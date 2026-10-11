@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-2a4df7ec",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes in one batch: c1 (edge-shape residue sweep), c2 (adversarial negative int32 words), c3 (tiny K and M=65 padding/masking). Each compares run() against reference() under the contract tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a3097d5fc9560ce2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_121\\\")\\nimport kernel\\n\\ndef gen(M,K,N,gs,seed):\\n    dev=\\\"cuda\\\"\\n    rng=torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    groups=(K+gs-1)//gs\\n    x=(torch.rand((M,K),generator=rng)-.5).half()\\n    codes=torch.randint(0,16,(((K+7)//8)*8,N),generator=rng,dtype=torch.int64)\\n    qw=torch.zeros(((K+7)//8,N),dtype=torch.int64)\\n    for i in range(8): qw|=codes[i::8]<<(4*i)\\n    zc=torch.randint(0,16,(groups,((N+7)//8)*8),generator=rng,dtype=torch.int64)\\n    qz=torch.zeros((groups,(N+7)//8),dtype=torch.int64)\\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\\n    sc=(.002+.029*torch.rand((groups,N),generator=rng)).half()\\n    ids=(torch.arange(K)//gs)[torch.randperm(K,generator=rng)].int()\\n    return (x.to(dev),qw.int().to(dev),sc.to(dev),qz.int().to(dev),ids.to(dev),gs)\\n\\nresults=[]\\ncases=[(7,13,17,16),(7,20,65,16),(7,33,96,16),(5,128,95,16),(7,64,31,32),(9,100,63,64),(7,3,1,16),(7,17,9,16),(11,48,65,32),(3,96,33,16)]\\nfor (M,K,N,gs) in cases:\\n    try:\\n        t=gen(M,K,N,gs,seed=K*1000+N)\\n        out=kernel.run(*t); ref=kernel.reference(*t)\\n        err=(out-ref).abs(); tol=0.01+0.001*ref.abs()\\n        bad=(err>tol).sum().item()\\n        results.append({\\\"case\\\":[M,K,N,gs],\\\"max_abs_err\\\":err.max().item(),\\\"n_violations\\\":bad})\\n    except Exception as e:\\n        results.append({\\\"case\\\":[M,K,N,gs],\\\"error\\\":str(e)[:300]})\\nprint(json.dumps({\\\"claim\\\":\\\"c1\\\",\\\"metric\\\":\\\"max_abs_err + violation count vs reference\\\",\\\"results\\\":results}))\\n\", \"expected_signal\": \"any in-domain shape with violations > 0 or large max_abs_err vs tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-aa80dd07234215a6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_121\\\")\\nimport kernel\\n\\ndev=\\\"cuda\\\"\\nM,K,N,gs=7,64,65,16\\nrng=torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\ngroups=(K+gs-1)//gs\\nx=(torch.rand((M,K),generator=rng)-.5).half()\\ncodes=torch.randint(0,16,(((K+7)//8)*8,N),generator=rng,dtype=torch.int64)\\nqw64=torch.zeros(((K+7)//8,N),dtype=torch.int64)\\nfor i in range(8): qw64|=codes[i::8]<<(4*i)\\nzc=torch.randint(0,16,(groups,((N+7)//8)*8),generator=rng,dtype=torch.int64)\\nqz64=torch.zeros((groups,(N+7)//8),dtype=torch.int64)\\nfor i in range(8): qz64|=zc[:,i::8]<<(4*i)\\nsc=(.002+.029*torch.rand((groups,N),generator=rng)).half()\\nids=(torch.arange(K)//gs)[torch.randperm(K,generator=rng)].int()\\n# force HIGH nibbles negative-signed: set bit31 in some words (those nibbles are unused for qweight along K, so\\n# instead make full words negative while keeping the used low nibbles: set bit31 -> word becomes negative int32,\\n# used nibbles (low 30 bits for 8 nibbles) unchanged.\\nqw=qw64.int()\\nqz=qz64.int()\\nqw[0,::3]=qw[0,::3]|(1<<31)\\nqz[:,0]=qz[:,0]|(1<<31)\\nqw=qw.to(dev); qz=qz.to(dev)\\nt=(x.to(dev),qw,sc.to(dev),qz,ids.to(dev),gs)\\nout=kernel.run(*t); ref=kernel.reference(*t)\\nerr=(out-ref).abs(); tol=0.01+0.001*ref.abs()\\nprint(json.dumps({\\\"claim\\\":\\\"c2\\\",\\\"M,K,N\\\": [M,K,N],\\\"n_negative_qw_words\\\":int((qw<0).sum()),\\\"n_negative_qz_words\\\":int((qz<0).sum()),\\n \\\"max_abs_err\\\":err.max().item(),\\\"n_violations\\\":int((err>tol).sum()),\\\"tol_max\\\":tol.max().item(),\\n \\\"metric\\\":\\\"max_abs_err vs reference under 0.01+0.001|target|, negative-word input\\\"}))\\n\", \"expected_signal\": \"nonzero violation count or large max_abs_err would confirm different decode of negative words\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-8d6b2cd28f7a60c6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_121\\\")\\nimport kernel\\n\\ndef gen(M,K,N,gs,seed):\\n    dev=\\\"cuda\\\"\\n    rng=torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    groups=(K+gs-1)//gs\\n    x=(torch.rand((M,K),generator=rng)-.5).half()\\n    codes=torch.randint(0,16,(((K+7)//8)*8,N),generator=rng,dtype=torch.int64)\\n    qw=torch.zeros(((K+7)//8,N),dtype=torch.int64)\\n    for i in range(8): qw|=codes[i::8]<<(4*i)\\n    zc=torch.randint(0,16,(groups,((N+7)//8)*8),generator=rng,dtype=torch.int64)\\n    qz=torch.zeros((groups,(N+7)//8),dtype=torch.int64)\\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\\n    sc=(.002+.029*torch.rand((groups,N),generator=rng)).half()\\n    ids=(torch.arange(K)//gs)[torch.randperm(K,generator=rng)].int()\\n    return (x.to(dev),qw.int().to(dev),sc.to(dev),qz.int().to(dev),ids.to(dev),gs)\\n\\nresults=[]\\nfor (M,K,N,gs) in [(1,1,1,16),(1,5,8,16),(2,8,16,16),(3,13,17,16),(4,15,32,16),(7,31,65,16),(65,16,65,16),(65,13,17,16),(7,17,32,32),(7,65,96,32)]:\\n    try:\\n        t=gen(M,K,N,gs,seed=K*77+N)\\n        out=kernel.run(*t); ref=kernel.reference(*t)\\n        err=(out-ref).abs(); tol=0.01+0.001*ref.abs()\\n        results.append({\\\"case\\\":[M,K,N,gs],\\\"max_abs_err\\\":err.max().item(),\\\"n_violations\\\":int((err>tol).sum())})\\n    except Exception as e:\\n        results.append({\\\"case\\\":[M,K,N,gs],\\\"error\\\":str(e)[:300]})\\nprint(json.dumps({\\\"claim\\\":\\\"c3\\\",\\\"metric\\\":\\\"max_abs_err + violation count vs reference for small K / edge M\\\",\\\"results\\\":results}))\\n\", \"expected_signal\": \"any small-K or M=65 case with violations > 0, or an exception from tl.dot minimum dims\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Need probes for c1 (edge shapes K,N residues), c2 (negative words), c3 (small K, M=65). I can build inputs with make_inputs and modify. Write probe code importing kernel from artifact dir. Let me launch three run_claim_probe calls together.\n\nFor c1: sweep shapes with residues, compare run vs reference. For c2: force negative words. For c3: small K (1..15), M=65.\n\nProbe code: sys.path append /root/cases/case_121, import kernel. Build inputs via kernel.make_inputs then adjust dimensions — easier: write own generator following make_inputs logic. I'll write a generic gen(M,K,N,group_size,seed, negative=False).\n\nNote disjoint byte ranges required — separate tensors are fine. But careful: making contiguous views with offsets would break disjointness; just use separate tensors.\n\nrun_claim_probe code for each claim."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791054376,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1968,
+    "prompt_tokens": 27481,
+    "total_tokens": 29449,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3952,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

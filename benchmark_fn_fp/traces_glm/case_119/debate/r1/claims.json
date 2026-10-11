@@ -1,0 +1,126 @@
+[
+  {
+    "created_at": "2026-10-03T18:15:54Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T18:16:24Z",
+        "data": {
+          "E": 5,
+          "GROUP_M": 4,
+          "K": 32,
+          "M": 80,
+          "N": 96,
+          "Q": 1,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "00d2d5ec352e82c57ede98092d102846efe3d880939523e218969e0d290330d1"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "06d82248fcb42409eaa41dfb84407c670cb122d6484a25d0acf4856ea5004098"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "a9db2313ad7bb4df90f90476197c90a4e17e72f5b3b17c31f346631a2a4ecbc9"
+            }
+          ],
+          "covered_tile_cols": "0-31 only for last group",
+          "duration_s": 7.372964,
+          "exit_code": 0,
+          "expected_n_tile_cols": 3,
+          "expected_signal": "n_violations > 0 concentrated in upper column tiles (cols >= 32) of tokens routed to the last expert block, with |diff| far above tolerance",
+          "json_parse_error": null,
+          "json_result": {
+            "E": 5,
+            "K": 32,
+            "M": 80,
+            "N": 96,
+            "Q": 1,
+            "expected_n_tile_cols": 3,
+            "info": {
+              "experts": 5,
+              "input_width": 32,
+              "output_width": 96,
+              "tokens": 80,
+              "topk": 1,
+              "valid": true
+            },
+            "max_abs_diff": 0.6899164791148733,
+            "n_violating_cols": 64,
+            "n_violations": 966,
+            "num_blocks": 5,
+            "num_pid_m": 5,
+            "tolerance": 0.01,
+            "violating_cols": [
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              42,
+              43,
+              44,
+              45,
+              46,
+              47,
+              48,
+              49,
+              50,
+              51
+            ]
+          },
+          "last_group_size": 1,
+          "max_abs_diff": 0.6899164791148733,
+          "n_violating_cols": 64,
+          "n_violations": 966,
+          "num_blocks": 5,
+          "num_pid_m": 5,
+          "stderr": "",
+          "stdout": "{\"info\": {\"valid\": true, \"tokens\": 80, \"experts\": 5, \"topk\": 1, \"input_width\": 32, \"output_width\": 96}, \"num_blocks\": 5, \"num_pid_m\": 5, \"M\": 80, \"K\": 32, \"N\": 96, \"E\": 5, \"Q\": 1, \"max_abs_diff\": 0.6899164791148733, \"n_violations\": 966, \"violating_cols\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51], \"n_violating_cols\": 64, \"tolerance\": 0.01, \"expected_n_tile_cols\": 3}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0.01,
+          "violating_col_range": "32-95"
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Runtime probe confirms the swizzle bug (c1). Legal input (M=80,K=32,N=96,E=5,Q=1, 16 routes per expert -> 5 expert blocks, num_pid_m=5, GROUP_M=4, last group size 1): 966 output entries violate tolerance, all in columns 32-95 (the upper column tiles of the last group's expert block, cols 0-31 correct), max abs diff 0.690 vs tolerance 0.01+0.0002|target| \u2014 missing output tiles exactly as the claim predicted.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The Triton tutorial swizzle uses pid_n = r // group_size_m (the actual last-group size); this kernel uses the compile-time GROUP_M. In the last partial group only group_size_m*num_pid_n pids exist, so r//GROUP_M reaches at most about group_size_m/GROUP_M of the column tiles; tiles beyond that are never launched even though the grid size expert_blocks.numel()*cdiv(N,32) assumes full column coverage per block. Reachable with legal inputs, e.g. E=5 experts each receiving routes padded to 16 blocks (num_pid_m=5, GROUP_M=4), or two experts with 33-48 routes each (num_pid_m=6).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Tolerance 'does not permit missing routes, output tiles or expert projections' and 'Correctness covers every legal shape, value and routing layout; there is one verdict for this fixed implementation' \u2014 a routing layout where expert block counts yield num_pid_m % 4 != 0 (e.g. E=5, or two experts with 33-48 routes each, M<=129, Q<=4) is a legal input, and the dropped upper column tiles of those expert blocks produce zeros instead of target values."
+      }
+    ],
+    "scope_rationale": "The contract requires every output entry to satisfy abs(actual-target) <= 0.01+0.0002*abs(target) for every legal routing layout, and explicitly states the tolerance does not permit missing output tiles or expert projections. A legal layout (e.g. 5 experts each routed so each pads to exactly one 16-route block, num_pid_m=5, GROUP_M=4; or any case where total padded blocks % 4 != 0) drops column tiles of the last expert blocks, producing zero entries where target is nonzero.",
+    "statement": "When the total number of 16-route expert blocks (num_pid_m = sum of padded per-expert counts / 16) is >= 4 and not divisible by 4, the swizzle in _expert_projection computes pid_n = (pid % num_pid_in_group) // GROUP_M using GROUP_M=4 instead of the actual last-group size, so only about group_size_m/4 of the cdiv(N,32) column tiles of the final group's expert blocks are ever launched; the missing tiles leave the corresponding ROUTED entries at zero and the final output for those tokens' experts wrong (absent projection), violating the tolerance which forbids missing output tiles.",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T18:16:24Z"
+  }
+]

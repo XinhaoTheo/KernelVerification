@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-035c36a71f7349ce9c49dc3ea19588c1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The last probe failed only on my syntax error (repeated keyword `n`). I'll fix and re-run.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-871762ba33deb39c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_119\\\")\\nimport kernel\\n\\ndef make(m, e, q, k, n, seed):\\n    g = torch.Generator(\\\"cpu\\\").manual_seed(seed)\\n    x = (torch.rand((m, k), generator=g) - .5).half()\\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\\n    ids = torch.zeros((m, q), dtype=torch.int32)\\n    for t in range(m):\\n        uniq = torch.randperm(e, generator=g)[:q]\\n        ids[t] = uniq.to(torch.int32)\\n    route = torch.rand((m, q), generator=g)\\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\\n\\nresults = []\\ncases = [\\n    (37, 4, 2, 33, 65, 0),\\n    (65, 4, 2, 33, 65, 1),\\n    (50, 4, 2, 17, 97, 2),\\n    (100, 4, 2, 33, 65, 3),\\n    (129, 4, 4, 33, 65, 4),\\n    (70, 3, 3, 33, 65, 5),\\n    (44, 4, 2, 33, 65, 6),\\n    (21, 5, 3, 33, 65, 7),\\n    (33, 6, 2, 33, 65, 8),\\n]\\nworst = 0.0\\nfor (m,e,q,k,n,seed) in cases:\\n    x,w,ids,rw = make(m,e,q,k,n,seed)\\n    c = torch.bincount(ids.reshape(-1).cpu().long(), minlength=e)\\n    padded = ((c + 15)//16)*16\\n    nblocks = int((padded.sum()//16).item())\\n    out = kernel.run(x,w,ids,rw)\\n    ref = kernel.reference(x,w,ids,rw)\\n    err = (out.double() - ref).abs()\\n    tol = 0.01 + 0.0002*ref.abs()\\n    viol = int((err > tol).sum().item())\\n    maxerr = err.max().item()\\n    worst = max(worst, maxerr)\\n    bad_cols = (err > tol).any(dim=0).nonzero().flatten().tolist()\\n    results.append(dict(m=m,e=e,q=q,k=k,out_n=n,blocks=nblocks,\\n                        blocks_mod4=nblocks%4,\\n                        violations=viol, max_abs_err=maxerr,\\n                        bad_col_indices=bad_cols[:40], n_bad_cols=len(bad_cols)))\\n    print(results[-1], flush=True)\\n\\nprint(\\\"WORST\\\", worst)\\nprint(json.dumps({\\\"metric\\\": \\\"elementwise |actual-target| vs 0.01+0.0002|target|\\\",\\n                  \\\"worst_max_abs_err\\\": worst, \\\"results\\\": results}))\\n\", \"expected_signal\": \"violations>0 with bad columns at high pid_n indices when blocks%4 != 0\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Fix syntax error and re-run probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051330,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 753,
+    "prompt_tokens": 18878,
+    "total_tokens": 19631,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 8,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4648,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 8
+    }
+  }
+}

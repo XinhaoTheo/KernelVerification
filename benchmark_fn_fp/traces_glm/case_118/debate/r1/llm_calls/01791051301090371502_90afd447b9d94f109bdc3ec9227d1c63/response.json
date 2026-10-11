@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-8f1931b55c904aafaac2b82a3ac3c11b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching one runtime probe per open claim in a single batch: c1 (zero-route experts + exact multiple-of-16 count), c2 (partial swizzle group with 5 and 7 expert blocks, N=65), and c3 (worst-case 0.5-magnitude FP16, K=N=129, Q=4). All three are independent, so they're launched together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-97d92f4eca342d70",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_118/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1)\\n# E=3, M=16, Q=1, all tokens routed to expert 0; experts 1,2 zero routes.\\nM,K,N,E,Q = 16, 33, 65, 3, 1\\nx = ((torch.rand((M,K), generator=g)-.5)*0.9).half().to(dev)\\nw = ((torch.rand((E,K,N), generator=g)-.5)*0.9).half().to(dev)\\nids = torch.zeros((M,Q), dtype=torch.int32, device=dev)\\nrt = torch.full((M,Q), 0.9999, dtype=torch.float32, device=dev)\\nref = k.reference(x, w, ids, rt)\\nout = k.run(x, w, ids, rt)\\nerr = (out.double()-ref).abs()\\ntol = 0.01 + 0.0002*ref.abs()\\nprint(json.dumps({\\\"metric\\\":\\\"max_abs_err vs tol over all entries\\\", \\\"max_abs_err\\\": float(err.max()),\\n \\\"tol_at_max\\\": float(tol.flatten()[err.argmax()]), \\\"violations\\\": int((err>tol).sum()),\\n \\\"setup\\\":\\\"E=3,M=16,Q=1,all->expert0,experts1&2 zero routes\\\", \\\"passed\\\": bool((err<=tol).all())}))\", \"expected_signal\": \"max_abs_err <= 0.01+0.0002*|ref| across all entries (claim predicts violation)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-87dd817ebb3ddeda",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_118/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(2)\\ndef build(M, E, Q, per_counts, K=33, N=65):\\n    ids = torch.zeros((M,Q), dtype=torch.int32)\\n    row = 0; e = 0\\n    for cnt in per_counts:\\n        for _ in range(cnt):\\n            for q in range(Q):\\n                ids[row, (e+q) % E] = (e+q) % E\\n            row += 1\\n        e += 1\\n    # fill remaining tokens with last expert to keep distinctness simple: use Q=1\\n    assert row == M\\n    return ids\\n# 5 expert blocks: counts 16,16,16,16,5 -> 5 blocks (not multiple of GROUP_M=4), N=65 (3 col tiles)\\nM,K,N,E,Q = 69, 33, 65, 8, 1\\nids = build(M, E, Q, [16,16,16,16,5,0,0,0]).to(dev)\\nx = ((torch.rand((M,K), generator=g)-.5)*0.9).half().to(dev)\\nw = ((torch.rand((E,K,N), generator=g)-.5)*0.9).half().to(dev)\\nrt = (torch.rand((M,Q), generator=g)*0.9).float().to(dev)\\nref = k.reference(x, w, ids, rt); out = k.run(x, w, ids, rt)\\nerr = (out.double()-ref).abs(); tol = 0.01 + 0.0002*ref.abs()\\nr5 = {\\\"violations_5blocks\\\": int((err>tol).sum()), \\\"max_abs_err_5blocks\\\": float(err.max()), \\\"max_tol_5blocks\\\": float(tol.max())}\\n# 7 expert blocks: counts 16,16,16,16,16,16,1\\nM2 = 97\\nids2 = build(M2, E, Q, [16,16,16,16,16,16,1,0]).to(dev)\\nx2 = ((torch.rand((M2,K), generator=g)-.5)*0.9).half().to(dev)\\nrt2 = (torch.rand((M2,Q), generator=g)*0.9).float().to(dev)\\nref2 = k.reference(x2, w, ids2, rt2); out2 = k.run(x2, w, ids2, rt2)\\nerr2 = (out2.double()-ref2).abs(); tol2 = 0.01 + 0.0002*ref2.abs()\\nr7 = {\\\"violations_7blocks\\\": int((err2>tol2).sum()), \\\"max_abs_err_7blocks\\\": float(err2.max()), \\\"max_tol_7blocks\\\": float(tol2.max())}\\nprint(json.dumps({\\\"metric\\\":\\\"elementwise abs err vs 0.01+0.0002|ref| for 5 and 7 expert-block partial-group cases, N=65\\\", **r5, **r7, \\\"passed_both\\\": bool((err<=tol).all() and (err2<=tol2).all())}))\", \"expected_signal\": \"violations count 0 for both 5- and 7-block partial-group cases (claim predicts missing/doubled tiles)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8ea4e7f8a52497db",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_118/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n# Worst-case magnitudes: all |x|=|w|=0.5, K=N=129, E=4, Q=4, weights 0.25 each (sum=1)\\nM,K,N,E,Q = 4, 129, 129, 4, 4\\nx = torch.full((M,K), 0.5, dtype=torch.half, device=dev)\\nw = torch.full((E,K,N), 0.5, dtype=torch.half, device=dev)\\nids = torch.arange(M, dtype=torch.int32, device=dev).unsqueeze(1).repeat(1,Q).contiguous()\\nids = (ids + torch.arange(Q, dtype=torch.int32, device=dev).unsqueeze(0)) % E\\nids = ids.contiguous()\\nrt = torch.full((M,Q), 0.25, dtype=torch.float32, device=dev)\\nref = k.reference(x, w, ids, rt)\\nout = k.run(x, w, ids, rt)\\nerr = (out.double()-ref).abs()\\ntol = 0.01 + 0.0002*ref.abs()\\nprint(json.dumps({\\\"metric\\\":\\\"max_abs_err vs 0.01+0.0002*|ref|, worst-case 0.5-magnitude FP16, K=N=129, Q=4\\\",\\n \\\"max_abs_target\\\": float(ref.abs().max()), \\\"max_abs_err\\\": float(err.max()),\\n \\\"tol_at_max_err\\\": float(tol.flatten()[err.argmax()]), \\\"violations\\\": int((err>tol).sum()),\\n \\\"M\\\":M,\\\"K\\\":K,\\\"N\\\":N,\\\"Q\\\":Q,\\\"passed\\\": bool((err<=tol).all())}))\", \"expected_signal\": \"max_abs_err vs tolerance for worst-magnitude case (claim predicts > tol)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch three probes in one turn. Each loads kernel.py from /root/cases/case_118/kernel.py presumably. Write probes importing module via importlib from path.\n\nc1: E=3, M=16, Q=1, all tokens expert 0. c2: configuration with e.g. 7 expert blocks and N>32 — need num_pid_m = EM/16 not multiple of 4. Use E=7 experts, spread routes so each expert count leads to ~7 blocks: e.g. M=40, Q=1, route 16 tokens to e0, 16 to e1, 8 to e2 → 3 blocks (group_m... blocks=3 <4 so group=1). Better blocks=5: counts 16,16,16,16,5 → 5 blocks, N=65 (3 col tiles). M=69? 16*4+5=69 ≤129. Q=1, E=8, ids: first 64 tokens experts 0-3, last 5 tokens expert 4. That gives 5 blocks, GROUP_M=4, partial group of 1, N=65 → good. Also test 7 blocks variant.\n\nc3: K=129, N=129, M=4, E=4, Q=4, all x and w = 0.5 magnitude with mixed signs (to get target near 32), weights 0.25 each. Use +0.5/-0.5 patterns so products align to maximize |target|: x all +0.5, w all +0.5 → each product 0.25, sum 129*0.25=32.25, weighted by row sum 1 → target up to 32.25? Actually sum over q with weights summing to 1 → target = 32.25. Contract says |target|<32.251... fine.\n\nAlso check inputs preserved maybe. Write probe code per claim.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051301,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2123,
+    "prompt_tokens": 25617,
+    "total_tokens": 27740,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 416,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 416
+    }
+  }
+}

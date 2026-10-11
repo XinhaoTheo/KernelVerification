@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-6e2e497b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have the full contract and source. Recording the description model: the kernel uses the Abramowitz–Stegun 5-coefficient erfc approximation, and the key tension is that the contract demands 1e-6 absolute error against the exact erfc target while the approximation's Phi error (~1e-7–1.5e-7) is multiplied by |x|, so large |x| magnifies absolute error far past tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-893eed1da736e6a0",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Target: GELU(x)=0.5*x*erfc(-x/sqrt(2)) evaluated in real arithmetic on the exact stored FP16 value; approximations permitted only if output error <=1e-6 absolute (rtol=0) for EVERY finite FP16 input, N in [1,131072].\", \"Output must be a fresh finite FP32 [N] tensor on x.device, computed from FP16 contiguous 1-D CUDA input; both signed zeros, subnormals, and +/-65504 are in scope; NaN/Inf out of scope.\", \"reference() computes FP64 erfc definition and accepts CPU; validate_inputs enforces the domain; make_inputs is examples only; single verdict over whole domain.\", \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\"], \"kernel_model\": [\"Triton kernel loads FP16 x, casts to FP32, computes |x| and z=|x|/sqrt(2), then the A&S 7.1.26-style five-coefficient rational polynomial in t=1/(1+0.3275911 z), tail=0.5*poly*exp(-x^2/2), Phi = tail for x<0 else 1-tail, output = x*Phi (lines 14-30).\", \"BLOCK=256, grid=ceil(N/256), masked loads/stores, num_warps=4, enable_fp_fusion=False; output is FP32 (lines 60-63).\", \"run() calls validate_inputs, allocates fresh output with torch.empty, launches under x.device context.\", \"Coefficients match the classic A&S 7.1.26 set (0.3275911, 0.25482/0.25483, -0.28449/-0.28450, 1.42141, -1.45315, 1.06140/1.06141); exact FP32 constants are truncations of the published ones.\"], \"open_questions\": [\"What is the actual max absolute error of this exact coefficient set composed with GELU across all 65536 finite FP16 values (needs runtime sweep)?\", \"Does tl.exp or any Triton fast-math variant reduce accuracy below what the FP32 formula implies on T4?\", \"Any behavior difference for N not multiple of 256 or storage-offset views?\"], \"risk_map\": [\"Approximation accuracy vs 1e-6 tolerance: A&S 7.1.26 erfc error is ~1.5e-7 absolute; composed into GELU as x*Phi the absolute output error scales roughly as |x| * Phi-error, so at |x| ~ 4-8 (and certainly near +/-65504) error can exceed 1e-6; this is the primary failure surface.\", \"Coefficient rounding: 0.25483 vs published 0.25482 and -0.28450 vs -0.28449, 1.06141 vs 1.06140 shifts the approximation error slightly; needs numeric check.\", \"Large-magnitude behavior: for x>~10, Phi should be ~1 to within 1e-6 of x*Phi; tail = 0.5*poly*exp(-x^2/2) underflows to 0 (fine), but for x<0 large, tail must approximate GELU/-x < 1e-6/|x|; polynomial-t path with tiny t must stay accurate enough.\", \"tl.exp accuracy on T4 vs CUDA libdevice exp — small ULP differences in exp(-x^2/2) matter near tolerance boundary for moderate |x|.\", \"tl.div_rn correctness (round-to-nearest division) — assumed available in Triton 3.4; miscompile or fusion concerns mitigated by enable_fp_fusion=False.\", \"Signed zero: x=-0.0 gives x<0 true, tail computed on magnitude 0: Phi=t(0)... = 0.5*poly*1; Phi(0)=0.5 required; output = -0.0*0.5, numerically zero — likely fine but worth probing.\", \"Subnormal FP16 inputs cast to FP32 exactly; formula should still hold at tiny x where Phi(0)=0.5 and GELU~x/2 within 1e-6.\"], \"scope_notes\": [\"One correctness verdict across the entire finite FP16 domain; benign randn samples (make_inputs, std~2) do not cover the risky |x|>3 regime where approximation error grows.\", \"NaN/Inf, non-CUDA, autograd, subclasses, non-contiguous inputs are out of scope per contract.\", \"Only the last-block mask boundary (N%256) and elementwise independence matter for indexing; no reductions or cross-element coupling.\"], \"summary\": \"Described case_128: GELU via Abramowitz-Stegun five-coefficient erfc approximation in FP32 Triton, with the 1e-6 absolute tolerance across all finite FP16 inputs being the key contract tension.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Record description update. Key risk: A&S approximation max error ~1e-7 in erfc but composed with GELU — tolerance 1e-6 absolute; classic A&S 7.1.26 has absolute error < 7.5e-8 in Phi, times x up to 65504 — huge! Also exp(-x²/2) underflow for |x|>~27 fine (0). But GELU for large positive x should be x; 1-tail where tail→0 fine. For large negative x, GELU→0; tail→0? polynomial*exp small... t→1/(0.327*65504*0.707) small, polynomial → -0.28450? Wait Horner ends polynomial*=-0.28450... actually last step polynomial*t+0.25483 then *t: at t→0 polynomial→0? Horner: p=1.06141t-1.45315; p=p*t+1.42141... final p=p*t after +0.25483. At t=0, p→0. Fine. Main risk: error in Phi ~ up to ~7e-8? Actually A&S 7.1.26 error in erfc is <1.5e-7 absolute. Multiplied by |x| up to 65504 → up to ~0.01 absolute error — far exceeds 1e-6. Even at moderate |x|~4, error ~6e-7 borderline. So risk: tolerance violation for moderate/large |x|."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791532819,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1552,
+    "prompt_tokens": 6741,
+    "total_tokens": 8293,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

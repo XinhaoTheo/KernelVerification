@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-fef68711",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a runtime probe for c1: sweep all 65536 finite FP16 values through the kernel and compare against the FP64 erfc reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9223d303409817ec",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_128/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nvals = torch.arange(65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\\nx = vals.cuda().contiguous()\\nprint(\\\"N:\\\", x.numel(), \\\"finite:\\\", torch.isfinite(x).all().item())\\n\\nout = k.run(x)\\nref = k.reference(x.cpu()).cuda()\\nerr = (out.double() - ref.double()).abs()\\nmaxerr = err.max().item()\\ni = int(err.argmax())\\ntargeted = torch.tensor([4.0,5.0,6.0,7.0,8.0,10.0,-4.0,-5.0,-6.0,-7.0,-8.0,-10.0], dtype=torch.float16).cuda()\\no2 = k.run(targeted); r2 = k.reference(targeted.cpu()).cuda()\\nterr = (o2.double()-r2.double()).abs()\\njson.dump({\\n \\\"max_abs_err_full_sweep\\\": maxerr,\\n \\\"worst_input_fp16\\\": float(x[i].item()),\\n \\\"worst_input_repr\\\": hex(int(torch.tensor([x[i]]).view(torch.int16).item())),\\n \\\"tolerance\\\": 1e-6,\\n \\\"num_exceed_tol\\\": int((err > 1e-6).sum().item()),\\n \\\"targeted_inputs\\\": [float(v) for v in targeted.cpu()],\\n \\\"targeted_errors\\\": [float(v) for v in terr.cpu()],\\n \\\"targeted_max_err\\\": terr.max().item(),\\n \\\"verdict_metric\\\": \\\"max absolute error vs FP64 erfc reference over all 65536 finite FP16 values\\\"\\n}, fp := open(\\\"/tmp/probe_c1.json\\\",\\\"w\\\")); fp.close()\\nprint(open(\\\"/tmp/probe_c1.json\\\").read())\\nprint(\\\"FINAL_JSON:\\\", open(\\\"/tmp/probe_c1.json\\\").read())\", \"expected_signal\": \"max absolute error > 1e-6 at moderate |x| (4-10) on T4 CUDA\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a claim probe: sweep all FP16 values (or targeted range plus full sweep, 65504 values fits in 131072... actually 65536 values ≤ 131072, but validate N ≤ 131072 so full sweep in one run is fine). Compare run() vs reference."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791532858,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 575,
+    "prompt_tokens": 17383,
+    "total_tokens": 17958,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

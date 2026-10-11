@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-5763382e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a decisive probe comparing `run()` against the contract's `reference()` on adversarial inputs: extreme accumulators, all shift values 0–31, both tie directions at the R stage, and saturation-boundary cases.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-80e245d80572d2a7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\n# Channels: one per shift value 0..31, plus a couple of extras\\nshifts = torch.arange(0, 32, dtype=torch.int32)\\nC = 32\\nmult = torch.full((C,), 2**31 - 1, dtype=torch.int32)\\n# vary multipliers across channels\\ng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult = torch.randint(2**30, 2**31, (C,), dtype=torch.int64, generator=g).to(torch.int32)\\nzeros = torch.tensor([0,127,-128] * 11, dtype=torch.int32)[:C]\\nexps = torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0] * 4, dtype=torch.int32)[:C]\\nscales = torch.pow(torch.tensor(2.0), exps.to(torch.float64)).to(torch.float32)\\n\\ndef H_exact(a, m):\\n    P = int(a) * int(m)\\n    return (P + (1 << 30)) // (1 << 31)\\n\\n# Build adversarial accumulator values per channel\\nrows = []\\n# 1) extremes\\nrows.append([(-2**31)] * C); rows.append([2**31 - 1] * C); rows.append([0]*C)\\n# 2) exact R-stage tie accumulators (positive and negative) for each channel\\nrng = torch.Generator(\\\"cpu\\\").manual_seed(2)\\nfor trial in range(3):\\n    tie_pos, tie_neg = [], []\\n    for c in range(C):\\n        r = int(shifts[c]); m = int(mult[c])\\n        found_p, found_n = None, None\\n        for _ in range(20000):\\n            a = int(torch.randint(-(2**31), 2**31, (1,), dtype=torch.int64, generator=g).item())\\n            h = H_exact(a, m)\\n            if r > 0:\\n                if found_p is None and h > 0 and h % (1 << r) == (1 << (r - 1)):\\n                    found_p = a\\n                if found_n is None and h < 0 and (-h) % (1 << r) == (1 << (r - 1)):\\n                    found_n = a\\n            else:\\n                if found_p is None: found_p = a\\n                if found_n is None: found_n = -a\\n            if found_p is not None and found_n is not None: break\\n        tie_pos.append(found_p if found_p is not None else 0)\\n        tie_neg.append(found_n if found_n is not None else 0)\\n    rows.append(tie_pos); rows.append(tie_neg)\\n# 3) values near saturation boundaries after rounding\\nrows.append([])\\nfor c in range(C):\\n    m = int(mult[c])\\n    # find a such that H (or R) lands near +-128-z\\n    vals = []\\n    for target in (127, 128, 129, -127, -128, -129, 255, 256, -255, -256):\\n        found = None\\n        for _ in range(30000):\\n            a = int(torch.randint(-(2**31), 2**31, (1,), dtype=torch.int64, generator=g).item())\\n            h = H_exact(a, m)\\n            if h == target: found = a; break\\n        vals.append(found if found is not None else 0)\\n    rows[-1] = vals\\nacc = torch.tensor(rows, dtype=torch.int32)\\nacc = torch.cat([acc, torch.randint(-(2**31), 2**31, (200, C), dtype=torch.int64, generator=torch.Generator(\\\"cpu\\\").manual_seed(3)).to(torch.int32)], 0).to(dev)\\n\\nparams = tuple(t.to(dev) for t in (mult, shifts, zeros, scales))\\nout = k.run(acc, *params)\\nref = k.reference(acc, *params)\\ndiff = (out.double() - ref.double()).abs()\\nmism = (diff > 1e-6).sum().item()\\nprint(\\\"shape\\\", tuple(acc.shape), \\\"max_abs_err\\\", diff.max().item(), \\\"mismatches\\\", mism)\\nif mism:\\n    idx = (diff > 1e-6).nonzero()[:10]\\n    for i, j in idx.tolist():\\n        print(\\\"MISMATCH\\\", i, j, \\\"a=\\\", int(acc[i,j]), \\\"m=\\\", int(mult[j]), \\\"r=\\\", int(shifts[j]), \\\"z=\\\", int(zeros[j]), \\\"s=\\\", float(scales[j]),\\n              \\\"got=\\\", out[i,j].item(), \\\"ref=\\\", ref[i,j].item(), \\\"H=\\\", H_exact(int(acc[i,j]), int(mult[j])))\\nimport json\\nprint(json.dumps({\\\"max_abs_err\\\": diff.max().item(), \\\"mismatches\\\": mism, \\\"shape\\\": list(acc.shape)}))\\n\", \"expected_signal\": \"mismatches == 0 (or >0 with details)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe comparing run() to reference() on adversarial inputs: tie cases, extremes, various shifts. Design: exhaustively check tie construction is hard; instead random sampling plus targeted exact-tie accumulators. For a chosen m, r, find a such that H is exactly odd multiple of 2^(r-1) (tie). We can search using reference's H computation. Build a tensor with many a values spanning int32 range and tie cases.\n\nProbe code: import kernel from /root/cases/case_125/kernel.py, generate acc rows×channels with channels covering shifts 0..31, multipliers varied, plus special tie accumulators. For each (m,r), compute H for random a, find a where H % 2^r == 2^(r-1) (tie) or -tie. Simpler: for random a, compute P; H = (P+2^30)>>31 floor... H can be negative; tie condition abs(H) with low bit... Use reference to compute H directly. Then pick a values whose H is an exact tie for the channel's r and place them in acc. Also extremes ±2^31-1, -2^31. Compare run vs reference, report max abs error and mismatch count."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791183335,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1438,
+    "prompt_tokens": 13174,
+    "total_tokens": 14612,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7875,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

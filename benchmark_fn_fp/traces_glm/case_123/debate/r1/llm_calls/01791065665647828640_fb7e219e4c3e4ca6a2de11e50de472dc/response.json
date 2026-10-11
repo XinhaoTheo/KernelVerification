@@ -1,0 +1,60 @@
+{
+  "id": "chatcmpl-47f9399e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent runtime probes: c1 tests steps=4 near-edge divergence, c2 tests steps=8 accumulation, both against the FP64 per-step reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-aba8a59f1e9baa14",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_123\\\")\\nimport kernel\\n\\ntorch.manual_seed(0)\\nres = {}\\nfor (H, W) in [(31, 33), (8, 8), (5, 9)]:\\n    x = (2*torch.rand((H, W), generator=torch.Generator().manual_seed(1)) - 1).half().cuda()\\n    actual = kernel.run(x, 4)\\n    ref = kernel.reference(x.cpu(), 4).cuda()\\n    err = (actual - ref).abs()\\n    # near-edge mask: within 4 of any border\\n    m = torch.zeros((H, W), dtype=torch.bool, device=\\\"cuda\\\")\\n    m[:4, :] = m[-4:, :] = True; m[:, :4] = m[:, -4:] = True\\n    res[f\\\"{H}x{W}\\\"] = {\\n        \\\"max_err_near_edge\\\": err[m].max().item(),\\n        \\\"max_err_interior\\\": err[~m].max().item() if (~m).any() else None,\\n        \\\"n_over_tol\\\": (err > 2e-5).sum().item(),\\n        \\\"argmax\\\": torch.unravel_index(err.argmax(), (H, W)),\\n    }\\nprint(json.dumps(res))\", \"expected_signal\": \"near-edge max abs error > 2e-5 vs FP64 per-step reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a186e897f56ebb4b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_123\\\")\\nimport kernel\\n\\nres = {}\\nfor (H, W) in [(31, 33), (16, 16)]:\\n    x = (2*torch.rand((H, W), generator=torch.Generator().manual_seed(2)) - 1).half().cuda()\\n    actual = kernel.run(x, 8)\\n    ref = kernel.reference(x.cpu(), 8).cuda()\\n    err = (actual - ref).abs()\\n    m = torch.zeros((H, W), dtype=torch.bool, device=\\\"cuda\\\")\\n    m[:4, :] = m[-4:, :] = True; m[:, :4] = m[:, -4:] = True\\n    res[f\\\"{H}x{W}\\\"] = {\\n        \\\"max_err_near_edge\\\": err[m].max().item(),\\n        \\\"max_err_interior\\\": err[~m].max().item(),\\n        \\\"n_over_tol\\\": (err > 2e-5).sum().item(),\\n    }\\nprint(json.dumps(res))\", \"expected_signal\": \"steps=8 near-edge max abs error > 2e-5 vs FP64 per-step reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 (steps=4, 31x33, near-edge errors vs FP64 reference) and c2 (steps=8). Both independent."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791065668,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 665,
+    "prompt_tokens": 20775,
+    "total_tokens": 21440,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

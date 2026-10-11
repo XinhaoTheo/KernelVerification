@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-0b003b6c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The prior probe was inconclusive because ±0.5 values made all partial sums exactly FP16-representable. I'll now run a genuinely adversarial probe: partials large (~±16) but not FP16-representable, cancelling across split halves so the target is near 0 and the 0.01 tolerance floor must absorb up to 8 FP16 roundings.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b391ec6f3e513341",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\nworst = None\\nnviol = 0\\nncases = 0\\n\\n# Construct: within each 64-lane segment, B aligns with A's signs so each split\\n# partial is large (~8..16, NOT a multiple of 0.25) while alignment flips sign\\n# across split halves so partials cancel and target is near 0.\\nfor trial in range(60):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(1000 + trial)\\n    m, n, k = 4, 8, 512\\n    A = ((torch.rand((m, k), generator=gen) * 0.5)).half()  # magnitudes in (0,0.5]\\n    signs = torch.sign(A[0])\\n    # replace zeros with positive\\n    signs = torch.where(signs == 0, torch.ones_like(signs), signs)\\n    Bsign = signs[:, None].repeat(1, n).clone()\\n    seg = k // 8\\n    Bsign[4*seg:, :] = -Bsign[4*seg:, :]  # flip last 4 splits' alignment\\n    B = (Bsign * (torch.rand((k, n), generator=gen) * 0.5).half()).half()\\n    B = torch.where(B == 0, torch.tensor(0.25, dtype=torch.float16), B)\\n    bias = torch.zeros(n, dtype=torch.float32)\\n    A, B, bias = A.to(device), B.to(device), bias.to(device)\\n    for sk in (8, 4, 2):\\n        out = kernel.run(A, B, bias, sk)\\n        ref = kernel.reference(A, B, bias, sk)\\n        diff = (out - ref).abs()\\n        v = diff > tol(ref)\\n        nv = int(v.sum())\\n        ncases += 1\\n        if nv > 0:\\n            nviol += nv\\n            if worst is None or float(diff.max()) > worst[\\\"max_diff\\\"]:\\n                worst = {\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv,\\n                         \\\"max_diff\\\": float(diff.max()),\\n                         \\\"max_tol_at_viol\\\": float(tol(ref)[v].max()),\\n                         \\\"example_target\\\": float(ref.flatten()[v.flatten()][0]),\\n                         \\\"example_actual\\\": float(out.flatten()[v.flatten()][0])}\\n\\nprint(json.dumps({\\\"cases\\\": ncases, \\\"total_violations\\\": nviol, \\\"worst\\\": worst,\\n                  \\\"note\\\": \\\"large non-representable cancelling partials, target near 0\\\"}))\", \"expected_signal\": \"tolerance violation when large partials cancel to near-zero target\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Now run the adversarial cancelling-partials probe (c1 now interpretable). Also there's another subtle bug: work buffer uninitialized torch.empty with split_k>1 — if tiles computed... let me check coverage: tiles = cdiv(cdiv(k,32), split_k); each split covers TILES*BK starting at split*TILES*BK. Coverage = split_k*TILES*BK >= cdiv(k,32)*32 >= K. Good, and inner>=K masked. So coverage fine. Main risk remains FP16 partial storage. Run the adversarial probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791051072,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 823,
+    "prompt_tokens": 18990,
+    "total_tokens": 19813,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7140,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

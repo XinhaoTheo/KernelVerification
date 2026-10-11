@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-45e673f478cf4553bb9175392dffbc3b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch the corrected c1 probe, with all tensor construction done on CPU before moving to CUDA, using non-representable large partials that cancel to a near-zero target.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a631c7f67c352243",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nM, N, K, split_k = 1, 4, 512, 4\\nseg = K // split_k  # 128\\n\\na = torch.full((M, K), 0.5, dtype=torch.float16)  # CPU first\\nbest = None\\nfor seed in range(80):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    # splits 0-2: random positive grain in [0.25,0.5] -> partial ~ 24-30 each\\n    pos = (0.25 + 0.25 * torch.rand((3 * seg, N), generator=g)).half()\\n    pos_d = pos.double()\\n    col_pos = torch.matmul(a.double(), pos_d).flatten()  # [N], magnitude ~22-28\\n    # split 3: constant per-column value so each column's total cancels\\n    need = -col_pos / (0.5 * seg)  # values within +-0.5\\n    if need.abs().max() > 0.5:\\n        continue\\n    b3 = need.to(torch.float16).unsqueeze(0).expand(seg, N).contiguous()\\n    b = torch.cat([pos, b3], dim=0).to(dev)\\n    a_d = a.to(dev)\\n    bias = torch.zeros(N, dtype=torch.float32, device=dev)\\n    ref = kernel.reference(a_d, b, bias, split_k)\\n    if float(ref.abs().max()) > 0.05:\\n        continue\\n    # per-split partial magnitudes\\n    partials = []\\n    for s in range(split_k):\\n        block = b[s*seg:(s+1)*seg].double()\\n        partials.append(float(torch.matmul(a_d.double(), block).abs().max()))\\n    out = kernel.run(a_d, b, bias, split_k)\\n    err = (out - ref).abs()\\n    tol = 0.01 + 0.001 * ref.abs()\\n    viol = int((err > tol).sum())\\n    rec = {\\\"seed\\\": seed, \\\"max_abs_err\\\": float(err.max()),\\n           \\\"max_ref_abs\\\": float(ref.abs().max()),\\n           \\\"min_partial_abs\\\": min(partials), \\\"max_partial_abs\\\": max(partials),\\n           \\\"violations\\\": viol, \\\"numel\\\": out.numel()}\\n    if best is None or rec[\\\"max_abs_err\\\"] > best[\\\"max_abs_err\\\"]:\\n        best = rec\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs err vs FP64 ref; large non-representable partials, near-zero target, split_k=4\\\",\\n    \\\"reason\\\": \\\"c1: FP16 scratch rounding of large partials should exceed 0.01 base tolerance when target cancels\\\",\\n    \\\"best\\\": best,\\n    \\\"a_partial_reps\\\": \\\"random-grain [0.25,0.5] values, partials ~24-30, not FP16-representable sums\\\",\\n    \\\"claims_confirmed_if\\\": \\\"best.violations > 0\\\"\\n}))\", \"expected_signal\": \"max abs err > 0.01 with near-zero target on split_k=4, from FP16 partial rounding\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch a corrected c1 probe: build all on CPU, move to CUDA.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051195,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 778,
+    "prompt_tokens": 64735,
+    "total_tokens": 65513,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 16,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 16
+    }
+  }
+}

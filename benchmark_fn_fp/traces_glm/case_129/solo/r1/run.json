@@ -1,0 +1,811 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_129",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise GELU using a Gaussian-tail approximation.\n\nOriginal Triton adaptation of the Abramowitz--Stegun five-coefficient formula\nfor the Gaussian tail in GELU. This is a synthetic benchmark implementation,\nnot a claimed historical bug.\n\"\"\"\nimport math\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _gelu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    normalized = magnitude * 0.7071067811865475\n    t = tl.div_rn(1.0, 1.0 + 0.3276 * normalized)\n    polynomial = 1.06141 * t - 1.45315\n    polynomial = polynomial * t + 1.42141\n    polynomial = polynomial * t - 0.28450\n    polynomial = polynomial * t + 0.25483\n    polynomial = polynomial * t\n    envelope = tl.exp(-(0.5 * (magnitude * magnitude)))\n    tail = 0.5 * (polynomial * envelope)\n    probability = tl.where(x < 0.0, tail, 1.0 - tail)\n    value = x * probability\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating GELU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _gelu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical GELU definition using the FP64 erfc function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return (0.5 * value) * torch.erfc(-value / math.sqrt(2.0))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute GELU elementwise on stored FP16 input values and return FP32 output.\nThe mathematical target is the Gaussian Error Linear Unit\n\n  target[i] = GELU(x[i]) = x[i] * Phi(x[i])\n            = 0.5 * x[i] * erfc(-x[i] / sqrt(2)),\n\nwhere Phi is the standard normal cumulative distribution function and\n  erfc(u) = (2/sqrt(pi)) * integral from u to infinity of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - GELU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo intermediate FP16 rounding or particular polynomial is part of its\nmathematical definition. Polynomial, rational, tanh or other approximations\nare permitted if they satisfy this fixed absolute tolerance throughout the\nentire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates the erfc definition in FP64 and returns FP64; it accepts CPU inputs.\nmake_inputs() supplies examples only. This is an original Triton adaptation\nof the Abramowitz--Stegun five-coefficient Gaussian-tail approximation,\ncomposed with the GELU definition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_129",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-09T08:00:44Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:01:14Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "87cb5699b5736069ded93cbdbc6d6f58e790247ce626d91ca28abd35a4e9db18"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "ca6c45556618775f2c9354e1576d5e010cdf84997790ce170c35490cdfac00c7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "cef9c304a23c0437c8fdc6b9be19bfa129285efb78d534d34eaf089dbd5e796e"
+              }
+            ],
+            "duration_s": 3.921995,
+            "exit_code": 0,
+            "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_err": 2.740334944961731e-06,
+              "metric": "max abs error over all finite FP16 inputs vs FP64 erfc reference",
+              "n_finite": 63488,
+              "num_violations_gt_1e-5": 0,
+              "num_violations_gt_1e-6": 5358,
+              "out": 0.8487585783004761,
+              "ref": 0.8487558379655311,
+              "worst_x": 1.0068359375
+            },
+            "max_err": 2.740334944961731e-06,
+            "num_violations_gt_1e-6": 5358,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\", \"n_finite\": 63488, \"max_err\": 2.740334944961731e-06, \"worst_x\": 1.0068359375, \"out\": 0.8487585783004761, \"ref\": 0.8487558379655311, \"num_violations_gt_1e-6\": 5358, \"num_violations_gt_1e-5\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_x": 1.0068359375
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive scan of all 63,488 finite FP16 values vs FP64 erfc reference: max abs error 2.7403e-6 at x\u22481.0068 (out 0.84875858 vs ref 0.84875584), and 5,358 inputs exceed the 1e-6 absolute tolerance. Zero exceed 1e-5. This is intrinsic A&S approximation error amplified by |x|, not a coding bug, but it violates the contract's fixed 1e-6 tolerance throughout the legal domain.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The A&S five-coefficient erfc approximation has ~7.5e-8 error in Phi; multiplied by |x| this can approach or exceed 1e-6 for moderate-to-large |x|, and GELU(x)\u22480 for large negative x where error is x*(1-Phi) tiny; the risky region is moderate positive x where Phi error is amplified.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - GELU(x[i])) <= 1e-6 ... approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. EVERY finite FP16 value is legal."
+        }
+      ],
+      "scope_rationale": "The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for EVERY finite FP16 value in the full domain, and states approximations are permitted only if they satisfy the tolerance throughout the entire legal domain.",
+      "statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|).",
+      "status": "confirmed",
+      "updated_at": "2026-10-09T08:01:14Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_129",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_129"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_129"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_129"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_129",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.380889809,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel uses the Abramowitz\u2013Stegun erf approximation, which has intrinsic error ~1.5e-7 in erf \u2014 likely close to but possibly exceeding the 1e-6 absolute GELU tolerance for some inputs. I'll record a claim and probe against all 65,408 finite FP16 values.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The A&S five-coefficient erfc approximation has ~7.5e-8 error in Phi; multiplied by |x| this can approach or exceed 1e-6 for moderate-to-large |x|, and GELU(x)\u22480 for large negative x where error is x*(1-Phi) tiny; the risky region is moderate positive x where Phi error is amplified.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - GELU(x[i])) <= 1e-6 ... approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. EVERY finite FP16 value is legal."
+              }
+            ],
+            "scope_rationale": "The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for EVERY finite FP16 value in the full domain, and states approximations are permitted only if they satisfy the tolerance throughout the entire legal domain.",
+            "statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.381,
+        "input_tokens": 9295,
+        "output_tokens": 547
+      }
+    },
+    {
+      "duration_s": 8.03817656,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the decisive probe: the kernel over every finite FP16 value (61,696 values), compared against the FP64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, math, json, importlib.util, os\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_129/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\n# all finite FP16 values\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\nf = bits[torch.isfinite(bits)]\nprint(\"finite fp16 count:\", f.numel())\n\nf64 = f.to(torch.float64)\nref = 0.5 * f64 * torch.erfc(-f64 / math.sqrt(2.0))\n\nout = k.run(f.cuda())\nerr = (out.to(torch.float64) - ref).abs()\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error over all finite FP16 inputs\",\n  \"max_err\": float(err[i]),\n  \"argmax_x\": float(f[i]),\n  \"num_violations_1e-6\": int((err > 1e-6).sum()),\n  \"num_violations_1e_5\": int((err > 1e-5).sum()),\n  \"num_violations_1e_7\": int((err > 1e-7).sum()),\n  \"worst_x\": float(f[i]),\n  \"out\": float(out[i]),\n  \"ref\": float(ref[i]),\n}))\n",
+            "expected_signal": "max abs error over the full finite FP16 domain vs FP64 reference, and violation count at 1e-6"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.038,
+        "input_tokens": 10700,
+        "output_tokens": 431
+      }
+    },
+    {
+      "duration_s": 5.869896082,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed on a device mismatch (my reference stayed on CPU). I'll rerun with both tensors on the same device.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, math, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_129/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\nf = bits[torch.isfinite(bits)]\nf64 = f.to(torch.float64)\nref = 0.5 * f64 * torch.erfc(-f64 / math.sqrt(2.0))\n\nout = k.run(f.cuda()).cpu().to(torch.float64)\nerr = (out - ref).abs()\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\",\n  \"n_finite\": f.numel(),\n  \"max_err\": float(err[i]),\n  \"worst_x\": float(f[i]),\n  \"out\": float(out[i]),\n  \"ref\": float(ref[i]),\n  \"num_violations_gt_1e-6\": int((err > 1e-6).sum()),\n  \"num_violations_gt_1e-5\": int((err > 1e-5).sum()),\n}))\n",
+            "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.87,
+        "input_tokens": 12778,
+        "output_tokens": 359
+      }
+    },
+    {
+      "duration_s": 5.696245365000003,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive probe over all 63,488 finite FP16 values confirmed a violation: max abs error 2.74e-6 at x\u22481.0068, with 5,358 inputs exceeding the 1e-6 tolerance. I'll finalize this evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_err": 2.740334944961731e-06,
+              "num_violations_gt_1e-6": 5358,
+              "worst_x": 1.0068359375
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Exhaustive scan of all 63,488 finite FP16 values vs FP64 erfc reference: max abs error 2.7403e-6 at x\u22481.0068 (out 0.84875858 vs ref 0.84875584), and 5,358 inputs exceed the 1e-6 absolute tolerance. Zero exceed 1e-5. This is intrinsic A&S approximation error amplified by |x|, not a coding bug, but it violates the contract's fixed 1e-6 tolerance throughout the legal domain.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.696,
+        "input_tokens": 15238,
+        "output_tokens": 318
+      }
+    },
+    {
+      "duration_s": 7.071777589999996,
+      "role": "solo",
+      "round": 6,
+      "text": "The decisive claim is resolved: the exhaustive scan over all 63,488 finite FP16 values shows 5,358 inputs exceed the contract's fixed 1e-6 absolute tolerance (max error 2.74e-6 at x\u22481.0068). I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 (in_scope, confirmed) is decisive. The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for every finite FP16 value, and explicitly permits polynomial approximations only if they satisfy that tolerance throughout the entire legal domain. Probe t7 exhaustively ran the kernel over all 63,488 finite FP16 values and compared against the FP64 erfc reference: max absolute error 2.7403e-6 at x=1.0068 (kernel output 0.84875858 vs reference 0.84875584), with 5,358 inputs exceeding 1e-6 (though none exceed 1e-5). This is the intrinsic Abramowitz\u2013Stegun approximation error amplified by |x|\u00b7Phi-error, a genuine contract violation on inputs the contract explicitly admits (e.g., moderate positive values reachable by any input including make_inputs examples), not a metric artifact or edge case.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.072,
+        "input_tokens": 19040,
+        "output_tokens": 328
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_129"
+      },
+      "created_at": "2026-10-09T08:00:32Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_129",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise GELU using a Gaussian-tail approximation.\n\nOriginal Triton adaptation of the Abramowitz--Stegun five-coefficient formula\nfor the Gaussian tail in GELU. This is a synthetic benchmark implementation,\nnot a claimed historical bug.\n\"\"\"\nimport math\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _gelu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    normalized = magnitude * 0.7071067811865475\n    t = tl.div_rn(1.0, 1.0 + 0.3276 * normalized)\n    polynomial = 1.06141 * t - 1.45315\n    polynomial = polynomial * t + 1.42141\n    polynomial = polynomial * t - 0.28450\n    polynomial = polynomial * t + 0.25483\n    polynomial = polynomial * t\n    envelope = tl.exp(-(0.5 * (magnitude * magnitude)))\n    tail = 0.5 * (polynomial * envelope)\n    probability = tl.where(x < 0.0, tail, 1.0 - tail)\n    value = x * probability\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating GELU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _gelu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical GELU definition using the FP64 erfc function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return (0.5 * value) * torch.erfc(-value / math.sqrt(2.0))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute GELU elementwise on stored FP16 input values and return FP32 output.\nThe mathematical target is the Gaussian Error Linear Unit\n\n  target[i] = GELU(x[i]) = x[i] * Phi(x[i])\n            = 0.5 * x[i] * erfc(-x[i] / sqrt(2)),\n\nwhere Phi is the standard normal cumulative distribution function and\n  erfc(u) = (2/sqrt(pi)) * integral from u to infinity of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - GELU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo intermediate FP16 rounding or particular polynomial is part of its\nmathematical definition. Polynomial, rational, tanh or other approximations\nare permitted if they satisfy this fixed absolute tolerance throughout the\nentire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates the erfc definition in FP64 and returns FP64; it accepts CPU inputs.\nmake_inputs() supplies examples only. This is an original Triton adaptation\nof the Abramowitz--Stegun five-coefficient Gaussian-tail approximation,\ncomposed with the GELU definition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_129",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_129"
+      },
+      "created_at": "2026-10-09T08:00:32Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute GELU elementwise on stored FP16 input values and return FP32 output.\nThe mathematical target is the Gaussian Error Linear Unit\n\n  target[i] = GELU(x[i]) = x[i] * Phi(x[i])\n            = 0.5 * x[i] * erfc(-x[i] / sqrt(2)),\n\nwhere Phi is the standard normal cumulative distribution function and\n  erfc(u) = (2/sqrt(pi)) * integral from u to infinity of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - GELU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo intermediate FP16 rounding or particular polynomial is part of its\nmathematical definition. Polynomial, rational, tanh or other approximations\nare permitted if they satisfy this fixed absolute tolerance throughout the\nentire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates the erfc definition in FP64 and returns FP64; it accepts CPU inputs.\nmake_inputs() supplies examples only. This is an original Triton adaptation\nof the Abramowitz--Stegun five-coefficient Gaussian-tail approximation,\ncomposed with the GELU definition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_129",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_129"
+      },
+      "created_at": "2026-10-09T08:00:32Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_129",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3098
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2174
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_129",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-09T08:00:32Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_129",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The A&S five-coefficient erfc approximation has ~7.5e-8 error in Phi; multiplied by |x| this can approach or exceed 1e-6 for moderate-to-large |x|, and GELU(x)\u22480 for large negative x where error is x*(1-Phi) tiny; the risky region is moderate positive x where Phi error is amplified.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - GELU(x[i])) <= 1e-6 ... approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. EVERY finite FP16 value is legal."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for EVERY finite FP16 value in the full domain, and states approximations are permitted only if they satisfy the tolerance throughout the entire legal domain.",
+        "statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|)."
+      },
+      "created_at": "2026-10-09T08:00:44Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-09T08:00:44Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The A&S five-coefficient erfc approximation has ~7.5e-8 error in Phi; multiplied by |x| this can approach or exceed 1e-6 for moderate-to-large |x|, and GELU(x)\u22480 for large negative x where error is x*(1-Phi) tiny; the risky region is moderate positive x where Phi error is amplified.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - GELU(x[i])) <= 1e-6 ... approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. EVERY finite FP16 value is legal."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for EVERY finite FP16 value in the full domain, and states approximations are permitted only if they satisfy the tolerance throughout the entire legal domain.",
+        "statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|).",
+        "status": "open",
+        "updated_at": "2026-10-09T08:00:44Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, math, json, importlib.util, os\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_129/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\n# all finite FP16 values\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\nf = bits[torch.isfinite(bits)]\nprint(\"finite fp16 count:\", f.numel())\n\nf64 = f.to(torch.float64)\nref = 0.5 * f64 * torch.erfc(-f64 / math.sqrt(2.0))\n\nout = k.run(f.cuda())\nerr = (out.to(torch.float64) - ref).abs()\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error over all finite FP16 inputs\",\n  \"max_err\": float(err[i]),\n  \"argmax_x\": float(f[i]),\n  \"num_violations_1e-6\": int((err > 1e-6).sum()),\n  \"num_violations_1e_5\": int((err > 1e-5).sum()),\n  \"num_violations_1e_7\": int((err > 1e-7).sum()),\n  \"worst_x\": float(f[i]),\n  \"out\": float(out[i]),\n  \"ref\": float(ref[i]),\n}))\n",
+        "expected_signal": "max abs error over the full finite FP16 domain vs FP64 reference, and violation count at 1e-6"
+      },
+      "created_at": "2026-10-09T08:00:58Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "dbf879244c1c6bd8ed87b330f7e81d6205c105fdc6bc5d2279f732ff4507b117"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "aa9c07d2af6ddcf3d98f41d47bdca3cbb96d04ac718a076a6ddf1ce685afd68c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "758744234b811f2d5d3d33465bf9cb4069ec6ccdf42fb2b345aaa79a005d663c"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|).",
+        "cwd": "/root/cases/case_129",
+        "duration_s": 5.817864,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "dbf879244c1c6bd8ed87b330f7e81d6205c105fdc6bc5d2279f732ff4507b117"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "aa9c07d2af6ddcf3d98f41d47bdca3cbb96d04ac718a076a6ddf1ce685afd68c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "758744234b811f2d5d3d33465bf9cb4069ec6ccdf42fb2b345aaa79a005d663c"
+              }
+            ],
+            "duration_s": 5.817864,
+            "exit_code": 1,
+            "expected_signal": "max abs error over the full finite FP16 domain vs FP64 reference, and violation count at 1e-6",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_129/solo/probes/t6_probe.py\", line 15, in <module>\n    err = (out.to(torch.float64) - ref).abs()\n           ~~~~~~~~~~~~~~~~~~~~~~^~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+            "stdout": "finite fp16 count: 63488\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": "max abs error over the full finite FP16 domain vs FP64 reference, and violation count at 1e-6",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_129/solo/probes/t6_probe.py\", line 15, in <module>\n    err = (out.to(torch.float64) - ref).abs()\n           ~~~~~~~~~~~~~~~~~~~~~~^~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+        "stdout": "finite fp16 count: 63488\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, math, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_129/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16).view(torch.float16)\nf = bits[torch.isfinite(bits)]\nf64 = f.to(torch.float64)\nref = 0.5 * f64 * torch.erfc(-f64 / math.sqrt(2.0))\n\nout = k.run(f.cuda()).cpu().to(torch.float64)\nerr = (out - ref).abs()\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\",\n  \"n_finite\": f.numel(),\n  \"max_err\": float(err[i]),\n  \"worst_x\": float(f[i]),\n  \"out\": float(out[i]),\n  \"ref\": float(ref[i]),\n  \"num_violations_gt_1e-6\": int((err > 1e-6).sum()),\n  \"num_violations_gt_1e-5\": int((err > 1e-5).sum()),\n}))\n",
+        "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6"
+      },
+      "created_at": "2026-10-09T08:01:08Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "87cb5699b5736069ded93cbdbc6d6f58e790247ce626d91ca28abd35a4e9db18"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "ca6c45556618775f2c9354e1576d5e010cdf84997790ce170c35490cdfac00c7"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "cef9c304a23c0437c8fdc6b9be19bfa129285efb78d534d34eaf089dbd5e796e"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|).",
+        "cwd": "/root/cases/case_129",
+        "duration_s": 3.921995,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "87cb5699b5736069ded93cbdbc6d6f58e790247ce626d91ca28abd35a4e9db18"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "ca6c45556618775f2c9354e1576d5e010cdf84997790ce170c35490cdfac00c7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "cef9c304a23c0437c8fdc6b9be19bfa129285efb78d534d34eaf089dbd5e796e"
+              }
+            ],
+            "duration_s": 3.921995,
+            "exit_code": 0,
+            "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_err": 2.740334944961731e-06,
+              "metric": "max abs error over all finite FP16 inputs vs FP64 erfc reference",
+              "n_finite": 63488,
+              "num_violations_gt_1e-5": 0,
+              "num_violations_gt_1e-6": 5358,
+              "out": 0.8487585783004761,
+              "ref": 0.8487558379655311,
+              "worst_x": 1.0068359375
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\", \"n_finite\": 63488, \"max_err\": 2.740334944961731e-06, \"worst_x\": 1.0068359375, \"out\": 0.8487585783004761, \"ref\": 0.8487558379655311, \"num_violations_gt_1e-6\": 5358, \"num_violations_gt_1e-5\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "max_err": 2.740334944961731e-06,
+          "metric": "max abs error over all finite FP16 inputs vs FP64 erfc reference",
+          "n_finite": 63488,
+          "num_violations_gt_1e-5": 0,
+          "num_violations_gt_1e-6": 5358,
+          "out": 0.8487585783004761,
+          "ref": 0.8487558379655311,
+          "worst_x": 1.0068359375
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\", \"n_finite\": 63488, \"max_err\": 2.740334944961731e-06, \"worst_x\": 1.0068359375, \"out\": 0.8487585783004761, \"ref\": 0.8487558379655311, \"num_violations_gt_1e-6\": 5358, \"num_violations_gt_1e-5\": 0}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_err": 2.740334944961731e-06,
+          "num_violations_gt_1e-6": 5358,
+          "worst_x": 1.0068359375
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Exhaustive scan of all 63,488 finite FP16 values vs FP64 erfc reference: max abs error 2.7403e-6 at x\u22481.0068 (out 0.84875858 vs ref 0.84875584), and 5,358 inputs exceed the 1e-6 absolute tolerance. Zero exceed 1e-5. This is intrinsic A&S approximation error amplified by |x|, not a coding bug, but it violates the contract's fixed 1e-6 tolerance throughout the legal domain.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-09T08:01:14Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-09T08:00:44Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-09T08:01:14Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "87cb5699b5736069ded93cbdbc6d6f58e790247ce626d91ca28abd35a4e9db18"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "ca6c45556618775f2c9354e1576d5e010cdf84997790ce170c35490cdfac00c7"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "cef9c304a23c0437c8fdc6b9be19bfa129285efb78d534d34eaf089dbd5e796e"
+                  }
+                ],
+                "duration_s": 3.921995,
+                "exit_code": 0,
+                "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_err": 2.740334944961731e-06,
+                  "metric": "max abs error over all finite FP16 inputs vs FP64 erfc reference",
+                  "n_finite": 63488,
+                  "num_violations_gt_1e-5": 0,
+                  "num_violations_gt_1e-6": 5358,
+                  "out": 0.8487585783004761,
+                  "ref": 0.8487558379655311,
+                  "worst_x": 1.0068359375
+                },
+                "max_err": 2.740334944961731e-06,
+                "num_violations_gt_1e-6": 5358,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\", \"n_finite\": 63488, \"max_err\": 2.740334944961731e-06, \"worst_x\": 1.0068359375, \"out\": 0.8487585783004761, \"ref\": 0.8487558379655311, \"num_violations_gt_1e-6\": 5358, \"num_violations_gt_1e-5\": 0}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "worst_x": 1.0068359375
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive scan of all 63,488 finite FP16 values vs FP64 erfc reference: max abs error 2.7403e-6 at x\u22481.0068 (out 0.84875858 vs ref 0.84875584), and 5,358 inputs exceed the 1e-6 absolute tolerance. Zero exceed 1e-5. This is intrinsic A&S approximation error amplified by |x|, not a coding bug, but it violates the contract's fixed 1e-6 tolerance throughout the legal domain.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The A&S five-coefficient erfc approximation has ~7.5e-8 error in Phi; multiplied by |x| this can approach or exceed 1e-6 for moderate-to-large |x|, and GELU(x)\u22480 for large negative x where error is x*(1-Phi) tiny; the risky region is moderate positive x where Phi error is amplified.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - GELU(x[i])) <= 1e-6 ... approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. EVERY finite FP16 value is legal."
+            }
+          ],
+          "scope_rationale": "The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for EVERY finite FP16 value in the full domain, and states approximations are permitted only if they satisfy the tolerance throughout the entire legal domain.",
+          "statement": "The kernel's output violates the 1e-6 absolute tolerance for some finite FP16 input values (likely from the intrinsic A&S approximation error amplified by large |x|).",
+          "status": "confirmed",
+          "updated_at": "2026-10-09T08:01:14Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:01:14Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "87cb5699b5736069ded93cbdbc6d6f58e790247ce626d91ca28abd35a4e9db18"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "ca6c45556618775f2c9354e1576d5e010cdf84997790ce170c35490cdfac00c7"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "cef9c304a23c0437c8fdc6b9be19bfa129285efb78d534d34eaf089dbd5e796e"
+              }
+            ],
+            "duration_s": 3.921995,
+            "exit_code": 0,
+            "expected_signal": "max abs error over the full finite FP16 domain and count of elements exceeding 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_err": 2.740334944961731e-06,
+              "metric": "max abs error over all finite FP16 inputs vs FP64 erfc reference",
+              "n_finite": 63488,
+              "num_violations_gt_1e-5": 0,
+              "num_violations_gt_1e-6": 5358,
+              "out": 0.8487585783004761,
+              "ref": 0.8487558379655311,
+              "worst_x": 1.0068359375
+            },
+            "max_err": 2.740334944961731e-06,
+            "num_violations_gt_1e-6": 5358,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error over all finite FP16 inputs vs FP64 erfc reference\", \"n_finite\": 63488, \"max_err\": 2.740334944961731e-06, \"worst_x\": 1.0068359375, \"out\": 0.8487585783004761, \"ref\": 0.8487558379655311, \"num_violations_gt_1e-6\": 5358, \"num_violations_gt_1e-5\": 0}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_x": 1.0068359375
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive scan of all 63,488 finite FP16 values vs FP64 erfc reference: max abs error 2.7403e-6 at x\u22481.0068 (out 0.84875858 vs ref 0.84875584), and 5,358 inputs exceed the 1e-6 absolute tolerance. Zero exceed 1e-5. This is intrinsic A&S approximation error amplified by |x|, not a coding bug, but it violates the contract's fixed 1e-6 tolerance throughout the legal domain.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 (in_scope, confirmed) is decisive. The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for every finite FP16 value, and explicitly permits polynomial approximations only if they satisfy that tolerance throughout the entire legal domain. Probe t7 exhaustively ran the kernel over all 63,488 finite FP16 values and compared against the FP64 erfc reference: max absolute error 2.7403e-6 at x=1.0068 (kernel output 0.84875858 vs reference 0.84875584), with 5,358 inputs exceeding 1e-6 (though none exceed 1e-5). This is the intrinsic Abramowitz\u2013Stegun approximation error amplified by |x|\u00b7Phi-error, a genuine contract violation on inputs the contract explicitly admits (e.g., moderate positive values reachable by any input including make_inputs examples), not a metric artifact or edge case.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-09T08:01:21Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-09T08:01:21Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 (in_scope, confirmed) is decisive. The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for every finite FP16 value, and explicitly permits polynomial approximations only if they satisfy that tolerance throughout the entire legal domain. Probe t7 exhaustively ran the kernel over all 63,488 finite FP16 values and compared against the FP64 erfc reference: max absolute error 2.7403e-6 at x=1.0068 (kernel output 0.84875858 vs reference 0.84875584), with 5,358 inputs exceeding 1e-6 (though none exceed 1e-5). This is the intrinsic Abramowitz\u2013Stegun approximation error amplified by |x|\u00b7Phi-error, a genuine contract violation on inputs the contract explicitly admits (e.g., moderate positive values reachable by any input including make_inputs examples), not a metric artifact or edge case.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-09T08:01:21Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 (in_scope, confirmed) is decisive. The contract requires abs(actual[i]-GELU(x[i])) <= 1e-6 for every finite FP16 value, and explicitly permits polynomial approximations only if they satisfy that tolerance throughout the entire legal domain. Probe t7 exhaustively ran the kernel over all 63,488 finite FP16 values and compared against the FP64 erfc reference: max absolute error 2.7403e-6 at x=1.0068 (kernel output 0.84875858 vs reference 0.84875584), with 5,358 inputs exceeding 1e-6 (though none exceed 1e-5). This is the intrinsic Abramowitz\u2013Stegun approximation error amplified by |x|\u00b7Phi-error, a genuine contract violation on inputs the contract explicitly admits (e.g., moderate positive values reachable by any input including make_inputs examples), not a metric artifact or edge case.",
+    "verdict": "reject"
+  }
+}

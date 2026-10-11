@@ -1,0 +1,1244 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "LICENSE",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_120",
+    "has_error": null,
+    "kernel_code": "\"\"\"Standalone GPTQ-format INT4 projection with activation-order preparation.\n\nAutoGPTQ portions: Copyright (c) 2023 \u6f58\u5176\u5a01(William), MIT.\nMarlin packing layout: Copyright (C) Marlin.2024 Elias Frantar, Apache-2.0.\nSee LICENSE. 2026 adaptation: explicit T4-compatible Triton preparation/GEMM,\nsmall shape bounds, GPTQ asymmetric zero points and independent public reference.\nThis uses the Marlin packed layout, not its Ampere-only CUDA execution kernel.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\ndef _layout_permutation(device):\n    permutation = []\n    for i in range(32):\n        column = i // 4\n        within = []\n        for block in (0, 1):\n            for row in (2*(i % 4), 2*(i % 4)+1,\n                        2*(i % 4+4), 2*(i % 4+4)+1):\n                within.append(16*row + column + 8*block)\n        for j in range(4):\n            permutation.extend(p + 256*j for p in within)\n    permutation = torch.tensor(permutation, device=device, dtype=torch.int32)\n    interleave = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device=device)\n    return permutation.reshape(-1, 8)[:, interleave].reshape(-1).contiguous()\n\n\n@triton.jit\ndef _repack(QWEIGHT, ORDER, PERM, PACKED,\n            K: tl.constexpr, N: tl.constexpr, NT: tl.constexpr,\n            B: tl.constexpr):\n    tile_k = tl.program_id(0)\n    tile_n = tl.program_id(1)\n    word = tl.arange(0, B)\n    packed = tl.zeros((B,), tl.uint32)\n    for nibble in tl.static_range(8):\n        source = tl.load(PERM + word*8 + nibble)\n        local_k = (source % 256) // 16\n        local_n = (source // 256)*16 + source % 16\n        sorted_k = tile_k*16 + local_k\n        original_k = tl.load(ORDER + sorted_k, mask=sorted_k < K, other=0)\n        column = tile_n*64 + local_n\n        value = tl.load(QWEIGHT + (original_k // 8)*N + column,\n                        mask=(sorted_k < K) & (column < N), other=0).to(tl.uint32)\n        quant = (value >> (4*(original_k % 8))) & 15\n        packed |= quant << (4*nibble)\n    tl.store(PACKED + (tile_k*NT + tile_n)*128 + word, packed)\n\n\n@triton.jit\ndef _int4_gemm(X, PACKED, SCALE, QZERO, ORDER, OUT,\n               M: tl.constexpr, K: tl.constexpr, N: tl.constexpr,\n               NT: tl.constexpr, ZN: tl.constexpr, GROUP_SIZE: tl.constexpr,\n               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):\n    rows = tl.program_id(0)*BM + tl.arange(0, BM)\n    columns = tl.program_id(1)*BN + tl.arange(0, BN)\n    inner = tl.arange(0, BK)\n    accumulator = tl.zeros((BM, BN), tl.float32)\n    for block in range(tl.cdiv(K, BK)):\n        kk = block*BK + inner\n        original = tl.load(ORDER + kk, mask=kk < K, other=0)\n        activation = tl.load(X + rows[:, None]*K + original[None, :],\n                             mask=(rows[:, None] < M) & (kk[None, :] < K), other=0.0)\n        word = 4*(4*(columns[None, :] % 8) + (kk[:, None] % 8)//2) + (columns[None, :] % 64)//16\n        lane = 4*(kk[:, None] % 2) + 2*((columns[None, :] % 16)//8) + (kk[:, None] % 16)//8\n        address = ((kk[:, None]//16)*NT + columns[None, :]//64)*128 + word\n        packed = tl.load(PACKED + address,\n                         mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\n        quant = (packed >> (4*lane)) & 15\n        group = kk // GROUP_SIZE\n        scale = tl.load(SCALE + group[:, None]*N + columns[None, :],\n                        mask=(kk[:, None] < K) & (columns[None, :] < N), other=0.0).to(tl.float32)\n        zero_word = tl.load(QZERO + group[:, None]*ZN + columns[None, :]//8,\n                            mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\n        zero = ((zero_word >> (4*(columns[None, :] % 8))) & 15) + 1\n        weight = ((quant.to(tl.int32)-zero.to(tl.int32)).to(tl.float32)*scale).to(tl.float16)\n        accumulator = tl.dot(activation, weight, accumulator)\n    tl.store(OUT + rows[:, None]*N + columns[None, :], accumulator,\n             mask=(rows[:, None] < M) & (columns[None, :] < N))\n\n\ndef validate_inputs(x, qweight, scales, qzeros, g_idx, group_size, require_cuda=True):\n    \"\"\"Enforce the full public contract; CPU validation is also available.\"\"\"\n    tensors = (x, qweight, scales, qzeros, g_idx)\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for tensor in tensors:\n        require(type(tensor) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(), \"contiguous strided tensors required\")\n        require(not tensor.requires_grad and not tensor.is_inference(), \"ordinary non-gradient materialized buffers required\")\n        require(not tensor.is_neg() and not tensor.is_conj(), \"logical view flags are outside this domain\")\n    require(all(t.device == x.device for t in tensors), \"all inputs must share one device\")\n    require(not require_cuda or x.is_cuda, \"CUDA inputs required by run\")\n    require(type(group_size) is int and group_size in (16,32,64), \"group_size must be16,32 or64\")\n    require(x.ndim == 2 and qweight.ndim == 2 and scales.ndim == 2,\n            \"expected x[M,K], qweight[ceil(K/8),N], scales[G,N]\")\n    m,k = x.shape\n    n = qweight.shape[1]\n    groups = (k+group_size-1)//group_size\n    require(1 <= m <= 65 and 1 <= k <= 128 and 1 <= n <= 96, \"shape outside supported bounds\")\n    require(qweight.shape == ((k+7)//8,n) and scales.shape == (groups,n), \"qweight/scales shape mismatch\")\n    require(qzeros.shape == (groups,(n+7)//8) and g_idx.shape == (k,), \"qzeros/g_idx shape mismatch\")\n    require(x.dtype == scales.dtype == torch.float16, \"activations/scales must be FP16\")\n    require(qweight.dtype == qzeros.dtype == g_idx.dtype == torch.int32, \"packed buffers and g_idx must be int32\")\n    require(bool(torch.isfinite(x).all().item()) and bool(torch.isfinite(scales).all().item()), \"floating inputs must be finite\")\n    require(bool((x.abs() <= .5).all().item()), \"activation magnitude exceeds0.5\")\n    require(bool(((scales > 0) & (scales <= .03125)).all().item()), \"scales must be in(0,1/32]\")\n    require(bool(((g_idx >= 0) & (g_idx < groups)).all().item()), \"group id out of range\")\n    counts = torch.bincount(g_idx.long(), minlength=groups)\n    expected = torch.tensor([min(group_size,k-g*group_size) for g in range(groups)],\n                            device=x.device,dtype=counts.dtype)\n    require(bool(torch.equal(counts,expected)), \"group histogram does not match group_size and final partial group\")\n    intervals = [(t.data_ptr(),t.data_ptr()+t.numel()*t.element_size()) for t in tensors]\n    require(all(a1 <= b0 or b1 <= a0 for i,(a0,a1) in enumerate(intervals)\n                for b0,b1 in intervals[i+1:]), \"input byte ranges must be disjoint\")\n    return {\"valid\":True,\"rows\":m,\"input_width\":k,\"output_width\":n,\n            \"groups\":groups,\"group_size\":group_size}\n\n\ndef run(x, qweight, scales, qzeros, g_idx, group_size):\n    \"\"\"Prepare the packed representation, then return a fresh FP32 matrix.\"\"\"\n    validate_inputs(x,qweight,scales,qzeros,g_idx,group_size)\n    m,k = x.shape\n    n = qweight.shape[1]\n    with torch.cuda.device(x.device):\n        order = torch.argsort(g_idx,stable=True).to(torch.int32)\n        permutation = _layout_permutation(x.device)\n        kt,nt = triton.cdiv(k,16),triton.cdiv(n,64)\n        packed = torch.empty((kt*nt*128,),device=x.device,dtype=torch.int32)\n        _repack[(kt,nt)](qweight,order,permutation,packed,K=k,N=n,NT=nt,B=128,num_warps=4)\n        output = torch.empty((m,n),device=x.device,dtype=torch.float32)\n        _int4_gemm[(triton.cdiv(m,16),triton.cdiv(n,32))](x,packed,scales,qzeros,\n            order,output,M=m,K=k,N=n,NT=nt,ZN=triton.cdiv(n,8),GROUP_SIZE=group_size,\n            BM=16,BN=32,BK=32,num_warps=4)\n    return output\n\n\ndef reference(x, qweight, scales, qzeros, g_idx, group_size):\n    \"\"\"Direct canonical bit decode, H16 weights, independent FP64 target.\"\"\"\n    validate_inputs(x,qweight,scales,qzeros,g_idx,group_size,require_cuda=False)\n    m,k = x.shape\n    n = qweight.shape[1]\n    columns = torch.arange(n,device=x.device)\n    decoded = torch.empty((k,n),device=x.device,dtype=torch.float16)\n    for row in range(k):\n        quant = (qweight[row//8].long() >> (4*(row%8))) & 15\n        group = int(g_idx[row].item())\n        zero = ((qzeros[group,columns//8].long() >> (4*(columns%8))) & 15) + 1\n        decoded[row] = ((quant-zero).double()*scales[group].double()).half()\n    return x.double() @ decoded.double()\n\n\ndef make_inputs(device=\"cuda\", rows=7, input_width=64, output_width=65, group_size=16, seed=0):\n    \"\"\"Convenience generator; not a restriction on the legal input domain.\"\"\"\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    k,n = input_width,output_width\n    groups = (k+group_size-1)//group_size\n    x = (torch.rand((rows,k),generator=rng)-.5).half()\n    codes = torch.randint(0,16,(((k+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qweight = torch.zeros(((k+7)//8,n),dtype=torch.int64)\n    for i in range(8):\n        qweight |= codes[i::8] << (4*i)\n    zero_codes = torch.randint(0,16,(groups,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qzeros = torch.zeros((groups,(n+7)//8),dtype=torch.int64)\n    for i in range(8):\n        qzeros |= zero_codes[:,i::8] << (4*i)\n    scales = (.002 + .029*torch.rand((groups,n),generator=rng)).half()\n    ids = (torch.arange(k)//group_size)[torch.randperm(k,generator=rng)].int()\n    return (x.to(device),qweight.int().to(device),scales.to(device),\n            qzeros.int().to(device),ids.to(device),group_size)\n",
+    "passed": null,
+    "problem_text": "Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\nbuffers. The target is the matrix decoded from these buffers, not a comparison\nto any original, pre-quantization matrix. Input row order may be activation-order\npermuted with respect to the quantization groups.\n\nInputs and complete canonical format:\n- x: finite FP16 [M,K], every magnitude <=0.5.\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\n  Actual zero points range from1 through16; there is no wrap after adding one.\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\n  The group histogram is fixed, while its order is unrestricted.\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\nincluding negative signed words, is valid in qweight/qzeros. Packed word\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\n\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\nContiguous views with nonzero storage offsets are legal. Inputs must have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nrun in ordinary non-inference mode without concurrent external input writes.\nThis is forward execution on materialized buffers and does not provide autograd.\n\nFor each k,n, define the decoded weight\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\nwhere the product uses the exact stored scale value and H16 means one IEEE\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\ntarget definition, not permission to round arbitrary later intermediates.\nDefine the target in real arithmetic on those stored/decoded values:\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\nbounded FP16-input/FP32-accumulation implementation including small subnormal\ncontributions. It does not change the canonical packing, group assignment or\nspecified decoded-weight definition.\n\nThe implementation may reorder rows, change internal packing and tile the GEMM;\nthese choices must preserve the complete target. Correctness is one verdict for\nthis fixed implementation over the full legal domain, not a verdict per input.\nvalidate_inputs() enforces the public domain and is called by run(). reference()\ndecodes the canonical buffers directly in original order and computes the FP64\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_120",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-03T19:05:39Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T19:07:40Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+              }
+            ],
+            "duration_s": 11.707981,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "tested": 42
+            },
+            "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+            "stderr": "",
+            "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+            "tested": 42,
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T19:09:21Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "bcff219f0032d5e50cc113e0dc04b85ea815f891598634087d679065b13a8f5e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c4f7c04a8a64e668dced2cf6136d6db479d4f26da8f036c2e65b9463b3957439"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "332d949b98d738e0a7a468ee820c2f8d200a95cfb99f46f13839a7a4f480ce8d"
+              }
+            ],
+            "duration_s": 84.089753,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "max_excess_over_tol": -0.009999943614937366,
+              "tested": 120
+            },
+            "max_excess_over_tol": -0.009999943614937366,
+            "stderr": "",
+            "stdout": "{\"tested\": 120, \"max_excess_over_tol\": -0.009999943614937366, \"fails\": []}\n",
+            "tested": 120,
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "120 randomized legal-domain configurations (random M in [1,65], K in [1,128], N in [1,96], group_size 16/32/64, shuffled g_idx, random signed-negative packed words in qweight/qzeros) all passed: max (err - tol) = -0.0099999 < 0, i.e. every output within 0.01 + 0.001*|target|.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+        }
+      ],
+      "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+      "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+      "status": "rebutted",
+      "updated_at": "2026-10-03T19:09:21Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_120",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_120"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_120"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_120"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_120",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 22.285600691,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll register a correctness claim covering the full legal input domain and then run a probe comparing `run()` against `reference()` across many shape/group/edge-case combinations.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+              }
+            ],
+            "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+            "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 22.286,
+        "input_tokens": 13050,
+        "output_tokens": 1253
+      }
+    },
+    {
+      "duration_s": 17.113746857999995,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe comparing run() against reference() across many shapes, group sizes, and edge cases (negative words, shuffled g_idx, partial groups).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, itertools, json, sys\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\n\ndev = \"cuda\"\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    G = (kk+gs-1)//gs\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\n    for i in range(8): qw |= codes[i::8] << (4*i)\n    if neg_words:\n        # make some stored words negative signed patterns\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\n    if neg_words:\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    if worst:\n        # extreme codes\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\n        for i in range(8): qw |= codes2[i::8] << (4*i)\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)  # zero=16\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\n        sc = torch.full((G,n), 0.03125).half().to(dev)\n    else:\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\n\nfails = []\ntested = 0\ncases = []\nfor gs in (16,32,64):\n    for kk in (1, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 128):\n        for n in (1, 7, 8, 9, 32, 33, 63, 64, 65, 96):\n            for m in (1, 7, 16, 17, 65):\n                if kk < gs and gs != 16: continue\n                cases.append((m,kk,n,gs))\nimport random\nrandom.seed(0)\nif len(cases) > 400: cases = random.sample(cases, 400)\nfor (m,kk,n,gs) in cases:\n    for seed, neg, worst in ((0,False,False),(1,False,False),(2,True,False),(3,False,True)):\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\n        try:\n            out = K.run(x,qw,sc,qz,ids,gs_)\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\n            err = (out.double()-ref.double()).abs()\n            tol = 0.01 + 0.001*ref.double().abs()\n            tested += 1\n            if bool((err > tol).any()):\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\n                                  maxerr=float(err.max()), maxtol=float(tol.min())))\n        except Exception as e:\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:200]))\n        if len(fails) >= 5: break\n    if len(fails) >= 5: break\nprint(json.dumps({\"tested\":tested,\"fails\":fails}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.114,
+        "input_tokens": 14721,
+        "output_tokens": 1095
+      }
+    },
+    {
+      "duration_s": 15.533686215000003,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe timed out compiling many Triton variants. I'll rerun a smaller, targeted set with a longer timeout and incremental flushing so partial results survive.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\n\ndev = \"cuda\"\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    G = (kk+gs-1)//gs\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\n    for i in range(8): qw |= codes[i::8] << (4*i)\n    if neg_words:\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\n    if neg_words:\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    if worst:\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\n        for i in range(8): qw |= codes2[i::8] << (4*i)\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\n        sc = torch.full((G,n), 0.03125).half().to(dev)\n    else:\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\n\nfails = []\ntested = 0\n# targeted edge shapes: K not mult of 8/16, N not mult of 64, M extremes\ncases = [(1,1,1,16),(1,7,9,16),(5,9,63,16),(17,15,64,16),(65,17,65,16),\n         (7,16,96,16),(16,31,33,16),(3,33,7,16),(2,63,65,32),(1,64,96,64),\n         (65,127,96,16),(1,128,96,16),(33,65,1,16),(4,1,96,16)]\nfor (m,kk,n,gs) in cases:\n    for seed, neg, worst in ((0,False,False),(2,True,False),(3,False,True)):\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\n        try:\n            out = K.run(x,qw,sc,qz,ids,gs_)\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\n            err = (out.double()-ref.double()).abs()\n            tol = 0.01 + 0.001*ref.double().abs()\n            tested += 1\n            if bool((err > tol).any()):\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\n                                  maxerr=float(err.max()), bad=int((err>tol).sum())))\n        except Exception as e:\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:150]))\n        print(\"done\", m,kk,n,gs,seed, len(fails), flush=True)\nprint(json.dumps({\"tested\":tested,\"fails\":fails}), flush=True)\n",
+            "timeout_s": 480
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.534,
+        "input_tokens": 17671,
+        "output_tokens": 1071
+      }
+    },
+    {
+      "duration_s": 11.649335878000016,
+      "role": "solo",
+      "round": 5,
+      "text": "The targeted edge-shape probe (t7) passed all 42 configurations including K/N/M boundary shapes, negative packed words, and extreme codes. I'll run one broader randomized sweep to strengthen coverage before resolving the claim.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys, random\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\ndev=\"cuda\"\ndef gen(m,kk,n,gs,seed):\n    rng=torch.Generator(device=\"cpu\").manual_seed(seed)\n    G=(kk+gs-1)//gs\n    x=(torch.rand((m,kk),generator=rng)-.5).half().to(dev)\n    codes=torch.randint(0,16,(((kk+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qw=torch.zeros(((kk+7)//8,n),dtype=torch.int64)\n    for i in range(8): qw|=codes[i::8]<<(4*i)\n    qw=qw|(torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    zc=torch.randint(0,16,(G,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qz=torch.zeros((G,(n+7)//8),dtype=torch.int64)\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\n    qz=qz|(torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    sc=(.002+.029*torch.rand((G,n),generator=rng)).half().to(dev)\n    ids=(torch.arange(kk)//gs)[torch.randperm(kk,generator=rng)].int().to(dev)\n    return (x,qw.int().to(dev),sc,qz.int().to(dev),ids,gs)\nfails=[];tested=0;maxerr=0.0\nrandom.seed(1)\nfor trial in range(120):\n    gs=random.choice([16,32,64]); kk=random.randint(1,128)\n    if gs>16 and kk<gs: kk=gs\n    m=random.randint(1,65); n=random.randint(1,96); seed=trial\n    x,qw,sc,qz,ids,gs_=gen(m,kk,n,gs,seed)\n    out=K.run(x,qw,sc,qz,ids,gs_); ref=K.reference(x,qw,sc,qz,ids,gs_)\n    err=(out.double()-ref.double()).abs(); tol=0.01+0.001*ref.double().abs()\n    tested+=1; maxerr=max(maxerr,float((err-tol).max()))\n    if bool((err>tol).any()):\n        fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,maxerr=float(err.max()),bad=int((err>tol).sum())))\n        if len(fails)>=5: break\nprint(json.dumps({\"tested\":tested,\"max_excess_over_tol\":maxerr,\"fails\":fails}),flush=True)\n",
+            "timeout_s": 480
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.649,
+        "input_tokens": 22091,
+        "output_tokens": 707
+      }
+    },
+    {
+      "duration_s": 4.572404456999976,
+      "role": "solo",
+      "round": 6,
+      "text": "I'll finalize the t7 evidence, then run the broader randomized sweep to strengthen coverage.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "fails": 0,
+              "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+              "tested": 42
+            },
+            "event_id": "t7",
+            "status": null,
+            "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.572,
+        "input_tokens": 23788,
+        "output_tokens": 183
+      }
+    },
+    {
+      "duration_s": 11.346551102000006,
+      "role": "solo",
+      "round": 7,
+      "text": "The edge-case probe (t7) passed all 42 configurations. I'll run one broader randomized sweep across the full legal domain to strengthen coverage before recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys, random\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\ndev=\"cuda\"\ndef gen(m,kk,n,gs,seed):\n    rng=torch.Generator(device=\"cpu\").manual_seed(seed)\n    G=(kk+gs-1)//gs\n    x=(torch.rand((m,kk),generator=rng)-.5).half().to(dev)\n    codes=torch.randint(0,16,(((kk+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qw=torch.zeros(((kk+7)//8,n),dtype=torch.int64)\n    for i in range(8): qw|=codes[i::8]<<(4*i)\n    qw=qw|(torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    zc=torch.randint(0,16,(G,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qz=torch.zeros((G,(n+7)//8),dtype=torch.int64)\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\n    qz=qz|(torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    sc=(.002+.029*torch.rand((G,n),generator=rng)).half().to(dev)\n    ids=(torch.arange(kk)//gs)[torch.randperm(kk,generator=rng)].int().to(dev)\n    return (x,qw.int().to(dev),sc,qz.int().to(dev),ids,gs)\nfails=[];tested=0;maxexcess=-1e9\nrandom.seed(1)\nfor trial in range(120):\n    gs=random.choice([16,32,64]); kk=random.randint(1,128)\n    if gs>16 and kk<gs: kk=gs\n    m=random.randint(1,65); n=random.randint(1,96); seed=trial\n    x,qw,sc,qz,ids,gs_=gen(m,kk,n,gs,seed)\n    out=K.run(x,qw,sc,qz,ids,gs_); ref=K.reference(x,qw,sc,qz,ids,gs_)\n    err=(out.double()-ref.double()).abs(); tol=0.01+0.001*ref.double().abs()\n    tested+=1; maxexcess=max(maxexcess,float((err-tol).max()))\n    if bool((err>tol).any()):\n        fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,maxerr=float(err.max()),bad=int((err>tol).sum())))\n        if len(fails)>=5: break\nprint(json.dumps({\"tested\":tested,\"max_excess_over_tol\":maxexcess,\"fails\":fails}),flush=True)\n",
+            "timeout_s": 480
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.347,
+        "input_tokens": 28262,
+        "output_tokens": 715
+      }
+    },
+    {
+      "duration_s": 5.480734420999994,
+      "role": "solo",
+      "round": 8,
+      "text": "The broader randomized sweep (t10) also passed all 120 configurations across the full legal domain. I'll finalize that evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "fails": 0,
+              "max_excess_over_tol": -0.009999943614937366,
+              "tested": 120
+            },
+            "event_id": "t10",
+            "status": "rebutted",
+            "summary": "120 randomized legal-domain configurations (random M in [1,65], K in [1,128], N in [1,96], group_size 16/32/64, shuffled g_idx, random signed-negative packed words in qweight/qzeros) all passed: max (err - tol) = -0.0099999 < 0, i.e. every output within 0.01 + 0.001*|target|.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.481,
+        "input_tokens": 30827,
+        "output_tokens": 219
+      }
+    },
+    {
+      "duration_s": 5.987113897,
+      "role": "solo",
+      "round": 9,
+      "text": "The sole in-scope claim is resolved with two independent runtime probes covering boundary shapes, extreme codes, negative packed words, and randomized full-domain sweeps \u2014 no failures beyond tolerance. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.9,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probes t7 (42 targeted edge-case configurations: M/K/N boundary and non-multiple-of-8/16/64 shapes, group_size 16/32/64, shuffled g_idx, negative signed packed words, extreme codes 15 with zero=16 and scale=1/32) and t10 (120 randomized full legal-domain configurations) both compared run() to the contract reference; every output satisfied err <= 0.01 + 0.001*|target| (t10 max excess over tolerance = -0.0099999). No legal-domain input violating the tolerance was found, so claim c1 is rebutted and the kernel satisfies the contract.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.987,
+        "input_tokens": 34739,
+        "output_tokens": 229
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_120"
+      },
+      "created_at": "2026-10-03T19:05:16Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "LICENSE",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_120",
+        "has_error": null,
+        "kernel_code": "\"\"\"Standalone GPTQ-format INT4 projection with activation-order preparation.\n\nAutoGPTQ portions: Copyright (c) 2023 \u6f58\u5176\u5a01(William), MIT.\nMarlin packing layout: Copyright (C) Marlin.2024 Elias Frantar, Apache-2.0.\nSee LICENSE. 2026 adaptation: explicit T4-compatible Triton preparation/GEMM,\nsmall shape bounds, GPTQ asymmetric zero points and independent public reference.\nThis uses the Marlin packed layout, not its Ampere-only CUDA execution kernel.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\ndef _layout_permutation(device):\n    permutation = []\n    for i in range(32):\n        column = i // 4\n        within = []\n        for block in (0, 1):\n            for row in (2*(i % 4), 2*(i % 4)+1,\n                        2*(i % 4+4), 2*(i % 4+4)+1):\n                within.append(16*row + column + 8*block)\n        for j in range(4):\n            permutation.extend(p + 256*j for p in within)\n    permutation = torch.tensor(permutation, device=device, dtype=torch.int32)\n    interleave = torch.tensor([0, 2, 4, 6, 1, 3, 5, 7], device=device)\n    return permutation.reshape(-1, 8)[:, interleave].reshape(-1).contiguous()\n\n\n@triton.jit\ndef _repack(QWEIGHT, ORDER, PERM, PACKED,\n            K: tl.constexpr, N: tl.constexpr, NT: tl.constexpr,\n            B: tl.constexpr):\n    tile_k = tl.program_id(0)\n    tile_n = tl.program_id(1)\n    word = tl.arange(0, B)\n    packed = tl.zeros((B,), tl.uint32)\n    for nibble in tl.static_range(8):\n        source = tl.load(PERM + word*8 + nibble)\n        local_k = (source % 256) // 16\n        local_n = (source // 256)*16 + source % 16\n        sorted_k = tile_k*16 + local_k\n        original_k = tl.load(ORDER + sorted_k, mask=sorted_k < K, other=0)\n        column = tile_n*64 + local_n\n        value = tl.load(QWEIGHT + (original_k // 8)*N + column,\n                        mask=(sorted_k < K) & (column < N), other=0).to(tl.uint32)\n        quant = (value >> (4*(original_k % 8))) & 15\n        packed |= quant << (4*nibble)\n    tl.store(PACKED + (tile_k*NT + tile_n)*128 + word, packed)\n\n\n@triton.jit\ndef _int4_gemm(X, PACKED, SCALE, QZERO, ORDER, OUT,\n               M: tl.constexpr, K: tl.constexpr, N: tl.constexpr,\n               NT: tl.constexpr, ZN: tl.constexpr, GROUP_SIZE: tl.constexpr,\n               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):\n    rows = tl.program_id(0)*BM + tl.arange(0, BM)\n    columns = tl.program_id(1)*BN + tl.arange(0, BN)\n    inner = tl.arange(0, BK)\n    accumulator = tl.zeros((BM, BN), tl.float32)\n    for block in range(tl.cdiv(K, BK)):\n        kk = block*BK + inner\n        original = tl.load(ORDER + kk, mask=kk < K, other=0)\n        activation = tl.load(X + rows[:, None]*K + original[None, :],\n                             mask=(rows[:, None] < M) & (kk[None, :] < K), other=0.0)\n        word = 4*(4*(columns[None, :] % 8) + (kk[:, None] % 8)//2) + (columns[None, :] % 64)//16\n        lane = 4*(kk[:, None] % 2) + 2*((columns[None, :] % 16)//8) + (kk[:, None] % 16)//8\n        address = ((kk[:, None]//16)*NT + columns[None, :]//64)*128 + word\n        packed = tl.load(PACKED + address,\n                         mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\n        quant = (packed >> (4*lane)) & 15\n        group = kk // GROUP_SIZE\n        scale = tl.load(SCALE + group[:, None]*N + columns[None, :],\n                        mask=(kk[:, None] < K) & (columns[None, :] < N), other=0.0).to(tl.float32)\n        zero_word = tl.load(QZERO + group[:, None]*ZN + columns[None, :]//8,\n                            mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\n        zero = ((zero_word >> (4*(columns[None, :] % 8))) & 15) + 1\n        weight = ((quant.to(tl.int32)-zero.to(tl.int32)).to(tl.float32)*scale).to(tl.float16)\n        accumulator = tl.dot(activation, weight, accumulator)\n    tl.store(OUT + rows[:, None]*N + columns[None, :], accumulator,\n             mask=(rows[:, None] < M) & (columns[None, :] < N))\n\n\ndef validate_inputs(x, qweight, scales, qzeros, g_idx, group_size, require_cuda=True):\n    \"\"\"Enforce the full public contract; CPU validation is also available.\"\"\"\n    tensors = (x, qweight, scales, qzeros, g_idx)\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for tensor in tensors:\n        require(type(tensor) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(), \"contiguous strided tensors required\")\n        require(not tensor.requires_grad and not tensor.is_inference(), \"ordinary non-gradient materialized buffers required\")\n        require(not tensor.is_neg() and not tensor.is_conj(), \"logical view flags are outside this domain\")\n    require(all(t.device == x.device for t in tensors), \"all inputs must share one device\")\n    require(not require_cuda or x.is_cuda, \"CUDA inputs required by run\")\n    require(type(group_size) is int and group_size in (16,32,64), \"group_size must be16,32 or64\")\n    require(x.ndim == 2 and qweight.ndim == 2 and scales.ndim == 2,\n            \"expected x[M,K], qweight[ceil(K/8),N], scales[G,N]\")\n    m,k = x.shape\n    n = qweight.shape[1]\n    groups = (k+group_size-1)//group_size\n    require(1 <= m <= 65 and 1 <= k <= 128 and 1 <= n <= 96, \"shape outside supported bounds\")\n    require(qweight.shape == ((k+7)//8,n) and scales.shape == (groups,n), \"qweight/scales shape mismatch\")\n    require(qzeros.shape == (groups,(n+7)//8) and g_idx.shape == (k,), \"qzeros/g_idx shape mismatch\")\n    require(x.dtype == scales.dtype == torch.float16, \"activations/scales must be FP16\")\n    require(qweight.dtype == qzeros.dtype == g_idx.dtype == torch.int32, \"packed buffers and g_idx must be int32\")\n    require(bool(torch.isfinite(x).all().item()) and bool(torch.isfinite(scales).all().item()), \"floating inputs must be finite\")\n    require(bool((x.abs() <= .5).all().item()), \"activation magnitude exceeds0.5\")\n    require(bool(((scales > 0) & (scales <= .03125)).all().item()), \"scales must be in(0,1/32]\")\n    require(bool(((g_idx >= 0) & (g_idx < groups)).all().item()), \"group id out of range\")\n    counts = torch.bincount(g_idx.long(), minlength=groups)\n    expected = torch.tensor([min(group_size,k-g*group_size) for g in range(groups)],\n                            device=x.device,dtype=counts.dtype)\n    require(bool(torch.equal(counts,expected)), \"group histogram does not match group_size and final partial group\")\n    intervals = [(t.data_ptr(),t.data_ptr()+t.numel()*t.element_size()) for t in tensors]\n    require(all(a1 <= b0 or b1 <= a0 for i,(a0,a1) in enumerate(intervals)\n                for b0,b1 in intervals[i+1:]), \"input byte ranges must be disjoint\")\n    return {\"valid\":True,\"rows\":m,\"input_width\":k,\"output_width\":n,\n            \"groups\":groups,\"group_size\":group_size}\n\n\ndef run(x, qweight, scales, qzeros, g_idx, group_size):\n    \"\"\"Prepare the packed representation, then return a fresh FP32 matrix.\"\"\"\n    validate_inputs(x,qweight,scales,qzeros,g_idx,group_size)\n    m,k = x.shape\n    n = qweight.shape[1]\n    with torch.cuda.device(x.device):\n        order = torch.argsort(g_idx,stable=True).to(torch.int32)\n        permutation = _layout_permutation(x.device)\n        kt,nt = triton.cdiv(k,16),triton.cdiv(n,64)\n        packed = torch.empty((kt*nt*128,),device=x.device,dtype=torch.int32)\n        _repack[(kt,nt)](qweight,order,permutation,packed,K=k,N=n,NT=nt,B=128,num_warps=4)\n        output = torch.empty((m,n),device=x.device,dtype=torch.float32)\n        _int4_gemm[(triton.cdiv(m,16),triton.cdiv(n,32))](x,packed,scales,qzeros,\n            order,output,M=m,K=k,N=n,NT=nt,ZN=triton.cdiv(n,8),GROUP_SIZE=group_size,\n            BM=16,BN=32,BK=32,num_warps=4)\n    return output\n\n\ndef reference(x, qweight, scales, qzeros, g_idx, group_size):\n    \"\"\"Direct canonical bit decode, H16 weights, independent FP64 target.\"\"\"\n    validate_inputs(x,qweight,scales,qzeros,g_idx,group_size,require_cuda=False)\n    m,k = x.shape\n    n = qweight.shape[1]\n    columns = torch.arange(n,device=x.device)\n    decoded = torch.empty((k,n),device=x.device,dtype=torch.float16)\n    for row in range(k):\n        quant = (qweight[row//8].long() >> (4*(row%8))) & 15\n        group = int(g_idx[row].item())\n        zero = ((qzeros[group,columns//8].long() >> (4*(columns%8))) & 15) + 1\n        decoded[row] = ((quant-zero).double()*scales[group].double()).half()\n    return x.double() @ decoded.double()\n\n\ndef make_inputs(device=\"cuda\", rows=7, input_width=64, output_width=65, group_size=16, seed=0):\n    \"\"\"Convenience generator; not a restriction on the legal input domain.\"\"\"\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    k,n = input_width,output_width\n    groups = (k+group_size-1)//group_size\n    x = (torch.rand((rows,k),generator=rng)-.5).half()\n    codes = torch.randint(0,16,(((k+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qweight = torch.zeros(((k+7)//8,n),dtype=torch.int64)\n    for i in range(8):\n        qweight |= codes[i::8] << (4*i)\n    zero_codes = torch.randint(0,16,(groups,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qzeros = torch.zeros((groups,(n+7)//8),dtype=torch.int64)\n    for i in range(8):\n        qzeros |= zero_codes[:,i::8] << (4*i)\n    scales = (.002 + .029*torch.rand((groups,n),generator=rng)).half()\n    ids = (torch.arange(k)//group_size)[torch.randperm(k,generator=rng)].int()\n    return (x.to(device),qweight.int().to(device),scales.to(device),\n            qzeros.int().to(device),ids.to(device),group_size)\n",
+        "passed": null,
+        "problem_text": "Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\nbuffers. The target is the matrix decoded from these buffers, not a comparison\nto any original, pre-quantization matrix. Input row order may be activation-order\npermuted with respect to the quantization groups.\n\nInputs and complete canonical format:\n- x: finite FP16 [M,K], every magnitude <=0.5.\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\n  Actual zero points range from1 through16; there is no wrap after adding one.\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\n  The group histogram is fixed, while its order is unrestricted.\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\nincluding negative signed words, is valid in qweight/qzeros. Packed word\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\n\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\nContiguous views with nonzero storage offsets are legal. Inputs must have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nrun in ordinary non-inference mode without concurrent external input writes.\nThis is forward execution on materialized buffers and does not provide autograd.\n\nFor each k,n, define the decoded weight\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\nwhere the product uses the exact stored scale value and H16 means one IEEE\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\ntarget definition, not permission to round arbitrary later intermediates.\nDefine the target in real arithmetic on those stored/decoded values:\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\nbounded FP16-input/FP32-accumulation implementation including small subnormal\ncontributions. It does not change the canonical packing, group assignment or\nspecified decoded-weight definition.\n\nThe implementation may reorder rows, change internal packing and tile the GEMM;\nthese choices must preserve the complete target. Correctness is one verdict for\nthis fixed implementation over the full legal domain, not a verdict per input.\nvalidate_inputs() enforces the public domain and is called by run(). reference()\ndecodes the canonical buffers directly in original order and computes the FP64\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_120",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_120"
+      },
+      "created_at": "2026-10-03T19:05:16Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\nbuffers. The target is the matrix decoded from these buffers, not a comparison\nto any original, pre-quantization matrix. Input row order may be activation-order\npermuted with respect to the quantization groups.\n\nInputs and complete canonical format:\n- x: finite FP16 [M,K], every magnitude <=0.5.\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\n  Actual zero points range from1 through16; there is no wrap after adding one.\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\n  The group histogram is fixed, while its order is unrestricted.\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\nincluding negative signed words, is valid in qweight/qzeros. Packed word\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\n\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\nContiguous views with nonzero storage offsets are legal. Inputs must have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nrun in ordinary non-inference mode without concurrent external input writes.\nThis is forward execution on materialized buffers and does not provide autograd.\n\nFor each k,n, define the decoded weight\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\nwhere the product uses the exact stored scale value and H16 means one IEEE\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\ntarget definition, not permission to round arbitrary later intermediates.\nDefine the target in real arithmetic on those stored/decoded values:\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\nbounded FP16-input/FP32-accumulation implementation including small subnormal\ncontributions. It does not change the canonical packing, group assignment or\nspecified decoded-weight definition.\n\nThe implementation may reorder rows, change internal packing and tile the GEMM;\nthese choices must preserve the complete target. Correctness is one verdict for\nthis fixed implementation over the full legal domain, not a verdict per input.\nvalidate_inputs() enforces the public domain and is called by run(). reference()\ndecodes the canonical buffers directly in original order and computes the FP64\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_120",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_120"
+      },
+      "created_at": "2026-10-03T19:05:16Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_120",
+        "files": [
+          {
+            "kind": "other",
+            "path": "LICENSE",
+            "size_bytes": 12564
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 9612
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 3399
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_120",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-03T19:05:16Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_120",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+          }
+        ],
+        "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+        "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target)."
+      },
+      "created_at": "2026-10-03T19:05:39Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-03T19:05:39Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+          }
+        ],
+        "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+        "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+        "status": "open",
+        "updated_at": "2026-10-03T19:05:39Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, itertools, json, sys\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\n\ndev = \"cuda\"\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    G = (kk+gs-1)//gs\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\n    for i in range(8): qw |= codes[i::8] << (4*i)\n    if neg_words:\n        # make some stored words negative signed patterns\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\n    if neg_words:\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    if worst:\n        # extreme codes\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\n        for i in range(8): qw |= codes2[i::8] << (4*i)\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)  # zero=16\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\n        sc = torch.full((G,n), 0.03125).half().to(dev)\n    else:\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\n\nfails = []\ntested = 0\ncases = []\nfor gs in (16,32,64):\n    for kk in (1, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 128):\n        for n in (1, 7, 8, 9, 32, 33, 63, 64, 65, 96):\n            for m in (1, 7, 16, 17, 65):\n                if kk < gs and gs != 16: continue\n                cases.append((m,kk,n,gs))\nimport random\nrandom.seed(0)\nif len(cases) > 400: cases = random.sample(cases, 400)\nfor (m,kk,n,gs) in cases:\n    for seed, neg, worst in ((0,False,False),(1,False,False),(2,True,False),(3,False,True)):\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\n        try:\n            out = K.run(x,qw,sc,qz,ids,gs_)\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\n            err = (out.double()-ref.double()).abs()\n            tol = 0.01 + 0.001*ref.double().abs()\n            tested += 1\n            if bool((err > tol).any()):\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\n                                  maxerr=float(err.max()), maxtol=float(tol.min())))\n        except Exception as e:\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:200]))\n        if len(fails) >= 5: break\n    if len(fails) >= 5: break\nprint(json.dumps({\"tested\":tested,\"fails\":fails}))\n"
+      },
+      "created_at": "2026-10-03T19:06:56Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "5dbbde00a54bb0ec968daf56d33ffd5c5380634a55c8fdfab6ea1c2ac6a8d929"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+        "cwd": "/root/cases/case_120",
+        "duration_s": 60.170188,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5dbbde00a54bb0ec968daf56d33ffd5c5380634a55c8fdfab6ea1c2ac6a8d929"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 60.170188,
+            "exit_code": null,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "",
+            "timed_out": true,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe timed out and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": null,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "",
+        "timed_out": true,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\n\ndev = \"cuda\"\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\n    rng = torch.Generator(device=\"cpu\").manual_seed(seed)\n    G = (kk+gs-1)//gs\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\n    for i in range(8): qw |= codes[i::8] << (4*i)\n    if neg_words:\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\n    if neg_words:\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\n    if worst:\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\n        for i in range(8): qw |= codes2[i::8] << (4*i)\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\n        sc = torch.full((G,n), 0.03125).half().to(dev)\n    else:\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\n\nfails = []\ntested = 0\n# targeted edge shapes: K not mult of 8/16, N not mult of 64, M extremes\ncases = [(1,1,1,16),(1,7,9,16),(5,9,63,16),(17,15,64,16),(65,17,65,16),\n         (7,16,96,16),(16,31,33,16),(3,33,7,16),(2,63,65,32),(1,64,96,64),\n         (65,127,96,16),(1,128,96,16),(33,65,1,16),(4,1,96,16)]\nfor (m,kk,n,gs) in cases:\n    for seed, neg, worst in ((0,False,False),(2,True,False),(3,False,True)):\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\n        try:\n            out = K.run(x,qw,sc,qz,ids,gs_)\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\n            err = (out.double()-ref.double()).abs()\n            tol = 0.01 + 0.001*ref.double().abs()\n            tested += 1\n            if bool((err > tol).any()):\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\n                                  maxerr=float(err.max()), bad=int((err>tol).sum())))\n        except Exception as e:\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:150]))\n        print(\"done\", m,kk,n,gs,seed, len(fails), flush=True)\nprint(json.dumps({\"tested\":tested,\"fails\":fails}), flush=True)\n",
+        "timeout_s": 480
+      },
+      "created_at": "2026-10-03T19:07:24Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+        "cwd": "/root/cases/case_120",
+        "duration_s": 11.707981,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+              }
+            ],
+            "duration_s": 11.707981,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "tested": 42
+            },
+            "stderr": "",
+            "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "fails": [],
+          "tested": 42
+        },
+        "sandbox": {
+          "cpu_limit_s": 510,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+        "timed_out": false,
+        "timeout_s": 480,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys, random\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\ndev=\"cuda\"\ndef gen(m,kk,n,gs,seed):\n    rng=torch.Generator(device=\"cpu\").manual_seed(seed)\n    G=(kk+gs-1)//gs\n    x=(torch.rand((m,kk),generator=rng)-.5).half().to(dev)\n    codes=torch.randint(0,16,(((kk+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qw=torch.zeros(((kk+7)//8,n),dtype=torch.int64)\n    for i in range(8): qw|=codes[i::8]<<(4*i)\n    qw=qw|(torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    zc=torch.randint(0,16,(G,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qz=torch.zeros((G,(n+7)//8),dtype=torch.int64)\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\n    qz=qz|(torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    sc=(.002+.029*torch.rand((G,n),generator=rng)).half().to(dev)\n    ids=(torch.arange(kk)//gs)[torch.randperm(kk,generator=rng)].int().to(dev)\n    return (x,qw.int().to(dev),sc,qz.int().to(dev),ids,gs)\nfails=[];tested=0;maxerr=0.0\nrandom.seed(1)\nfor trial in range(120):\n    gs=random.choice([16,32,64]); kk=random.randint(1,128)\n    if gs>16 and kk<gs: kk=gs\n    m=random.randint(1,65); n=random.randint(1,96); seed=trial\n    x,qw,sc,qz,ids,gs_=gen(m,kk,n,gs,seed)\n    out=K.run(x,qw,sc,qz,ids,gs_); ref=K.reference(x,qw,sc,qz,ids,gs_)\n    err=(out.double()-ref.double()).abs(); tol=0.01+0.001*ref.double().abs()\n    tested+=1; maxerr=max(maxerr,float((err-tol).max()))\n    if bool((err>tol).any()):\n        fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,maxerr=float(err.max()),bad=int((err>tol).sum())))\n        if len(fails)>=5: break\nprint(json.dumps({\"tested\":tested,\"max_excess_over_tol\":maxerr,\"fails\":fails}),flush=True)\n",
+        "timeout_s": 480
+      },
+      "created_at": "2026-10-03T19:07:35Z",
+      "id": "t8",
+      "output": {
+        "error": {
+          "message": "claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t8",
+        "message": "claim c1 already has a successful probe you have not interpreted: event t7. Call finalize_probe_evidence(event_id='t7', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t7 first and then probe again.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "fails": 0,
+          "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+          "tested": 42
+        },
+        "event_id": "t7",
+        "status": null,
+        "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-03T19:07:40Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T19:05:39Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T19:07:40Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+                  }
+                ],
+                "duration_s": 11.707981,
+                "exit_code": 0,
+                "expected_signal": null,
+                "fails": 0,
+                "json_parse_error": null,
+                "json_result": {
+                  "fails": [],
+                  "tested": 42
+                },
+                "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+                "stderr": "",
+                "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+                "tested": 42,
+                "timed_out": false,
+                "timeout_s": 480
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+            }
+          ],
+          "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+          "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+          "status": "rebutted",
+          "updated_at": "2026-10-03T19:07:40Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T19:07:40Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+              }
+            ],
+            "duration_s": 11.707981,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "tested": 42
+            },
+            "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+            "stderr": "",
+            "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+            "tested": 42,
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys, random\nsys.path.insert(0, \"/root/cases/case_120\")\nimport kernel as K\ndev=\"cuda\"\ndef gen(m,kk,n,gs,seed):\n    rng=torch.Generator(device=\"cpu\").manual_seed(seed)\n    G=(kk+gs-1)//gs\n    x=(torch.rand((m,kk),generator=rng)-.5).half().to(dev)\n    codes=torch.randint(0,16,(((kk+7)//8)*8,n),generator=rng,dtype=torch.int64)\n    qw=torch.zeros(((kk+7)//8,n),dtype=torch.int64)\n    for i in range(8): qw|=codes[i::8]<<(4*i)\n    qw=qw|(torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    zc=torch.randint(0,16,(G,((n+7)//8)*8),generator=rng,dtype=torch.int64)\n    qz=torch.zeros((G,(n+7)//8),dtype=torch.int64)\n    for i in range(8): qz|=zc[:,i::8]<<(4*i)\n    qz=qz|(torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64)*(1<<31))\n    sc=(.002+.029*torch.rand((G,n),generator=rng)).half().to(dev)\n    ids=(torch.arange(kk)//gs)[torch.randperm(kk,generator=rng)].int().to(dev)\n    return (x,qw.int().to(dev),sc,qz.int().to(dev),ids,gs)\nfails=[];tested=0;maxexcess=-1e9\nrandom.seed(1)\nfor trial in range(120):\n    gs=random.choice([16,32,64]); kk=random.randint(1,128)\n    if gs>16 and kk<gs: kk=gs\n    m=random.randint(1,65); n=random.randint(1,96); seed=trial\n    x,qw,sc,qz,ids,gs_=gen(m,kk,n,gs,seed)\n    out=K.run(x,qw,sc,qz,ids,gs_); ref=K.reference(x,qw,sc,qz,ids,gs_)\n    err=(out.double()-ref.double()).abs(); tol=0.01+0.001*ref.double().abs()\n    tested+=1; maxexcess=max(maxexcess,float((err-tol).max()))\n    if bool((err>tol).any()):\n        fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,maxerr=float(err.max()),bad=int((err>tol).sum())))\n        if len(fails)>=5: break\nprint(json.dumps({\"tested\":tested,\"max_excess_over_tol\":maxexcess,\"fails\":fails}),flush=True)\n",
+        "timeout_s": 480
+      },
+      "created_at": "2026-10-03T19:09:15Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "bcff219f0032d5e50cc113e0dc04b85ea815f891598634087d679065b13a8f5e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "c4f7c04a8a64e668dced2cf6136d6db479d4f26da8f036c2e65b9463b3957439"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "332d949b98d738e0a7a468ee820c2f8d200a95cfb99f46f13839a7a4f480ce8d"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+        "cwd": "/root/cases/case_120",
+        "duration_s": 84.089753,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "bcff219f0032d5e50cc113e0dc04b85ea815f891598634087d679065b13a8f5e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c4f7c04a8a64e668dced2cf6136d6db479d4f26da8f036c2e65b9463b3957439"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "332d949b98d738e0a7a468ee820c2f8d200a95cfb99f46f13839a7a4f480ce8d"
+              }
+            ],
+            "duration_s": 84.089753,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "max_excess_over_tol": -0.009999943614937366,
+              "tested": 120
+            },
+            "stderr": "",
+            "stdout": "{\"tested\": 120, \"max_excess_over_tol\": -0.009999943614937366, \"fails\": []}\n",
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "fails": [],
+          "max_excess_over_tol": -0.009999943614937366,
+          "tested": 120
+        },
+        "sandbox": {
+          "cpu_limit_s": 510,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"tested\": 120, \"max_excess_over_tol\": -0.009999943614937366, \"fails\": []}\n",
+        "timed_out": false,
+        "timeout_s": 480,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "fails": 0,
+          "max_excess_over_tol": -0.009999943614937366,
+          "tested": 120
+        },
+        "event_id": "t10",
+        "status": "rebutted",
+        "summary": "120 randomized legal-domain configurations (random M in [1,65], K in [1,128], N in [1,96], group_size 16/32/64, shuffled g_idx, random signed-negative packed words in qweight/qzeros) all passed: max (err - tol) = -0.0099999 < 0, i.e. every output within 0.01 + 0.001*|target|.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-03T19:09:21Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T19:05:39Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T19:07:40Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "da63557dc04e96dcc804edea72a53aa7d2b137844f9b83a71e4352cf404bdf74"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "7d8d6c6343c203c2f6816afd18bd01649ebded1d0975d4e415773739848c0bc3"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "b6494814dcf86691fc722d76b5ec0681a3bacd8d5eca7af4e38e5fdd42619abc"
+                  }
+                ],
+                "duration_s": 11.707981,
+                "exit_code": 0,
+                "expected_signal": null,
+                "fails": 0,
+                "json_parse_error": null,
+                "json_result": {
+                  "fails": [],
+                  "tested": 42
+                },
+                "note": "All errors within tolerance on all edge shapes; neg-word and extreme-code variants included",
+                "stderr": "",
+                "stdout": "done 1 1 1 16 0 0\ndone 1 1 1 16 2 0\ndone 1 1 1 16 3 0\ndone 1 7 9 16 0 0\ndone 1 7 9 16 2 0\ndone 1 7 9 16 3 0\ndone 5 9 63 16 0 0\ndone 5 9 63 16 2 0\ndone 5 9 63 16 3 0\ndone 17 15 64 16 0 0\ndone 17 15 64 16 2 0\ndone 17 15 64 16 3 0\ndone 65 17 65 16 0 0\ndone 65 17 65 16 2 0\ndone 65 17 65 16 3 0\ndone 7 16 96 16 0 0\ndone 7 16 96 16 2 0\ndone 7 16 96 16 3 0\ndone 16 31 33 16 0 0\ndone 16 31 33 16 2 0\ndone 16 31 33 16 3 0\ndone 3 33 7 16 0 0\ndone 3 33 7 16 2 0\ndone 3 33 7 16 3 0\ndone 2 63 65 32 0 0\ndone 2 63 65 32 2 0\ndone 2 63 65 32 3 0\ndone 1 64 96 64 0 0\ndone 1 64 96 64 2 0\ndone 1 64 96 64 3 0\ndone 65 127 96 16 0 0\ndone 65 127 96 16 2 0\ndone 65 127 96 16 3 0\ndone 1 128 96 16 0 0\ndone 1 128 96 16 2 0\ndone 1 128 96 16 3 0\ndone 33 65 1 16 0 0\ndone 33 65 1 16 2 0\ndone 33 65 1 16 3 0\ndone 4 1 96 16 0 0\ndone 4 1 96 16 2 0\ndone 4 1 96 16 3 0\n{\"tested\": 42, \"fails\": []}\n",
+                "tested": 42,
+                "timed_out": false,
+                "timeout_s": 480
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "42 targeted edge-case configurations (K/N/M boundary shapes, K not multiple of 8/16, N not multiple of 64, M=1 and 65, group_size 16/32/64, shuffled g_idx, negative signed words via bit 31, extreme codes 15 with zero=16 and scale 1/32) all passed: err <= 0.01+0.001*|ref| for every output.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T19:09:21Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "bcff219f0032d5e50cc113e0dc04b85ea815f891598634087d679065b13a8f5e"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "c4f7c04a8a64e668dced2cf6136d6db479d4f26da8f036c2e65b9463b3957439"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "332d949b98d738e0a7a468ee820c2f8d200a95cfb99f46f13839a7a4f480ce8d"
+                  }
+                ],
+                "duration_s": 84.089753,
+                "exit_code": 0,
+                "expected_signal": null,
+                "fails": 0,
+                "json_parse_error": null,
+                "json_result": {
+                  "fails": [],
+                  "max_excess_over_tol": -0.009999943614937366,
+                  "tested": 120
+                },
+                "max_excess_over_tol": -0.009999943614937366,
+                "stderr": "",
+                "stdout": "{\"tested\": 120, \"max_excess_over_tol\": -0.009999943614937366, \"fails\": []}\n",
+                "tested": 120,
+                "timed_out": false,
+                "timeout_s": 480
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "120 randomized legal-domain configurations (random M in [1,65], K in [1,128], N in [1,96], group_size 16/32/64, shuffled g_idx, random signed-negative packed words in qweight/qzeros) all passed: max (err - tol) = -0.0099999 < 0, i.e. every output within 0.01 + 0.001*|target|.",
+              "supports": "rebutted",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel reorders rows via argsort(g_idx), repacks nibbles into a Marlin-style layout, and recomputes word/lane addresses and group indices in the GEMM; any inconsistency in that index math only shows on specific shapes (N not multiple of 64, K not multiple of 8/16, shuffled g_idx, partial final groups, negative packed words).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract fixes the target D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[...]) and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output over the full legal domain (1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, any int32 bit patterns in qweight/qzeros, unrestricted g_idx order with fixed histogram)."
+            }
+          ],
+          "scope_rationale": "The contract requires every output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) over the full declared legal domain, so any legal-domain input where run() deviates beyond tolerance is a contract violation.",
+          "statement": "There exists a legal input (within the contract's shape/domain bounds and input rules) for which run(x,qweight,scales,qzeros,g_idx,group_size) deviates from the contract target beyond the tolerance 0.01 + 0.001*abs(target).",
+          "status": "rebutted",
+          "updated_at": "2026-10-03T19:09:21Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T19:09:21Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "bcff219f0032d5e50cc113e0dc04b85ea815f891598634087d679065b13a8f5e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "c4f7c04a8a64e668dced2cf6136d6db479d4f26da8f036c2e65b9463b3957439"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "332d949b98d738e0a7a468ee820c2f8d200a95cfb99f46f13839a7a4f480ce8d"
+              }
+            ],
+            "duration_s": 84.089753,
+            "exit_code": 0,
+            "expected_signal": null,
+            "fails": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "fails": [],
+              "max_excess_over_tol": -0.009999943614937366,
+              "tested": 120
+            },
+            "max_excess_over_tol": -0.009999943614937366,
+            "stderr": "",
+            "stdout": "{\"tested\": 120, \"max_excess_over_tol\": -0.009999943614937366, \"fails\": []}\n",
+            "tested": 120,
+            "timed_out": false,
+            "timeout_s": 480
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "120 randomized legal-domain configurations (random M in [1,65], K in [1,128], N in [1,96], group_size 16/32/64, shuffled g_idx, random signed-negative packed words in qweight/qzeros) all passed: max (err - tol) = -0.0099999 < 0, i.e. every output within 0.01 + 0.001*|target|.",
+          "supports": "rebutted",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.9,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probes t7 (42 targeted edge-case configurations: M/K/N boundary and non-multiple-of-8/16/64 shapes, group_size 16/32/64, shuffled g_idx, negative signed packed words, extreme codes 15 with zero=16 and scale=1/32) and t10 (120 randomized full legal-domain configurations) both compared run() to the contract reference; every output satisfied err <= 0.01 + 0.001*|target| (t10 max excess over tolerance = -0.0099999). No legal-domain input violating the tolerance was found, so claim c1 is rebutted and the kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-03T19:09:27Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.9,
+        "created_at": "2026-10-03T19:09:27Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probes t7 (42 targeted edge-case configurations: M/K/N boundary and non-multiple-of-8/16/64 shapes, group_size 16/32/64, shuffled g_idx, negative signed packed words, extreme codes 15 with zero=16 and scale=1/32) and t10 (120 randomized full legal-domain configurations) both compared run() to the contract reference; every output satisfied err <= 0.01 + 0.001*|target| (t10 max excess over tolerance = -0.0099999). No legal-domain input violating the tolerance was found, so claim c1 is rebutted and the kernel satisfies the contract.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.9,
+    "created_at": "2026-10-03T19:09:27Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probes t7 (42 targeted edge-case configurations: M/K/N boundary and non-multiple-of-8/16/64 shapes, group_size 16/32/64, shuffled g_idx, negative signed packed words, extreme codes 15 with zero=16 and scale=1/32) and t10 (120 randomized full legal-domain configurations) both compared run() to the contract reference; every output satisfied err <= 0.01 + 0.001*|target| (t10 max excess over tolerance = -0.0099999). No legal-domain input violating the tolerance was found, so claim c1 is rebutted and the kernel satisfies the contract.",
+    "verdict": "trust"
+  }
+}

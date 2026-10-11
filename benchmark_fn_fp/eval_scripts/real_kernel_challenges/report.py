@@ -19,12 +19,30 @@ from summarize_traces import classify_outcome, read_run, read_single_call
 from traces import experiment_trial, iter_trace_records, trial_sort_key
 
 COHORTS = {"pilot": tuple(f"case_{i}" for i in range(106, 112)),
-           "boundary": tuple(f"case_{i}" for i in range(112, 116))}
+           "boundary": tuple(f"case_{i}" for i in range(112, 116)),
+           "splitk_moe": tuple(f"case_{i}" for i in range(116, 120)),
+           "int4_pipeline": ("case_120", "case_121"),
+           "stencil": ("case_122", "case_123"),
+           "requant": ("case_124", "case_125"),
+           "erf": ("case_126", "case_127"),
+           "gelu": ("case_128", "case_129"),
+           "silu": ("case_130", "case_131"),
+           "sine": ("case_132", "case_133")}
+SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
+                             if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
 ARMS = ("single_call", "solo", "debate")
 MODEL = "accounts/fireworks/models/glm-5p3"
 BEGIN = "<!-- BEGIN REAL KERNEL RESULTS -->"
 END = "<!-- END REAL KERNEL RESULTS -->"
+
+
+def _markers(cohort):
+    suffix = {"pilot": "", "boundary": " BOUNDARY", "splitk_moe": " SPLITK MOE",
+              "int4_pipeline": " INT4 PIPELINE", "stencil": " STENCIL",
+              "requant": " REQUANT", "erf": " ERF", "gelu": " GELU", "silu": " SILU", "sine": " SINE"}[cohort]
+    return (f"<!-- BEGIN REAL KERNEL{suffix} RESULTS -->",
+            f"<!-- END REAL KERNEL{suffix} RESULTS -->")
 
 
 def read(path):
@@ -103,7 +121,7 @@ def _attempt(record, labels, public, benchmark):
     budget = meta.get("max_tokens") if arm == "single_call" else meta.get("total_output_token_budget")
     if budget != 32768:
         issues.append("total output budget differs from 32768")
-    if case in COHORTS["boundary"] and arm != "single_call":
+    if case in SCOPED_TOOL_CASES and arm != "single_call":
         if meta.get("max_tokens") != 8192:
             issues.append("boundary tool turn limit differs from 8192")
         if meta.get("require_claim_scope_fields") is not True:
@@ -127,7 +145,10 @@ def _attempt(record, labels, public, benchmark):
     for call in calls:
         request, response, detail = (read(call / name) for name in ("request.json", "response.json", "metadata.json"))
         usage = response.get("usage") or {}
-        complete = bool(request and response and detail.get("status") == "completed"
+        # A saved provider response can be followed by a local parsing error.
+        # Capture completeness describes the evidence, not execution success;
+        # retain the call status and classify the failed run separately below.
+        complete = bool(request and response
                         and all(usage.get(k) is not None for k in ("prompt_tokens", "completion_tokens")))
         captures.append({"call": call.name, "status": detail.get("status"), "complete": complete})
         if request:
@@ -137,7 +158,7 @@ def _attempt(record, labels, public, benchmark):
                 raise ValueError(f"Incomplete or changed public task in API request: {call}")
             if not isinstance(request.get("max_tokens"), int) or not 0 < request["max_tokens"] <= 32768:
                 issues.append(f"request output limit mismatch: {call.name}")
-            elif case in COHORTS["boundary"] and arm != "single_call" and request["max_tokens"] > 8192:
+            elif case in SCOPED_TOOL_CASES and arm != "single_call" and request["max_tokens"] > 8192:
                 issues.append(f"boundary request exceeds per-turn 8192 cap: {call.name}")
     if not calls or not all(call["complete"] for call in captures):
         issues.append("raw API capture incomplete")
@@ -159,8 +180,8 @@ def _attempt(record, labels, public, benchmark):
             row["usd_is_partial"] = True
     outcome = classify_outcome(row, labels[case]["ground_truth"])
     if runner_error or status in {"error", "failed", "aborted", "cancelled", "timeout"}:
-        # No verdict after a length-limited response is budget exhaustion,
-        # even though the process also reports its missing verdict as an error.
+        # Keep the token_limit category for a length-limited response without
+        # a verdict, even if unused total/closeout budget remains after an error.
         if outcome != "token_limit":
             outcome = "error"
     elif status != "completed":
@@ -231,8 +252,7 @@ def _money(value):
 def render(report):
     rows = report["attempts"]
     cases = report["case_ids"]
-    begin, end = ((BEGIN, END) if report["cohort"] == "pilot" else
-                  ("<!-- BEGIN REAL KERNEL BOUNDARY RESULTS -->", "<!-- END REAL KERNEL BOUNDARY RESULTS -->"))
+    begin, end = _markers(report["cohort"])
     totals = report["totals"]
     outcomes = totals["outcomes"]
     lines = [begin, "", "以下结果直接由冻结标签和原始 traces 生成；保留所有尝试，不挑选最好结果。",
@@ -250,7 +270,7 @@ def render(report):
                 f"；probe {r.get('probes', 0)}；{_money(r.get('usd'))}"
                 + ("；审计未通过" if r["audit_issues"] else "") for r in trials) or "缺失")
         lines.append("| " + " | ".join(cells) + " |")
-    lines += ["", "| Arm | 尝试数 | 记录完整且判断正确 | 错误判断 | 弃答 | 预算耗尽 | 运行失败 | Probe | API 估算 |",
+    lines += ["", "| Arm | 尝试数 | 记录完整且判断正确 | 错误判断 | 弃答 | 输出截断／上限 | 其他运行失败 | Probe | API 估算 |",
               "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for arm in ARMS:
         count = report["arms"][arm]
@@ -258,12 +278,12 @@ def render(report):
         lines.append(f"| {arm} | {count['attempts']} | {count['audited_correct']} | {values.get('wrong_verdict', 0)} | "
                      f"{values.get('abstention', 0)} | {values.get('token_limit', 0)} | {values.get('error', 0)} | {count['probes']} | {_money(count['recorded_api_estimate_usd'])} |")
     lines += ["", f"目标 **{report['expected_slots']} 个 case×arm 槽位**：已有记录 {report['occupied_slots']}，缺失 {len(report['missing_slots'])}。"
-              f"共有 {totals['attempts']} 次尝试；运行失败 {outcomes.get('error', 0)}，弃答 {outcomes.get('abstention', 0)}，"
-              f"无最终答案 {outcomes.get('no_verdict', 0)}，token 上限 {outcomes.get('token_limit', 0)}，未完成 {outcomes.get('pending', 0)}。",
+              f"共有 {totals['attempts']} 次尝试；按互斥结果类别计：其他运行失败 {outcomes.get('error', 0)}，弃答 {outcomes.get('abstention', 0)}，"
+              f"其他无最终答案 {outcomes.get('no_verdict', 0)}，输出截断／上限 {outcomes.get('token_limit', 0)}，未完成 {outcomes.get('pending', 0)}。",
               f"全部尝试的已记录 API 费用估算：**{_money(totals['recorded_api_estimate_usd'])}**；"
               f"费用未知 {totals['unknown_cost_attempts']} 次、usage 不完整 {totals['partial_cost_attempts']} 次。"
               "优先使用 trace 定价记录，缺失时采用模型配置费率；非实际账单。GPU 账单未知，未计入；未返回 usage 的请求也未计入。", ""]
-    lines += [f"实际启动模型的评测有 **{report['model_attempts']} 次**。按每组实际评测次数计正确率（预算耗尽仍计入分母）：",
+    lines += [f"实际启动模型的评测有 **{report['model_attempts']} 次**。按每组实际评测次数计正确率（输出截断／上限仍计入分母）：",
               "", "| Arm | 判断正确 / 实际评测 | 正确率 |", "|---|---:|---:|"]
     for arm in ARMS:
         count = report["model_arms"][arm]
@@ -302,8 +322,7 @@ def main(argv=None):
     parser.add_argument("--cohort", choices=tuple(COHORTS), default="pilot")
     args = parser.parse_args(argv)
     report = derive(batch=args.batch, cohort=args.cohort)
-    begin, end = ((BEGIN, END) if args.cohort == "pilot" else
-                  ("<!-- BEGIN REAL KERNEL BOUNDARY RESULTS -->", "<!-- END REAL KERNEL BOUNDARY RESULTS -->"))
+    begin, end = _markers(args.cohort)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return

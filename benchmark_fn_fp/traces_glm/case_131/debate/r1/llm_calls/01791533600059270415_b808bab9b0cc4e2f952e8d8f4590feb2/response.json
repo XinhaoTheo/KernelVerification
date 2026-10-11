@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-293b65df231143b885c55f43a53dfd9e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching three independent probes: c1 tests the truncated-constant error in the |x|≈[1,4] band, c2 does the exhaustive finite FP16 sweep, and c3 tests a storage-offset contiguous view.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-96e05afed8e12590",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_131/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n# FP16 values in |x| in [1,4], dense\\nvals = torch.tensor([t/1024.0 for t in range(1024, 4097)], dtype=torch.float32).to(torch.float16)\\nx = torch.cat([vals, -vals]).to(dev)\\nout = k.run(x)\\nref = k.reference(x.cpu().cuda() if False else x).cpu()\\nref = k.reference(x.cpu()).to(dev)\\nerr = (out - ref).abs()\\ntol = 1e-6\\nbad = (err > tol)\\ni = int(err.argmax())\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max abs error vs FP64 reference\\\",\\n  \\\"n\\\": x.numel(),\\n  \\\"max_abs_err\\\": float(err[i]),\\n  \\\"tolerance\\\": tol,\\n  \\\"n_violations\\\": int(bad.sum()),\\n  \\\"worst_x\\\": float(x[i].item()),\\n  \\\"worst_x_abs\\\": float(abs(x[i].item())),\\n  \\\"out_at_worst\\\": float(out[i].item()),\\n  \\\"ref_at_worst\\\": float(ref[i].item()),\\n  \\\"x_band\\\": \\\"[1,4] dense, both signs\\\",\\n}))\", \"expected_signal\": \"max abs error near |x|~2 exceeds 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-83e208b427e10a21",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, numpy as np\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_131/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nbits = np.arange(65536, dtype=np.uint16)\\nh = torch.from_numpy(bits.view(np.float16).copy())\\nfinite = torch.isfinite(h)\\nx = h[finite].to(dev)  # all finite FP16 values (includes subnormals, signed zeros, +/-65504)\\nout = k.run(x)\\nref = k.reference(x.cpu()).to(dev)\\nerr = (out - ref).abs()\\ntol = 1e-6\\ni = int(err.argmax())\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max abs error vs FP64 reference over exhaustive finite FP16 domain\\\",\\n  \\\"n\\\": x.numel(),\\n  \\\"max_abs_err\\\": float(err[i]),\\n  \\\"tolerance\\\": tol,\\n  \\\"n_violations\\\": int((err > tol).sum()),\\n  \\\"worst_x\\\": float(x[i].item()),\\n  \\\"out_at_worst\\\": float(out[i].item()),\\n  \\\"ref_at_worst\\\": float(ref[i].item()),\\n  \\\"all_out_finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\", \"expected_signal\": \"exhaustive sweep reveals element(s) exceeding 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-9983f3ba6a9a6949",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_131/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(0)\\nbase = torch.randn(5000, dtype=torch.float32).to(torch.float16).to(dev)\\nn = 4093; off = 511\\nx = base[off:off+n]  # contiguous view, nonzero storage offset\\nassert x.is_contiguous() and x.storage_offset() == off\\nout = k.run(x)\\nref = k.reference(x.cpu()).to(dev)\\nerr = (out - ref).abs()\\ni = int(err.argmax())\\n# also confirm output matches SiLU of the viewed elements (not base[0:n])\\nref_base0 = k.reference(base[:n].cpu()).to(dev)\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max abs error of run(view) vs reference(view)\\\",\\n  \\\"n\\\": n, \\\"offset\\\": off,\\n  \\\"max_abs_err\\\": float(err[i]),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"n_violations\\\": int((err > 1e-6).sum()),\\n  \\\"mismatch_vs_base0_prefix\\\": float((out - ref_base0).abs().max()),\\n  \\\"input_preserved\\\": bool(torch.equal(x, base[off:off+n].cpu().to(dev)) if False else torch.equal(x.cpu(), base[off:off+n].cpu())),\\n}))\", \"expected_signal\": \"offset view produces mismatched results (wrong elements or >1e-6 error)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (band |x|~[1,4] sweep), c2 (full 65536 finite FP16 sweep), c3 (offset view). All independent.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791533600,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1117,
+    "prompt_tokens": 20568,
+    "total_tokens": 21685,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 41,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 41
+    }
+  }
+}

@@ -1,0 +1,1024 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_130",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise SiLU using a stable logistic-tail decomposition.\n\nOriginal Triton implementation of the standard sigmoid-weighted activation.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _silu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    exponential = tl.exp2(-(magnitude * 1.4426950408889634))\n    tail = tl.div_rn(magnitude * exponential, 1.0 + exponential)\n    value = tl.where(x >= 0.0, x - tail, -tail)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating SiLU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _silu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical SiLU definition with a stable FP64 sigmoid.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    exponential = torch.exp(-torch.abs(value))\n    numerator = torch.where(value >= 0, value, value * exponential)\n    return numerator / (1.0 + exponential)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_130",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-09T08:13:03Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:13:32Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "135ab79aa5cf0c3b1d223138cdd01cf8201e9a59669b389b04e992d9f2b66e01"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9411a738dd821e69f1298b05914c680a5e93f90de6f5adf7f3788a70d900d74a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "f5eba8c42d22d75a2f32f188c6810e7657d898a7c363df877a7a682db35629df"
+              }
+            ],
+            "breaches": 0,
+            "count_finite_fp16_tested": 63488,
+            "duration_s": 6.733146,
+            "exit_code": 0,
+            "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "breaches": 0,
+              "max_abs_err": 9.490936072609202e-07,
+              "metric": "max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain",
+              "region_max_abs_err": {
+                "all": 9.490936072609202e-07,
+                "huge_gt103": 1.7931872069347772e-43,
+                "large_gt20_le103": 4.061567437929625e-08,
+                "mid_1_20": 9.490936072609202e-07,
+                "small_lt1": 6.59898574673079e-08
+              },
+              "tolerance": 1e-06,
+              "verdict_signal": "pass_all_domain",
+              "worst_input": 16.671875
+            },
+            "max_abs_err_all": 9.490936072609202e-07,
+            "max_abs_err_large_gt20_le103": 4.061567437929625e-08,
+            "max_abs_err_mid_1_20": 9.490936072609202e-07,
+            "max_abs_err_small_lt1": 6.59898574673079e-08,
+            "stderr": "",
+            "stdout": "count finite fp16: 63488 min -65504.0 max 65504.0\n{\"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\", \"tolerance\": 1e-06, \"max_abs_err\": 9.490936072609202e-07, \"breaches\": 0, \"worst_input\": 16.671875, \"region_max_abs_err\": {\"all\": 9.490936072609202e-07, \"mid_1_20\": 9.490936072609202e-07, \"small_lt1\": 6.59898574673079e-08, \"large_gt20_le103\": 4.061567437929625e-08, \"huge_gt103\": 1.7931872069347772e-43}, \"verdict_signal\": \"pass_all_domain\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_input": 16.671875
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of every finite FP16 value (63,488 elements, including signed zeros, subnormals, and \u00b165504) found zero tolerance breaches. Max abs error vs FP64 real-arithmetic SiLU is 9.49e-7 at x=16.671875, inside the mid-range region c1 predicted would breach; margin to the 1e-6 bound is only ~5%, but no breach exists, so the claim of >1e-6 error is contradicted. This single probe covers the entire legal input domain, making it decisive for the implementation-level contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "tl.exp2 on T4 likely compiles to ex2.approx.f32 with ~2 ulp relative error, and the tail = |x|*e/(1+e) propagates that relative error at scale |x|~(1+e); a relative error of ~1e-7 on a tail of ~0.3 plus rounding in the division and final subtraction could approach or exceed the 1e-6 absolute bound.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6; every finite FP16 value is legal; correctness is one verdict for the implementation, not per input."
+        }
+      ],
+      "scope_rationale": "The contract requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 value in the legal domain, with one verdict for the implementation; mid-range finite FP16 values are explicitly inside the domain, so any single breaching input falsifies the contract.",
+      "statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs.",
+      "status": "rebutted",
+      "updated_at": "2026-10-09T08:13:32Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+      "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+      "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+      "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+      "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+      "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+      "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+      "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+      "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+    ],
+    "open_questions": [],
+    "risk_map": [
+      "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+      "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+      "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+      "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+      "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+      "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+    ],
+    "scope_notes": [
+      "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+      "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+      "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+      "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+        "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+        "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+        "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+        "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-09T08:12:54Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+        "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+        "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+        "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+        "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+      ],
+      "open_questions": [],
+      "risk_map": [
+        "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+        "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+        "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+        "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+        "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+        "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+      ],
+      "scope_notes": [
+        "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+        "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+        "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+        "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+      ],
+      "summary": "Described case_130: Triton FP16->FP32 SiLU with logistic-tail decomposition (x - tail for x>=0, -tail for x<0), against a 1e-6 absolute-tolerance contract over all finite FP16 inputs.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_130",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_130"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_130"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_130"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_130",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 36.086745329,
+      "role": "describer",
+      "round": 2,
+      "text": "The contract, kernel source, and metadata are already fully loaded, so I'll analyze the visible implementation and record a structured description update for the Skeptic.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+              "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+              "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+              "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+              "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+              "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+              "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+              "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+              "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+            ],
+            "risk_map": [
+              "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+              "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+              "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+              "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+              "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+              "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+            ],
+            "scope_notes": [
+              "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+              "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+              "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+              "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+            ],
+            "summary": "Described case_130: Triton FP16->FP32 SiLU with logistic-tail decomposition (x - tail for x>=0, -tail for x<0), against a 1e-6 absolute-tolerance contract over all finite FP16 inputs."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 36.087,
+        "input_tokens": 6358,
+        "output_tokens": 1938
+      }
+    },
+    {
+      "duration_s": 8.769196301999997,
+      "role": "skeptic",
+      "round": 3,
+      "text": "Recording the three highest-risk, directly testable claims: exp2 approximation error in the mid-range where the tail term is largest, the underflow/subnormal boundary region, and near-zero/signed-zero handling.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "tl.exp2 on T4 likely compiles to ex2.approx.f32 with ~2 ulp relative error, and the tail = |x|*e/(1+e) propagates that relative error at scale |x|~(1+e); a relative error of ~1e-7 on a tail of ~0.3 plus rounding in the division and final subtraction could approach or exceed the 1e-6 absolute bound.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6; every finite FP16 value is legal; correctness is one verdict for the implementation, not per input."
+              }
+            ],
+            "scope_rationale": "The contract requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 value in the legal domain, with one verdict for the implementation; mid-range finite FP16 values are explicitly inside the domain, so any single breaching input falsifies the contract.",
+            "statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.769,
+        "input_tokens": 15450,
+        "output_tokens": 415
+      }
+    },
+    {
+      "duration_s": 13.703148590999994,
+      "role": "experimenter",
+      "round": 4,
+      "text": "The claim c1 targets mid-range |x| where the tail term is largest, but since FP16 has only ~65504 finite values total and N up to 131072 is allowed, I can exhaustively test the entire legal domain in one probe \u2014 which subsumes c1 and gives a decisive implementation-level answer.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, numpy as np, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kernelmod\", \"/root/cases/case_130/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\n\n# All finite FP16 values, exhaustive\nbits = np.arange(65536, dtype=np.uint32)\nh = torch.from_numpy(bits.astype(np.uint16).view(np.float16))\nfinite = torch.isfinite(h)\nvals = h[finite]  # all finite FP16 values, both signs\nprint(\"count finite fp16:\", vals.numel(), \"min\", vals.min().item(), \"max\", vals.max().item())\n\nx = vals.to(\"cuda\")\nout = km.run(x)\n\n# Real-arithmetic SiLU on exact stored values, FP64\nv = x.to(torch.float64)\nref = v * torch.sigmoid(v)\nerr = (out.to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nmax_idx = err.argmax().item()\n\n# region breakdown\nmag = v.abs()\nregions = {\n    \"all\": err.max().item(),\n    \"mid_1_20\": err[(mag>=1)&(mag<=20)].max().item(),\n    \"small_lt1\": err[mag<1].max().item(),\n    \"large_gt20_le103\": err[(mag>20)&(mag<=103)].max().item(),\n    \"huge_gt103\": err[mag>103].max().item(),\n}\nprint(json.dumps({\n    \"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\",\n    \"tolerance\": 1e-6,\n    \"max_abs_err\": max_err,\n    \"breaches\": int((err > 1e-6).sum().item()),\n    \"worst_input\": x[max_idx].item(),\n    \"region_max_abs_err\": regions,\n    \"verdict_signal\": \"breach\" if max_err > 1e-6 else \"pass_all_domain\",\n}))",
+            "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.703,
+        "input_tokens": 17312,
+        "output_tokens": 692
+      }
+    },
+    {
+      "duration_s": 8.444175465,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The exhaustive probe over all 63,488 finite FP16 values shows zero breaches; the worst case (9.49e-7 at x=16.67, exactly the mid-range region c1 targets) stays just under the 1e-6 tolerance. This rebuts c1: the ex2 approximation error in the mid-range does not produce any input exceeding the bound.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "breaches": 0,
+              "count_finite_fp16_tested": 63488,
+              "max_abs_err_all": 9.490936072609202e-07,
+              "max_abs_err_large_gt20_le103": 4.061567437929625e-08,
+              "max_abs_err_mid_1_20": 9.490936072609202e-07,
+              "max_abs_err_small_lt1": 6.59898574673079e-08,
+              "tolerance": 1e-06,
+              "worst_input": 16.671875
+            },
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Exhaustive test of every finite FP16 value (63,488 elements, including signed zeros, subnormals, and \u00b165504) found zero tolerance breaches. Max abs error vs FP64 real-arithmetic SiLU is 9.49e-7 at x=16.671875, inside the mid-range region c1 predicted would breach; margin to the 1e-6 bound is only ~5%, but no breach exists, so the claim of >1e-6 error is contradicted. This single probe covers the entire legal input domain, making it decisive for the implementation-level contract.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.444,
+        "input_tokens": 20550,
+        "output_tokens": 435
+      }
+    },
+    {
+      "duration_s": 5.686985487000001,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The exhaustive probe covered all 63,488 finite FP16 values (the entire legal domain) with zero tolerance breaches \u2014 the worst case (9.49e-7 at x=16.671875) stays under the 1e-6 bound. No further in-scope claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "The single exhaustive runtime probe tested every finite FP16 value in the legal domain (63,488 elements including signed zeros, subnormals, and both extrema) against the FP64 real-arithmetic SiLU and found zero breaches of the 1e-6 absolute tolerance; the sole open claim c1 was rebutted by direct, domain-complete evidence. No other in-scope attack surface remains untested: the domain is exactly the set of finite FP16 values, so nothing inside the contract can escape this probe.",
+            "reviewed_claims": [
+              "c1"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.687,
+        "input_tokens": 25163,
+        "output_tokens": 212
+      }
+    },
+    {
+      "duration_s": 8.448554614999992,
+      "role": "judge",
+      "round": 7,
+      "text": "The sole in-scope claim c1 was rebutted by an exhaustive probe covering all 63,488 finite FP16 values (zero breaches of the 1e-6 bound; max error 9.49e-7 at x=16.671875). Skeptic reviewed the latest evidence and found no new claims. The contract permits algebraic rewrites and base-2 exponentials, and the entire legal domain was tested in one probe, so this is decisive. I record a trust verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The kernel's logistic-tail decomposition of SiLU was exhaustively verified over its entire legal input domain: a runtime probe (t7) ran run(x) on all 63,488 finite FP16 values (including signed zeros, subnormals, and both extrema \u00b165504) and compared against FP64 real-arithmetic SiLU, finding zero breaches of the 1e-6 absolute tolerance. The worst case, 9.49e-7 at x=16.671875, occurs exactly in the mid-range region the only claim (c1) predicted would breach, and it still satisfies the contract's fixed absolute bound. The contract explicitly permits algebraic rewrites and base-2 exponentials provided the 1e-6 absolute tolerance holds across the whole domain, which the exhaustive evidence confirms. No open claims remain, all open claims had evidence, and the Skeptic reviewed the latest evidence and recorded no new claims (t9). No in-scope correctness failure exists.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.449,
+        "input_tokens": 25993,
+        "output_tokens": 368
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-09T08:13:38Z",
+    "decision": "no_new_claims",
+    "reason": "The single exhaustive runtime probe tested every finite FP16 value in the legal domain (63,488 elements including signed zeros, subnormals, and both extrema) against the FP64 real-arithmetic SiLU and found zero breaches of the 1e-6 absolute tolerance; the sole open claim c1 was rebutted by direct, domain-complete evidence. No other in-scope attack surface remains untested: the domain is exactly the set of finite FP16 values, so nothing inside the contract can escape this probe.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 8,
+    "tool_event_id": "t9",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_130"
+      },
+      "created_at": "2026-10-09T08:12:17Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_130",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise SiLU using a stable logistic-tail decomposition.\n\nOriginal Triton implementation of the standard sigmoid-weighted activation.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _silu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    exponential = tl.exp2(-(magnitude * 1.4426950408889634))\n    tail = tl.div_rn(magnitude * exponential, 1.0 + exponential)\n    value = tl.where(x >= 0.0, x - tail, -tail)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating SiLU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _silu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical SiLU definition with a stable FP64 sigmoid.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    exponential = torch.exp(-torch.abs(value))\n    numerator = torch.where(value >= 0, value, value * exponential)\n    return numerator / (1.0 + exponential)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_130",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_130"
+      },
+      "created_at": "2026-10-09T08:12:17Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_130",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_130"
+      },
+      "created_at": "2026-10-09T08:12:17Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_130",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2853
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2048
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_130",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-09T08:12:17Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_130",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+          "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+          "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+          "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+          "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+          "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+          "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+          "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+          "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+        ],
+        "risk_map": [
+          "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+          "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+          "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+          "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+          "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+          "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+        ],
+        "scope_notes": [
+          "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+          "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+          "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+          "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+        ],
+        "summary": "Described case_130: Triton FP16->FP32 SiLU with logistic-tail decomposition (x - tail for x>=0, -tail for x<0), against a 1e-6 absolute-tolerance contract over all finite FP16 inputs."
+      },
+      "created_at": "2026-10-09T08:12:54Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+            "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+            "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+            "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+            "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+            "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+            "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+            "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+            "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+            "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+            "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+            "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+            "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+            "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+            "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+            "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Elementwise SiLU on FP16 inputs x[i] (1D, N in [1,131072], every finite FP16 value including signed zeros, subnormals, and \u00b165504), returning a fresh finite FP32 tensor on x.device; NaN/Inf inputs are out of domain.",
+            "Absolute tolerance: abs(actual[i] - SiLU(x[i])) <= 1e-6, relative tolerance zero, signed zeros numerically equivalent; target defined in real arithmetic on the exact stored input value.",
+            "Algebraic rewrites, base-2 exponentials, and approximations are permitted so long as the 1e-6 absolute bound holds over the whole legal domain; single verdict for the implementation, not per-input.",
+            "Input must be an ordinary contiguous strided 1D FP16 CUDA tensor with requires_grad=False, is_neg/is_conj=False, in ordinary non-inference mode; validate_inputs() enforces this and run() calls it; reference() is a stable FP64 expression usable on CPU.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-09T08:12:54Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel loads FP16 x, casts to FP32, computes e = exp2(-|x|*log2(e)) and tail = |x|*e/(1+e) via round-to-nearest division, then value = x - tail for x>=0 and -tail for x<0; this algebraically reproduces SiLU(x) = x/(1+exp(-x)) for both signs (lines 13-20).",
+            "FP16 -> FP32 cast is exact, so the mathematical target is evaluated on the exact stored value; intermediates stay in FP32 with enable_fp_fusion=False and div_rn to avoid fused-MMA precision loss.",
+            "Handles N not a multiple of BLOCK=256 via mask; grid = cdiv(N,256), num_warps=4; N is constexpr so kernels are specialized per size (recompile per distinct N, not a correctness issue).",
+            "Output allocated as fresh FP32 tensor of size N; masked loads use other=0.0 so inactive lanes never affect stored values.",
+            "validate_inputs checks inference mode, tensor type, contiguity, grad/neg/conj flags, CUDA device, 1D shape with N in [1,131072], FP16 dtype, and finiteness (lines 23-42); run() calls it before launching."
+          ],
+          "open_questions": [],
+          "risk_map": [
+            "exp2(-|x|*1.4426950408889634) relies on Triton/hardware ex2 precision and the FP32 constant; any argument or result rounding error is amplified by |x| in the tail term \u2014 worth checking whether the worst case (|x| near ~1-20 where tail is largest, ~0.37) stays within the 1e-6 absolute bound.",
+            "For large |x| (>~87.3) exp2 underflows toward 0 (subnormals to ~|x|\u2248103, then exact 0); tail becomes 0, output is x (x>=0) or -0.0 (x<0). Signed-zero equivalence is contractually fine, but subnormal-tail rounding near the underflow edge is the thinnest region to probe.",
+            "Negative-signed zero: x=-0.0 makes x>=0.0 true in IEEE comparison, so value = -0.0 - tail(0) = -0.0; SiLU(-0.0) mathematically -0.0*0.5 = -0.0 \u2014 likely fine, but verify tl.where's >= semantics on signed zero in Triton.",
+            "tl.exp2 on T4 may compile to ex2.approx.f32 (~2 ulp relative error); combined with the multiplicative constant in FP32, tail relative error could approach the tolerance boundary \u2014 Skeptic should demand evidence, not assume uniform FP32 accuracy.",
+            "Subnormal FP16 inputs: |x| ~ 6e-8, tail \u2248 |x|/2; SiLU(6e-8) \u2248 3e-8, far below tolerance, so subnormal-region errors are unlikely to breach 1e-6 \u2014 low risk.",
+            "No autograd, no in-place mutation of x, output freshly allocated \u2014 matches contract; only masked stores write valid lanes."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value in [\u221265504, 65504] including subnormals and signed zeros; sizes 1..131072; CUDA-only execution on T4.",
+            "Out of scope: NaN/Inf inputs, non-contiguous or non-1D inputs, autograd behavior, subclasses/views with neg/conj flags, CPU execution of run().",
+            "Correctness metric is absolute 1e-6 vs the real-arithmetic SiLU on the exact stored FP16 value; reference() is a convenience oracle, not the definition itself.",
+            "One implementation-level verdict; passing benign randn inputs is not sufficient evidence for the full domain."
+          ],
+          "summary": "Described case_130: Triton FP16->FP32 SiLU with logistic-tail decomposition (x - tail for x>=0, -tail for x<0), against a 1e-6 absolute-tolerance contract over all finite FP16 inputs.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "tl.exp2 on T4 likely compiles to ex2.approx.f32 with ~2 ulp relative error, and the tail = |x|*e/(1+e) propagates that relative error at scale |x|~(1+e); a relative error of ~1e-7 on a tail of ~0.3 plus rounding in the division and final subtraction could approach or exceed the 1e-6 absolute bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6; every finite FP16 value is legal; correctness is one verdict for the implementation, not per input."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 value in the legal domain, with one verdict for the implementation; mid-range finite FP16 values are explicitly inside the domain, so any single breaching input falsifies the contract.",
+        "statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs."
+      },
+      "created_at": "2026-10-09T08:13:03Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-09T08:13:03Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "tl.exp2 on T4 likely compiles to ex2.approx.f32 with ~2 ulp relative error, and the tail = |x|*e/(1+e) propagates that relative error at scale |x|~(1+e); a relative error of ~1e-7 on a tail of ~0.3 plus rounding in the division and final subtraction could approach or exceed the 1e-6 absolute bound.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6; every finite FP16 value is legal; correctness is one verdict for the implementation, not per input."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 value in the legal domain, with one verdict for the implementation; mid-range finite FP16 values are explicitly inside the domain, so any single breaching input falsifies the contract.",
+        "statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs.",
+        "status": "open",
+        "updated_at": "2026-10-09T08:13:03Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, numpy as np, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kernelmod\", \"/root/cases/case_130/kernel.py\")\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\n\n# All finite FP16 values, exhaustive\nbits = np.arange(65536, dtype=np.uint32)\nh = torch.from_numpy(bits.astype(np.uint16).view(np.float16))\nfinite = torch.isfinite(h)\nvals = h[finite]  # all finite FP16 values, both signs\nprint(\"count finite fp16:\", vals.numel(), \"min\", vals.min().item(), \"max\", vals.max().item())\n\nx = vals.to(\"cuda\")\nout = km.run(x)\n\n# Real-arithmetic SiLU on exact stored values, FP64\nv = x.to(torch.float64)\nref = v * torch.sigmoid(v)\nerr = (out.to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nmax_idx = err.argmax().item()\n\n# region breakdown\nmag = v.abs()\nregions = {\n    \"all\": err.max().item(),\n    \"mid_1_20\": err[(mag>=1)&(mag<=20)].max().item(),\n    \"small_lt1\": err[mag<1].max().item(),\n    \"large_gt20_le103\": err[(mag>20)&(mag<=103)].max().item(),\n    \"huge_gt103\": err[mag>103].max().item(),\n}\nprint(json.dumps({\n    \"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\",\n    \"tolerance\": 1e-6,\n    \"max_abs_err\": max_err,\n    \"breaches\": int((err > 1e-6).sum().item()),\n    \"worst_input\": x[max_idx].item(),\n    \"region_max_abs_err\": regions,\n    \"verdict_signal\": \"breach\" if max_err > 1e-6 else \"pass_all_domain\",\n}))",
+        "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance"
+      },
+      "created_at": "2026-10-09T08:13:24Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "135ab79aa5cf0c3b1d223138cdd01cf8201e9a59669b389b04e992d9f2b66e01"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "9411a738dd821e69f1298b05914c680a5e93f90de6f5adf7f3788a70d900d74a"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "f5eba8c42d22d75a2f32f188c6810e7657d898a7c363df877a7a682db35629df"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs.",
+        "cwd": "/root/cases/case_130",
+        "duration_s": 6.733146,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "135ab79aa5cf0c3b1d223138cdd01cf8201e9a59669b389b04e992d9f2b66e01"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9411a738dd821e69f1298b05914c680a5e93f90de6f5adf7f3788a70d900d74a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "f5eba8c42d22d75a2f32f188c6810e7657d898a7c363df877a7a682db35629df"
+              }
+            ],
+            "duration_s": 6.733146,
+            "exit_code": 0,
+            "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "breaches": 0,
+              "max_abs_err": 9.490936072609202e-07,
+              "metric": "max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain",
+              "region_max_abs_err": {
+                "all": 9.490936072609202e-07,
+                "huge_gt103": 1.7931872069347772e-43,
+                "large_gt20_le103": 4.061567437929625e-08,
+                "mid_1_20": 9.490936072609202e-07,
+                "small_lt1": 6.59898574673079e-08
+              },
+              "tolerance": 1e-06,
+              "verdict_signal": "pass_all_domain",
+              "worst_input": 16.671875
+            },
+            "stderr": "",
+            "stdout": "count finite fp16: 63488 min -65504.0 max 65504.0\n{\"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\", \"tolerance\": 1e-06, \"max_abs_err\": 9.490936072609202e-07, \"breaches\": 0, \"worst_input\": 16.671875, \"region_max_abs_err\": {\"all\": 9.490936072609202e-07, \"mid_1_20\": 9.490936072609202e-07, \"small_lt1\": 6.59898574673079e-08, \"large_gt20_le103\": 4.061567437929625e-08, \"huge_gt103\": 1.7931872069347772e-43}, \"verdict_signal\": \"pass_all_domain\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "breaches": 0,
+          "max_abs_err": 9.490936072609202e-07,
+          "metric": "max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain",
+          "region_max_abs_err": {
+            "all": 9.490936072609202e-07,
+            "huge_gt103": 1.7931872069347772e-43,
+            "large_gt20_le103": 4.061567437929625e-08,
+            "mid_1_20": 9.490936072609202e-07,
+            "small_lt1": 6.59898574673079e-08
+          },
+          "tolerance": 1e-06,
+          "verdict_signal": "pass_all_domain",
+          "worst_input": 16.671875
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "count finite fp16: 63488 min -65504.0 max 65504.0\n{\"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\", \"tolerance\": 1e-06, \"max_abs_err\": 9.490936072609202e-07, \"breaches\": 0, \"worst_input\": 16.671875, \"region_max_abs_err\": {\"all\": 9.490936072609202e-07, \"mid_1_20\": 9.490936072609202e-07, \"small_lt1\": 6.59898574673079e-08, \"large_gt20_le103\": 4.061567437929625e-08, \"huge_gt103\": 1.7931872069347772e-43}, \"verdict_signal\": \"pass_all_domain\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "breaches": 0,
+          "count_finite_fp16_tested": 63488,
+          "max_abs_err_all": 9.490936072609202e-07,
+          "max_abs_err_large_gt20_le103": 4.061567437929625e-08,
+          "max_abs_err_mid_1_20": 9.490936072609202e-07,
+          "max_abs_err_small_lt1": 6.59898574673079e-08,
+          "tolerance": 1e-06,
+          "worst_input": 16.671875
+        },
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Exhaustive test of every finite FP16 value (63,488 elements, including signed zeros, subnormals, and \u00b165504) found zero tolerance breaches. Max abs error vs FP64 real-arithmetic SiLU is 9.49e-7 at x=16.671875, inside the mid-range region c1 predicted would breach; margin to the 1e-6 bound is only ~5%, but no breach exists, so the claim of >1e-6 error is contradicted. This single probe covers the entire legal input domain, making it decisive for the implementation-level contract.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-09T08:13:32Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-09T08:13:03Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-09T08:13:32Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "135ab79aa5cf0c3b1d223138cdd01cf8201e9a59669b389b04e992d9f2b66e01"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "9411a738dd821e69f1298b05914c680a5e93f90de6f5adf7f3788a70d900d74a"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "f5eba8c42d22d75a2f32f188c6810e7657d898a7c363df877a7a682db35629df"
+                  }
+                ],
+                "breaches": 0,
+                "count_finite_fp16_tested": 63488,
+                "duration_s": 6.733146,
+                "exit_code": 0,
+                "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance",
+                "json_parse_error": null,
+                "json_result": {
+                  "breaches": 0,
+                  "max_abs_err": 9.490936072609202e-07,
+                  "metric": "max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain",
+                  "region_max_abs_err": {
+                    "all": 9.490936072609202e-07,
+                    "huge_gt103": 1.7931872069347772e-43,
+                    "large_gt20_le103": 4.061567437929625e-08,
+                    "mid_1_20": 9.490936072609202e-07,
+                    "small_lt1": 6.59898574673079e-08
+                  },
+                  "tolerance": 1e-06,
+                  "verdict_signal": "pass_all_domain",
+                  "worst_input": 16.671875
+                },
+                "max_abs_err_all": 9.490936072609202e-07,
+                "max_abs_err_large_gt20_le103": 4.061567437929625e-08,
+                "max_abs_err_mid_1_20": 9.490936072609202e-07,
+                "max_abs_err_small_lt1": 6.59898574673079e-08,
+                "stderr": "",
+                "stdout": "count finite fp16: 63488 min -65504.0 max 65504.0\n{\"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\", \"tolerance\": 1e-06, \"max_abs_err\": 9.490936072609202e-07, \"breaches\": 0, \"worst_input\": 16.671875, \"region_max_abs_err\": {\"all\": 9.490936072609202e-07, \"mid_1_20\": 9.490936072609202e-07, \"small_lt1\": 6.59898574673079e-08, \"large_gt20_le103\": 4.061567437929625e-08, \"huge_gt103\": 1.7931872069347772e-43}, \"verdict_signal\": \"pass_all_domain\"}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "worst_input": 16.671875
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive test of every finite FP16 value (63,488 elements, including signed zeros, subnormals, and \u00b165504) found zero tolerance breaches. Max abs error vs FP64 real-arithmetic SiLU is 9.49e-7 at x=16.671875, inside the mid-range region c1 predicted would breach; margin to the 1e-6 bound is only ~5%, but no breach exists, so the claim of >1e-6 error is contradicted. This single probe covers the entire legal input domain, making it decisive for the implementation-level contract.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "tl.exp2 on T4 likely compiles to ex2.approx.f32 with ~2 ulp relative error, and the tail = |x|*e/(1+e) propagates that relative error at scale |x|~(1+e); a relative error of ~1e-7 on a tail of ~0.3 plus rounding in the division and final subtraction could approach or exceed the 1e-6 absolute bound.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6; every finite FP16 value is legal; correctness is one verdict for the implementation, not per input."
+            }
+          ],
+          "scope_rationale": "The contract requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 value in the legal domain, with one verdict for the implementation; mid-range finite FP16 values are explicitly inside the domain, so any single breaching input falsifies the contract.",
+          "statement": "In the mid-range |x| where the logistic tail term is largest (roughly |x| between 1 and 20, tail up to ~0.37), the hardware ex2 approximation in tl.exp2 combined with the FP32 constant 1.4426950408889634 may produce abs(actual[i]-SiLU(x[i])) > 1e-6 for some finite FP16 inputs.",
+          "status": "rebutted",
+          "updated_at": "2026-10-09T08:13:32Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:13:32Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "135ab79aa5cf0c3b1d223138cdd01cf8201e9a59669b389b04e992d9f2b66e01"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "9411a738dd821e69f1298b05914c680a5e93f90de6f5adf7f3788a70d900d74a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "f5eba8c42d22d75a2f32f188c6810e7657d898a7c363df877a7a682db35629df"
+              }
+            ],
+            "breaches": 0,
+            "count_finite_fp16_tested": 63488,
+            "duration_s": 6.733146,
+            "exit_code": 0,
+            "expected_signal": "max abs error over exhaustive finite FP16 domain vs 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "breaches": 0,
+              "max_abs_err": 9.490936072609202e-07,
+              "metric": "max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain",
+              "region_max_abs_err": {
+                "all": 9.490936072609202e-07,
+                "huge_gt103": 1.7931872069347772e-43,
+                "large_gt20_le103": 4.061567437929625e-08,
+                "mid_1_20": 9.490936072609202e-07,
+                "small_lt1": 6.59898574673079e-08
+              },
+              "tolerance": 1e-06,
+              "verdict_signal": "pass_all_domain",
+              "worst_input": 16.671875
+            },
+            "max_abs_err_all": 9.490936072609202e-07,
+            "max_abs_err_large_gt20_le103": 4.061567437929625e-08,
+            "max_abs_err_mid_1_20": 9.490936072609202e-07,
+            "max_abs_err_small_lt1": 6.59898574673079e-08,
+            "stderr": "",
+            "stdout": "count finite fp16: 63488 min -65504.0 max 65504.0\n{\"metric\": \"max abs error vs FP64 real-arithmetic SiLU over exhaustive finite FP16 domain\", \"tolerance\": 1e-06, \"max_abs_err\": 9.490936072609202e-07, \"breaches\": 0, \"worst_input\": 16.671875, \"region_max_abs_err\": {\"all\": 9.490936072609202e-07, \"mid_1_20\": 9.490936072609202e-07, \"small_lt1\": 6.59898574673079e-08, \"large_gt20_le103\": 4.061567437929625e-08, \"huge_gt103\": 1.7931872069347772e-43}, \"verdict_signal\": \"pass_all_domain\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_input": 16.671875
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of every finite FP16 value (63,488 elements, including signed zeros, subnormals, and \u00b165504) found zero tolerance breaches. Max abs error vs FP64 real-arithmetic SiLU is 9.49e-7 at x=16.671875, inside the mid-range region c1 predicted would breach; margin to the 1e-6 bound is only ~5%, but no breach exists, so the claim of >1e-6 error is contradicted. This single probe covers the entire legal input domain, making it decisive for the implementation-level contract.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "The single exhaustive runtime probe tested every finite FP16 value in the legal domain (63,488 elements including signed zeros, subnormals, and both extrema) against the FP64 real-arithmetic SiLU and found zero breaches of the 1e-6 absolute tolerance; the sole open claim c1 was rebutted by direct, domain-complete evidence. No other in-scope attack surface remains untested: the domain is exactly the set of finite FP16 values, so nothing inside the contract can escape this probe.",
+        "reviewed_claims": [
+          "c1"
+        ]
+      },
+      "created_at": "2026-10-09T08:13:38Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-10-09T08:13:38Z",
+        "decision": "no_new_claims",
+        "reason": "The single exhaustive runtime probe tested every finite FP16 value in the legal domain (63,488 elements including signed zeros, subnormals, and both extrema) against the FP64 real-arithmetic SiLU and found zero breaches of the 1e-6 absolute tolerance; the sole open claim c1 was rebutted by direct, domain-complete evidence. No other in-scope attack surface remains untested: the domain is exactly the set of finite FP16 values, so nothing inside the contract can escape this probe.",
+        "reviewed_claims": [
+          "c1"
+        ],
+        "reviewed_tool_event_count": 8,
+        "tool_event_id": "t9",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel's logistic-tail decomposition of SiLU was exhaustively verified over its entire legal input domain: a runtime probe (t7) ran run(x) on all 63,488 finite FP16 values (including signed zeros, subnormals, and both extrema \u00b165504) and compared against FP64 real-arithmetic SiLU, finding zero breaches of the 1e-6 absolute tolerance. The worst case, 9.49e-7 at x=16.671875, occurs exactly in the mid-range region the only claim (c1) predicted would breach, and it still satisfies the contract's fixed absolute bound. The contract explicitly permits algebraic rewrites and base-2 exponentials provided the 1e-6 absolute tolerance holds across the whole domain, which the exhaustive evidence confirms. No open claims remain, all open claims had evidence, and the Skeptic reviewed the latest evidence and recorded no new claims (t9). No in-scope correctness failure exists.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-09T08:13:46Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-09T08:13:46Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel's logistic-tail decomposition of SiLU was exhaustively verified over its entire legal input domain: a runtime probe (t7) ran run(x) on all 63,488 finite FP16 values (including signed zeros, subnormals, and both extrema \u00b165504) and compared against FP64 real-arithmetic SiLU, finding zero breaches of the 1e-6 absolute tolerance. The worst case, 9.49e-7 at x=16.671875, occurs exactly in the mid-range region the only claim (c1) predicted would breach, and it still satisfies the contract's fixed absolute bound. The contract explicitly permits algebraic rewrites and base-2 exponentials provided the 1e-6 absolute tolerance holds across the whole domain, which the exhaustive evidence confirms. No open claims remain, all open claims had evidence, and the Skeptic reviewed the latest evidence and recorded no new claims (t9). No in-scope correctness failure exists.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-09T08:13:46Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The kernel's logistic-tail decomposition of SiLU was exhaustively verified over its entire legal input domain: a runtime probe (t7) ran run(x) on all 63,488 finite FP16 values (including signed zeros, subnormals, and both extrema \u00b165504) and compared against FP64 real-arithmetic SiLU, finding zero breaches of the 1e-6 absolute tolerance. The worst case, 9.49e-7 at x=16.671875, occurs exactly in the mid-range region the only claim (c1) predicted would breach, and it still satisfies the contract's fixed absolute bound. The contract explicitly permits algebraic rewrites and base-2 exponentials provided the 1e-6 absolute tolerance holds across the whole domain, which the exhaustive evidence confirms. No open claims remain, all open claims had evidence, and the Skeptic reviewed the latest evidence and recorded no new claims (t9). No in-scope correctness failure exists.",
+    "verdict": "trust"
+  }
+}

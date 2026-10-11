@@ -1,0 +1,47 @@
+Check kernel: for x>=0: x - tail where tail = |x|*e^-|x|/(1+e^-|x|) = x - x*sigmoid(-x)? SiLU = x/(1+e^-x) = x - x*e^-x/(1+e^-x). For x>=0, tail uses magnitude=x, so tail = x*e^-x/(1+e^-x), value = x - tail. Correct.
+
+For x<0: SiLU(x) = x/(1+e^-x) = x*e^x/(1+e^x) = -|x|*e^-|x|/(1+e^-|x|) = -tail. Correct.
+
+Accuracy: uses exp2(-|x|*1.4427). 1.4427 vs log2(e)=1.442695. Error in argument: |x|*0.000005 ≈ 65504*5e-6 ≈ 0.33... wait 1.442695 vs 1.4427: diff = 5e-6? 1.4427 - 1.4426950 = 4.99e-6. Times 65504 → 0.327. That's a huge relative error in the exponent → e^-65504-ish values... but for large |x|, e^-|x| is ~0, tail ~0, so fine. Actually the relative error in exponent is 4.99e-6/1.4427 ≈ 3.5e-6, so exp value relative error ~3.5e-6*|x|*ln2... hmm.
+
+Let's think: exponent magnitude = |x|*1.4427, correct = |x|*log2(e). Relative error in exponent δ = 4.99e-6/1.4427 ≈ 3.46e-6. Relative error in exp ≈ δ*|exponent| ≈ 3.46e-6 * |x|*1.4427. For |x|=65504 → 0.327 relative error in exponential. But e^-65504 underflows to 0 anyway in fp32. Underflow: exp2(-94564) → 0 in fp32 (denormal limit ~2^-149). So for |x| > ~103, exponential = 0, tail = 0, value = x or 0. Correct (SiLU(65504)=65504, SiLU(-large)=0 with SiLU(-103)≈ -103*e^-103 ≈ tiny <1e-6). Fine.
+
+For moderate |x|, e.g. |x|=10: relative error in exponential ≈ 3.46e-6*14.4 ≈ 5e-5. tail ≈ 10*e^-10/(1+e^-10) ≈ 4.5e-4. Absolute error ≈ 4.5e-4*5e-5 ≈ 2e-8. Fine. Worst case: tail largest where errors matter. tail max ~0.278 at x≈-1.28. Relative error in exp at |x|=1.28: 3.46e-6*1.85≈6.4e-6. Absolute error ≈ 0.278*~3e-6 ≈ 1e-6? Hmm, error in tail: tail = m*e/(1+e). d(tail)/d(rel err of e) = m*e/(1+e)^2 ≈ 0.28*... At m=1.28, e=e^-1.28=0.278, e/(1+e)^2 = 0.278/1.64 ≈ 0.17, times m=1.28 → 0.218. Times rel err 6.4e-6 → 1.4e-6? Wait rel err at m=1.28: exponent = 1.85, rel err 3.46e-6, error in exp rel = 1.85*3.46e-6 ≈ 6.4e-6. tail error ≈ 0.218 * 6.4e-6 * tail? No: Δtail ≈ d(tail)/dε * ε where ε is relative error of e. d(tail)/d(e) * e*ε = m*e/(1+e)^2 * ε = 1.28*0.278/1.64 * 6.4e-6 ≈ 0.217*6.4e-6 ≈ 1.4e-6. Hmm that's > 1e-6!
+
+Wait recheck: Δtail = ε * e * d(tail)/de = ε * m*e/(1+e)^2 = 6.4e-6 * 1.28 * 0.278/1.6438 = 6.4e-6 * 0.2167 ≈ 1.39e-6.
+
+Hmm, that exceeds the 1e-6 tolerance? But wait — the coefficient: is it 1.4427 exactly? tl.exp2(-(magnitude * 1.4427)). 1.4427 as a float32 constant. Correct value log2(e) = 1.44269504089. Difference = 4.959e-6. Relative: 3.437e-6.
+
+Worst-case ε = |x|*log2(e)*3.437e-6... wait relative error of exponent is (Δc/c)*|x| = 3.437e-6*|x|. Exponent = |x|*1.4427, so error in ln of exp = ln2 * 3.437e-6*|x|*1.4427 ≈ 3.437e-6*|x| (since 1.4427*ln2 ≈ 1). So relative error of e ≈ 3.437e-6*|x|.
+
+Δtail = 3.437e-6*|x| * |x|e/(1+e)^2. Maximize f(m)=m^2*e^-m/(1+e^-m)^2 over m. For large m, ~m^2 e^-m; max around m≈2: 4*0.135/1.27 ≈ 0.43. Also m=1: 0.211. m=2.5: 6.25*0.082/1.17≈0.44. m=3: 9*0.0498/1.102≈0.407. m=2.4: 5.76*0.0907/1.174≈0.445. m=2.2: 4.84*0.111/1.15... let's compute: e^-2.2=0.1108, (1.1108)^2=1.234, 4.84*0.1108/1.234=0.435. m=2.5: e^-2.5=0.0821, 1.169, 6.25*0.0821/1.169=0.439. m=2.6: e^-2.6=0.0743, (1.0743)^2=1.154, 6.76*0.0743/1.154=0.435. Max ≈ 0.44 near m≈2.4.
+
+So worst Δtail ≈ 3.437e-6 * 0.44 ≈ 1.51e-6 > 1e-6. Hmm! But wait — the reference computes in FP64, tolerance is absolute 1e-6. But is the reference itself? Reference uses exact exp. So error ≈ 1.5e-6 at m≈2.4 exceeds 1e-6.
+
+Hmm, but maybe I should double-check. Also tl.exp2 itself has accuracy ~1 ulp. And fp32 arithmetic rounding. But the constant 1.4427 alone gives up to ~1.5e-6 error. Wait, but actually — maybe also the reference matches the kernel? No, reference is exact.
+
+Hmm, wait — but also note: for x≥0, value = x - tail, error in tail directly. For x<0, value = -tail, error in tail directly. So Δoutput = Δtail ≈ 1.5e-6 at worst point.
+
+Hmm, but wait: is 1.4427 vs 1.442695041 — the actual fp32 value of the literal 1.4427 is 1.4427000284194946. Δ = 2.84e-8?? No: 1.4427000284 - 1.4426950409 = 4.988e-6. Yes ~4.99e-6.
+
+So worst-case error ~1.5e-6 > 1e-6 tolerance. That suggests reject.
+
+But wait — maybe I misestimated. Let's compute exactly at m=2.4, x=-2.4. Exponent used: 2.4*1.4427000284 = 3.462480068. Correct: 2.4*log2(e) = 3.462468098. Δexp = 1.197e-5 in base-2 exponent → factor 2^(1.197e-5) ≈ 1 + 8.3e-6. So e^-2.4 computed as 0.090718 * (1+8.3e-6) = 0.090718+7.5e-7. tail = m*e/(1+e): with e'=e*(1+8.3e-6), tail' ≈ tail + m*e/(1+e)^2*8.3e-6. m*e/(1+e)^2 = 2.4*0.090718/1.1903 = 0.1829. Δtail ≈ 1.52e-6.
+
+Yes, error ≈ 1.5e-6 > 1e-6 tolerance. Also plus fp32 rounding of the argument magnitude*1.4427 (~1 ulp, fine) and exp2 error.
+
+Hmm, but wait — do we also need to check whether reference's tail comparison... reference is FP64 exact, so no.
+
+So the implementation violates the 1e-6 absolute tolerance for inputs near ±2.4 (legal FP16 values, e.g., -2.400390625). Verdict: reject.
+
+Wait, but actually let me double check whether there's another interpretation: maybe the intended tolerance check uses the reference implementation given? The reference computes numerator/(1+exponential) in FP64 — essentially exact. Yes.
+
+Also check overflow of magnitude*1.4427: 65504*1.4427 = 94497 < fp32 max, exp2(-94497) = 0. Fine.
+
+Also x=0: exp2(0)=1, tail=0/(2)=0, value where x>=0: 0-0=0. Good.
+
+So reject due to coarse constant 1.4427 causing up to ~1.5e-6 error. Confidence: moderate. Let me verify worst point more carefully across m. Max of g(m)=m^2 e^{-m} ln2*δc/c /(1+e^-m)^2 where δc/c = 4.988e-6/1.4427 = 3.459e-6. So error = 3.459e-6 * m^2 e^-m/(1+e^-m)^2 * ln2? Wait recheck: exponent in base-2: E = m*c. Error ΔE = m*δc. exp2(E+ΔE) = e * (1 + ΔE ln2). So rel error of e = m*δc*ln2 = m*4.988e-6*0.6931 = 3.457e-6*m. Yes as I had (δc*ln2 = 3.457e-6).
+
+Δtail = 3.457e-6 * m * m*e/(1+e)^2 = 3.457e-6 * h(m), h(m)=m^2 e^-m/(1+e^-m)^2. Max h ≈ 0.445 (at m≈2.4? let me recompute h at 2.4: 5.76*0.090718 = 0.52253; /1.1903^2... wait (1+e^-m)^2 = (1.090718)^2 = 1.18967. 0.52253/1.18967 = 0.4392). Try m=2.5: 6.25*0.082085=0.51303; (1.082085)^2=1.17091; h=0.4382. m=2.3: 5.29*0.10026=0.53037; 1.21058; h=0.4381. m=2.4 gives ~0.439. Max h≈0.44. Δtail ≈ 3.457e-6*0.439 = 1.52e-6.
+
+So error up to ~1.5e-6, exceeding 1e-6 absolute tolerance. Reject.

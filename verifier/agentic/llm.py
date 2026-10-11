@@ -310,6 +310,20 @@ class OpenAILLMClient:
             if not tools:
                 return text
 
+            if response.choices[0].finish_reason == "length":
+                # A length-limited response can contain complete calls followed
+                # by an unfinished one. Treat the whole action batch as absent:
+                # neither a partial argument nor a completed prefix may mutate
+                # the ledger. Raw output and usage were recorded above, and this
+                # no-action turn lets the orchestrator reach budget closeout.
+                return _serialize_tool_response(
+                    message="[output_truncated] The provider reached the output-token limit "
+                            "(finish_reason=length). No tool actions from this response were "
+                            "executed; any proposed actions were discarded. Usage is counted. "
+                            "Use the recorded run state when deciding how to continue.",
+                    tool_calls=[],
+                )
+
             return _serialize_tool_response(
                 message=text,
                 tool_calls=[

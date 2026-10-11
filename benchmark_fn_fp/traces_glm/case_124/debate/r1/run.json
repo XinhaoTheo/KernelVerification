@@ -1,0 +1,1204 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_124",
+    "has_error": null,
+    "kernel_code": "\"\"\"Fused fixed-point rescaling and dequantization for an integer GEMM epilogue.\n\nSynthetic Triton implementation of the gemmlowp double-rounding arithmetic.\nThe arithmetic specification is inspired by gemmlowp fixedpoint/fixedpoint.h;\nthis is not a port of an upstream kernel or a claim of a historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rescale(ACC, MULT, SHIFT, ZERO, SCALE, OUT,\n             ROWS: tl.constexpr, CHANNELS: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < ROWS * CHANNELS\n    channel = index % CHANNELS\n    a = tl.load(ACC + index, mask=active, other=0)\n    m = tl.load(MULT + channel, mask=active, other=1073741824)\n    r = tl.load(SHIFT + channel, mask=active, other=0)\n    z = tl.load(ZERO + channel, mask=active, other=0)\n    scale = tl.load(SCALE + channel, mask=active, other=1.0)\n\n    # Signed upper product and modulo-2^32 lower product.\n    high = tl.inline_asm_elementwise(\n        \"mul.hi.s32 $0, $1, $2;\", constraints=\"=r,r,r\",\n        args=[a, m], dtype=tl.int32, is_pure=True, pack=1)\n    low = a.to(tl.uint32) * m.to(tl.uint32)\n    low_a = low + tl.full((BLOCK,), 0x40000000, tl.uint32)\n    carry_a = (low_a < low).to(tl.int32)\n\n    negative = a < 0\n    low_b = tl.where(\n        r == 1, tl.where(negative, 0, 0x80000000),\n        tl.where((r > 1) & negative, 0x80000000, 0)).to(tl.uint32)\n    high_b = tl.where(\n        r >= 2, (1 << tl.maximum(r - 2, 0)) - negative.to(tl.int32), 0)\n    low_final = low_a + low_b\n    carry_b = (low_final < low_a).to(tl.int32)\n    high_final = high + high_b + carry_a + carry_b\n\n    q0 = ((high_final.to(tl.uint32) << 1) | (low_final >> 31)).to(tl.int32)\n    shifted = high_final >> tl.maximum(r - 1, 0)\n    q = tl.where(r == 0, q0, shifted)\n    q = tl.minimum(tl.maximum(q, -255), 255)\n    q = tl.minimum(tl.maximum(q + z, -128), 127)\n    result = (q - z).to(tl.float32) * scale\n    tl.store(OUT + index, result, mask=active)\n\n\ndef validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\n                    require_cuda=True):\n    \"\"\"Validate the whole public domain; CPU validation is also available.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    buffers = (acc, multipliers, right_shifts, zero_points, output_scales)\n    for tensor in buffers:\n        require(type(tensor) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(),\n                \"contiguous strided tensors required\")\n        require(not tensor.requires_grad and not tensor.is_inference(),\n                \"ordinary non-gradient buffers required\")\n        require(not tensor.is_neg() and not tensor.is_conj(),\n                \"logical view flags are outside this domain\")\n        require(not require_cuda or tensor.is_cuda, \"CUDA tensors required by run\")\n    require(all(t.device == acc.device for t in buffers), \"one device required\")\n    require(acc.ndim == 2 and acc.dtype == torch.int32, \"acc must be int32 [M,C]\")\n    rows, channels = acc.shape\n    require(1 <= rows <= 4096 and 1 <= channels <= 257,\n            \"M must be in [1,4096] and C in [1,257]\")\n    for tensor in (multipliers, right_shifts, zero_points):\n        require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n                \"integer channel parameters must be int32 [C]\")\n    require(output_scales.dtype == torch.float32 and output_scales.shape == (channels,),\n            \"output_scales must be FP32 [C]\")\n    require(bool((multipliers >= (1 << 30)).all().item()),\n            \"Q31 multipliers must be in [2^30,2^31-1]\")\n    require(bool(((right_shifts >= 0) & (right_shifts <= 31)).all().item()),\n            \"right shifts must be in [0,31]\")\n    require(bool(((zero_points >= -128) & (zero_points <= 127)).all().item()),\n            \"zero points must be in [-128,127]\")\n    allowed_scale = torch.zeros_like(output_scales, dtype=torch.bool)\n    for exponent in range(-8, 1):\n        allowed_scale |= output_scales == 2.0 ** exponent\n    require(bool(allowed_scale.all().item()), \"scales must be powers of two from 2^-8 to 1\")\n    return {\"valid\": True, \"rows\": rows, \"channels\": channels}\n\n\ndef run(acc, multipliers, right_shifts, zero_points, output_scales):\n    \"\"\"Return a fresh FP32 dequantized epilogue result.\"\"\"\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n    rows, channels = acc.shape\n    with torch.cuda.device(acc.device):\n        out = torch.empty((rows, channels), dtype=torch.float32, device=acc.device)\n        _rescale[(triton.cdiv(rows * channels, 128),)](\n            acc, multipliers, right_shifts, zero_points, output_scales, out,\n            ROWS=rows, CHANNELS=channels, BLOCK=128, num_warps=4)\n    return out\n\n\ndef reference(acc, multipliers, right_shifts, zero_points, output_scales):\n    \"\"\"Independent scalar Python-integer definition of the two rounding stages.\"\"\"\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\n                    require_cuda=False)\n    matrix = acc.cpu().tolist()\n    mult = multipliers.cpu().tolist()\n    shifts = right_shifts.cpu().tolist()\n    zeros = zero_points.cpu().tolist()\n    scales = output_scales.cpu().tolist()\n    result = []\n    for row in matrix:\n        out_row = []\n        for a, m, r, z, scale in zip(row, mult, shifts, zeros, scales):\n            product = a * m\n            high_round = (product + (1 << 30)) // (1 << 31)\n            magnitude = abs(high_round)\n            if r:\n                magnitude = (magnitude + (1 << (r - 1))) // (1 << r)\n            scaled = -magnitude if high_round < 0 else magnitude\n            quantized = min(127, max(-128, scaled + z))\n            out_row.append((quantized - z) * scale)\n        result.append(out_row)\n    return torch.tensor(result, dtype=torch.float32, device=acc.device)\n\n\ndef make_inputs(device=\"cuda\", rows=31, channels=33, seed=0):\n    \"\"\"Example generator only; the legal accumulator domain is all int32 values.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    acc = torch.randint(-(1 << 31), 1 << 31, (rows, channels),\n                        dtype=torch.int64, generator=generator).to(torch.int32)\n    multipliers = torch.randint(1 << 30, 1 << 31, (channels,),\n                                dtype=torch.int64, generator=generator).to(torch.int32)\n    shifts = torch.randint(0, 32, (channels,), dtype=torch.int32, generator=generator)\n    zeros = torch.randint(-128, 128, (channels,), dtype=torch.int32, generator=generator)\n    exponents = torch.randint(-8, 1, (channels,), generator=generator)\n    scales = torch.pow(torch.tensor(2.0), exponents).to(torch.float32)\n    return tuple(t.to(device) for t in (acc, multipliers, shifts, zeros, scales))\n",
+    "passed": null,
+    "problem_text": "Compute the fixed-point requantization epilogue of an integer GEMM, returning\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\nrounding. Single-rounding requantization is a different operation.\n\nInputs and complete public domain:\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\n  value is legal, including -2^31 and 2^31-1.\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\n  positive Q31 fixed-point per-channel multipliers.\n- right_shifts is int32 [C], with values in [0,31].\n- zero_points is int32 [C], with values in [-128,127].\n- output_scales is FP32 [C], with values exactly in\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\n  are legal. Inputs may share storage if each otherwise meets this contract.\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external writes.\n  This forward operation does not provide autograd.\n\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\nmathematical integer arithmetic, without intermediate integer overflow:\n\n  P = a*m\n  H = floor((P + 2^30) / 2^31)\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\n  Q = min(127, max(-128, R + z))\n  target[i,c] = (Q-z)*s\n\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\noperands cannot occur. Saturation is applied after the two rounding stages\nand zero-point addition. The target is the requantized/dequantized result,\nnot the pre-quantization real number. All target values are exactly\nrepresentable in FP32 for this domain.\n\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\ninputs. Require absolute error <=1e-6 for every element, with relative\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\nsmaller than the smallest nonzero quantization step in the public domain.\nThe implementation may fuse stages, use fixed-width product limbs, or\nrearrange the arithmetic if the target above is preserved for the ENTIRE\nlegal domain. Correctness is one verdict for the implementation, not one\nverdict per input, seed, shape or channel parameter configuration.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses Python arbitrary-precision integers and the direct two-stage definition;\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\nit does not claim to reproduce an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_124",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-05T07:01:04Z",
+      "evidence": [],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Kernel lines 29-40 add the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, so the fused shift by r computes a single rounding of (P + 2^30 + second_bias)/2^(31+r); the contract demands two sequential roundings. The two disagree exactly when H mod 2^r == 2^(r-1) (second-stage half-tie), producing an off-by-one in Q and a full quantization-step output error, far above 1e-6.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract requires DOUBLE rounding: H = floor((P+2^30)/2^31), then R = nearest to H/2^r with ties AWAY from zero, applied over the ENTIRE legal int32 domain ('correctness is one verdict ... for the ENTIRE legal domain', tolerance <=1e-6)."
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires double rounding over the entire legal int32 domain, and the 1e-6 absolute tolerance is smaller than one quantization step, so any off-by-one at a legal tie point is a contract violation.",
+      "statement": "The kernel's fused single rounding of (P + 2^30 + bias)/2^(31+r) disagrees with the contract's double rounding at exact second-stage tie points (H mod 2^r == 2^(r-1)) for constructible legal (a, m, r) values, e.g. H = 2^(r-1) with r >= 1.",
+      "status": "open",
+      "updated_at": "2026-10-05T07:01:04Z"
+    },
+    {
+      "created_at": "2026-10-05T07:01:04Z",
+      "evidence": [],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Line 34 adds the 0x80000000 bias only for non-negative a when r==1, and line 35 adds it only for negative a when r>1. Gemmlowp's away-from-zero tie rule requires bias for both signs in the negative branch. If the r==1 negative-tie case is un-biased, negative exact-tie accumulators round toward zero (up) instead of away from zero (down), producing an off-by-one Q.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: 'R = nearest integer to H/2^r, with exact half ties AWAY from zero' \u2014 negative exact-half cases are within the stated tie rule and every int32 accumulator is legal."
+        }
+      ],
+      "scope_rationale": "Negative exact-half H/2^r values are directly covered by the contract's stated away-from-zero tie rule for R, and every int32 a (hence negative products) is in the public domain.",
+      "statement": "For negative accumulators a < 0 with r == 1 and H exactly odd (a half-tie for the /2 shift), the kernel's sign-asymmetric bias (0x80000000 added only when NOT negative, line 34) rounds the negative half-tie toward zero (i.e., H/2 truncated up) instead of away from zero, differing from the contract by one quantization step.",
+      "status": "open",
+      "updated_at": "2026-10-05T07:01:04Z"
+    },
+    {
+      "created_at": "2026-10-05T07:01:04Z",
+      "evidence": [],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "q0 = (high_final<<1) | (low_final>>31) reinterprets the 64-bit biased product's top 33 bits, then casts to int32. If high_final = 2^31 - 1, q0 overflows int32 and wraps to a large negative value, which after the [-255,255] clamp would produce a completely wrong clamped Q (near -128 side) instead of +127. E.g. a = 2^31 - 1, m = 2^31 - 1: P + 2^30 = 2^62 - 2^32 + 2^30 - 1 < 2^62, so H = 2^31 - 1 is reachable.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: every int32 accumulator value is legal including 2^31-1; m in [2^30, 2^31-1]; for r=0, R=H; tolerance <=1e-6 requires exact Q."
+        }
+      ],
+      "scope_rationale": "a = 2^31-1 and m near 2^31-1 with r=0 are explicitly inside the contract's domain (every int32 accumulator legal, multipliers up to 2^31-1, r=0 permitted), and H = floor((P+2^30)/2^31) can reach 2^31-1, where the int32 cast of q0 wraps.",
+      "statement": "On the r==0 path with extreme positive products (a = 2^31-1, m = 2^31-1 gives P \u2248 2^62 - 2^32 + 1 so H = floor((P+2^30)/2^31) = 2^31-1), the q0 recombination (high_final<<1 | low_final>>31) cast to int32 overflows/wraps, producing a wrong sign or magnitude for Q.",
+      "status": "open",
+      "updated_at": "2026-10-05T07:01:04Z"
+    }
+  ],
+  "convergence": {
+    "created_at": "2026-10-05T07:00:12Z",
+    "focus_claims": [],
+    "reason": "Skeptic must review the latest evidence and call record_no_new_claims before Judge",
+    "request": "more_debate"
+  },
+  "description_model": {
+    "contract_model": [
+      "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+      "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+      "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+      "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+      "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+    ],
+    "kernel_model": [
+      "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+      "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+      "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+      "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+      "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+      "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom.",
+      "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+      "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+      "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+      "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+    ],
+    "open_questions": [
+      "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+      "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+      "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+      "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?",
+      "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+      "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+      "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+    ],
+    "risk_map": [
+      "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+      "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+      "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+      "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+      "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+      "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+      "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+      "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised.",
+      "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+      "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+      "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+      "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+    ],
+    "scope_notes": [
+      "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]",
+      "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+      "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+        "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+        "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+        "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+        "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+      ],
+      "created_at": "2026-10-05T06:55:37Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+        "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+        "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+        "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+        "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+        "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom."
+      ],
+      "open_questions": [
+        "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+        "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+        "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+        "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?"
+      ],
+      "risk_map": [
+        "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+        "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+        "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+        "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+        "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+        "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+        "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+        "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised."
+      ],
+      "scope_notes": [
+        "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]"
+      ],
+      "summary": "Initial description of case_124: a synthetic gemmlowp-style fixed-point requantization epilogue (double rounding then saturate then dequantize) implemented as a fused Triton kernel, with contract-defined tie rules (H ties toward +infinity, R ties away from zero) and an absolute 1e-6 / zero-relative tolerance over the entire legal int32 domain.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [],
+      "created_at": "2026-10-05T07:00:42Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [
+        "Refines du1's central risk (tie-rule mismatch at the second rounding stage) into a concrete mathematical hypothesis: fused single rounding vs required double rounding, differing only at exact tie residues; probes should construct H values with exact half residues rather than relying on random inputs.",
+        "Removes the clamp-ordering item from the primary risk set per Skeptic's round-4 case analysis, pending independent confirmation.",
+        "Note: Skeptic rounds 3-4 produced reasoning text but no tool calls, so no claims are yet recorded in the ledger for any of these surfaces."
+      ],
+      "kernel_model": [
+        "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+        "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+        "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+        "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+      ],
+      "open_questions": [
+        "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+        "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+        "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+      ],
+      "risk_map": [
+        "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+        "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+        "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+        "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+      ],
+      "scope_notes": [
+        "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+        "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+      ],
+      "summary": "Refinement after Skeptic rounds 3-4: the kernel's fused limb bias composes both rounding constants onto the raw 64-bit product, implementing what is mathematically SINGLE rounding of (P+2^30+bias)/2^(31+r) rather than the contract's DOUBLE rounding; the two disagree only at exact second-stage tie points (H mod 2^r == 2^(r-1)), which becomes the decisive probe surface. Clamp-ordering risk appears contract-equivalent per case analysis and is down-graded. No claims are yet in the ledger (Skeptic made no tool calls in rounds 3-4).",
+      "task_ids": [],
+      "turn": 5
+    }
+  ],
+  "entry": "case_124",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_124"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_124"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_124"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_124",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 44.908158971999995,
+      "role": "describer",
+      "round": 2,
+      "text": "The contract and full kernel source are already loaded; this case is a synthetic gemmlowp-style double-rounding requantization epilogue in Triton. I have enough context to record the initial description model, highlighting the tie-rule and limb-arithmetic surfaces that Skeptic should probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+              "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+              "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+              "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+              "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+            ],
+            "kernel_model": [
+              "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+              "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+              "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+              "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+              "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+              "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom."
+            ],
+            "open_questions": [
+              "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+              "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+              "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+              "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?"
+            ],
+            "risk_map": [
+              "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+              "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+              "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+              "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+              "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+              "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+              "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+              "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised."
+            ],
+            "scope_notes": "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]",
+            "summary": "Initial description of case_124: a synthetic gemmlowp-style fixed-point requantization epilogue (double rounding then saturate then dequantize) implemented as a fused Triton kernel, with contract-defined tie rules (H ties toward +infinity, R ties away from zero) and an absolute 1e-6 / zero-relative tolerance over the entire legal int32 domain."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 44.908,
+        "input_tokens": 9065,
+        "output_tokens": 2476
+      }
+    },
+    {
+      "duration_s": 140.45442261600002,
+      "role": "skeptic",
+      "round": 3,
+      "text": "Record 3 high-risk claims: second-stage tie rule mismatch; r==0 q0 overflow; clamp ordering. Also H first stage tie toward +inf \u2014 gemmlowp's RoundingDivideByPOT uses... Actually the kernel mirrors gemmlowp's single-rounding style; the double-rounding contract differs. Let me quickly analyze one key point: contract H = floor((P+2^30)/2^31) \u2014 that's ties toward +inf. Kernel low_a = low + 2^30 with carry \u2014 that's fine for H.\n\nSecond stage: contract R = round-half-away-from-zero of H/2^r. Kernel's low_b/high_b idiom: this is exactly gemmlowp's RoundingDivideByPOT (toward... actually gemmlowp's RoundingDivideByPOT rounds ties away from zero? It adds (1<<(shift-1)) and handles negative by rounding... The kernel computes on high_final which already includes the +2^30 bias from stage 1 (double rounding through the fused limbs). Hmm, that's the whole point of gemmlowp's rounding \u2014 but here the double-rounding means rounding P first. The kernel applies r-shift to (P+2^30) limbs, giving round of ((P+2^30 rounded...)/2^r)... This is the fused \"single-rounding\" style: rounding (P + 2^30 + 2^(30+r-...)) hmm.\n\nActually the fused computation: total = P + 2^30 (stage-1 bias) then plus low_b/high_b bias which equals... low_b/high_b adds 2^(r-1) at the position of the R-stage half. So total bias = 2^30 + 2^(r-1+31)? Let's see: high_b for non-negative r>=2 is (1<<(r-2)), and shifted = high_final >> (r-1). high_final is the high 32-bit limb representing value >>32. So high_b = 1<<(r-2) in the high limb = 2^(r-2)*2^32 = 2^(r+30)?? No wait. Hmm, shifted = high_final >> (r-1). High limb value V, and total value = V*2^32 + low_final. Then >> (r-1) and... hmm but the final shift total >> r would be the R. With bias in the high limb of 1<<(r-2), when shifted by (r-1) it contributes 2^(r-2)/(2^(r-1)) = 1/2 \u2192 half-tie contribution. So bias is 2^30 (stage1, in low limb) + 2^31+2^(r-2)*2^31? low_b = 0x80000000 for negative r>1 = 2^31. So total bias = 2^30 + 2^31 + 2^(r-2)*2^32. Then final value = (P + bias) >> r (with high_final >> (r-1) including... q = high_final >> (r-1) which equals (V*2^32+low) >> r ... yes). So it computes floor((P + 2^30 + 2^31 + 2^(r+30)) / 2^r)? That's a fused single-rounding of (P + 2^30)/2^r \u2014 i.e., rounding the biased P once. But the contract demands DOUBLE rounding: first H = round(P/2^31), then R = round(H/2^r). Fused single rounding of (P+2^30)/2^r differs from double rounding when the intermediate residue crosses a tie differently. E.g., P such that H/2^r is exactly at .5 vs fused residue not. This is precisely the \"single-rounding is a different operation\" warning in the problem! So the strong claim: kernel implements fused single rounding, mismatching double rounding at boundary values. Good, testable with targeted P values.\n\nWait, but is that right? bias = 2^30 + 2^31 + ...? Hmm, but check gemmlowp's actual double-rounding: gemmlowp uses RoundingDivideByPOT(MultByPot...) Actually gemmlowp's standard: (a*m) rounded-divide by 2^31 then... The kernel adds both biases simultaneously \u2192 single rounding. But actually maybe the low_b bias (2^31 = 0x80000000 low + high_b) is staged after q0 which recombines... no, q0 uses high_final including all biases, only for r==0. For r>0, shift uses high_final with all biases. So yes fused.\n\nHmm, but maybe not: maybe the intended design is that the +2^30 bias fully vanishes... no. Let me just compute an example: r=1. Contract: H = round(P/2^31) half toward +inf; R = round(H/2) half away from zero. Kernel: total = P + 2^30 (bias1) then r=1: low_b = 0x80000000 if a>=0 else 0; high_b = 0 (r<2). q = high_final >> 0 ... shifted = high_final >> 0 = high_final. Hmm wait r=1: shifted = high_final >> max(r-1,0)=0. So q = high_final = high limb of (P + 2^30 + 2^31*[a>=0]). That's H-biased... floor((P+2^30+2^31*(a>=0))/2^32)? That doesn't look like /2. Hmm, actually q = high_final (32-bit) but P up to ~2^62 so high ~2^30; the value would be (P+bias)>>32 which is H if r=1?? No: H = (P+2^30)>>31, then R = H>>1 half-away = floor((H + sign)/2)... (P+2^30)>>32 approximates H/2. So fused single rounding: R_fused = floor((P + 2^30 + 2^31*(a>=0)) / 2^32)? Hmm, for r=1 away-from-zero: R = sign*floor((|H|+1)/2). Fused: floor((P + 2^30 + 2^31*(a>=0))/2^32)? For negative a, bias=2^30 only, floor((P+2^30)/2^32) \u2014 floor of H/2 with H = (P+2^30)>>31... for negative P, H/2 exact-half goes down (toward -inf = away from zero for negative) \u2713. For positive a, bias adds 2^31 \u2192 floor((H*2^31+2^30+2^31)/2^32)... that rounds H/2 half up = away from zero \u2713. But the fused differs from double when H is odd and the fraction P/2^31 has residue: e.g., P = 3*2^30 - 1 (H=1... floor((3*2^30-1+2^30)/2^31)=floor(4*2^30-1 over 2^31)=1, since (2^32-1)/2^31 = 1.99\u21921). Fused with r=1: (P+2^30+2^31)/2^32 = (2^32-1+2^31)/2^32 \u2192 floor = 1. Double: R = round(1/2)=1 (half away from zero, positive \u21921). Same here. Need case where fused residue < half but double rounds up because H exactly at half. Fused rounds H/2 to 1 iff P residue after stage-1... fused condition: (P+2^30+2^31) mod 2^32 >= 2^31... Hmm, this analysis is getting long \u2014 that's what probes are for. Record the claims and let probes decide.\n\nClaims:\n1. Second rounding stage is fused single-rounding of (P+2^30)/2^r, not double rounding \u2014 mismatch on boundary accumulator values (in_scope, full domain contract).\n2. Clamp ordering: intermediate clamp to [-255,255] before adding z \u2014 can it differ? Reference clamps Q=min(127,max(-128,R+z)). Kernel: q=clamp(R,-255,255), then clamp(q+z,-128,127), output (q_final - z)*s. If R=300, z=-100: contract Q=clamp(200,...)=127, output (127+100)*s=227s. Kernel: q=clamp(300)=255, q+z=155\u2192127, output (127+100)=227s \u2713. If R=300, z=127: contract Q=127, out 0. Kernel: q=255, 255+127=382\u2192127, out 0 \u2713. If R=-300, z=-127: contract Q=-128, out -1s. Kernel: q=-255, -255-127=-382\u2192-128, out -1 \u2713. Hmm seems designed. But R can be much larger than 255: R up to 2^30. If R=2^30, z=-128: contract Q=127, out 255s. Kernel: q=255, q+z=127, out 255s \u2713. R=2^30, z=128... z\u2264127. R=2^30, z=127: contract Q=127, out 0. Kernel: q=255, 382\u2192127, out 0 \u2713. Interesting: the intermediate clamp to \u00b1255 then adding z (\u2264127 in magnitude) then clamping: is clamp(clamp(R,\u00b1255)+z, \u00b1128) == clamp(R+z,\u00b1128) whenever |R|>... For R>255: contract R+z\u2265128 \u2192 Q=127 \u2192 out=(127-z)s. Kernel: q=255, out=(clamp(255+z,\u00b1128)-z)s. If z\u2208[-127,127]: 255+z\u2265128\u2192127 \u2192 (127-z)s \u2713. z=-128: 255-128=127\u2192(127+128)=255s; contract R>255,z=-128: Q=127, out=(127+128)s=255s \u2713. Seems safe for z\u2265-128: need clamp(255+z) = 127 whenever z \u2265 -127 \u2192 255+z\u2265128 \u2713; z=-128 gives 127 \u2713. Similarly negative side: R<-255, contract Q=-128, out=(-128-z)s. Kernel: q=-255, clamp(-255+z): z\u2264127 \u2192 -128 when -255+z\u2264-128, i.e., z\u2264127 \u2713. z=127: -128 \u2713 out=-255s; contract out=(-128-127)s=-255s \u2713. So clamp ordering is actually equivalent. Skip that claim or mark low. Maybe still record as a claim? Better pick the q0 r==0 overflow claim instead.\n\n3. r==0 path: q0 = (high_final<<1 | low>>31) as int32. high_final for r==0: low_b=0, high_b=0 (r>=2 false), so high_final = high + carry_a. Value = floor((P+2^30)/2^32)*2 + top bit... (V*2^32 + low_a)>>31 where V=high+carry_a. That equals (P+2^30)>>31 = H \u2713 mathematically, but the int32 cast: H ranges up to ~2^30 (P up to (2^31-1)^2\u22482^62 \u2192 H\u22482^31-1... actually H can be up to (2^62-2^32+2^30+...)/2^31 \u2248 2^31-1, exceeding int32 max! E.g., a=2^31-1, m=2^31-1: P=2^62-2^32+1, H=(P+2^30)>>31 = 2^31 - 1... compute: (2^62-2^32+1+2^30)/2^31 = 2^31 - 2 + something. floor = 2^31-1? (2^62 - 2^32 + 1 + 2^30) / 2^31 = 2^31 - 2 + (1+2^30)/2^31 < 2^31. floor = 2^31 - 2? 2^62/2^31=2^31; -2^32/2^31 = -2; so \u22482^31-2+small \u2192 2^31-2 or so. H \u2248 2^31-2 which exceeds INT32_MAX? 2^31-2 > 2^31-1? No, 2^31-2 < 2^31-1. Hmm so H \u2264 2^31-2 < int32 max? Max a=2^31-1, m=2^31-1: P = (2^31-1)^2 = 2^62 - 2^32 + 1. +2^30. Divide by 2^31: 2^31 - 2 + (1+2^30)/2^31 \u2192 floor = 2^31 - 2? (2^31-2)*2^31 = 2^62 - 2^32. Remainder = 1 + 2^30 > 0, so floor = 2^31-2. OK fits in int32 (max 2^31-1). But then the intermediate clamp to 255 handles it. What about the (high_final<<1) in uint32 then cast \u2014 uint32 wrap then cast to int32 gives correct low-32 bits = H mod 2^32; H < 2^31 so fine. Negative: a=-2^31, m=2^31-1: P=-2^62+2^31. H = floor((P+2^30)/2^31) = -(2^31-1)+... compute: P+2^30 = -2^62+2^31+2^30. /2^31 = -(2^31) + 1 + 0.5 \u2192 floor = -2^31+1. That's \u2265 INT32_MIN \u2713. So r==0 likely fine. Hmm.\n\nActually wait \u2014 is H = 2^31-1 possible? a=2^31-1,m=2^31-1 gives H=2^31-2. Hmm but shifted path for r>0: shifted = high_final >> (r-1); high_final could be ~2^30 for positive or, negative case: high_final >> (r-1) arithmetic shift \u2014 fine, clamped anyway. The clamp of q to [-255,255] handles any garbage. So really the only meaningful surface is the rounding composition. And also: does the intermediate clamp break ties? No.\n\nBut wait \u2014 reconsider claim 1 more carefully. Is it actually fused? For r>=2, high_b = (1<<(r-2)) - negative. And shifted = high_final >> (r-1). Value total = (high_final * 2^32 + low_final) mod-ish; the actual mathematical value being computed: q = floor(( (P + 2^30) + 2^31 + (2^(r-2))*2^32*sign-adjust ) / 2^r )? Let's just define: N = P + 2^30 (stage-1 biased). Kernel computes q \u2248 floor( (N + 2^(r-1)) / 2^r ) for positive (since low_b=2^31=2^(r-1+32-r)... hmm for r>=2, low_b = 2^31, high_b = 2^(r-2). In combined 64-bit value: bias2 = 2^(r-2)*2^32 + 2^31 = 2^(r+30) + 2^31. Then q = total >> r (via high_final>>(r-1) discarding low... wait shifted = high_final >> (r-1), which drops low_final except its top bits? No \u2014 high_final >> (r-1) is just the high limb shifted, ignoring low_final entirely except carry_b. So q = floor(high_final / 2^(r-1)) where high_final \u2248 N'>>32. So q = floor( (N + bias2) / 2^32 / 2^(r-1) ) = floor( (N + bias2) / 2^(r+31) ). Hmm that's dividing by 2^(r+31) not 2^r! Wait \u2014 but gemmlowp's double rounding: H = N>>31 (rounded), then R = (H rounded)/2^r. R = floor((H + half)/2^r) \u2248 floor((N/2^31 + 2^(r-1))/2^r) \u2248 floor((N + 2^31*2^(r-1) + ...)/2^(31+r)) = floor((N + 2^(r+30))/2^(31+r)). And bias2 = 2^(r+30) + 2^31. Hmm the extra 2^31... and the stage-1 rounding of N (ties) \u2014 floor vs round. Double rounding rounds N/2^31 to nearest first (floor((N+2^30)/2^31) is exactly that, N already includes 2^30). So kernel: q = floor( (P + 2^30 + 2^31 + 2^(r+30)) / 2^(31+r) ) for r>=2 positive. True double: H = floor((P+2^30)/2^31), R = floor((|H| + 2^(r-1))/2^r) signed. These differ! Double rounding loses the sub-stage-1 residue; fused keeps it. Classic: P = H*2^31 - 2^30 + something... e.g., r=1? Actually the problem text explicitly says \"This interface requires gemmlowp-compatible DOUBLE rounding. Single-rounding requantization is a different operation.\" Hmm but wait \u2014 gemmlowp's own standard epilogue actually does: result = RoundingDivideByPOT(MultiplyByQuantizedMultiplier(...)) which is... gemmlowp fixedpoint uses RoundingDivideByPOT on the sum, and the \"double rounding\" of the contract refers to the two-stage definition given. The kernel's math with both biases: floor((P + 2^30 + 2^31 + 2^(r+30))/2^(31+r))... hmm is the +2^31 spurious? For positive: half-tie for R stage needs bias 2^(r-1) at scale of H, i.e., 2^(r-1)*2^31 = 2^(r+30) relative to P. \u2713. The extra 2^31: hmm, ties toward +inf for stage... 2^31 at P-scale = 1 at H-scale = half of 2 (r=1)... For r>=2, 2^31 is below the rounding quantum 2^(r+30)? No: quantum is 2^(31+r); half-quantum is 2^(30+r). Bias should be exactly 2^(30+r) for round-half-up. Kernel bias = 2^30 (stage1) + 2^31 + 2^(r+30). Stage-1 bias 2^30 < half quantum (for r>=1, 2^(30+r) \u2265 2^31 > 2^30), so it acts as... it perturbs but shouldn't cross tie except when residue near boundary. The 2^31 extra: also small relative to half quantum for r\u22652. So kernel \u2248 single rounding of (P + small extra)/2^(31+r): floor((P + 2^(r+30) + 2^31 + 2^30)/2^(31+r)). True double: R = round(H/2^r) where H = round(P/2^31). Difference arises when P's residue relative to 2^31 quantum is e.g. slightly below half at stage 1 (H rounds down) but the combined residue pushes the fused up \u2014 no wait, fused rounds once with total bias; double rounds sequentially. Mismatch example (r=1, positive): fused bias = 2^30+2^31+2^31 = 2^30+2^32; quantum 2^32; fused q = floor((P+2^30+2^32)/2^32) = floor(P/2^32 + 2^30/2^32 + 1) = floor((P+2^30)/2^32)+... Double: H = round(P/2^31) half-up = floor((P+2^30)/2^31); R = round(H/2) half-away(pos=up) = floor((H+1)/2). Take P = 3*2^30 - 1: H = floor((4*2^30-1)/2^31)=1 (since (2^32-1)/2^31<2). R = floor(2/2)=1. Fused: floor((3*2^30-1+2^30+2^31)/2^32)=floor((2^32-1+2^31)/2^32)=1. Same. Take P = 2^32 - 2^30 - 1? H = floor((2^32-1)/2^31)=1; R=1. Fused: floor((2^32 - 2^30 -1 + 2^30 + 2^31)/2^32)=floor((2^32-1+2^31)/2^32)=1. Hmm. Take P where H is odd and fused differs: P = 3*2^31 (H = floor((3*2^31+2^30)/2^31)=3, odd). R = floor((3+1)/2)=2. Fused: floor((3*2^31+2^30+2^31)/2^32) = floor((4*2^31 + 2^30)/2^32) = floor(2 + 0.25)=2 \u2713. P = 3*2^31 + 2^30 - 1: H = floor((3*2^31+2^31-1)/2^31) = floor(4 - 2^-31)=3. R=2. Fused: (3*2^31+2^31-1+2^30+2^31)/2^32 = (5*2^31 + 2^30 -1)/2^32 \u2192 floor(2.5+)=2 \u2713. P = 3*2^31 - 2^30 - 1: H = floor((3*2^31+2^30-1-... let me: P+2^30 = 3*2^31 - 1 \u2192 /2^31 \u2192 floor(3-\u03b5)=2. H=2 even. R=floor((2+1)/2)=1. Fused: (3*2^31 - 2^30 -1 + 2^30 + 2^31)/2^32 = (4*2^31 - 1)/2^32 \u2192 floor(2-\u03b5)=1 \u2713. Hmm hard to break with r=1. For r=1 the fused equals double? Maybe by design the +2^31 extra handles the stage-2 half and the 2^30 handles... wait for r=1, low_b adds 2^31 only when a>=0 (r==1 branch). And in my fused formula I had bias 2^30+2^31(from low_b? no for r=1, high_b=0, low_b=2^31). So bias = 2^30+2^31. q = floor((P+2^30+2^31)/2^32). Double: R = floor((H+1)/2), H = floor((P+2^30)/2^31). Claim equality? Let x = P+2^30. R = floor((floor(x/2^31)+1)/2) = floor((floor(x/2^31)+1)/2). Fused = floor((x+2^31)/2^32). Is floor((\u230ax/2^31\u230b+1)/2) == floor((x+2^31)/2^32)? Let h=\u230ax/2^31\u230b, x = h*2^31 + \u03c1, 0\u2264\u03c1<2^31. Fused numerator = h*2^31+\u03c1+2^31; /2^32 = (h+1)/2 + \u03c1/2^32. Left = \u230a(h+1)/2\u230b = (h+1)>>1. Fused = \u230a(h+1)/2 + \u03c1/2^32\u230b. If h odd: (h+1)/2 = k+0.5 where... h=2k+1: left = k+1; fused = floor(k+1+0.5+\u03c1/2^32)=k+1 \u2713. h=2k: left=k; fused=floor(k+0.5+\u03c1/2^32): = k if \u03c1<2^31... \u03c1/2^32<0.5 so k+0.5+something<0.5\u2192 k \u2713 (\u03c1\u22642^31-1 \u2192 \u03c1/2^32 < 0.5). Equal! So r=1 fused == double for non-negative. OK so maybe the kernel is correctly designed after all (this is a deliberately constructed case, could be correct). For r\u22652: bias = 2^30 + 2^31 + 2^(r+30)... wait recompute: low_b=2^31 (negative\u2192different), high_b=2^(r-2) in high limb \u2192 contributes 2^(r-2)*2^32 = 2^(r+30). Total = 2^30+2^31+2^(r+30). Fused q = floor((x + 2^31 + 2^(r+30))/2^(31+r)) where x=P+2^30. Double: R = floor((H + 2^(r-1))/2^r), H=\u230ax/2^31\u230b. H = h, x=h*2^31+\u03c1. Double R = floor((h+2^(r-1))/2^r). Fused = floor((h*2^31+\u03c1+2^31+2^(r+30))/2^(31+r)) = floor((h + 1 + 2^r)/2^(1+r) + \u03c1/2^(31+r))... = floor(((h+1+2^r)/2)*... let me write: numerator/(2^(31+r)) = (h + 1 + 2^r + \u03c1/2^31)/2^(r+1)... hmm: h*2^31/(2^(31+r)) = h/2^r. 2^31/2^(31+r) = 1/2^r. 2^(r+30)/2^(31+r) = 1/2. \u03c1/2^(31+r) < 1/2^(r+1)... So fused = floor( h/2^r + 2^-r + 1/2 + \u03c1/2^(31+r) ). Double = floor( (h + 2^(r-1))/2^r ) = floor( h/2^r + 1/2 ). Compare: fused has extra 2^-r + \u03c1/2^(31+r), where \u03c1/2^(31+r) < 2^(-r-1). Extra \u2208 (2^-r, 2^-r + 2^(-r-1)) = (2^-r, 1.5*2^-r). Let frac = h/2^r fractional part. Double rounds up iff frac \u2265 1/2. Fused rounds up iff frac + 2^-r + \u03c1term \u2265 1/2, i.e., frac \u2265 1/2 - 2^-r - \u03c1term. Since 2^-r > 0, fused rounds up in cases double rounds down: when frac \u2208 [1/2 - 2^-r - \u03c1term, 1/2). E.g., r=2: frac \u2208 [1/4 - \u03c1term, 1/2). h mod 4 = 1 \u2192 frac=0.25: double rounds down (R=floor(h/4+0.5)); fused: frac+0.25+\u03c1term \u2265 0.5 iff \u03c1term \u2265 0 \u2014 always \u2265 0.25+0.25=0.5 \u2192 rounds UP. Mismatch! Example: r=2, h \u2261 1 mod 4. h=1: double R = floor(0.25+0.5)=0. Fused = 1. Concrete P: choose a,m with H=1, r=2. H=1 means x \u2208 [2^31, 2^32), P = x-2^30 \u2208 [2^30, 2^31+2^30). Need m \u2265 2^30, a=P/m... a = 1, m = 2^31-1? P = 2^31-1. x = 2^31-1+2^30 = 3*2^30 - 1 \u2208 [2^31, 2^32) \u2713 H=1. Double: R = floor((1+2)/4)=0. Kernel: q should be 1. So concrete failing input: a=1, m=2^31-1, r=2, z=0, s=1 \u2192 target (Q-z)s with Q=clamp(R+z)=0 \u2192 0.0; kernel likely 1.0. Strong, testable, in-scope claim!\n\nWait but double-check the h\u22611 mod 4 case: h=1, r=2. Double R = nearest to 1/4 = 0 (not a tie). Kernel fused: value = (x + 2^31 + 2^32)/2^33 (quantum 2^(31+2)=2^33, bias 2^(30+2)=2^32 plus 2^31 plus x's 2^30). x\u22482^31..2^32. (x + 2^31 + 2^32)/2^33: with x=3*2^30-1: (3*2^30-1+2^30*... 2^31=2*2^30, 2^32=4*2^30 \u2192 total 3+2+4=9*2^30-1, /2^33=2^3*2^30 \u2192 (9*2^30-1)/2^33 \u2192 floor 9/8=1. So q=1 vs contract 0. \n\nAlso negative side: for negative a with r\u22652, low_b=2^31 also? No \u2014 (r>1)&negative \u2192 low_b=0x80000000. And high_b = (1<<(r-2)) - 1 = 2^(r+30) - 2^32. So bias = 2^30 + 2^31 + 2^(r+30) - 2^32 = 2^30 - 2^31 + 2^(r+30). Fused = floor((x + 2^(r+30) - 2^31)/2^(31+r))... hmm x = P+2^30, P negative. The double for negative: R = away from zero = -floor((|H|+2^(r-1))/2^r) = floor((H - 2^(r-1))/2^r). Similar analysis: fused = floor(h/2^r - 2^-r + 1/2 + \u03c1term). Compare to floor(h/2^r - 1/2 ... wait double = floor((h - 2^(r-1))/2^r) = floor(h/2^r - 1/2). Fused = floor(h/2^r - 2^-r + 1/2 + \u03c1term). These differ a lot! Hmm, for negative: e.g., h=-1, r=1: hmm r=1 negative: low_b=0, high_b=0. q = floor((x)/2^32) with x=P+2^30, P negative. Double: H=h, R = floor((h-1)/2)? h=-1: R=floor(-1)=-1. Fused: h=-1 \u2192 x \u2208 [-2^31, -2^31+2^31)=[-2^31,0): x/2^32 \u2208 [-0.5, 0) \u2192 floor = -1 \u2713. h=-3, r=1: double R = floor(-4/2)=-2. Fused: x\u2208[-3*2^31, -2*2^31): x/2^32 \u2208 [-1.5,-1) \u2192 -2 \u2713. OK r=1 negative fine.\n\nr\u22652 negative: fused = floor(h/2^r - 2^-r + 1/2 + \u03c1term) vs double = floor(h/2^r - 1/2)? Wait double away-from-zero negative: R = -round(|h|/2^r) = -floor((|h|+2^(r-1))/2^r) = ceil((h - 2^(r-1))/2^r)... = floor((h-2^(r-1))/2^r) + 1 if not exact... For h negative: away from zero means round down (more negative): R = floor((h - 2^(r-1))/2^r) when (h - 2^(r-1)) not divisible... Actually R = floor((h - 2^(r-1))/2^r) for all h? h=-1,r=1: floor(-2/2)=-1 \u2713 (away from zero: -0.5\u2192-1). h=-3,r=1: floor(-4/2)=-2 \u2713. h=-2,r=1: floor(-3/2)=-2 \u2713 (-1 away from zero \u2192 -1? -1/2 away from zero = -1). Hmm h=-2: R = round(-1) = -1. floor((-2-1)/2)=floor(-1.5)=-2 \u2717! So away-from-zero for negative is NOT floor((h-2^(r-1))/2^r) at ties; it's ceil for... -1.5 away from zero = -2? Away from zero means -1.5 \u2192 -2 (magnitude increases). Yes! -2 \u2713. OK so R = floor((h - 2^(r-1))/2^r) works for negative ties: h-2^(r-1) \u2261 tie \u2192 floor goes more negative = away from zero \u2713. And for positive R = floor((h+2^(r-1))/2^r). Good, matches reference's magnitude formula.\n\nNegative r\u22652 fused: floor(h/2^r - 2^-r + 1/2 + \u03c1term) vs floor(h/2^r - 1/2)?? Wait recompute bias for negative r\u22652: low_b=2^31, high_b = 2^(r-2) - 1 (since negative\u2192subtract 1). Hmm wait high_b = (1 << max(r-2,0)) - negative = 2^(r-2) - 1 for negative. In the 64-bit combined: high limb contribution = high_b*2^32 = 2^(r+30) - 2^32. low_b=2^31. So total extra bias beyond x: 2^31 + 2^(r+30) - 2^32 = 2^(r+30) - 2^31. Fused q = floor((x + 2^(r+30) - 2^31)/2^(31+r)). x = h*2^31 + \u03c1 (floor semantics, \u03c1\u2208[0,2^31)). = floor(h/2^r - 2^-r + 1/2 + \u03c1term). Hmm that has +1/2 from 2^(r+30)/2^(31+r)=1/2. Double = floor(h/2^r - 1/2)?? No wait: double negative = floor((h - 2^(r-1))/2^r) = floor(h/2^r - 1/2). Fused = floor(h/2^r + 1/2 - 2^-r + \u03c1term). These differ by ~1 in general?! E.g., h=-4, r=2: double = floor(-1 - 0.5) = -2. fused = floor(-1 + 0.5 - 0.25 + \u03c1term)",
+      "tool_calls": [],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 140.454,
+        "input_tokens": 22791,
+        "output_tokens": 8192
+      }
+    },
+    {
+      "duration_s": 134.60437656,
+      "role": "skeptic",
+      "round": 4,
+      "text": "The previous skeptic round (round 3) apparently made no tool calls. I should record 3 claims now: tie-rule mismatch, clamp ordering, r==0 overflow. Let me think about the clamp ordering issue carefully \u2014 is it a real bug?\n\nContract: Q = clamp(R+z). Output (Q-z)*s. Kernel: q = clamp(R, -255, 255); q = clamp(q+z, -128, 127); result (q - z)*s. If |R| > 255, kernel produces q=255, then q+z clamped gives Q', but Q should be min(127, max(-128, R+z)) = likely 127 for R>255. Then output kernel = (Q'-z)*s vs contract (127-z)*s. E.g., R=300, z=-128: contract Q = clamp(172) = 127, output = 255*s. Kernel: q=255, q+z=127, Q'=127, output=(127-(-128))*s=255*s. Same! Actually with the intermediate clamp to [-255,255], q+z in [-383,382], clamped to [-128,127]... contract Q = clamp(R+z). If R>255: contract Q=127 (since R+z>=127 when z>=-128 and R>=255... R=255, z=-128: R+z=127, Q=127, output 255s. Kernel: q=255, 255-128=127, Q'=127, output 255s. Fine. R negative similarly. Hmm the intermediate clamp to \u00b1255 seems chosen so that clamp(q+z) equals clamp(R+z) whenever they differ? If |R|<=255 they're identical. If R>255: R+z could be <127? R>255, z>=-128 \u2192 R+z>127 \u2192 Q=127. Kernel q=255, q+z>=127 \u2192 Q'=127. Equal. R<-255: R+z<-128? R<-255, z<=127 \u2192 R+z<-128 \u2192 Q=-128. Kernel: q=-255, q+z<-128 \u2192 Q'=-128. Equal. So clamp ordering is safe. Skip that claim.\n\nThe real suspected bug: the fused second-rounding. Kernel computes shifted = high_final >> (r-1) where high_final is the biased product limbs (i.e., value V = P + 2^30 + bias). Let me derive: kernel's first stage reproduces H with ties toward +inf. Actually the fused approach: q for r>0 = (P + 2^30 + 2^(31+r-1-31)...) \u2014 it rounds P+bias2 by 2^(31+r-1) then divides... This computes a SINGLE rounding of (P + 2^30 + 2^(r+29)) / 2^(31+r)? That's not double rounding. Double rounding requires: first round (P+2^30)/2^31 to H, then round H/2^r half-away. The fused kernel computes floor((P + 2^30 + bias_b)/2^(31+r)) roughly \u2014 a single-rounding of P/2^(31+r), which differs from double rounding on certain inputs. That's the classic single vs double rounding difference and matches the problem statement \"Single-rounding requantization is a different operation\" \u2014 suggesting the kernel is the single-rounding version. Strong bug hypothesis.\n\nPrecisely: kernel computes V = P + 2^30 + bias where bias = for r>=2 and negative a: 2^(r+29)? low_b = 0x80000000 for r>1 & negative; high_b = (1<<(r-2)) - (negative?1:0)... This is gemmlowp's RoundingDivideByPOT(P, 31+r-? ) combined... Actually gemmlowp's epilogue uses RoundingDivideByPOT(MultiplyByFixedQuantizedMultiplier result, ...). This looks like single rounding of (P+m-bias)/2^(31+r)? Regardless \u2014 hypothesis: kernel yields round((P+2^30)/2^(31+r)) single-rounding rather than double rounding; mismatch occurs when the two differ. Classic difference: double rounding R = round(H/2^r), H = floor((P+2^30)/2^31). Example: P such that H/2^r is exactly half-integer with H even/odd... Known difference cases: when residue of first rounding (P mod 2^31 - 2^30 rounding) pushes across. A concrete example: P = 2^31 * k + 2^30 + 2^(30+r-...). Let me construct: want H odd multiple tie. Take r=1, tie case H = 2n+1, H/2 = n + 0.5 \u2192 R = n+1 (away from zero for positive). Single rounding of (P+2^30)/2^32 with ties toward +inf: (P+2^30)/2^32 = (H+0.5)/2 = n+0.75, rounds to n+1 too. Hmm. For negative: H = -(2n+1), away from zero \u2192 R = -(n+1); single rounding ties toward +inf of (P+2^30)/2^32 = -(n+0.75) \u2192 -(n+1)? floor(-n-0.75) = -(n+1). Same. So double-rounding difference shows where H's residue... double rounding differs from single rounding when H = 2n (even) and... no. Actually double-round differs from single round when first rounding pushes value just past a tie boundary. E.g., exact P such that H/2^r is exactly at .5: fine. Difference: when P/2^(31+r) is just below .5 boundary but first rounding of P/2^31 rounds up to make it exactly .5 \u2192 double rounds up, single rounds down. Example: r=1, target value (P+2^30)/2^32 = n + 0.5 - \u03b5 where \u03b5 = tiny. Double: H = floor((P+2^30)/2^31) = floor(2n+1-2\u03b5) = 2n (if 2\u03b5>0 small... wait 2n+1-2\u03b5 \u2192 floor = 2n if \u03b5>0). Then H/2 = n, R = n. Single: floor(n+0.5-\u03b5) = n. Same. Hmm, other direction: (P+2^30)/2^32 = n+0.5+\u03b5: double H = floor(2n+1+2\u03b5) = 2n+1, H/2 = n+0.5 tie \u2192 away \u2192 n+1. Single: floor(n+0.5+\u03b5)=n+1. Same.\n\nDifference case: value just above tie where double rounds through non-tie? H=2n+1 with remainder so H/2 = n+0.5 exactly is tie always when H odd. Double rounds away from zero. Single: (P+2^30)/2^32 = (H + frac)/2 where frac\u2208[0,1). If H odd, frac\u22650: value = n+0.5+frac/2 > n+0.5, single rounds to n+1 too. Negative side: H negative odd, P negative. H/2 = -(n+0.5), away from zero \u2192 -(n+1). Single ties toward +inf: value (P+2^30)/2^32 = -(n+0.5) - frac/2, floor = -(n+1). Same again. Hmm, but kernel's fused arithmetic isn't exactly \"single rounding with ties toward +inf\" \u2014 its bias differs by sign of a. gemmlowp's RoundingDivideByPOT: q = (n + (1<<(shift-1)) - (n<0)) >> shift? Actually gemmlowp: for right shift rounding, they use (n >= 0 ? n + bias : n + bias - ...). Let me think kernel semantics: V64 = P + 2^30 (stage1 bias). Then stage2 adds: for r>=2, negative: low_b=0x80000000, high_b = 2^(r-2)-1 \u2192 adds 2^(r+29)+2^(r-2)*2^32? Wait high_b added to high limb (units 2^32). high_b = 2^(r-2)-1 plus low_b=2^31 \u2192 total added = (2^(r-2)-1)*2^32 + 2^31 \u2248 2^(r+30). For r>=2 non-negative: high_b = 2^(r-2), no low_b \u2192 2^(r-2)*2^32 = 2^(r+30). So bias \u2248 2^(r+30), and result = (V + 2^(r+30)) >> (31+r) roughly, i.e., round-to-nearest of V/2^(31+r) with tie adjustment by sign of a (away from zero on ties, roughly). So kernel = single rounding of (P+2^30)/2^(31+r) with ties away-from-zero-ish. That differs from double rounding on inputs where the intermediate rounding matters: i.e., where H is exactly at a tie for stage 2 but produced by stage-1 rounding, or more precisely where double rounding \u2260 single rounding \u2014 known to happen when the fractional residue crosses. Classic example: r=1: single = round((P+2^30)/2^32) with tie away-from-zero; double = round(floor((P+2^30)/2^31)/2) tie away. These differ when (P+2^30)/2^32 = n+0.5 exactly with H = 2n+1: double gives tie \u2192 away \u2192 n+1 (positive). Single: exact tie away \u2192 n+1. Same. When value = n+0.5\u00b1frac... shown above equal. Hmm for r=1 they may coincide. For r>=2: double: H = round((P+2^30)/2^31); R = round(H/2^r) away-from-zero. Single: round((P+2^30)/2^(31+r)). Difference example: V = P+2^30. Take V = 2^(31+r-1) + 2^30 + ... hmm. Double: H = V>>31 (floor with +2^30 already? wait stage-1 bias is 2^30, floor((P+2^30)/2^31) \u2014 kernel's high_final at that point = (P + 2^30) >> 31 arithmetic... Actually kernel's first stage = H already? No \u2014 kernel fuses; q0 for r=0 = (P+2^30)/2^31 = H. Good.\n\nFor r>=2: kernel result = floor((V + bias)/2^(31+r)) where bias ~ 2^(r+30) with sign tweaks = round(V / 2^(31+r)) ties ~away-from-zero. Double: H = floor(V/2^31)?? Wait H = floor((P+2^30)/2^31) \u2014 the +2^30 is the rounding bias, so H = round(P/2^31) ties to +inf. So kernel's V/2^(31+r) rounding = round( (P+2^30) / 2^(31+r) ) = round( P/2^(31+r) + 2^(30-31-r) ) \u2248 round(P/2^(31+r) + 0.5*2^(-31-r))... = round(P / 2^(31+r)) with ties... So kernel \u2248 single rounding of P/2^(31+r) \u2014 \"single-rounding requantization is a different operation\" per problem statement. And the double rounding differs from single rounding when P/2^(31+r) fractional part... The difference arises when the two roundings chain: e.g., P such that H = 2^r * n + 2^(r-1) exactly (tie in stage 2) \u2014 double rounds away from zero; single: P/2^(31+r) = (n + 0.5)/2^31 + ... hmm since H tie means P/2^31 = n+0.5 exactly (P = (2n+1)*2^30), then P/2^(31+r) = (n+0.5)/2^r, tiny \u2014 rounds to 0 unless n big. This is getting messy; the point is a claim with the assertion \"kernel implements fused single rounding of P by 2^(31+r) rather than double rounding; there exist legal inputs (a, m, r) where they differ by one quantization step.\" Let me find a concrete differing case to make the claim testable.\n\nDouble rounding vs single rounding of x by 2^(31+r) where double = away-from-zero-round(round-to-nearest-tie-+inf(x*2^31))/2^r, single = round-half-something(x*2^(31+r))/2^(31+r). These differ exactly when the first rounding changes the value across the second stage's tie or midpoint. Example: let x*2^(31+r) = K. Let H-precise: P. Choose P with residue: P = 2^(31+r)*n + d, where d/2^(31+r) fraction. Double: H = round(P/2^31) tie +inf; R = round(H/2^r) away.\n\nConcrete: r=1, want P \u2261 3*2^30 mod 2^32? Let P = 2^32*n + 3*2^30 = ... H = round(P/2^31) tie +inf: P/2^31 = 2n + 1.5 \u2192 H = 2n+2. R = round(H/2) = n+1. Single: round(P/2^32): P/2^32 = n + 0.75 \u2192 n+1. Same.\n\nWant double \u2260 single: need H/2^r at a tie where H's own rounding pushed it. Take P = 2^(31+r)*n + 2^30*(2^(r+1)-1)?? Try: P = (2n+1)*2^30 * 2^r + 2^30 = H would be... P/2^31 = (2n+1)*2^(r-1) + 0.5 \u2192 tie \u2192 H = (2n+1)*2^(r-1)+1. Then H/2^r = n + 0.5 + 2^(-r)... not tie. Hmm.\n\nThe known difference: double rounding is not always equal to single rounding \"round to odd\" issues. Case: single rounding of P/2^(31+r) with ties away-from-zero vs double: differ when P/2^(31+r) is exactly halfway for stage2 in double but... Consider P = 2^(30+r)*odd? Let's just say: double rounds twice; error compound. Differ when P = 2^(31+r)*n + 2^(30+r) + 2^30 (i.e., fraction = 0.5 + 2^(-31-r)*2^30 = 0.5+2^(-1-r)... no.\n\nfraction f = P mod 2^(31+r) over 2^(31+r). Double: stage1: P/2^31 = n*2^r + f*2^r; H = round(n*2^r + f*2^r). Stage2: R = round(H/2^r). If f*2^r \u2208 (0.5, 1) i.e. f \u2208 (2^-(r+1), 2^-r): stage1 rounds up: H = n*2^r + 1?? no wait f*2^r \u2208 (0.5,1) means P/2^31 = n*2^r + f', f'\u2208(0.5,1), H = n*2^r+1. Then H/2^r = n + 2^-r \u2192 R = n (rounds down, for r\u22652... n+small rounds to n). Single: f \u2208 (2^-(r+1), 2^-r) < 0.5 \u2192 rounds to n. Same.\n\nf slightly above 0.5 relative to stage-2 tie: want H/2^r = n + 0.5 exactly: H = n*2^r + 2^(r-1). P/2^31 \u2208 [H-0.5, H+0.5] maps to H. So P = (n*2^r + 2^(r-1))*2^31 + e, |e| \u2264 2^30 (e\u2265-2^30 for floor... tie toward +inf: H = floor((P+2^30)/2^31)). Double: R = round(n + 0.5) away = n+1 (n\u22650). Single: P/2^(31+r) = n + 0.5 + e/2^(31+r). If e>0: n+0.5+small \u2192 single rounds to n+1. Same. If e<0 (e.g., e=-2^30, and H computed via tie-toward-+inf when e=-2^30 exactly: floor((P+2^30)/2^31) = floor(n+0.5-2^-31... let me recompute: P+2^30 = (n*2^r+2^(r-1))*2^31 + e + 2^30; with e = -2^30: = ...*2^31, floor \u2192 H = n*2^r+2^(r-1). Yes H includes e=-2^30 case via tie toward +inf.) Then single: P/2^(31+r) = n + 0.5 - 2^(-31-r)*... e/2^(31+r) = -2^30/2^(31+r) tiny negative \u2192 single rounds DOWN to n. Double rounds UP to n+1. DIFFERENT! \n\nSo concrete difference: P \u2261 (n*2^r + 2^(r-1))*2^31 - 2^30 (mod nothing, exact), with n\u22650, r\u22651. E.g., r=1, n=0: P = 2^30 - 2^30 = 0? (n*2+1)*2^31 - 2^30 = 2^31-2^30 = 2^30. Check: P=2^30: H = floor((2^30+2^30)/2^31) = 1. R = round(0.5) away \u2192 1. Single: round((2^30+2^30)/2^32)... wait single rounds (P+2^30)/2^(31+r) = 2^31/2^32 = 0.5 \u2192 tie! Depends on kernel tie rule (away from zero) \u2192 rounds to 1. Hmm same because tie.\n\nNeed e strictly negative but not at tie boundary: e = -2^29? But then H = floor((P+2^30)/2^31): P+2^30 = (2n+1)*2^31 + 2^29 \u2192 floor = 2n+1? floor((2n+1)*2^31 + 2^29)/2^31 = 2n+1. Yes H = 2n+1 (r=1). H/2 = n+0.5 tie \u2192 away \u2192 n+1. Single: (P+2^30)/2^32 = (2n+1)*2^31/2^32 + 2^29/2^32 = n+0.5+2^-3? no: (2n+1)/2 + 2^29/2^32 = n+0.5+0.125 \u2192 rounds to n+1. Same! Ugh \u2014 the +2^30 bias inside single: kernel rounds V = P+2^30, so single = round((P+2^30)/2^(31+r)). With e=-2^29, V = (2n+1)*2^31 + 2^29, /2^32 = n + 0.5 + 1/16 \u2192 n+1. Same as double. Try e more negative: e = -2^30 + 1 (P = (2n+1)*2^31 - 2^30 + 1). H: V = P + 2^30 = (2n+1)*2^31 + 1 \u2192 floor \u2192 2n+1. Wait floor((P+2^30)/2^31): (2n+1)*2^31+1 over 2^31 = 2n+1 + tiny \u2192 floor = 2n+1. H=2n+1, R = n+1 (tie away). Single: V/2^32 = n + 0.5 + 2^-32 \u2192 rounds to n+1 (above tie). Same again!\n\nHmm. For r=1 single and double seem to coincide broadly. Try r=2. Double: H = floor((P+2^30)/2^31); R = round(H/4) away. Want H = 4n+2 (tie): H/4 = n+0.5 \u2192 R = n+1. P ranges: floor((P+2^30)/2^31) = 4n+2 \u2192 P+2^30 \u2208 [(4n+2)*2^31, (4n+3)*2^31) \u2192 P \u2208 [(4n+2)*2^31 - 2^30, (4n+3)*2^31 - 2^30). Single: round((P+2^30)/2^33). At P = (4n+2)*2^31 - 2^30: V = (4n+2)*2^31, V/2^33 = n/... (4n+2)/4 = n+0.5 \u2192 tie. Kernel's single-rounding tie rule (based on sign of a, gemmlowp style) \u2014 away from zero \u2192 n+1. Same. At P = (4n+3)*2^31 - 2^30 - 1: V = (4n+3)*2^31 - 1, V/2^33 = n + 0.75 - tiny \u2192 n+1. Same. In between all map to n+1. Hmm, double and single coincide again? Because ties-away matches for positive.\n\nNegative side is where gemmlowp idiom's tie handling matters: negative a, tie \u2192 away from zero (down). Double: H = -(4n+2), H/4 = -(n+0.5) \u2192 R = -(n+1). Single with kernel's bias for negative: kernel for r\u22652 negative adds 2^(r+30) - ... plus the -1 in high_b? high_b = (1<<(r-2)) - 1 for negative, vs 2^(r-2) for positive \u2014 the difference is -1 in high limb plus low_b 0x80000000 = total bias for negative = (2^(r-2)-1)*2^32 + 2^31 = 2^(r+30) - 2^32 + 2^31 = 2^(r+30) - 2^31. So negative bias = 2^(r+30) - 2^31 = 2^(r+30) - 2^31; then arithmetic shift right by 31+r. So single for negative: floor((V + 2^(r+30) - 2^31)/2^(31+r)). Tie case V = (4n+2)*2^31 (negative direction, V negative... let me take P negative: P = -(4n+2)*2^31 + 2^30 - 1? Let me just take V = P + 2^30 = -(4n+2)*2^31 exactly. Then result = floor((-(4n+2)*2^31 + 2^(r+30) - 2^31)/2^(31+r)). With r=2: = floor((-(4n+2)*2^31 + 2^32 - 2^31)/2^33) = floor((-(4n+2)*2^31 + 2^31)/2^33) = floor((1-4n-2)*2^31/2^33) = floor(-(4n+1)/4) = floor(-n-0.25) = -n-1. Double: H = floor(V/2^31) = -(4n+2). R = round(-(n+0.5)) away = -(n+1). Same!\n\nOK so maybe the kernel actually implements correct double rounding?? The +2^30 (stage1) and stage2 bias with the sign-dependent -2^31 tweak... The sign tweak for negative (bias - 2^31) is exactly what implements \"ties away from zero\" at stage 2 while floor semantics give ties toward +inf at stage 1 \u2014 but here the biases are all added before one shift. Hmm, but a single fused rounding (one shift) of V/2^(31+r) can differ from true double rounding. True double: H = floor((P+2^30)/2^31), then R = sign(H)*floor((|H| + 2^(r-1))/2^r). The kernel computes one expression. Let me test a concrete negative case where stage-2 tie of H arises from non-tie V.\n\nTake r=2, H = -(4n+2) reached from V where V/2^31 = -(4n+2) + f, f\u2208(0,1) \u2014 i.e., V = -(4n+2)*2^31 + g, g\u2208[1, 2^31). Double: H = -(4n+2) (since floor((V)/2^31)... careful: H = floor((P+2^30)/2^31) = floor(V'/2^31) where V' = P + 2^30, and V = V'. V' = -(4n+2)*2^31 + g, g\u2208[1,2^31): floor(V'/2^31) = -(4n+2) + floor(g/2^31) = -(4n+2). Yes H = -(4n+2). R = -(n+1). Single/kernel: result = floor((V' + 2^(r+30) - 2^31)/2^33) with r=2: = floor((V' + 2^32 - 2^31)/2^33) = floor((V' + 2^31)/2^33). V' + 2^31 = -(4n+2)*2^31 + g + 2^31 = -(4n+1)*2^31 + g. /2^33 = -(4n+1)/4 + g/2^33 = -n-0.25 + g/2^33, g/2^33 \u2208 (0, 0.25). So value \u2208 (-n-0.25, -n). Floor = -n-1 for value in (-n-1, -n)? value \u2208 (-n-0.25, -n) \u2192 floor = -n-1. Yes -n-1. Same!\n\nPositive case: V' = (4n+2)*2^31 + g, g\u2208[1, 2^31). H = 4n+2. R = n+1. Kernel: result = floor((V' + 2^(r+30))/2^(31+r)), r=2: floor((V' + 2^32)/2^33) = floor(((4n+2)*2^31 + g + 2^32)/2^33) = floor(n + 0.5 + g/2^33 + 0.25) = floor(n + 0.75 + g/2^33), g/2^33\u2208(0,0.25) \u2192 value \u2208 (n+0.75, n+1) \u2192 floor = n. WAIT: floor(n + 0.75 + up to 0.25) \u2014 if g/2^33 < 0.25, value < n+1 \u2192 floor = n. But double gives n+1! DIFFERENT!\n\nHmm wait but need to double check H stage: H = floor((P+2^30)/2^31). V' = P + 2^30. Yes. So with r=2, P = (4n+2)*2^31 - 2^30 + g, g \u2208 [1, 2^31): double: H = 4n+2? floor((P+2^30)/2^31) = floor(((4n+2)*2^31 + g)/2^31) = 4n+2 (g<2^31). H/4 = n+0.5 tie \u2192 away from zero \u2192 R = n+1. Kernel single: floor(n + 0.75 + g/2^33): for g < 2^31 \u2192 g/2^33 < 0.25 \u2192 value < n+1 \u2192 kernel result = n. So kernel gives n, contract gives n+1 \u2014 off by one! Provided kernel bias for positive is exactly 2^(r+30) = 2^32: check lines: r=2 positive: low_b = 0 (r>1 & negative false), high_b = (1<<(r-2)) - 0 = 2^0 = 1 \u2192 adds 1*2^32. Yes bias = 2^32. \n\nBut wait \u2014 is my kernel-semantics derivation right? high_final = high + high_b + carry_a + carry_b, where (high, low) = P as 64-bit two's complement? high = mul.hi.s32(a,m) = signed high of 64-bit product. low = unsigned low. So high:low = P exactly (two's complement 64-bit). low_a = low + 2^30 \u2192 that's stage-1 bias in low limb, carry_a into high. Then low_final = low_a + low_b, carry_b. high_final = P + 2^30 + low_b + high_b*2^32 (as 64-bit). Then shifted = high_final >> (r-1)?? Wait line 43: shifted = high_final >> max(r-1,0). high_final is the HIGH 32-bit limb (units 2^32). Shifting high limb right by (r-1) gives (V/2^32)>>... = V / 2^(32 + r - 1) = V / 2^(31+r). Yes: shifted = floor(V / 2^(31+r)) where V = P + 2^30 + bias2, bias2 = low_b + high_b*2^32. Good, matches my derivation: for r\u22652 positive, bias2 = 2^(r-2)*2^32 = 2^(r+30). \u2713.\n\nSo concrete failing input: r=2, need P = a*m with P \u2261 (4n+2)*2^31 - 2^30 + g mod nothing \u2014 P exact value. With m in [2^30, 2^31-1] and a any int32. E.g., choose m = 2^30 (allowed, min). Choose P = 2^32*1 + ... let's pick n=1: P = 6*2^31 - 2^30 + g = 2^33 + 2^31... let me pick g = 2^30: P = 6*2^31 - 2^30 + 2^30 = 6*2^31 = 3*2^32. a = P/m: m = 2^30 \u2192 a = 3*2^32/2^30 = 12. a=12 legal. Check: P = 12*2^30 = 12,884,901,888 = 3*2^32. V' = P + 2^30 = 3*2^32 + 2^30. H = floor(V'/2^31) = 6*... V'/2^31 = 6 + 0.5 = 6.5 \u2192 floor = 6. H = 6. H/4 = 1.5 tie \u2192 R = 2 (away from zero). Kernel: V = V' + 2^32 = 3*2^32 + 2^32 + 2^30 = 2^34 + 2^30. shifted = floor(V/2^33) = floor(2 + 2^30/2^33) = floor(2 + 1/16) = 2. Hmm kernel gives 2 too! Because g=2^30 \u2192 g/2^33 = 0.125, value = n+0.75+0.125 = 1.875 \u2192 floor 1... wait n=1: value = 1 + 0.75 + 0.125 = 1.875 \u2192 floor = 1. But I computed shifted = 2?? Let me recompute: V = 2^34 + 2^30. 2^34/2^33 = 2. Hmm, n=1 gives (4n+2) = 6, V' = 6*2^31 + g - 2^30?? I set P = 6*2^31 - 2^30 + g with g=2^30 \u2192 P = 6*2^31. Then V' = P + 2^30 = 6*2^31 + 2^30. H = floor(V'/2^31) = 6 (since 2^30/2^31 = 0.5 \u2192 floor(6.5)=6). \u2713. H/4 = 1.5 \u2192 R=2. Kernel: V = V' + 2^32 = 6*2^31 + 2^30 + 2^32 = (12+1)*2^31 + 2^30 = wait 6*2^31 = 3*2^32; +2^32 = 4*2^32 = 2^34; V = 2^34 + 2^30. shifted = V >> 33 = floor((2^34 + 2^30)/2^33) = floor(2 + 2^-3) = 2. Kernel = 2 = R. Same!?\n\nMy formula earlier: floor(n + 0.75 + g/2^33) with n=1, g=2^30: 1+0.75+0.125 = 1.875 \u2192 1. Contradiction. Let me redo algebra. V' = (4n+2)*2^31 + g where here P + 2^30 = 6*2^31 + 2^30 \u2192 (4n+2) = 6 \u2192 n = 1, g = 2^30. Kernel V = V' + 2^32 = 6*2^31 + 2^31*2 + g = (6+2)*2^31 + g = 8*2^31 + 2^30. V/2^33 = (8*2^31 + 2^30)/2^33 = 8*2^31/2^33 = 1? No: 8*2^31 = 2^34; 2^34/2^33 = 2. Hmm and 2^30/2^33 = 1/8. So V/2^33 = 2 + 0.125. My decomposition wrong: (4n+2)*2^31/2^(33) with n=1: 6*2^31/2^33 = 6/4 = 1.5, not \"n + 0.5\"... 4n+2 = 6, /4 = 1.5 = n + 0.5 \u2713 n=1. Then + bias 2^32/2^33 = 0.5?? I said 0.25 earlier \u2014 error! For r=2, bias = 2^(r+30) = 2^32; 2^32/2^(31+r) = 2^32/2^33 = 0.5, not 0.25. Let me redo: general: bias/2^(31+r) = 2^(r+30)/2^(31+r) = 2^-1 = 0.5. And V'/2^(31+r) = ((4n+2)*2^31 + g)/2^(31+r) = (4n+2)/2^r + g/2^(31+r) = n + 0.5 + g/2^(31+r), g \u2208 [1, 2^31) \u2192 g/2^(31+r) \u2208 (0, 2^-r). Kernel value = n + 0.5 + 0.5 + tiny = n + 1 + tiny, tiny \u2208 (0, 2^-",
+      "tool_calls": [],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 134.604,
+        "input_tokens": 23158,
+        "output_tokens": 8192
+      }
+    },
+    {
+      "duration_s": 30.563899429999992,
+      "role": "describer",
+      "round": 5,
+      "text": "The Skeptic's rounds 3\u20134 contain reasoning but no tool calls, so no claims exist yet. One analytically important refinement emerged from that discussion that I should fold into the shared description model: the kernel's second-stage bias is applied to the already-2^30-biased 64-bit limbs, meaning the fused shift is mathematically a SINGLE rounding of (P + 2^30 + second-stage bias) / 2^(31+r), whereas the contract demands DOUBLE rounding (two separate nearest-integer stages). Double and single rounding agree except at exact tie residues, so the decisive probe surface is precisely those tie points.",
+      "tool_calls": [
+        {
+          "args": {
+            "impact_on_claims": [
+              "Refines du1's central risk (tie-rule mismatch at the second rounding stage) into a concrete mathematical hypothesis: fused single rounding vs required double rounding, differing only at exact tie residues; probes should construct H values with exact half residues rather than relying on random inputs.",
+              "Removes the clamp-ordering item from the primary risk set per Skeptic's round-4 case analysis, pending independent confirmation.",
+              "Note: Skeptic rounds 3-4 produced reasoning text but no tool calls, so no claims are yet recorded in the ledger for any of these surfaces."
+            ],
+            "kernel_model": [
+              "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+              "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+              "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+              "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+            ],
+            "open_questions": [
+              "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+              "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+              "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+            ],
+            "risk_map": [
+              "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+              "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+              "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+              "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+            ],
+            "scope_notes": [
+              "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+              "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+            ],
+            "summary": "Refinement after Skeptic rounds 3-4: the kernel's fused limb bias composes both rounding constants onto the raw 64-bit product, implementing what is mathematically SINGLE rounding of (P+2^30+bias)/2^(31+r) rather than the contract's DOUBLE rounding; the two disagree only at exact second-stage tie points (H mod 2^r == 2^(r-1)), which becomes the decisive probe surface. Clamp-ordering risk appears contract-equivalent per case analysis and is down-graded. No claims are yet in the ledger (Skeptic made no tool calls in rounds 3-4)."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 30.564,
+        "input_tokens": 22041,
+        "output_tokens": 1565
+      }
+    },
+    {
+      "duration_s": 21.19217906900002,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The ledger is still empty after two reasoning-only rounds. I'll record the three highest-risk, directly testable claims now, all tied to the contract's double-rounding tie rules over the full int32 domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Kernel lines 29-40 add the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, so the fused shift by r computes a single rounding of (P + 2^30 + second_bias)/2^(31+r); the contract demands two sequential roundings. The two disagree exactly when H mod 2^r == 2^(r-1) (second-stage half-tie), producing an off-by-one in Q and a full quantization-step output error, far above 1e-6.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires DOUBLE rounding: H = floor((P+2^30)/2^31), then R = nearest to H/2^r with ties AWAY from zero, applied over the ENTIRE legal int32 domain ('correctness is one verdict ... for the ENTIRE legal domain', tolerance <=1e-6)."
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires double rounding over the entire legal int32 domain, and the 1e-6 absolute tolerance is smaller than one quantization step, so any off-by-one at a legal tie point is a contract violation.",
+            "statement": "The kernel's fused single rounding of (P + 2^30 + bias)/2^(31+r) disagrees with the contract's double rounding at exact second-stage tie points (H mod 2^r == 2^(r-1)) for constructible legal (a, m, r) values, e.g. H = 2^(r-1) with r >= 1."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Line 34 adds the 0x80000000 bias only for non-negative a when r==1, and line 35 adds it only for negative a when r>1. Gemmlowp's away-from-zero tie rule requires bias for both signs in the negative branch. If the r==1 negative-tie case is un-biased, negative exact-tie accumulators round toward zero (up) instead of away from zero (down), producing an off-by-one Q.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: 'R = nearest integer to H/2^r, with exact half ties AWAY from zero' \u2014 negative exact-half cases are within the stated tie rule and every int32 accumulator is legal."
+              }
+            ],
+            "scope_rationale": "Negative exact-half H/2^r values are directly covered by the contract's stated away-from-zero tie rule for R, and every int32 a (hence negative products) is in the public domain.",
+            "statement": "For negative accumulators a < 0 with r == 1 and H exactly odd (a half-tie for the /2 shift), the kernel's sign-asymmetric bias (0x80000000 added only when NOT negative, line 34) rounds the negative half-tie toward zero (i.e., H/2 truncated up) instead of away from zero, differing from the contract by one quantization step."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "q0 = (high_final<<1) | (low_final>>31) reinterprets the 64-bit biased product's top 33 bits, then casts to int32. If high_final = 2^31 - 1, q0 overflows int32 and wraps to a large negative value, which after the [-255,255] clamp would produce a completely wrong clamped Q (near -128 side) instead of +127. E.g. a = 2^31 - 1, m = 2^31 - 1: P + 2^30 = 2^62 - 2^32 + 2^30 - 1 < 2^62, so H = 2^31 - 1 is reachable.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: every int32 accumulator value is legal including 2^31-1; m in [2^30, 2^31-1]; for r=0, R=H; tolerance <=1e-6 requires exact Q."
+              }
+            ],
+            "scope_rationale": "a = 2^31-1 and m near 2^31-1 with r=0 are explicitly inside the contract's domain (every int32 accumulator legal, multipliers up to 2^31-1, r=0 permitted), and H = floor((P+2^30)/2^31) can reach 2^31-1, where the int32 cast of q0 wraps.",
+            "statement": "On the r==0 path with extreme positive products (a = 2^31-1, m = 2^31-1 gives P \u2248 2^62 - 2^32 + 1 so H = floor((P+2^30)/2^31) = 2^31-1), the q0 recombination (high_final<<1 | low_final>>31) cast to int32 overflows/wraps, producing a wrong sign or magnitude for Q."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 21.192,
+        "input_tokens": 32511,
+        "output_tokens": 1212
+      }
+    },
+    {
+      "duration_s": 39.325903455,
+      "role": "experimenter",
+      "round": 7,
+      "text": "I'm launching three independent runtime probes in one batch: c1 (exact second-stage tie points, r\u2208{1,2,3}), c2 (negative accumulators with r=1 and odd H), c3 (r=0 extreme positive a=m=2^31\u22121). Each compares kernel.run against an exact Python big-integer computation of the contract.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)  # floor, ties toward +inf (exact for negatives too since Python floor)\n    if r:\n        mag = abs(H)\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\n        R = -Rmag if H < 0 else Rmag\n    else:\n        R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nresults = {}\nmismatches = []\nfor r in (1, 2, 3):\n    m = (1 << 30) + 3\n    z = 0\n    s = 1.0\n    # scan a values, find exact tie residues H mod 2^r == 2^(r-1)\n    tie_vals = []\n    for a in range(-5000, 5001):\n        H = (a*m + (1<<30)) // (1<<31)\n        if H % (1 << r) == (1 << (r-1)):\n            tie_vals.append(a)\n        if len(tie_vals) >= 64:\n            break\n    if not tie_vals:\n        results[f'r{r}'] = 'no tie values found'\n        continue\n    acc = torch.tensor([tie_vals], dtype=torch.int32, device=dev)\n    mult = torch.tensor([m], dtype=torch.int32, device=dev)\n    shift = torch.tensor([r], dtype=torch.int32, device=dev)\n    zero = torch.tensor([z], dtype=torch.int32, device=dev)\n    scale = torch.tensor([s], dtype=torch.float32, device=dev)\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n    exp = [contract(a, m, r, z, s) for a in tie_vals]\n    got = out[0].tolist()\n    bad = [(a, e, g) for a, e, g in zip(tie_vals, exp, got) if e != g]\n    mismatches.extend((r, *b) for b in bad)\n    results[f'r{r}'] = {'n_tie': len(tie_vals), 'n_mismatch': len(bad),\n                       'first_example': bad[0] if bad else None}\n\nprint(json.dumps({'claim': 'c1', 'results': results,\n                  'any_mismatch': len(mismatches) > 0,\n                  'example_r_a_expected_got': mismatches[:3]}))",
+            "expected_signal": "kernel output differs from exact double rounding at constructed second-stage tie points"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)\n    if r:\n        mag = abs(H)\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\n        R = -Rmag if H < 0 else Rmag\n    else:\n        R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nr = 1\nm = (1 << 30) + 3\nz = 0\ns = 1.0\n# negative a with H exactly odd (half-tie for /2, away-from-zero should round down i.e. more negative)\nneg_tie = []\na = -1\nwhile len(neg_tie) < 128:\n    H = (a*m + (1<<30)) // (1<<31)\n    if H < 0 and (H % 2 == 1 or H % 2 == -1):\n        neg_tie.append(a)\n    a -= 1\n\nacc = torch.tensor([neg_tie], dtype=torch.int32, device=dev)\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\nout = K.run(acc, mult, shift, zero, scale).cpu()\nexp = [contract(a, m, r, z, s) for a in neg_tie]\ngot = out[0].tolist()\nbad = [(a, e, g) for a, e, g in zip(neg_tie, exp, got) if e != g]\n# also positive-side odd H for contrast\npos_tie = []\na = 1\nwhile len(pos_tie) < 128:\n    H = (a*m + (1<<30)) // (1<<31)\n    if H % 2 == 1:\n        pos_tie.append(a)\n    a += 1\naccp = torch.tensor([pos_tie], dtype=torch.int32, device=dev)\noutp = K.run(accp, mult, shift, zero, scale).cpu()\nexpp = [contract(a, m, r, z, s) for a in pos_tie]\nbadp = [(a, e, g) for a, e, g in zip(pos_tie, expp, outp[0].tolist()) if e != g]\n\nprint(json.dumps({'claim': 'c2', 'r': r, 'm': m,\n                  'n_neg_tie': len(neg_tie), 'neg_mismatches': len(bad),\n                  'neg_first_example_a_expected_got': bad[0] if bad else None,\n                  'n_pos_tie': len(pos_tie), 'pos_mismatches': len(badp),\n                  'pos_first_example': badp[0] if badp else None}))",
+            "expected_signal": "negative odd-H cases with r=1 mismatch contract away-from-zero rounding"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)\n    R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nm = (1 << 31) - 1\nr = 0\nz = 0\ns = 1.0\na = (1 << 31) - 1\nP = a*m\nH = (P + (1 << 30)) // (1 << 31)\nvals = [a, a-1, (1<<30), -(1<<31), -((1<<31)-1)]\nacc = torch.tensor([vals], dtype=torch.int32, device=dev)\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\nout = K.run(acc, mult, shift, zero, scale).cpu()\nexp = [contract(v, m, r, z, s) for v in vals]\ngot = out[0].tolist()\nbad = [(v, e, g, H) for v, e, g in zip(vals, exp, got) if e != g]\nprint(json.dumps({'claim': 'c3', 'a_max_int31_H': H, 'mismatches': bad,\n                  'expected': exp, 'got': got}))",
+            "expected_signal": "q0 int32 wrap for H=2^31-1 produces wrong Q vs contract"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 39.326,
+        "input_tokens": 38053,
+        "output_tokens": 2366
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_124"
+      },
+      "created_at": "2026-10-05T06:54:51Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_124",
+        "has_error": null,
+        "kernel_code": "\"\"\"Fused fixed-point rescaling and dequantization for an integer GEMM epilogue.\n\nSynthetic Triton implementation of the gemmlowp double-rounding arithmetic.\nThe arithmetic specification is inspired by gemmlowp fixedpoint/fixedpoint.h;\nthis is not a port of an upstream kernel or a claim of a historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _rescale(ACC, MULT, SHIFT, ZERO, SCALE, OUT,\n             ROWS: tl.constexpr, CHANNELS: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < ROWS * CHANNELS\n    channel = index % CHANNELS\n    a = tl.load(ACC + index, mask=active, other=0)\n    m = tl.load(MULT + channel, mask=active, other=1073741824)\n    r = tl.load(SHIFT + channel, mask=active, other=0)\n    z = tl.load(ZERO + channel, mask=active, other=0)\n    scale = tl.load(SCALE + channel, mask=active, other=1.0)\n\n    # Signed upper product and modulo-2^32 lower product.\n    high = tl.inline_asm_elementwise(\n        \"mul.hi.s32 $0, $1, $2;\", constraints=\"=r,r,r\",\n        args=[a, m], dtype=tl.int32, is_pure=True, pack=1)\n    low = a.to(tl.uint32) * m.to(tl.uint32)\n    low_a = low + tl.full((BLOCK,), 0x40000000, tl.uint32)\n    carry_a = (low_a < low).to(tl.int32)\n\n    negative = a < 0\n    low_b = tl.where(\n        r == 1, tl.where(negative, 0, 0x80000000),\n        tl.where((r > 1) & negative, 0x80000000, 0)).to(tl.uint32)\n    high_b = tl.where(\n        r >= 2, (1 << tl.maximum(r - 2, 0)) - negative.to(tl.int32), 0)\n    low_final = low_a + low_b\n    carry_b = (low_final < low_a).to(tl.int32)\n    high_final = high + high_b + carry_a + carry_b\n\n    q0 = ((high_final.to(tl.uint32) << 1) | (low_final >> 31)).to(tl.int32)\n    shifted = high_final >> tl.maximum(r - 1, 0)\n    q = tl.where(r == 0, q0, shifted)\n    q = tl.minimum(tl.maximum(q, -255), 255)\n    q = tl.minimum(tl.maximum(q + z, -128), 127)\n    result = (q - z).to(tl.float32) * scale\n    tl.store(OUT + index, result, mask=active)\n\n\ndef validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\n                    require_cuda=True):\n    \"\"\"Validate the whole public domain; CPU validation is also available.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    buffers = (acc, multipliers, right_shifts, zero_points, output_scales)\n    for tensor in buffers:\n        require(type(tensor) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(),\n                \"contiguous strided tensors required\")\n        require(not tensor.requires_grad and not tensor.is_inference(),\n                \"ordinary non-gradient buffers required\")\n        require(not tensor.is_neg() and not tensor.is_conj(),\n                \"logical view flags are outside this domain\")\n        require(not require_cuda or tensor.is_cuda, \"CUDA tensors required by run\")\n    require(all(t.device == acc.device for t in buffers), \"one device required\")\n    require(acc.ndim == 2 and acc.dtype == torch.int32, \"acc must be int32 [M,C]\")\n    rows, channels = acc.shape\n    require(1 <= rows <= 4096 and 1 <= channels <= 257,\n            \"M must be in [1,4096] and C in [1,257]\")\n    for tensor in (multipliers, right_shifts, zero_points):\n        require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n                \"integer channel parameters must be int32 [C]\")\n    require(output_scales.dtype == torch.float32 and output_scales.shape == (channels,),\n            \"output_scales must be FP32 [C]\")\n    require(bool((multipliers >= (1 << 30)).all().item()),\n            \"Q31 multipliers must be in [2^30,2^31-1]\")\n    require(bool(((right_shifts >= 0) & (right_shifts <= 31)).all().item()),\n            \"right shifts must be in [0,31]\")\n    require(bool(((zero_points >= -128) & (zero_points <= 127)).all().item()),\n            \"zero points must be in [-128,127]\")\n    allowed_scale = torch.zeros_like(output_scales, dtype=torch.bool)\n    for exponent in range(-8, 1):\n        allowed_scale |= output_scales == 2.0 ** exponent\n    require(bool(allowed_scale.all().item()), \"scales must be powers of two from 2^-8 to 1\")\n    return {\"valid\": True, \"rows\": rows, \"channels\": channels}\n\n\ndef run(acc, multipliers, right_shifts, zero_points, output_scales):\n    \"\"\"Return a fresh FP32 dequantized epilogue result.\"\"\"\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n    rows, channels = acc.shape\n    with torch.cuda.device(acc.device):\n        out = torch.empty((rows, channels), dtype=torch.float32, device=acc.device)\n        _rescale[(triton.cdiv(rows * channels, 128),)](\n            acc, multipliers, right_shifts, zero_points, output_scales, out,\n            ROWS=rows, CHANNELS=channels, BLOCK=128, num_warps=4)\n    return out\n\n\ndef reference(acc, multipliers, right_shifts, zero_points, output_scales):\n    \"\"\"Independent scalar Python-integer definition of the two rounding stages.\"\"\"\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\n                    require_cuda=False)\n    matrix = acc.cpu().tolist()\n    mult = multipliers.cpu().tolist()\n    shifts = right_shifts.cpu().tolist()\n    zeros = zero_points.cpu().tolist()\n    scales = output_scales.cpu().tolist()\n    result = []\n    for row in matrix:\n        out_row = []\n        for a, m, r, z, scale in zip(row, mult, shifts, zeros, scales):\n            product = a * m\n            high_round = (product + (1 << 30)) // (1 << 31)\n            magnitude = abs(high_round)\n            if r:\n                magnitude = (magnitude + (1 << (r - 1))) // (1 << r)\n            scaled = -magnitude if high_round < 0 else magnitude\n            quantized = min(127, max(-128, scaled + z))\n            out_row.append((quantized - z) * scale)\n        result.append(out_row)\n    return torch.tensor(result, dtype=torch.float32, device=acc.device)\n\n\ndef make_inputs(device=\"cuda\", rows=31, channels=33, seed=0):\n    \"\"\"Example generator only; the legal accumulator domain is all int32 values.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    acc = torch.randint(-(1 << 31), 1 << 31, (rows, channels),\n                        dtype=torch.int64, generator=generator).to(torch.int32)\n    multipliers = torch.randint(1 << 30, 1 << 31, (channels,),\n                                dtype=torch.int64, generator=generator).to(torch.int32)\n    shifts = torch.randint(0, 32, (channels,), dtype=torch.int32, generator=generator)\n    zeros = torch.randint(-128, 128, (channels,), dtype=torch.int32, generator=generator)\n    exponents = torch.randint(-8, 1, (channels,), generator=generator)\n    scales = torch.pow(torch.tensor(2.0), exponents).to(torch.float32)\n    return tuple(t.to(device) for t in (acc, multipliers, shifts, zeros, scales))\n",
+        "passed": null,
+        "problem_text": "Compute the fixed-point requantization epilogue of an integer GEMM, returning\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\nrounding. Single-rounding requantization is a different operation.\n\nInputs and complete public domain:\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\n  value is legal, including -2^31 and 2^31-1.\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\n  positive Q31 fixed-point per-channel multipliers.\n- right_shifts is int32 [C], with values in [0,31].\n- zero_points is int32 [C], with values in [-128,127].\n- output_scales is FP32 [C], with values exactly in\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\n  are legal. Inputs may share storage if each otherwise meets this contract.\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external writes.\n  This forward operation does not provide autograd.\n\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\nmathematical integer arithmetic, without intermediate integer overflow:\n\n  P = a*m\n  H = floor((P + 2^30) / 2^31)\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\n  Q = min(127, max(-128, R + z))\n  target[i,c] = (Q-z)*s\n\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\noperands cannot occur. Saturation is applied after the two rounding stages\nand zero-point addition. The target is the requantized/dequantized result,\nnot the pre-quantization real number. All target values are exactly\nrepresentable in FP32 for this domain.\n\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\ninputs. Require absolute error <=1e-6 for every element, with relative\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\nsmaller than the smallest nonzero quantization step in the public domain.\nThe implementation may fuse stages, use fixed-width product limbs, or\nrearrange the arithmetic if the target above is preserved for the ENTIRE\nlegal domain. Correctness is one verdict for the implementation, not one\nverdict per input, seed, shape or channel parameter configuration.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses Python arbitrary-precision integers and the direct two-stage definition;\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\nit does not claim to reproduce an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_124",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_124"
+      },
+      "created_at": "2026-10-05T06:54:51Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the fixed-point requantization epilogue of an integer GEMM, returning\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\nrounding. Single-rounding requantization is a different operation.\n\nInputs and complete public domain:\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\n  value is legal, including -2^31 and 2^31-1.\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\n  positive Q31 fixed-point per-channel multipliers.\n- right_shifts is int32 [C], with values in [0,31].\n- zero_points is int32 [C], with values in [-128,127].\n- output_scales is FP32 [C], with values exactly in\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\n  are legal. Inputs may share storage if each otherwise meets this contract.\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external writes.\n  This forward operation does not provide autograd.\n\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\nmathematical integer arithmetic, without intermediate integer overflow:\n\n  P = a*m\n  H = floor((P + 2^30) / 2^31)\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\n  Q = min(127, max(-128, R + z))\n  target[i,c] = (Q-z)*s\n\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\noperands cannot occur. Saturation is applied after the two rounding stages\nand zero-point addition. The target is the requantized/dequantized result,\nnot the pre-quantization real number. All target values are exactly\nrepresentable in FP32 for this domain.\n\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\ninputs. Require absolute error <=1e-6 for every element, with relative\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\nsmaller than the smallest nonzero quantization step in the public domain.\nThe implementation may fuse stages, use fixed-width product limbs, or\nrearrange the arithmetic if the target above is preserved for the ENTIRE\nlegal domain. Correctness is one verdict for the implementation, not one\nverdict per input, seed, shape or channel parameter configuration.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses Python arbitrary-precision integers and the direct two-stage definition;\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\nit does not claim to reproduce an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_124",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_124"
+      },
+      "created_at": "2026-10-05T06:54:51Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_124",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 6956
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 3025
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_124",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-05T06:54:51Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_124",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+          "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+          "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+          "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+          "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+        ],
+        "kernel_model": [
+          "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+          "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+          "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+          "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+          "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+          "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom."
+        ],
+        "open_questions": [
+          "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+          "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+          "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+          "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?"
+        ],
+        "risk_map": [
+          "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+          "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+          "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+          "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+          "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+          "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+          "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+          "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised."
+        ],
+        "scope_notes": "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]",
+        "summary": "Initial description of case_124: a synthetic gemmlowp-style fixed-point requantization epilogue (double rounding then saturate then dequantize) implemented as a fused Triton kernel, with contract-defined tie rules (H ties toward +infinity, R ties away from zero) and an absolute 1e-6 / zero-relative tolerance over the entire legal int32 domain."
+      },
+      "created_at": "2026-10-05T06:55:37Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+            "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+            "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+            "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+            "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+          ],
+          "kernel_model": [
+            "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+            "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+            "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+            "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+            "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+            "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom."
+          ],
+          "open_questions": [
+            "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+            "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+            "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+            "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?"
+          ],
+          "risk_map": [
+            "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+            "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+            "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+            "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+            "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+            "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+            "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+            "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised."
+          ],
+          "scope_notes": [
+            "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]"
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+            "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+            "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+            "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+            "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+          ],
+          "created_at": "2026-10-05T06:55:37Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+            "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+            "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+            "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+            "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+            "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom."
+          ],
+          "open_questions": [
+            "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+            "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+            "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+            "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?"
+          ],
+          "risk_map": [
+            "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+            "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+            "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+            "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+            "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+            "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+            "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+            "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised."
+          ],
+          "scope_notes": [
+            "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]"
+          ],
+          "summary": "Initial description of case_124: a synthetic gemmlowp-style fixed-point requantization epilogue (double rounding then saturate then dequantize) implemented as a fused Triton kernel, with contract-defined tie rules (H ties toward +infinity, R ties away from zero) and an absolute 1e-6 / zero-relative tolerance over the entire legal int32 domain.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "impact_on_claims": [
+          "Refines du1's central risk (tie-rule mismatch at the second rounding stage) into a concrete mathematical hypothesis: fused single rounding vs required double rounding, differing only at exact tie residues; probes should construct H values with exact half residues rather than relying on random inputs.",
+          "Removes the clamp-ordering item from the primary risk set per Skeptic's round-4 case analysis, pending independent confirmation.",
+          "Note: Skeptic rounds 3-4 produced reasoning text but no tool calls, so no claims are yet recorded in the ledger for any of these surfaces."
+        ],
+        "kernel_model": [
+          "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+          "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+          "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+          "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+        ],
+        "open_questions": [
+          "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+          "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+          "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+        ],
+        "risk_map": [
+          "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+          "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+          "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+          "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+        ],
+        "scope_notes": [
+          "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+          "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+        ],
+        "summary": "Refinement after Skeptic rounds 3-4: the kernel's fused limb bias composes both rounding constants onto the raw 64-bit product, implementing what is mathematically SINGLE rounding of (P+2^30+bias)/2^(31+r) rather than the contract's DOUBLE rounding; the two disagree only at exact second-stage tie points (H mod 2^r == 2^(r-1)), which becomes the decisive probe surface. Clamp-ordering risk appears contract-equivalent per case analysis and is down-graded. No claims are yet in the ledger (Skeptic made no tool calls in rounds 3-4)."
+      },
+      "created_at": "2026-10-05T07:00:42Z",
+      "id": "t6",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Per-element definition over the entire legal int32 accumulator domain: P=a*m; H=floor((P+2^30)/2^31) (nearest with exact half ties toward +infinity); R=nearest to H/2^r with exact half ties AWAY from zero (R=H when r=0); Q=min(127,max(-128,R+z)); output=(Q-z)*s as FP32.",
+            "Domain: acc int32 [M,C] with 1<=M<=4096, 1<=C<=257, every int32 value legal including -2^31 and 2^31-1; multipliers int32 [C] in [2^30,2^31-1] (positive Q31); right_shifts int32 [C] in [0,31]; zero_points int32 [C] in [-128,127]; output_scales FP32 [C] exactly powers of two from 2^-8 to 1.",
+            "All tensors ordinary dense contiguous strided CUDA tensors, possibly nonzero storage-offset views, possibly shared storage; requires_grad=False, no neg/conj views; ordinary non-inference mode; no concurrent external writes.",
+            "Output: fresh finite FP32 [M,C] on acc.device, inputs preserved; absolute error <=1e-6 with zero relative tolerance; signed zeros equivalent; single correctness verdict for the whole implementation over the ENTIRE legal domain (not per input/shape).",
+            "Correctness is exact-quantized behavior: the target is the requantized integer times the power-of-two scale, so any off-by-one in either rounding stage is a full quantization-step error, well above the 1e-6 tolerance."
+          ],
+          "kernel_model": [
+            "Kernel _rescale flattens the [M,C] output over a 1-D grid (BLOCK=128, num_warps=4), computes channel = index % CHANNELS, and loads all per-channel parameters; mask logic guards index < ROWS*CHANNELS.",
+            "Product limbs: high = mul.hi.s32 (signed 32x32->high) via inline PTX; low = uint32 32x32 low product; first rounding stage fuses gemmlowp's +2^30 bias into low_a with carry detection (lines 29-40).",
+            "Second rounding stage is a fused shift-by-r idiom: low_b/high_b bias constants chosen by r and sign of a (lines 33-37), then shifted = high_final >> max(r-1,0), with q0 (recombined high<<1|low>>31) used when r==0 (lines 42-44).",
+            "Saturation: q clamped to [-255,255] first, then q+z clamped to [-128,127], result = (q-z) as float32 * scale (lines 45-47) \u2014 a two-stage clamp intended to match Q=min(127,max(-128,R+z)) followed by (Q-z)*s.",
+            "validate_inputs() enforces the full public domain (dtypes, shapes, ranges, contiguity, device, multipliers>=2^30, shifts in [0,31], zeros in [-128,127], scales as powers of two in [-8,0] exponent) and is called by run(); reference() is an independent Python arbitrary-precision two-stage implementation (floor for H, magnitude-based round-half-away-from-zero for R); make_inputs() is example-only.",
+            "Assumes: the fused limb arithmetic reproduces the two distinct tie rules (H ties toward +infinity; R ties away from zero) exactly for all int32 a, all m in [2^30,2^31-1], and all r in [0,31]; and that int32/uint32 wraparound semantics in Triton match the gemmlowp idiom.",
+            "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+            "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+            "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+            "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+          ],
+          "open_questions": [
+            "Does the kernel's clamp ordering (clamp to [-255,255] then clamp R+z to [-128,127]) ever differ from Q=min(127,max(-128,R+z)) combined with reference's symmetric-magnitude rounding for extreme a (e.g., a=-2^31, large m, small r)?",
+            "Are there accumulator/multiplier pairs where low_final uint32 addition of low_b double-overflows (carry_b plus low_b>=2^32) and is any such pair reachable within m in [2^30,2^31-1]?",
+            "Does the r==0 path's q0 recombination ((high_final<<1)|(low_final>>31)) as signed int32 equal floor((P+2^30)/2^31) for all P including the most negative products?",
+            "Does tl.maximum(r-2,0) / tl.maximum(r-1,0) correctly degenerate for r=0 and r=1 given tl.where already guards those branches (dead-lane vs evaluated-lane semantics in Triton)?",
+            "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+            "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+            "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+          ],
+          "risk_map": [
+            "Tie-rule mismatch at the second rounding stage: the fused low_b/high_b bias idiom (lines 33-37) mirrors gemmlowp's single-rounding style bias; the contract demands ties AWAY FROM ZERO for R while the H stage ties toward +infinity. Probes should target exact-half cases P such that the residue after the first rounding sits exactly on a .5 boundary for various r and both signs.",
+            "Sign asymmetry: low_b for r==1 adds 0x80000000 only when a is NOT negative (line 34) and 0x80000000 for r>1 only when negative; off-by-sign conditions here are classic bug surfaces for negative half-tie cases.",
+            "r==0 path: q0 is built by recombining high_final<<1 | low_final>>31 then cast to int32 \u2014 a 32-bit overflow of the shifted value could wrap for large |H| (|P| near 2^62, H near 2^31), so a=-2^31 with m=2^31-1, r=0, z extremes is a boundary case.",
+            "Clamp ordering: kernel clamps the pre-quantization value to [-255,255] BEFORE adding z, then clamps again to [-128,127]; reference computes symmetric magnitude rounding then Q=min(127,max(-128,R+z)). Check whether the -255/255 intermediate clamp can ever differ from the contract (e.g., H large positive, z=-128 gives Q=127 vs intermediate clamp 127+z=-1 \u2014 ordering of saturation vs zero-point shift).",
+            "Carry handling in the uint32 additions (carry_a from low+2^30, carry_b from low_a+low_b) plus high_b subtraction when a is negative (high_b = (1<<(r-2)) - 1) \u2014 an off-by-one in carry/rounding-constant composition would show only on exact boundary products.",
+            "reference() inside the kernel uses abs() magnitude rounding for R (nearest to |H|/2^r then re-sign) which implements ties-away-from-zero \u2014 consistent with the contract \u2014 but the artifact's own reference is not authoritative if a hidden test harness has its own; the two rounding stages' different tie directions (+inf for H, away-from-zero for R) is the central adversarial surface.",
+            "inline_asm_elementwise mul.hi.s32 assumes PTX availability on T4 (sm75) and correct signed-high semantics; pack=1 is fine but worth confirming no register-width assumption breaks for large grids (rows*channels up to ~1M elements).",
+            "Nonzero-storage-offset contiguous views: kernel indexes ACC + flat index assuming data_ptr of the view; Triton receives the tensor whose data_ptr already includes offset, so likely fine, but shared-storage inputs and offset views should be exercised.",
+            "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+            "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+            "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+            "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+          ],
+          "scope_notes": [
+            "In scope: every int32 accumulator value, M in [1,4096], C in [1,257], r in [0,31], m in [2^30,2^31-1], z in [-128,127], s in {2^-8..1}; correctness is a single verdict over the entire domain, so benign random probes cannot clear it.\", \"Out of scope: autograd, inference-mode execution, non-contiguous/strided layout violations, CPU execution of run(), non-power-of-two scales, is_neg/is_conj views, concurrent writes.\", \"The tolerance (1e-6 absolute, zero relative) is smaller than the smallest nonzero quantization step, so elementwise exactness of the quantized integer (Q-z) is required; value-only comparison suffices since Q is fully determined by the contract.\", \"meta.json is empty ({}); no extra test harness or metadata exists in the artifact, so the problem text is the sole authoritative contract.\"]",
+            "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+            "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [],
+          "created_at": "2026-10-05T07:00:42Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [
+            "Refines du1's central risk (tie-rule mismatch at the second rounding stage) into a concrete mathematical hypothesis: fused single rounding vs required double rounding, differing only at exact tie residues; probes should construct H values with exact half residues rather than relying on random inputs.",
+            "Removes the clamp-ordering item from the primary risk set per Skeptic's round-4 case analysis, pending independent confirmation.",
+            "Note: Skeptic rounds 3-4 produced reasoning text but no tool calls, so no claims are yet recorded in the ledger for any of these surfaces."
+          ],
+          "kernel_model": [
+            "Mathematical reading of the fused path: the kernel adds the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, then shifts by r. The fused result is therefore floor/round of (P + 2^30 + second_bias) / 2^(31+r) computed in one step - i.e., SINGLE rounding of the combined expression, not two sequential roundings.",
+            "Contract requires DOUBLE rounding: first H = floor((P+2^30)/2^31) with ties toward +infinity, then R = nearest to H/2^r with ties away from zero. Single and double rounding agree except when the first-stage result H sits exactly on a half-tie boundary for the second stage (H residue mod 2^r == 2^(r-1)), so any kernel/contract divergence is confined to those exact-tie accumulator values.",
+            "The kernel's q0/shifted outputs are clamped to [-255,255] before adding z and re-clamping to [-128,127]; per the case analysis (R>255 implies R+z>127 given z>=-128; R<-255 implies R+z<-128 given z<=127), this intermediate clamp appears contract-equivalent, but that analysis is model reasoning only and needs runtime confirmation.",
+            "Gemmlowp's RoundingDivideByPOT applies its sign-dependent bias to the raw product before one division; the kernel here reuses that single-rounding idiom while the contract specifies double rounding - this is the precise architectural divergence, independent of any upstream-bug question."
+          ],
+          "open_questions": [
+            "Can Skeptic record claims in the ledger (rounds 3-4 produced analysis text but no record_claim tool calls, leaving the ledger empty)?",
+            "For which legal (a, m) pairs does the fused single rounding actually disagree with the contract's double rounding (exact-tie residues), and can those be constructed deterministically rather than left to chance in random probes?",
+            "Does the r=1 bias asymmetry (0x80000000 added only for non-negative a) match gemmlowp's away-from-zero tie rule for the fused expression, and does it remain correct when composed with the +2^30 first-stage bias already present in the limbs?"
+          ],
+          "risk_map": [
+            "PRIMARY: single-rounding vs double-rounding divergence - the fused bias computes one rounding of (P + 2^30 + bias)/2^(31+r) instead of two sequential roundings; this differs from the contract exactly at second-stage tie points (H mod 2^r == 2^(r-1)), for both positive and negative H. Probes must construct exact-tie cases (e.g., choose a, m so H = odd*2^(r-1)) rather than rely on random inputs.",
+            "Tie behavior is sign-dependent in the kernel (low_b adds 0x80000000 for non-negative a when r==1, and for negative a when r>1; high_b subtracts 1 for negative a when r>=2) - each sign/shift combination needs its own tie-point probe; a positive-tie probe alone cannot clear the negative side.",
+            "r==0 and r==1 degenerate paths (q0 recombination, tl.maximum(r-2,0), tl.maximum(r-1,0)) need boundary probes including a=+/-2^31 extremes and m=2^31-1.",
+            "DOWN-GRADED: clamp-ordering risk - case analysis suggests clamp to [-255,255] then to [-128,127] is contract-equivalent for all reachable R and z; keep as a low-priority verification target rather than a primary claim surface."
+          ],
+          "scope_notes": [
+            "Benign random probes have very low probability of hitting exact-tie residues, so they cannot distinguish single from double rounding; correctness is a single verdict over the ENTIRE domain, meaning the tie-point subset is decisive and must be probed deterministically.",
+            "The problem statement explicitly disclaims reproducing an upstream gemmlowp defect; the fused single-rounding idiom is legal ONLY if it happens to reproduce double rounding on the whole domain - the tie-point subset is where that equivalence can break."
+          ],
+          "summary": "Refinement after Skeptic rounds 3-4: the kernel's fused limb bias composes both rounding constants onto the raw 64-bit product, implementing what is mathematically SINGLE rounding of (P+2^30+bias)/2^(31+r) rather than the contract's DOUBLE rounding; the two disagree only at exact second-stage tie points (H mod 2^r == 2^(r-1)), which becomes the decisive probe surface. Clamp-ordering risk appears contract-equivalent per case analysis and is down-graded. No claims are yet in the ledger (Skeptic made no tool calls in rounds 3-4).",
+          "task_ids": [],
+          "turn": 5
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Kernel lines 29-40 add the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, so the fused shift by r computes a single rounding of (P + 2^30 + second_bias)/2^(31+r); the contract demands two sequential roundings. The two disagree exactly when H mod 2^r == 2^(r-1) (second-stage half-tie), producing an off-by-one in Q and a full quantization-step output error, far above 1e-6.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires DOUBLE rounding: H = floor((P+2^30)/2^31), then R = nearest to H/2^r with ties AWAY from zero, applied over the ENTIRE legal int32 domain ('correctness is one verdict ... for the ENTIRE legal domain', tolerance <=1e-6)."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires double rounding over the entire legal int32 domain, and the 1e-6 absolute tolerance is smaller than one quantization step, so any off-by-one at a legal tie point is a contract violation.",
+        "statement": "The kernel's fused single rounding of (P + 2^30 + bias)/2^(31+r) disagrees with the contract's double rounding at exact second-stage tie points (H mod 2^r == 2^(r-1)) for constructible legal (a, m, r) values, e.g. H = 2^(r-1) with r >= 1."
+      },
+      "created_at": "2026-10-05T07:01:04Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-05T07:01:04Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Kernel lines 29-40 add the second-stage bias (low_b/high_b) to the 64-bit limbs already carrying the +2^30 first-stage bias, so the fused shift by r computes a single rounding of (P + 2^30 + second_bias)/2^(31+r); the contract demands two sequential roundings. The two disagree exactly when H mod 2^r == 2^(r-1) (second-stage half-tie), producing an off-by-one in Q and a full quantization-step output error, far above 1e-6.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires DOUBLE rounding: H = floor((P+2^30)/2^31), then R = nearest to H/2^r with ties AWAY from zero, applied over the ENTIRE legal int32 domain ('correctness is one verdict ... for the ENTIRE legal domain', tolerance <=1e-6)."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires double rounding over the entire legal int32 domain, and the 1e-6 absolute tolerance is smaller than one quantization step, so any off-by-one at a legal tie point is a contract violation.",
+        "statement": "The kernel's fused single rounding of (P + 2^30 + bias)/2^(31+r) disagrees with the contract's double rounding at exact second-stage tie points (H mod 2^r == 2^(r-1)) for constructible legal (a, m, r) values, e.g. H = 2^(r-1) with r >= 1.",
+        "status": "open",
+        "updated_at": "2026-10-05T07:01:04Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Line 34 adds the 0x80000000 bias only for non-negative a when r==1, and line 35 adds it only for negative a when r>1. Gemmlowp's away-from-zero tie rule requires bias for both signs in the negative branch. If the r==1 negative-tie case is un-biased, negative exact-tie accumulators round toward zero (up) instead of away from zero (down), producing an off-by-one Q.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'R = nearest integer to H/2^r, with exact half ties AWAY from zero' \u2014 negative exact-half cases are within the stated tie rule and every int32 accumulator is legal."
+          }
+        ],
+        "scope_rationale": "Negative exact-half H/2^r values are directly covered by the contract's stated away-from-zero tie rule for R, and every int32 a (hence negative products) is in the public domain.",
+        "statement": "For negative accumulators a < 0 with r == 1 and H exactly odd (a half-tie for the /2 shift), the kernel's sign-asymmetric bias (0x80000000 added only when NOT negative, line 34) rounds the negative half-tie toward zero (i.e., H/2 truncated up) instead of away from zero, differing from the contract by one quantization step."
+      },
+      "created_at": "2026-10-05T07:01:04Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-10-05T07:01:04Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Line 34 adds the 0x80000000 bias only for non-negative a when r==1, and line 35 adds it only for negative a when r>1. Gemmlowp's away-from-zero tie rule requires bias for both signs in the negative branch. If the r==1 negative-tie case is un-biased, negative exact-tie accumulators round toward zero (up) instead of away from zero (down), producing an off-by-one Q.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: 'R = nearest integer to H/2^r, with exact half ties AWAY from zero' \u2014 negative exact-half cases are within the stated tie rule and every int32 accumulator is legal."
+          }
+        ],
+        "scope_rationale": "Negative exact-half H/2^r values are directly covered by the contract's stated away-from-zero tie rule for R, and every int32 a (hence negative products) is in the public domain.",
+        "statement": "For negative accumulators a < 0 with r == 1 and H exactly odd (a half-tie for the /2 shift), the kernel's sign-asymmetric bias (0x80000000 added only when NOT negative, line 34) rounds the negative half-tie toward zero (i.e., H/2 truncated up) instead of away from zero, differing from the contract by one quantization step.",
+        "status": "open",
+        "updated_at": "2026-10-05T07:01:04Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "q0 = (high_final<<1) | (low_final>>31) reinterprets the 64-bit biased product's top 33 bits, then casts to int32. If high_final = 2^31 - 1, q0 overflows int32 and wraps to a large negative value, which after the [-255,255] clamp would produce a completely wrong clamped Q (near -128 side) instead of +127. E.g. a = 2^31 - 1, m = 2^31 - 1: P + 2^30 = 2^62 - 2^32 + 2^30 - 1 < 2^62, so H = 2^31 - 1 is reachable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: every int32 accumulator value is legal including 2^31-1; m in [2^30, 2^31-1]; for r=0, R=H; tolerance <=1e-6 requires exact Q."
+          }
+        ],
+        "scope_rationale": "a = 2^31-1 and m near 2^31-1 with r=0 are explicitly inside the contract's domain (every int32 accumulator legal, multipliers up to 2^31-1, r=0 permitted), and H = floor((P+2^30)/2^31) can reach 2^31-1, where the int32 cast of q0 wraps.",
+        "statement": "On the r==0 path with extreme positive products (a = 2^31-1, m = 2^31-1 gives P \u2248 2^62 - 2^32 + 1 so H = floor((P+2^30)/2^31) = 2^31-1), the q0 recombination (high_final<<1 | low_final>>31) cast to int32 overflows/wraps, producing a wrong sign or magnitude for Q."
+      },
+      "created_at": "2026-10-05T07:01:04Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-10-05T07:01:04Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "q0 = (high_final<<1) | (low_final>>31) reinterprets the 64-bit biased product's top 33 bits, then casts to int32. If high_final = 2^31 - 1, q0 overflows int32 and wraps to a large negative value, which after the [-255,255] clamp would produce a completely wrong clamped Q (near -128 side) instead of +127. E.g. a = 2^31 - 1, m = 2^31 - 1: P + 2^30 = 2^62 - 2^32 + 2^30 - 1 < 2^62, so H = 2^31 - 1 is reachable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: every int32 accumulator value is legal including 2^31-1; m in [2^30, 2^31-1]; for r=0, R=H; tolerance <=1e-6 requires exact Q."
+          }
+        ],
+        "scope_rationale": "a = 2^31-1 and m near 2^31-1 with r=0 are explicitly inside the contract's domain (every int32 accumulator legal, multipliers up to 2^31-1, r=0 permitted), and H = floor((P+2^30)/2^31) can reach 2^31-1, where the int32 cast of q0 wraps.",
+        "statement": "On the r==0 path with extreme positive products (a = 2^31-1, m = 2^31-1 gives P \u2248 2^62 - 2^32 + 1 so H = floor((P+2^30)/2^31) = 2^31-1), the q0 recombination (high_final<<1 | low_final>>31) cast to int32 overflows/wraps, producing a wrong sign or magnitude for Q.",
+        "status": "open",
+        "updated_at": "2026-10-05T07:01:04Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)  # floor, ties toward +inf (exact for negatives too since Python floor)\n    if r:\n        mag = abs(H)\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\n        R = -Rmag if H < 0 else Rmag\n    else:\n        R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nresults = {}\nmismatches = []\nfor r in (1, 2, 3):\n    m = (1 << 30) + 3\n    z = 0\n    s = 1.0\n    # scan a values, find exact tie residues H mod 2^r == 2^(r-1)\n    tie_vals = []\n    for a in range(-5000, 5001):\n        H = (a*m + (1<<30)) // (1<<31)\n        if H % (1 << r) == (1 << (r-1)):\n            tie_vals.append(a)\n        if len(tie_vals) >= 64:\n            break\n    if not tie_vals:\n        results[f'r{r}'] = 'no tie values found'\n        continue\n    acc = torch.tensor([tie_vals], dtype=torch.int32, device=dev)\n    mult = torch.tensor([m], dtype=torch.int32, device=dev)\n    shift = torch.tensor([r], dtype=torch.int32, device=dev)\n    zero = torch.tensor([z], dtype=torch.int32, device=dev)\n    scale = torch.tensor([s], dtype=torch.float32, device=dev)\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n    exp = [contract(a, m, r, z, s) for a in tie_vals]\n    got = out[0].tolist()\n    bad = [(a, e, g) for a, e, g in zip(tie_vals, exp, got) if e != g]\n    mismatches.extend((r, *b) for b in bad)\n    results[f'r{r}'] = {'n_tie': len(tie_vals), 'n_mismatch': len(bad),\n                       'first_example': bad[0] if bad else None}\n\nprint(json.dumps({'claim': 'c1', 'results': results,\n                  'any_mismatch': len(mismatches) > 0,\n                  'example_r_a_expected_got': mismatches[:3]}))",
+        "expected_signal": "kernel output differs from exact double rounding at constructed second-stage tie points"
+      },
+      "created_at": "2026-10-05T07:01:47Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "77ef636557942670c90eb76af81278b1cac3e0e9c3814c594572d48bf76eddb8"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "6e4d95dc98fe33efc95f5abc2b5a267c6fc835c2acae7dda0187d62c5b95111f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's fused single rounding of (P + 2^30 + bias)/2^(31+r) disagrees with the contract's double rounding at exact second-stage tie points (H mod 2^r == 2^(r-1)) for constructible legal (a, m, r) values, e.g. H = 2^(r-1) with r >= 1.",
+        "cwd": "/root/cases/case_124",
+        "duration_s": 4.104288,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "77ef636557942670c90eb76af81278b1cac3e0e9c3814c594572d48bf76eddb8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "6e4d95dc98fe33efc95f5abc2b5a267c6fc835c2acae7dda0187d62c5b95111f"
+              }
+            ],
+            "duration_s": 4.104288,
+            "exit_code": 1,
+            "expected_signal": "kernel output differs from exact double rounding at constructed second-stage tie points",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t10_probe.py\", line 42, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 1,
+        "expected_signal": "kernel output differs from exact double rounding at constructed second-stage tie points",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t10_probe.py\", line 42, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)\n    if r:\n        mag = abs(H)\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\n        R = -Rmag if H < 0 else Rmag\n    else:\n        R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nr = 1\nm = (1 << 30) + 3\nz = 0\ns = 1.0\n# negative a with H exactly odd (half-tie for /2, away-from-zero should round down i.e. more negative)\nneg_tie = []\na = -1\nwhile len(neg_tie) < 128:\n    H = (a*m + (1<<30)) // (1<<31)\n    if H < 0 and (H % 2 == 1 or H % 2 == -1):\n        neg_tie.append(a)\n    a -= 1\n\nacc = torch.tensor([neg_tie], dtype=torch.int32, device=dev)\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\nout = K.run(acc, mult, shift, zero, scale).cpu()\nexp = [contract(a, m, r, z, s) for a in neg_tie]\ngot = out[0].tolist()\nbad = [(a, e, g) for a, e, g in zip(neg_tie, exp, got) if e != g]\n# also positive-side odd H for contrast\npos_tie = []\na = 1\nwhile len(pos_tie) < 128:\n    H = (a*m + (1<<30)) // (1<<31)\n    if H % 2 == 1:\n        pos_tie.append(a)\n    a += 1\naccp = torch.tensor([pos_tie], dtype=torch.int32, device=dev)\noutp = K.run(accp, mult, shift, zero, scale).cpu()\nexpp = [contract(a, m, r, z, s) for a in pos_tie]\nbadp = [(a, e, g) for a, e, g in zip(pos_tie, expp, outp[0].tolist()) if e != g]\n\nprint(json.dumps({'claim': 'c2', 'r': r, 'm': m,\n                  'n_neg_tie': len(neg_tie), 'neg_mismatches': len(bad),\n                  'neg_first_example_a_expected_got': bad[0] if bad else None,\n                  'n_pos_tie': len(pos_tie), 'pos_mismatches': len(badp),\n                  'pos_first_example': badp[0] if badp else None}))",
+        "expected_signal": "negative odd-H cases with r=1 mismatch contract away-from-zero rounding"
+      },
+      "created_at": "2026-10-05T07:01:50Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "542f474b1a92983f53ab37feec1597bc9a428c3aab44446abebc90417da61c9f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "1f6c69c2c518fa3a7e5a5bd34dfbe72f05441053ce3939a794abb7ffe67095a2"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For negative accumulators a < 0 with r == 1 and H exactly odd (a half-tie for the /2 shift), the kernel's sign-asymmetric bias (0x80000000 added only when NOT negative, line 34) rounds the negative half-tie toward zero (i.e., H/2 truncated up) instead of away from zero, differing from the contract by one quantization step.",
+        "cwd": "/root/cases/case_124",
+        "duration_s": 2.784022,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "542f474b1a92983f53ab37feec1597bc9a428c3aab44446abebc90417da61c9f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "1f6c69c2c518fa3a7e5a5bd34dfbe72f05441053ce3939a794abb7ffe67095a2"
+              }
+            ],
+            "duration_s": 2.784022,
+            "exit_code": 1,
+            "expected_signal": "negative odd-H cases with r=1 mismatch contract away-from-zero rounding",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t11_probe.py\", line 38, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 1,
+        "expected_signal": "negative odd-H cases with r=1 mismatch contract away-from-zero rounding",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t11_probe.py\", line 38, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "import sys, json\nsys.path.insert(0, '/root/cases/case_124')\nimport torch\nimport kernel as K\n\ndev = 'cuda'\n\ndef contract(a, m, r, z, s):\n    P = a*m\n    H = (P + (1 << 30)) // (1 << 31)\n    R = H\n    Q = min(127, max(-128, R + z))\n    return (Q - z) * s\n\nm = (1 << 31) - 1\nr = 0\nz = 0\ns = 1.0\na = (1 << 31) - 1\nP = a*m\nH = (P + (1 << 30)) // (1 << 31)\nvals = [a, a-1, (1<<30), -(1<<31), -((1<<31)-1)]\nacc = torch.tensor([vals], dtype=torch.int32, device=dev)\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\nout = K.run(acc, mult, shift, zero, scale).cpu()\nexp = [contract(v, m, r, z, s) for v in vals]\ngot = out[0].tolist()\nbad = [(v, e, g, H) for v, e, g in zip(vals, exp, got) if e != g]\nprint(json.dumps({'claim': 'c3', 'a_max_int31_H': H, 'mismatches': bad,\n                  'expected': exp, 'got': got}))",
+        "expected_signal": "q0 int32 wrap for H=2^31-1 produces wrong Q vs contract"
+      },
+      "created_at": "2026-10-05T07:01:53Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "592a34f0d91973bf2e69385c4d291c12ffe581dcdd5756d49ff7b3b47bd27d17"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "ebc6069d98dea8951d15a4526a0dc3ff031c5cc29486593a0d25a53d7b7186d9"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "On the r==0 path with extreme positive products (a = 2^31-1, m = 2^31-1 gives P \u2248 2^62 - 2^32 + 1 so H = floor((P+2^30)/2^31) = 2^31-1), the q0 recombination (high_final<<1 | low_final>>31) cast to int32 overflows/wraps, producing a wrong sign or magnitude for Q.",
+        "cwd": "/root/cases/case_124",
+        "duration_s": 3.144632,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "592a34f0d91973bf2e69385c4d291c12ffe581dcdd5756d49ff7b3b47bd27d17"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "ebc6069d98dea8951d15a4526a0dc3ff031c5cc29486593a0d25a53d7b7186d9"
+              }
+            ],
+            "duration_s": 3.144632,
+            "exit_code": 1,
+            "expected_signal": "q0 int32 wrap for H=2^31-1 produces wrong Q vs contract",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t12_probe.py\", line 28, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 1,
+        "expected_signal": "q0 int32 wrap for H=2^31-1 produces wrong Q vs contract",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_124/debate/probes/t12_probe.py\", line 28, in <module>\n    out = K.run(acc, mult, shift, zero, scale).cpu()\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_124/kernel.py\", line 94, in run\n    validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\n  File \"/root/cases/case_124/kernel.py\", line 75, in validate_inputs\n    require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\n  File \"/root/cases/case_124/kernel.py\", line 56, in require\n    raise ValueError(message)\nValueError: integer channel parameters must be int32 [C]\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    }
+  ],
+  "verdict": null
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-7029eb54814d49eb928618bf0954aa80",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing run() against reference() across many shapes, group sizes, and edge cases (negative words, shuffled g_idx, partial groups).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-97a36a2989ecc977",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, itertools, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_120\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\\n    rng = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    G = (kk+gs-1)//gs\\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\\n    for i in range(8): qw |= codes[i::8] << (4*i)\\n    if neg_words:\\n        # make some stored words negative signed patterns\\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\\n    if neg_words:\\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\\n    if worst:\\n        # extreme codes\\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\\n        for i in range(8): qw |= codes2[i::8] << (4*i)\\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)  # zero=16\\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\\n        sc = torch.full((G,n), 0.03125).half().to(dev)\\n    else:\\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\\n\\nfails = []\\ntested = 0\\ncases = []\\nfor gs in (16,32,64):\\n    for kk in (1, 7, 8, 9, 15, 16, 17, 31, 33, 63, 64, 65, 127, 128):\\n        for n in (1, 7, 8, 9, 32, 33, 63, 64, 65, 96):\\n            for m in (1, 7, 16, 17, 65):\\n                if kk < gs and gs != 16: continue\\n                cases.append((m,kk,n,gs))\\nimport random\\nrandom.seed(0)\\nif len(cases) > 400: cases = random.sample(cases, 400)\\nfor (m,kk,n,gs) in cases:\\n    for seed, neg, worst in ((0,False,False),(1,False,False),(2,True,False),(3,False,True)):\\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\\n        try:\\n            out = K.run(x,qw,sc,qz,ids,gs_)\\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\\n            err = (out.double()-ref.double()).abs()\\n            tol = 0.01 + 0.001*ref.double().abs()\\n            tested += 1\\n            if bool((err > tol).any()):\\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\\n                                  maxerr=float(err.max()), maxtol=float(tol.min())))\\n        except Exception as e:\\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:200]))\\n        if len(fails) >= 5: break\\n    if len(fails) >= 5: break\\nprint(json.dumps({\\\"tested\\\":tested,\\\"fails\\\":fails}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe: exhaustively test shapes and edge cases, compare run vs reference.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791054340,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1095,
+    "prompt_tokens": 14721,
+    "total_tokens": 15816,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 17,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 17
+    }
+  }
+}

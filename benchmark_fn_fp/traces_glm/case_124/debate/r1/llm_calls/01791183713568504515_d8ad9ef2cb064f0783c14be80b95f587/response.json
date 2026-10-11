@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-18c2e245",
+  "choices": [
+    {
+      "finish_reason": "length",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "All three probes failed on a probe-construction bug: I passed a [1, N] acc (so channels = N) with 1-element parameter tensors. Fixing by making the tensors [N, 1] with channel params shaped (1,), and relaunching all three.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0a837fc89c4855a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, '/root/cases/case_124')\\nimport torch\\nimport kernel as K\\ndev = 'cuda'\\n\\ndef contract(a, m, r, z, s):\\n    P = a*m\\n    H = (P + (1 << 30)) // (1 << 31)\\n    if r:\\n        mag = abs(H)\\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\\n        R = -Rmag if H < 0 else Rmag\\n    else:\\n        R = H\\n    Q = min(127, max(-128, R + z))\\n    return (Q - z) * s\\n\\nresults, mismatches = {}, []\\nfor r in (1, 2, 3):\\n    m = (1 << 30) + 3\\n    z, s = 0, 1.0\\n    tie_vals = []\\n    for a in range(-5000, 5001):\\n        H = (a*m + (1<<30)) // (1<<31)\\n        if H % (1 << r) == (1 << (r-1)):\\n            tie_vals.append(a)\\n        if len(tie_vals) >= 64:\\n            break\\n    if not tie_vals:\\n        results[f'r{r}'] = 'no tie values found'\\n        continue\\n    acc = torch.tensor([tie_vals], dtype=torch.int32, device=dev).T.reshape(-1, 1)\\n    mult = torch.tensor([m], dtype=torch.int32, device=dev)\\n    shift = torch.tensor([r], dtype=torch.int32, device=dev)\\n    zero = torch.tensor([z], dtype=torch.int32, device=dev)\\n    scale = torch.tensor([s], dtype=torch.float32, device=dev)\\n    out = K.run(acc, mult, shift, zero, scale).cpu()\\n    exp = [contract(a, m, r, z, s) for a in tie_vals]\\n",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Probes failed because channel params had shape (1,) but channels = number of columns (5 for c3). My acc was [1, n_vals], so channels = n_vals, but mult had shape (1,). Fix: make acc [n,1] with C=1, params shape (1,). Relaunch all three probes now."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791183716,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 573,
+    "prompt_tokens": 46178,
+    "total_tokens": 46751,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 11445,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -3,14 +3,14 @@
 所有题库和 traces 共用 `case_数字` 编号。同一编号始终指向同一道题；来源记录在 case_map.json，部分题库共用统一公开目录。
 本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。
 
-当前 90 题；另有 24 题已归档。归档编号保留，不复用、不进入默认实验。
+当前 108 题；另有 24 题已归档。归档编号保留，不复用、不进入默认实验。
 
 | 编号范围 | 数量 | 测什么 | 说明与题目 |
 |---|---:|---|---|
 | `case_01`–`case_35` | 34 | 原始 FN/FP benchmark | [说明](README.md) · [题目](triton_eval_cases/) |
 | `case_36`–`case_61` | 26 | 无工具单次调用 vs 带工具验证 | [说明](single_call_vs_tools_challenges/README.md) · [题目](triton_eval_cases/) |
 | `case_62`–`case_81` | 20 | Solo vs 多角色 debate | [说明](solo_vs_debate_challenges/README.md) · [题目](triton_eval_cases/) |
-| `case_106`–`case_115` | 10 | 专门构造的真实 kernel 验证挑战（单独统计） | [说明](real_kernel_challenges/README.md) · [题目](triton_eval_cases/) |
+| `case_106`–`case_133` | 28 | 专门构造的真实 kernel 验证挑战（单独统计） | [说明](real_kernel_challenges/README.md) · [题目](triton_eval_cases/) |
 
 已归档：`case_82`–`case_105`，共 24 题。[早期数值 pilot](archive/numerical_pilot/README.md) 保留题目、真值、旧 Opus 结果和 72 条 GLM 实验。
 
@@ -20,11 +20,11 @@
 
 | 分组 | Case / traces |
 |---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | [case_109](traces_glm/case_109/)、[case_114](traces_glm/case_114/) |
-| 未体现增益，保留待归普通集合 | [case_106](traces_glm/case_106/)、[case_107](traces_glm/case_107/)、[case_108](traces_glm/case_108/)、[case_110](traces_glm/case_110/)、[case_111](traces_glm/case_111/)、[case_112](traces_glm/case_112/)、[case_113](traces_glm/case_113/)、[case_115](traces_glm/case_115/) |
+| 成功案例：已观察到工具流程增益，单独保留 | [case_109](traces_glm/case_109/)、[case_114](traces_glm/case_114/)、[case_127](traces_glm/case_127/)、[case_128](traces_glm/case_128/) |
+| 未体现增益，保留待归普通集合 | [case_106](traces_glm/case_106/)、[case_107](traces_glm/case_107/)、[case_108](traces_glm/case_108/)、[case_110](traces_glm/case_110/)、[case_111](traces_glm/case_111/)、[case_112](traces_glm/case_112/)、[case_113](traces_glm/case_113/)、[case_115](traces_glm/case_115/)、[case_116](traces_glm/case_116/)、[case_117](traces_glm/case_117/)、[case_118](traces_glm/case_118/)、[case_119](traces_glm/case_119/)、[case_120](traces_glm/case_120/)、[case_121](traces_glm/case_121/)、[case_122](traces_glm/case_122/)、[case_123](traces_glm/case_123/)、[case_124](traces_glm/case_124/)、[case_125](traces_glm/case_125/)、[case_126](traces_glm/case_126/)、[case_129](traces_glm/case_129/)、[case_130](traces_glm/case_130/)、[case_131](traces_glm/case_131/)、[case_132](traces_glm/case_132/)、[case_133](traces_glm/case_133/) |
 
 
-已退休且不复用的编号：`case_03`。下一可用编号从 116 开始。
+已退休且不复用的编号：`case_03`。下一可用编号从 134 开始。
 `real_kernel_challenges/` 保存真实源码衍生的专门构造挑战；标签针对固定实现与合同，结果单独统计。
 
 每道题的完整对应关系如下。旧编号仅用于查阅历史记录，今后运行请使用新编号。
@@ -145,6 +145,24 @@
 | `case_113` | 当前 · 未体现增益，保留待归普通集合 | `case_113` | real_kernel_challenges / 分段递推：段标识选取错误 | [kernel](triton_eval_cases/case_113/kernel.py) · [合同](triton_eval_cases/case_113/problem.txt) | [记录](traces_glm/case_113/) |
 | `case_114` | 当前 · 成功案例：已观察到工具流程增益，单独保留 | `case_114` | real_kernel_challenges / 分页 Attention：窗口外 V 遮罩遗漏 | [kernel](triton_eval_cases/case_114/kernel.py) · [合同](triton_eval_cases/case_114/problem.txt) | [记录](traces_glm/case_114/) |
 | `case_115` | 当前 · 未体现增益，保留待归普通集合 | `case_115` | real_kernel_challenges / 分页 Attention：窗口外 V 遮罩修复 | [kernel](triton_eval_cases/case_115/kernel.py) · [合同](triton_eval_cases/case_115/problem.txt) | [记录](traces_glm/case_115/) |
+| `case_116` | 当前 · 未体现增益，保留待归普通集合 | `case_116` | real_kernel_challenges / Split-K GEMM：半精度中间缓冲 | [kernel](triton_eval_cases/case_116/kernel.py) · [合同](triton_eval_cases/case_116/problem.txt) | [记录](traces_glm/case_116/) |
+| `case_117` | 当前 · 未体现增益，保留待归普通集合 | `case_117` | real_kernel_challenges / Split-K GEMM：FP32 中间缓冲 | [kernel](triton_eval_cases/case_117/kernel.py) · [合同](triton_eval_cases/case_117/problem.txt) | [记录](traces_glm/case_117/) |
+| `case_118` | 当前 · 未体现增益，保留待归普通集合 | `case_118` | real_kernel_challenges / MoE grouped GEMM：完整路由与尾组调度 | [kernel](triton_eval_cases/case_118/kernel.py) · [合同](triton_eval_cases/case_118/problem.txt) | [记录](traces_glm/case_118/) |
+| `case_119` | 当前 · 未体现增益，保留待归普通集合 | `case_119` | real_kernel_challenges / MoE grouped GEMM：尾组输出 tile 遗漏 | [kernel](triton_eval_cases/case_119/kernel.py) · [合同](triton_eval_cases/case_119/problem.txt) | [记录](traces_glm/case_119/) |
+| `case_120` | 当前 · 未体现增益，保留待归普通集合 | `case_120` | real_kernel_challenges / INT4 GEMM：完整 GPTQ 到 Marlin 布局转换 | [kernel](triton_eval_cases/case_120/kernel.py) · [合同](triton_eval_cases/case_120/problem.txt) | [记录](traces_glm/case_120/) |
+| `case_121` | 当前 · 未体现增益，保留待归普通集合 | `case_121` | real_kernel_challenges / INT4 GEMM：重排器与消费端格式不匹配 | [kernel](triton_eval_cases/case_121/kernel.py) · [合同](triton_eval_cases/case_121/problem.txt) | [记录](traces_glm/case_121/) |
+| `case_122` | 当前 · 未体现增益，保留待归普通集合 | `case_122` | real_kernel_challenges / 时间融合 Stencil：有限域镜像展开 | [kernel](triton_eval_cases/case_122/kernel.py) · [合同](triton_eval_cases/case_122/problem.txt) | [记录](traces_glm/case_122/) |
+| `case_123` | 当前 · 未体现增益，保留待归普通集合 | `case_123` | real_kernel_challenges / 时间融合 Stencil：边界扩展与融合不兼容 | [kernel](triton_eval_cases/case_123/kernel.py) · [合同](triton_eval_cases/case_123/problem.txt) | [记录](traces_glm/case_123/) |
+| `case_124` | 当前 · 未体现增益，保留待归普通集合 | `case_124` | real_kernel_challenges / 整数重定标：两级舍入与串联进位 | [kernel](triton_eval_cases/case_124/kernel.py) · [合同](triton_eval_cases/case_124/problem.txt) | [记录](traces_glm/case_124/) |
+| `case_125` | 当前 · 未体现增益，保留待归普通集合 | `case_125` | real_kernel_challenges / 整数重定标：拆分进位的依赖错误 | [kernel](triton_eval_cases/case_125/kernel.py) · [合同](triton_eval_cases/case_125/problem.txt) | [记录](traces_glm/case_125/) |
+| `case_126` | 当前 · 未体现增益，保留待归普通集合 | `case_126` | real_kernel_challenges / erf 快速近似：全有限 FP16 域精度 | [kernel](triton_eval_cases/case_126/kernel.py) · [合同](triton_eval_cases/case_126/problem.txt) | [记录](traces_glm/case_126/) |
+| `case_127` | 当前 · 成功案例：已观察到工具流程增益，单独保留 | `case_127` | real_kernel_challenges / erf 快速近似：系数表序列化精度 | [kernel](triton_eval_cases/case_127/kernel.py) · [合同](triton_eval_cases/case_127/problem.txt) | [记录](traces_glm/case_127/) |
+| `case_128` | 当前 · 成功案例：已观察到工具流程增益，单独保留 | `case_128` | real_kernel_challenges / GELU：五位系数的全域精度 | [kernel](triton_eval_cases/case_128/kernel.py) · [合同](triton_eval_cases/case_128/problem.txt) | [记录](traces_glm/case_128/) |
+| `case_129` | 当前 · 未体现增益，保留待归普通集合 | `case_129` | real_kernel_challenges / GELU：归一化参数序列化误差 | [kernel](triton_eval_cases/case_129/kernel.py) · [合同](triton_eval_cases/case_129/problem.txt) | [记录](traces_glm/case_129/) |
+| `case_130` | 当前 · 未体现增益，保留待归普通集合 | `case_130` | real_kernel_challenges / SiLU：稳定尾项与完整换底常数 | [kernel](triton_eval_cases/case_130/kernel.py) · [合同](triton_eval_cases/case_130/problem.txt) | [记录](traces_glm/case_130/) |
+| `case_131` | 当前 · 未体现增益，保留待归普通集合 | `case_131` | real_kernel_challenges / SiLU：指数换底常数保存精度 | [kernel](triton_eval_cases/case_131/kernel.py) · [合同](triton_eval_cases/case_131/problem.txt) | [记录](traces_glm/case_131/) |
+| `case_132` | 当前 · 未体现增益，保留待归普通集合 | `case_132` | real_kernel_challenges / 正弦：分拆常数与融合参数缩减 | [kernel](triton_eval_cases/case_132/kernel.py) · [合同](triton_eval_cases/case_132/problem.txt) | [记录](traces_glm/case_132/) |
+| `case_133` | 当前 · 未体现增益，保留待归普通集合 | `case_133` | real_kernel_challenges / 正弦：分步舍入的稀疏超差 | [kernel](triton_eval_cases/case_133/kernel.py) · [合同](triton_eval_cases/case_133/problem.txt) | [记录](traces_glm/case_133/) |
 
 ## 如何读 traces
 

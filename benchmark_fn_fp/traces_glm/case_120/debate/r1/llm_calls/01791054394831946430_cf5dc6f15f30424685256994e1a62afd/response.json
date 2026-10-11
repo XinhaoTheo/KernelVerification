@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-a0d0f145",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch all three claim probes together: c1 and c2 are independent end-to-end run-vs-reference tests on GPU (edge shapes, partial tiles/groups, shuffled g_idx), and c3 is an exhaustive bit-exactness check of the kernel's decoded-weight arithmetic path (fp32 multiply + one fp16 round) against the reference's fp64→fp16 path across all quant/zero/scale combinations including ties and subnormals.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-90f3902c2ce70c7a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_120\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nresults = []\\ndef gen(M, k, n, gs, seed, shuffle=True):\\n    rng = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    groups = (k + gs - 1)//gs\\n    x = (torch.rand((M, k), generator=rng) - .5).half().to(dev)\\n    codes = torch.randint(0, 16, (((k+7)//8)*8, n), generator=rng, dtype=torch.int64)\\n    qw = torch.zeros(((k+7)//8, n), dtype=torch.int64)\\n    for i in range(8): qw |= codes[i::8] << (4*i)\\n    zc = torch.randint(0, 16, (groups, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\\n    qz = torch.zeros((groups, (n+7)//8), dtype=torch.int64)\\n    for i in range(8): qz |= zc[:, i::8] << (4*i)\\n    # adversarial: also make some signed words negative\\n    qw[0, :] |= (torch.randint(0, 2, (n,), generator=rng) * (2**31))  # arbitrary high bits\\n    sc = (.002 + .029*torch.rand((groups, n), generator=rng)).half().to(dev)\\n    ids = (torch.arange(k)//gs)[torch.randperm(k, generator=rng)].int() if shuffle else ((torch.arange(k)//gs).int())\\n    return x, qw.int().to(dev), sc, qz.int().to(dev), ids.to(dev), gs\\n\\ncases = [(7,64,65,16,0),(1,128,96,64,1),(65,63,33,32,2),(65,128,64,16,3),\\n         (33,17,1,16,4),(65,127,95,64,5),(5,16,96,16,6),(17,33,65,32,7),\\n         (65,129%129 if False else 96,96,64,8),(9,79,49,16,9)]\\nfor (M,k,n,gs,seed) in cases:\\n    x,qw,sc,qz,ids,gs_ = gen(M,k,n,gs,seed)\\n    out = K.run(x,qw,sc,qz,ids,gs)\\n    ref = K.reference(x,qw,sc,qz,ids,gs)\\n    diff = (out - ref).abs()\\n    tol = 0.01 + 0.001*ref.abs()\\n    viol = int((diff > tol).sum().item())\\n    results.append({\\\"M\\\":M,\\\"K\\\":k,\\\"N\\\":n,\\\"gs\\\":gs,\\\"seed\\\":seed,\\n                    \\\"max_abs_diff\\\": float(diff.max().item()),\\n                    \\\"tol_violations\\\": viol,\\n                    \\\"max_target_abs\\\": float(ref.abs().max().item())})\\nprint(json.dumps({\\\"claim\\\":\\\"c1 layout inversion end-to-end\\\",\\\"n_cases\\\":len(results),\\n                  \\\"all_pass\\\": all(r[\\\"tol_violations\\\"]==0 for r in results),\\n                  \\\"max_diff_overall\\\": max(r[\\\"max_abs_diff\\\"] for r in results),\\n                  \\\"results\\\": results}))\", \"expected_signal\": \"If the GEMM layout arithmetic fails to invert the repack layout, tol_violations>0 with large max_abs_diff on edge shapes; all_pass indicates exact inversion.\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b560dbca384b83ca",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_120\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nresults = []\\ndef gen(M, k, n, gs, seed, shuffle=True):\\n    rng = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    groups = (k + gs - 1)//gs\\n    x = (torch.rand((M, k), generator=rng) - .5).half().to(dev)\\n    codes = torch.randint(0, 16, (((k+7)//8)*8, n), generator=rng, dtype=torch.int64)\\n    qw = torch.zeros(((k+7)//8, n), dtype=torch.int64)\\n    for i in range(8): qw |= codes[i::8] << (4*i)\\n    zc = torch.randint(0, 16, (groups, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\\n    qz = torch.zeros((groups, (n+7)//8), dtype=torch.int64)\\n    for i in range(8): qz |= zc[:, i::8] << (4*i)\\n    sc = (.002 + .029*torch.rand((groups, n), generator=rng)).half().to(dev)\\n    ids = (torch.arange(k)//gs)[torch.randperm(k, generator=rng)].int() if shuffle else ((torch.arange(k)//gs).int())\\n    return x, qw.int().to(dev), sc, qz.int().to(dev), ids.to(dev), gs\\n\\n# focus: K not a multiple of group_size (final partial group) and heavily shuffled g_idx,\\n# plus monotone g_idx and every group_size, plus all K 1..128 sweep with partial groups\\ncases = [(4,17,40,16,0),(4,31,40,32,1),(4,63,40,64,2),(4,97,40,32,3),\\n         (4,129-33,40,64,4),(4,48,40,32,5),(4,100,40,64,6),(4,55,40,16,7)]\\nfor (M,k,n,gs,seed) in cases:\\n    for shuffle in (True, False):\\n        x,qw,sc,qz,ids,gs_ = gen(M,k,n,gs,seed,shuffle)\\n        out = K.run(x,qw,sc,qz,ids,gs)\\n        ref = K.reference(x,qw,sc,qz,ids,gs)\\n        diff = (out - ref).abs()\\n        tol = 0.01 + 0.001*ref.abs()\\n        results.append({\\\"K\\\":k,\\\"gs\\\":gs,\\\"shuffle\\\":shuffle,\\\"seed\\\":seed,\\n                        \\\"violations\\\": int((diff > tol).sum().item()),\\n                        \\\"max_diff\\\": float(diff.max().item())})\\n# also: make scales/zeros strongly distinct per group so wrong pairing is visible\\nworst = max(r[\\\"max_diff\\\"] for r in results)\\nprint(json.dumps({\\\"claim\\\":\\\"c2 group indexing by sorted position\\\",\\\"n_cases\\\":len(results),\\n                  \\\"all_pass\\\": all(r[\\\"violations\\\"]==0 for r in results),\\n                  \\\"worst_max_diff\\\": worst, \\\"results\\\": results}))\", \"expected_signal\": \"If kk//GROUP_SIZE mispairs groups (e.g. partial final group or sort issue), violations>0 with large diffs; all_pass means group indexing correct for partial groups and shuffled g_idx.\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-ab83a3b10a25a0d4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json, torch\\n# Exhaustively compare the kernel's arithmetic path (fp32 multiply + one fp16 cast,\\n# i.e. float32(int)*scale then .half()) against the reference path (double product then\\n# .half()) for every quant 0..15, zero 1..16, and every fp16 scale value in (0, 1/32].\\nquant = torch.arange(16, dtype=torch.float32)\\nzero = torch.arange(1, 17, dtype=torch.float32)\\n# all positive fp16 values <= 1/32 (normals and subnormals)\\nbits = torch.arange(1, 0x4000, dtype=torch.int32)  # subnormals: exponent 0\\nsub = (bits.view(torch.int16).to(torch.float32))\\nbits2 = torch.arange(0x0400, 0x3801, dtype=torch.int32)\\nnorm = (bits2.view(torch.int16).to(torch.float32))\\nscales = torch.cat([sub, norm]).to(torch.float32)\\nscales = scales[(scales > 0) & (scales <= 0.03125)]\\nsc = scales.to(torch.float64).to(torch.float16).to(torch.float32)  # exact fp16 values\\nQ = quant[:, None, None]  # 16\\nZ = zero[None, :, None]   # 16\\nS = sc[None, None, :]     # S\\n# kernel path: (q-z) as int->fp32 (exact), times fp16-exact scale in fp32, one .half()\\nkern = ((Q - Z).to(torch.float32) * S).to(torch.float16)\\n# reference path: exact double product then one .half()\\nref = ((Q - Z).to(torch.float64) * S.to(torch.float64)).to(torch.float16)\\nmismatch = (kern.view(torch.int16) != ref.view(torch.int16))\\nprint(json.dumps({\\n  \\\"claim\\\": \\\"c3 decoded-weight H16 rounding\\\",\\n  \\\"n_scales_tested\\\": int(scales.numel()),\\n  \\\"n_combinations\\\": int(16*16*scales.numel()),\\n  \\\"n_subnormal_scales\\\": int((scales.view(torch.int16) < 0x0400).sum().item()),\\n  \\\"n_mismatches\\\": int(mismatch.sum().item()),\\n  \\\"verdict_bit_identical\\\": bool(not mismatch.any().item())}))\", \"expected_signal\": \"If any tie/subnormal case makes the fp32 path differ from the double path, n_mismatches>0; n_mismatches==0 means the in-kernel path is bit-identical to contract H16 for all combos.\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Design probes: c1 (layout inversion via end-to-end run vs reference over edge shapes), c2 (group indexing with non-multiple K), c3 (H16 rounding on GPU? Actually c3 is about the in-kernel cast — but we can't easily inspect the in-kernel weight; we can test CPU fp32-multiply-then-half vs double-half — but that's not the kernel. Better: c3 can be tested by simulating the arithmetic: (quant-zero) as int, * scale fp16 exact, cast to fp32, multiply in fp32 (exact since fp32 has enough precision? scale is fp16 subnormal e.g. 6e-8; (q-z)*scale in fp32: fp16 subnormal * int ≤16 — product magnitude ~1e-6, fp32 fine, exact? fp16 subnormal is a multiple of 2^-24; times integer up to 16 gives multiple of 2^-20, exact in fp32. Then .to(fp16) — rounding to fp16 subnormal granularity 2^-24, tie cases: product is multiple of 2^-20, always even multiple of 2^-24? multiples of 2^-20 = 16*2^-24, so rounding to nearest 2^-24 is exact! Wait but quant-zero ranges -16..15; scale subnormal is exact multiple of 2^-24. product = integer * m * 2^-24, exact in fp32, and exactly representable in fp16 subnormal? fp16 subnormals are multiples of 2^-24 up to 2^-14. If |product| < 2^-14 it's exactly representable; otherwise round normally. If scale is subnormal, product ≤ 16*2^-14*... hmm scale subnormal ≤ 2^-15-ish? Max subnormal = 2^-15 - 2^-24 ≈ 3e-5 > 1/32=3.125e-2? No! 1/32=0.03125; subnormals are ~3e-5. So scales in (0, 1/32] are mostly normal. Ties: scale = 2^-k normal, times odd integer gives product with ULP fractional — tie to even. In-kernel: fp32 multiply exact (int*fp16 value exact in fp32), then one round to fp16 with ties-even on GPU .to(tl.float16) — standard conversion uses round-to-nearest-even. Reference: double multiply exact, .half() also RN-even. So they agree mathematically. The claim c3 can be rebutted by a host-side exhaustive check: for all quant 0..15, zero 1..16, all fp16 scale values in (0,1/32], compare fp32-path vs double-path → identical bits. That's 16*16*~16384 fp16 scales... fp16 values in (0,1/32]: exponents from -24 (subnormal) up to -5: count ~ small. ~ 1024+ values per binade ×19 binades ≈ 30k × 256 = 7.7M — fine on CPU with numpy half comparisons. Actually do it in torch CPU with bit manipulation. But this is a source-level claim about the kernel's arithmetic; a host simulation shows the two arithmetic paths are bit-identical for all cases, which together with source inspection (line 78 exactly replicates fp32 mult + one fp16 cast) rebuts c3.\n\nAlso can do GPU check: float32 tensor * scale, .half() vs double.half() — equivalent. Use run_claim_probe.\n\nc1 and c2 need run() vs reference() on GPU. Probe code: import kernel from artifact path. Edge shapes: (K,N) in {64,65...}, M values, group sizes, several seeds, including K=63 (not multiple of 16, partial group), N=65. Both probes can run independently. But c1 and c2 tests overlap heavily; still fine to run both.\n\nBatch all three probes now.\n\nFor c1: use random g_idx permutations satisfying histogram with make_inputs-like generation, various (M,K,N,group_size,seed), compute run vs reference, max |diff| and tolerance violation count. Expected signal: if layout mismatch, diffs huge.\n\nFor c2: focus on K not multiple of group_size and shuffled g_idx; same metric essentially. Fine.\n\nWrite probes."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791054397,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 3221,
+    "prompt_tokens": 28166,
+    "total_tokens": 31387,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3952,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

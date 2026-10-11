@@ -1,0 +1,41 @@
+{
+  "id": "chatcmpl-d80d2650",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"The routing preparation (expert-sorted slots with sentinel padding), the projection kernel (masked loads, FP32 tl.dot accumulation, per-route weight application, sentinel-masked stores), and the per-token reduction all faithfully implement the contract; grid/scheduling matches the standard grouped-swathe pattern and edge cases (zero-route experts, partial groups, weight sums ≤ 1) are handled.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Analyze the kernel. Key concern: pid_n computation when group_size_m < GROUP_M — standard vLLM grid uses num_pid_in_group = GROUP_M * num_pid_n and group_size_m = min(...). The typical formula: pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m; pid_n = (pid % num_pid_in_group) // group_size_m. That's vLLM's standard. Fine.\n\nWait — grid is expert_blocks.numel() * cdiv(n,32) programs, but grouped ordering assumes total pid_m = EM/BM blocks. num_pid_m = cdiv(EM,BM). Since EM is padded to multiples of BM=16, num_pid_m = padded_blocks count = expert_blocks.numel(). Good.\n\nSorting: sorted_ids holds original flat route indices sorted by expert, padded with sentinel ids.numel(). valid = route < R = m*q. Sentinel is m*q, so masked. Good.\n\nX load: route // TOPK gives token index. Good. ROUTE_WEIGHT loaded at route index into flat [M*Q] FP32 — topk_weights contiguous, ok. Weight applied per row of block. Store ROUTED + route*N + cols: each route writes its own row of routed. Since experts are distinct per token but tokens can share experts — within a block, could two routes with same expert... store targets distinct rows (route index distinct), fine. tl.store with masks.\n\nPotential race: different blocks write distinct routes? Each route appears once in sorted_ids, so no duplicates. Good.\n\nRanks computation: arange(numel) - repeat_interleave(cumsum-counts, counts) gives rank within each expert group. slots = starts[expert] + rank. starts from padded cumsum. Correct.\n\nexpert_blocks: repeat_interleave(arange(experts), padded//16) — number of blocks per expert. Grid covers all pid_m blocks × pid_n.\n\n_combine_routes: sums TOPK rows of routed per token, correct. output fresh tensor.\n\nEdge case: R = m*q; sentinel m*q; valid route < R masks sentinel. tl.load of SORTED + pid_m*BM + arange(BM) — pid_m*BM up to EM-1+... EM is multiple of 16, load within bounds since pid_m < num_pid_m, pid_m*BM+BM <= EM. Good.\n\nSmall case: M=37, Q=2, one expert gets all... fine.\n\nPotential issue: group_size_m when expert_blocks.numel() < GROUP_M: group_m=1 then, and formula still works? group_m=1, num_pid_in_group = 1*num_pid_n. group_size_m = min(num_pid_m - first_pid_m, 1) = 1. pid_m = first_pid_m + 0. Fine.\n\ntl.dot with BM=16 fine (min 16). FP16 inputs, FP32 accum — allowed tolerance.\n\nexpert value: tl.load(EXPERT + pid_m) — pid_m indexes blocks, expert per block. Good.\n\nOne subtlety: pid_m within a group: (pid % num_pid_in_group) % group_size_m — but if group is not full (last group), group_size_m smaller; standard vLLM uses this and it works because remaining pids count = group_size_m*num_pid_n.\n\nNumerically: FP16 dot with FP32 accumulation within tolerance 0.01+0.0002|target|. Bounds: |x|,|w| ≤ 0.5, K ≤129 → per-route |proj| ≤ 0.5*0.5*129*... actually sum of 129 terms each ≤0.25 → ≤32.25, times weight sum ≤1 → ≤32.25 < 32.251. Accumulation error in FP32 for tl.dot with FP16 inputs: inputs are FP16 exact, dot uses TF32? No, FP16 inputs → tensor core FP16 with FP32 accumulate, fine. Weight multiply in FP32. Should be within tolerance. Sum in combine FP32. Fine.\n\ntopk_weights is FP32 loaded as ROUTE_WEIGHT; tl.load type from pointer — FP32, ok.\n\nVerdict: trust."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791050987,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 979,
+    "prompt_tokens": 3260,
+    "total_tokens": 4239,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

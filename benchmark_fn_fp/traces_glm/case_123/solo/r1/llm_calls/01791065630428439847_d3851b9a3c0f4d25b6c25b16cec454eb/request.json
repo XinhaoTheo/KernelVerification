@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_123\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Temporally fused, separable finite-domain binomial diffusion.\\n2: \\n3: Synthetic benchmark implementation of a standard image/stencil operation.\\n4: This is not an upstream project's kernel or an asserted historical bug.\\n5: \\\"\\\"\\\"\\n6: import torch\\n7: import triton\\n8: import triton.language as tl\\n9: \\n10: \\n11: @triton.jit\\n12: def _extend_coordinate(position, SIZE: tl.constexpr):\\n13:     coordinate = position\\n14:     sign = 1.0\\n15:     valid = (position >= 0) & (position < SIZE)\\n16:     return coordinate, sign, valid\\n17: \\n18: \\n19: @triton.jit\\n20: def _sweep_four_steps(X, Y, H: tl.constexpr, W: tl.constexpr,\\n21:                       VERTICAL: tl.constexpr, BLOCK: tl.constexpr):\\n22:     offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n23:     rows = offsets // W\\n24:     columns = offsets % W\\n25:     active = offsets < H * W\\n26:     coefficients: tl.constexpr = (1, 8, 28, 56, 70, 56, 28, 8, 1)\\n27:     accumulator = tl.zeros((BLOCK,), tl.float32)\\n28:     for tap in tl.static_range(9):\\n29:         if VERTICAL:\\n30:             source, sign, inside = _extend_coordinate(rows + tap - 4, H)\\n31:             address = source * W + columns\\n32:         else:\\n33:             source, sign, inside = _extend_coordinate(columns + tap - 4, W)\\n34:             address = rows * W + source\\n35:         value = tl.load(X + address, mask=active & inside, other=0.0).to(tl.float32)\\n36:         accumulator += value * sign * (coefficients[tap] / 256.0)\\n37:     tl.store(Y + offsets, accumulator, mask=active)\\n38: \\n39: \\n40: def validate_inputs(x, steps, require_cuda=True):\\n41:     \\\"\\\"\\\"Check the complete public input domain, also usable on CPU.\\\"\\\"\\\"\\n42:     def require(condition, message):\\n43:         if not condition:\\n44:             raise ValueError(message)\\n45: \\n46:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n47:     require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n48:     require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n49:     require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient buffer required\\\")\\n50:     require(not x.is_neg() and not x.is_conj(), \\\"logical view flags are outside this domain\\\")\\n51:     require(not require_cuda or x.is_cuda, \\\"CUDA input required by run\\\")\\n52:     require(x.ndim == 2, \\\"expected x[H,W]\\\")\\n53:     h, w = x.shape\\n54:     require(1 <= h <= 129 and 1 <= w <= 129, \\\"H and W must be in [1,129]\\\")\\n55:     require(x.dtype == torch.float16, \\\"x must be FP16\\\")\\n56:     require(bool(torch.isfinite(x).all().item()), \\\"x must be finite\\\")\\n57:     require(bool((x.abs() <= 1).all().item()), \\\"input magnitude must be at most one\\\")\\n58:     require(type(steps) is int and steps in (4, 8), \\\"steps must be the Python integer 4 or 8\\\")\\n59:     return {\\\"valid\\\": True, \\\"height\\\": h, \\\"width\\\": w, \\\"steps\\\": steps}\\n60: \\n61: \\n62: def run(x, steps):\\n63:     \\\"\\\"\\\"Return a fresh FP32 field after the requested diffusion steps.\\\"\\\"\\\"\\n64:     validate_inputs(x, steps)\\n65:     h, w = x.shape\\n66:     with torch.cuda.device(x.device):\\n67:         current = x\\n68:         for _ in range(steps // 4):\\n69:             horizontal = torch.empty((h, w), dtype=torch.float32, device=x.device)\\n70:             output = torch.empty((h, w), dtype=torch.float32, device=x.device)\\n71:             grid = (triton.cdiv(h * w, 128),)\\n72:             _sweep_four_steps[grid](current, horizontal, H=h, W=w,\\n73:                                     VERTICAL=False, BLOCK=128, num_warps=4)\\n74:             _sweep_four_steps[grid](horizontal, output, H=h, W=w,\\n75:                                     VERTICAL=True, BLOCK=128, num_warps=4)\\n76:             current = output\\n77:     return current\\n78: \\n79: \\n80: def reference(x, steps):\\n81:     \\\"\\\"\\\"Direct FP64 three-by-three update, with a new zero exterior each step.\\\"\\\"\\\"\\n82:     validate_inputs(x, steps, require_cuda=False)\\n83:     h, w = x.shape\\n84:     current = x.double()\\n85:     coefficients = (1.0, 2.0, 1.0)\\n86:     for _ in range(steps):\\n87:         padded = torch.zeros((h + 2, w + 2), dtype=torch.float64, device=x.device)\\n88:         padded[1:h + 1, 1:w + 1] = current\\n89:         output = torch.zeros_like(current)\\n90:         for row in range(3):\\n91:             for column in range(3):\\n92:                 output += (coefficients[row] * coefficients[column] / 16.0) * padded[row:row + h, column:column + w]\\n93:         current = output\\n94:     return current\\n95: \\n96: \\n97: def make_inputs(device=\\\"cuda\\\", height=31, width=33, steps=4, seed=0):\\n98:     \\\"\\\"\\\"Convenience example generator, not a restriction on the input domain.\\\"\\\"\\\"\\n99:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n100:     x = (2.0 * torch.rand((height, width), generator=generator) - 1.0).half()\\n101:     return x.to(device), steps\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute repeated finite-domain binomial diffusion, a separable image/stencil\\noperation. The input is x[H,W], and the update below is applied steps times.\\n\\nInputs and complete public domain:\\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\\n- steps is a Python int in {4,8}.\\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\\n  offsets are legal. The input has requires_grad=False, is_inference=False,\\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\\n  without concurrent external writes to the input. This forward operation\\n  does not provide autograd.\\n\\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\\n\\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\\n  where a[-1]=1, a[0]=2, a[1]=1.\\n\\nThe zero exterior is imposed at EVERY individual time step. Only values within\\nthe finite rectangle are retained as the state for the next step.\\nThe target is U_steps in real arithmetic on the stored input values; no\\nintermediate FP16 rounding is part of the target definition.\\n\\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\\nseparability, temporal fusion, alternative boundary evaluation and FP32\\narithmetic, provided the complete finite-domain target is preserved within\\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\\nnot a verdict per input or shape.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nimplements the individual three-by-three updates in FP64 and accepts CPU\\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\\nbenchmark in the standard finite-domain stencil family, not a claim of an\\nupstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_123\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-03T22:13:18Z\",\n      \"evidence\": [\n        {\n          \"created_at\": \"2026-10-03T22:13:50Z\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"c3c2f2278d9e65bbaf23675fdc34ef30b5741b213d4aa093a1d5915c1f5803bc\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"6039d4d8a52bfdd1523ebbadfb98e013f07d597a1fa08b8bb2e7ee10b2e9ac6e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"9601e4409588ef6b2feeb96a7d40afdab174286b56c0f00b87d3c3222cef9129\"\n              }\n            ],\n            \"duration_s\": 10.614342,\n            \"exit_code\": 0,\n            \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"fails\": [\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.05802503228187561,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.0045650796964764595,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.00557500496506691,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"impulse\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                }\n              ],\n              \"metric\": \"max abs error vs FP64 per-step reference, tolerance 2e-5\",\n              \"n_cases\": 71,\n              \"n_fail\": 70,\n              \"reason\": \"contract requires every element within 2e-5 of U_steps over whole legal domain\",\n              \"worst_max_abs_err\": 0.2109375\n            },\n            \"n_cases\": 71,\n            \"n_fail\": 70,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\", \\\"reason\\\": \\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\", \\\"n_cases\\\": 71, \\\"n_fail\\\": 70, \\\"worst_max_abs_err\\\": 0.2109375, \\\"fails\\\": [{\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.05802503228187561, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.0045650796964764595, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.00557500496506691, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"impulse\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60,\n            \"tolerance\": 2e-05,\n            \"worst_max_abs_err\": 0.2109375\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Kernel output exceeds the 2e-5 tolerance on 70 of 71 legal test cases (shapes from 1x1 to 129x129, steps 4 and 8, random/ones/impulse/corner inputs), worst max abs error 0.21 vs the FP64 per-step reference. The fused 9-tap sweep re-imposes the zero exterior only every 4 steps instead of at each individual step, so boundary elements lose mass that the contract requires be truncated per step.\",\n          \"supports\": \"confirmed\",\n          \"tool_event_id\": \"t6\"\n        }\n      ],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Contract requires U_steps per the per-step 3x3 update with zero exterior every step, FP32 output, and abs(actual-U_steps)<=2e-5 over the whole legal domain.\"\n        }\n      ],\n      \"scope_rationale\": \"Contract requires every element within 2e-5 of U_steps for all legal inputs; any elementwise violation on an admitted input is a defect.\",\n      \"statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\",\n      \"status\": \"confirmed\",\n      \"updated_at\": \"2026-10-03T22:13:50Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_123\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_123\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_123\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_123\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_123\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The kernel fuses 4 diffusion steps into a separable 9-tap binomial sweep ((1,8,28,56,70,...)/256 = ([1,2,1]/4)^4), which is mathematically consistent with per-step zero padding. I'll claim correctness within tolerance and probe it against the FP64 reference across the domain.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The 9-tap binomial coefficients are the fourth power of the 1D [1,2,1]/4 kernel, so temporal fusion with per-step zero padding is mathematically equivalent; FP32 accumulation should stay within the 2e-5 tolerance.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Contract requires U_steps per the per-step 3x3 update with zero exterior every step, FP32 output, and abs(actual-U_steps)<=2e-5 over the whole legal domain.\"\n              }\n            ],\n            \"scope_rationale\": \"Contract requires every element within 2e-5 of U_steps for all legal inputs; any elementwise violation on an admitted input is a defect.\",\n            \"statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll run a probe comparing the kernel against the FP64 per-step reference across several shapes, both step counts, and boundary-stressing inputs.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_123\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = []\\nshapes = [(1,1),(1,129),(129,1),(129,129),(31,33),(128,127),(2,3)]\\ndef make(h, w, kind, seed):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if kind == \\\"rand\\\":\\n        x = (2*torch.rand((h,w), generator=g)-1).half()\\n    elif kind == \\\"ones\\\":\\n        x = torch.ones((h,w)).half()\\n    elif kind == \\\"impulse\\\":\\n        x = torch.zeros((h,w)).half(); x[0,0]=1.0\\n    elif kind == \\\"corners\\\":\\n        x = torch.zeros((h,w)).half()\\n        x[0,0]=1.0; x[-1,-1]=-1.0; x[h//2,w//2]=1.0\\n    elif kind == \\\"neg\\\":\\n        x = -torch.ones((h,w)).half()\\n    return x.to(dev)\\n\\nworst = 0.0\\nfor (h,w) in shapes:\\n    for kind in [\\\"rand\\\",\\\"ones\\\",\\\"impulse\\\",\\\"corners\\\",\\\"neg\\\"]:\\n        for steps in (4,8):\\n            x = make(h,w,kind,hash((h,w,kind))%1000)\\n            out = kernel.run(x, steps)\\n            ref = kernel.reference(x, steps)\\n            err = (out.double()-ref).abs().max().item()\\n            worst = max(worst, err)\\n            results.append({\\\"h\\\":h,\\\"w\\\":w,\\\"kind\\\":kind,\\\"steps\\\":steps,\\\"max_abs_err\\\":err,\\n                            \\\"dtype\\\":str(out.dtype),\\\"shape\\\":list(out.shape),\\\"cuda\\\":out.is_cuda,\\n                            \\\"input_preserved\\\": bool(torch.equal(x, x.detach()))})\\n            if err > 2e-5:\\n                results[-1][\\\"fail\\\"] = True\\n\\n# contiguous view with nonzero storage offset is legal\\nbase = torch.randn(300, 300, generator=torch.Generator().manual_seed(1)).half().to(dev).clamp(-1,1)\\nview = base[10:139, 20:149].contiguous()  # actually contiguous slice with offset\\ntry:\\n    out = kernel.run(view, 4)\\n    ref = kernel.reference(view, 4)\\n    err = (out.double()-ref).abs().max().item()\\n    worst = max(worst, err)\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"err\\\":err})\\nexcept Exception as e:\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"error\\\":str(e)})\\n\\nfails = [r for r in results if r.get(\\\"fail\\\")]\\n...[truncated, 270 more chars]\",\n            \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The probe shows 70 of 71 cases exceeding tolerance (worst error 0.21), confirming the kernel violates the contract \\u2014 the fused 4-step sweep imposes the zero exterior only at the fused boundaries rather than at every individual step. I'll finalize the evidence and verdict.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"data\": {\n              \"n_cases\": 71,\n              \"n_fail\": 70,\n              \"tolerance\": 2e-05,\n              \"worst_max_abs_err\": 0.2109375\n            },\n            \"event_id\": \"t6\",\n            \"status\": \"confirmed\",\n            \"summary\": \"Kernel output exceeds the 2e-5 tolerance on 70 of 71 legal test cases (shapes from 1x1 to 129x129, steps 4 and 8, random/ones/impulse/corner inputs), worst max abs error 0.21 vs the FP64 per-step reference. The fused 9-tap sweep re-imposes the zero exterior only every 4 steps instead of at each individual step, so boundary elements lose mass that the contract requires be truncated per step.\",\n            \"supports\": \"confirmed\"\n          },\n          \"tool\": \"finalize_probe_evidence\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_123\"\n      },\n      \"created_at\": \"2026-10-03T22:13:01Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_123\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Temporally fused, separable finite-domain binomial diffusion.\\n\\nSynthetic benchmark implementation of a standard image/stencil operation.\\nThis is not an upstream project's kernel or an asserted historical bug.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _extend_coordinate(position, SIZE: tl.constexpr):\\n    coordinate = position\\n    sign = 1.0\\n    valid = (position >= 0) & (position < SIZE)\\n    return coordinate, sign, valid\\n\\n\\n@triton.jit\\ndef _sweep_four_steps(X, Y, H: tl.constexpr, W: tl.constexpr,\\n                      VERTICAL: tl.constexpr, BLOCK: tl.constexpr):\\n    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    rows = offsets // W\\n    columns = offsets % W\\n    active = offsets < H * W\\n    coefficients: tl.constexpr = (1, 8, 28, 56, 70, 56, 28, 8, 1)\\n    accumulator = tl.zeros((BLOCK,), tl.float32)\\n    for tap in tl.static_range(9):\\n        if VERTICAL:\\n            source, sign, inside = _extend_coordinate(rows + tap - 4, H)\\n            address = source * W + columns\\n        else:\\n            source, sign, inside = _extend_coordinate(columns + tap - 4, W)\\n            address = rows * W + source\\n        value = tl.load(X + address, mask=active & inside, other=0.0).to(tl.float32)\\n        accumulator += value * sign * (coefficients[tap] / 256.0)\\n    tl.store(Y + offsets, accumulator, mask=active)\\n\\n\\ndef validate_inputs(x, steps, require_cuda=True):\\n    \\\"\\\"\\\"Check the complete public input domain, also usable on CPU.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n    require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n    require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient buffer required\\\")\\n    require(not x.is_neg() and not x.is_conj(), \\\"logical view flags are outside this domain\\\")\\n    require(not require_cuda or x.is_cuda, \\\"CUDA input required by run\\\")\\n    require(x.ndim == 2, \\\"expected x[H,W]\\\")\\n    h, w = x.shape\\n    require(1 <= h <= 129 and 1 <= w <= 129, \\\"H and W must be in [1,129]\\\")\\n    require(x.dtype == torch.float16, \\\"x must be FP16\\\")\\n    require(bool(torch.isfinite(x).all().item()), \\\"x must be finite\\\")\\n    require(bool((x.abs() <= 1).all().item()), \\\"input magnitude must be at most one\\\")\\n    require(type(steps) is int and steps in (4, 8), \\\"steps must be the Python integer 4 or 8\\\")\\n    return {\\\"valid\\\": True, \\\"height\\\": h, \\\"width\\\": w, \\\"steps\\\": steps}\\n\\n\\ndef run(x, steps):\\n    \\\"\\\"\\\"Return a fresh FP32 field after the requested diffusion steps.\\\"\\\"\\\"\\n    validate_inputs(x, steps)\\n    h, w = x.shape\\n    with torch.cuda.device(x.device):\\n        current = x\\n        for _ in range(steps // 4):\\n            horizontal = torch.empty((h, w), dtype=torch.float32, device=x.device)\\n            output = torch.empty((h, w), dtype=torch.float32, device=x.device)\\n            grid = (triton.cdiv(h * w, 128),)\\n            _sweep_four_steps[grid](current, horizontal, H=h, W=w,\\n                                    VERTICAL=False, BLOCK=128, num_warps=4)\\n            _sweep_four_steps[grid](horizontal, output, H=h, W=w,\\n                                    VERTICAL=True, BLOCK=128, num_warps=4)\\n            current = output\\n    return current\\n\\n\\ndef reference(x, steps):\\n    \\\"\\\"\\\"Direct FP64 three-by-three update, with a new zero exterior each step.\\\"\\\"\\\"\\n    validate_inputs(x, steps, require_cuda=False)\\n    h, w = x.shape\\n    current = x.double()\\n    coefficients = (1.0, 2.0, 1.0)\\n    for _ in range(steps):\\n        padded = torch.zeros((h + 2, w + 2), dtype=torch.float64, device=x.device)\\n        padded[1:h + 1, 1:w + 1] = current\\n        output = torch.zeros_like(current)\\n        for row in range(3):\\n            for column in range(3):\\n...[truncated, 487 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute repeated finite-domain binomial diffusion, a separable image/stencil\\noperation. The input is x[H,W], and the update below is applied steps times.\\n\\nInputs and complete public domain:\\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\\n- steps is a Python int in {4,8}.\\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\\n  offsets are legal. The input has requires_grad=False, is_inference=False,\\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\\n  without concurrent external writes to the input. This forward operation\\n  does not provide autograd.\\n\\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\\n\\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\\n  where a[-1]=1, a[0]=2, a[1]=1.\\n\\nThe zero exterior is imposed at EVERY individual time step. Only values within\\nthe finite rectangle are retained as the state for the next step.\\nThe target is U_steps in real arithmetic on the stored input values; no\\nintermediate FP16 rounding is part of the target definition.\\n\\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\\nseparability, temporal fusion, alternative boundary evaluation and FP32\\narithmetic, provided the complete finite-domain target is preserved within\\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\\nnot a verdict per input or shape.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nimplements the individual three-by-three updates in FP64 and accepts CPU\\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\\nbenchmark in the standard finite-domain stencil family, not a claim of an\\nupstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_123\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_123\"\n      },\n      \"created_at\": \"2026-10-03T22:13:01Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute repeated finite-domain binomial diffusion, a separable image/stencil\\noperation. The input is x[H,W], and the update below is applied steps times.\\n\\nInputs and complete public domain:\\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\\n- steps is a Python int in {4,8}.\\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\\n  offsets are legal. The input has requires_grad=False, is_inference=False,\\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\\n  without concurrent external writes to the input. This forward operation\\n  does not provide autograd.\\n\\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\\n\\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\\n  where a[-1]=1, a[0]=2, a[1]=1.\\n\\nThe zero exterior is imposed at EVERY individual time step. Only values within\\nthe finite rectangle are retained as the state for the next step.\\nThe target is U_steps in real arithmetic on the stored input values; no\\nintermediate FP16 rounding is part of the target definition.\\n\\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\\nseparability, temporal fusion, alternative boundary evaluation and FP32\\narithmetic, provided the complete finite-domain target is preserved within\\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\\nnot a verdict per input or shape.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nimplements the individual three-by-three updates in FP64 and accepts CPU\\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\\nbenchmark in the standard finite-domain stencil family, not a claim of an\\nupstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_123\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_123\"\n      },\n      \"created_at\": \"2026-10-03T22:13:01Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_123\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 4388\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2067\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_123\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T22:13:01Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_123\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The 9-tap binomial coefficients are the fourth power of the 1D [1,2,1]/4 kernel, so temporal fusion with per-step zero padding is mathematically equivalent; FP32 accumulation should stay within the 2e-5 tolerance.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract requires U_steps per the per-step 3x3 update with zero exterior every step, FP32 output, and abs(actual-U_steps)<=2e-5 over the whole legal domain.\"\n          }\n        ],\n        \"scope_rationale\": \"Contract requires every element within 2e-5 of U_steps for all legal inputs; any elementwise violation on an admitted input is a defect.\",\n        \"statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\"\n      },\n      \"created_at\": \"2026-10-03T22:13:18Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-03T22:13:18Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The 9-tap binomial coefficients are the fourth power of the 1D [1,2,1]/4 kernel, so temporal fusion with per-step zero padding is mathematically equivalent; FP32 accumulation should stay within the 2e-5 tolerance.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract requires U_steps per the per-step 3x3 update with zero exterior every step, FP32 output, and abs(actual-U_steps)<=2e-5 over the whole legal domain.\"\n          }\n        ],\n        \"scope_rationale\": \"Contract requires every element within 2e-5 of U_steps for all legal inputs; any elementwise violation on an admitted input is a defect.\",\n        \"statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-03T22:13:18Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_123\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = []\\nshapes = [(1,1),(1,129),(129,1),(129,129),(31,33),(128,127),(2,3)]\\ndef make(h, w, kind, seed):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if kind == \\\"rand\\\":\\n        x = (2*torch.rand((h,w), generator=g)-1).half()\\n    elif kind == \\\"ones\\\":\\n        x = torch.ones((h,w)).half()\\n    elif kind == \\\"impulse\\\":\\n        x = torch.zeros((h,w)).half(); x[0,0]=1.0\\n    elif kind == \\\"corners\\\":\\n        x = torch.zeros((h,w)).half()\\n        x[0,0]=1.0; x[-1,-1]=-1.0; x[h//2,w//2]=1.0\\n    elif kind == \\\"neg\\\":\\n        x = -torch.ones((h,w)).half()\\n    return x.to(dev)\\n\\nworst = 0.0\\nfor (h,w) in shapes:\\n    for kind in [\\\"rand\\\",\\\"ones\\\",\\\"impulse\\\",\\\"corners\\\",\\\"neg\\\"]:\\n        for steps in (4,8):\\n            x = make(h,w,kind,hash((h,w,kind))%1000)\\n            out = kernel.run(x, steps)\\n            ref = kernel.reference(x, steps)\\n            err = (out.double()-ref).abs().max().item()\\n            worst = max(worst, err)\\n            results.append({\\\"h\\\":h,\\\"w\\\":w,\\\"kind\\\":kind,\\\"steps\\\":steps,\\\"max_abs_err\\\":err,\\n                            \\\"dtype\\\":str(out.dtype),\\\"shape\\\":list(out.shape),\\\"cuda\\\":out.is_cuda,\\n                            \\\"input_preserved\\\": bool(torch.equal(x, x.detach()))})\\n            if err > 2e-5:\\n                results[-1][\\\"fail\\\"] = True\\n\\n# contiguous view with nonzero storage offset is legal\\nbase = torch.randn(300, 300, generator=torch.Generator().manual_seed(1)).half().to(dev).clamp(-1,1)\\nview = base[10:139, 20:149].contiguous()  # actually contiguous slice with offset\\ntry:\\n    out = kernel.run(view, 4)\\n    ref = kernel.reference(view, 4)\\n    err = (out.double()-ref).abs().max().item()\\n    worst = max(worst, err)\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"err\\\":err})\\nexcept Exception as e:\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"error\\\":str(e)})\\n\\nfails = [r for r in results if r.get(\\\"fail\\\")]\\nprint(json.dumps({\\\"metric\\\":\\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\",\\n \\\"reason\\\":\\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\",\\n \\\"n_cases\\\":len(results),\\\"n_fail\\\":len(fails),\\\"worst_max_abs_err\\\":worst,\\\"fails\\\":fails[:5]}))\",\n        \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\"\n      },\n      \"created_at\": \"2026-10-03T22:13:42Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"c3c2f2278d9e65bbaf23675fdc34ef30b5741b213d4aa093a1d5915c1f5803bc\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"6039d4d8a52bfdd1523ebbadfb98e013f07d597a1fa08b8bb2e7ee10b2e9ac6e\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t6_json_result.json\",\n            \"sha256\": \"9601e4409588ef6b2feeb96a7d40afdab174286b56c0f00b87d3c3222cef9129\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\",\n        \"cwd\": \"/root/cases/case_123\",\n        \"duration_s\": 10.614342,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"c3c2f2278d9e65bbaf23675fdc34ef30b5741b213d4aa093a1d5915c1f5803bc\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"6039d4d8a52bfdd1523ebbadfb98e013f07d597a1fa08b8bb2e7ee10b2e9ac6e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"9601e4409588ef6b2feeb96a7d40afdab174286b56c0f00b87d3c3222cef9129\"\n              }\n            ],\n            \"duration_s\": 10.614342,\n            \"exit_code\": 0,\n            \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"fails\": [\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.05802503228187561,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.0045650796964764595,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.00557500496506691,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"impulse\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                }\n              ],\n              \"metric\": \"max abs error vs FP64 per-step reference, tolerance 2e-5\",\n              \"n_cases\": 71,\n              \"n_fail\": 70,\n              \"reason\": \"contract requires every element within 2e-5 of U_steps over whole legal domain\",\n              \"worst_max_abs_err\": 0.2109375\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\", \\\"reason\\\": \\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\", \\\"n_cases\\\": 71, \\\"n_fail\\\": 70, \\\"worst_max_abs_err\\\": 0.2109375, \\\"fails\\\": [{\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.05802503228187561, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.0045650796964764595, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.00557500496506691, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"impulse\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"fails\": [\n            {\n              \"cuda\": true,\n              \"dtype\": \"torch.float32\",\n              \"fail\": true,\n              \"h\": 1,\n              \"input_preserved\": true,\n              \"kind\": \"rand\",\n              \"max_abs_err\": 0.05802503228187561,\n              \"shape\": [\n                1,\n                1\n              ],\n              \"steps\": 4,\n              \"w\": 1\n            },\n            {\n              \"cuda\": true,\n              \"dtype\": \"torch.float32\",\n              \"fail\": true,\n              \"h\": 1,\n              \"input_preserved\": true,\n              \"kind\": \"rand\",\n              \"max_abs_err\": 0.0045650796964764595,\n              \"shape\": [\n                1,\n                1\n              ],\n              \"steps\": 8,\n              \"w\": 1\n            },\n            {\n              \"cuda\": true,\n              \"dtype\": \"torch.float32\",\n              \"fail\": true,\n              \"h\": 1,\n              \"input_preserved\": true,\n              \"kind\": \"ones\",\n              \"max_abs_err\": 0.07086181640625,\n              \"shape\": [\n                1,\n                1\n              ],\n              \"steps\": 4,\n              \"w\": 1\n            },\n            {\n              \"cuda\": true,\n              \"dtype\": \"torch.float32\",\n              \"fail\": true,\n              \"h\": 1,\n              \"input_preserved\": true,\n              \"kind\": \"ones\",\n              \"max_abs_err\": 0.00557500496506691,\n              \"shape\": [\n                1,\n                1\n              ],\n              \"steps\": 8,\n              \"w\": 1\n            },\n            {\n              \"cuda\": true,\n              \"dtype\": \"torch.float32\",\n              \"fail\": true,\n              \"h\": 1,\n              \"input_preserved\": true,\n              \"kind\": \"impulse\",\n              \"max_abs_err\": 0.07086181640625,\n              \"shape\": [\n                1,\n                1\n              ],\n              \"steps\": 4,\n              \"w\": 1\n            }\n          ],\n          \"metric\": \"max abs error vs FP64 per-step reference, tolerance 2e-5\",\n          \"n_cases\": 71,\n          \"n_fail\": 70,\n          \"reason\": \"contract requires every element within 2e-5 of U_steps over whole legal domain\",\n          \"worst_max_abs_err\": 0.2109375\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\", \\\"reason\\\": \\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\", \\\"n_cases\\\": 71, \\\"n_fail\\\": 70, \\\"worst_max_abs_err\\\": 0.2109375, \\\"fails\\\": [{\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.05802503228187561, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.0045650796964764595, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.00557500496506691, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"impulse\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}]}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"data\": {\n          \"n_cases\": 71,\n          \"n_fail\": 70,\n          \"tolerance\": 2e-05,\n          \"worst_max_abs_err\": 0.2109375\n        },\n        \"event_id\": \"t6\",\n        \"status\": \"confirmed\",\n        \"summary\": \"Kernel output exceeds the 2e-5 tolerance on 70 of 71 legal test cases (shapes from 1x1 to 129x129, steps 4 and 8, random/ones/impulse/corner inputs), worst max abs error 0.21 vs the FP64 per-step reference. The fused 9-tap sweep re-imposes the zero exterior only every 4 steps instead of at each individual step, so boundary elements lose mass that the contract requires be truncated per step.\",\n        \"supports\": \"confirmed\"\n      },\n      \"created_at\": \"2026-10-03T22:13:50Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"claim\": {\n          \"created_at\": \"2026-10-03T22:13:18Z\",\n          \"evidence\": [\n            {\n              \"artifacts\": [],\n              \"created_at\": \"2026-10-03T22:13:50Z\",\n              \"data\": {\n                \"artifacts\": [\n                  {\n                    \"description\": \"Python probe code executed by local runtime.\",\n                    \"kind\": \"probe_code\",\n                    \"path\": \"probes/t6_probe.py\",\n                    \"sha256\": \"c3c2f2278d9e65bbaf23675fdc34ef30b5741b213d4aa093a1d5915c1f5803bc\"\n                  },\n                  {\n                    \"description\": \"Captured stdout from the probe process.\",\n                    \"kind\": \"stdout\",\n                    \"path\": \"probes/t6_stdout.txt\",\n                    \"sha256\": \"6039d4d8a52bfdd1523ebbadfb98e013f07d597a1fa08b8bb2e7ee10b2e9ac6e\"\n                  },\n                  {\n                    \"description\": \"Captured stderr from the probe process.\",\n                    \"kind\": \"stderr\",\n                    \"path\": \"probes/t6_stderr.txt\",\n                    \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n                  },\n                  {\n                    \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                    \"kind\": \"json_result\",\n                    \"path\": \"probes/t6_json_result.json\",\n                    \"sha256\": \"9601e4409588ef6b2feeb96a7d40afdab174286b56c0f00b87d3c3222cef9129\"\n                  }\n                ],\n                \"duration_s\": 10.614342,\n                \"exit_code\": 0,\n                \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\",\n                \"json_parse_error\": null,\n                \"json_result\": {\n                  \"fails\": [\n                    {\n                      \"cuda\": true,\n                      \"dtype\": \"torch.float32\",\n                      \"fail\": true,\n                      \"h\": 1,\n                      \"input_preserved\": true,\n                      \"kind\": \"rand\",\n                      \"max_abs_err\": 0.05802503228187561,\n                      \"shape\": [\n                        1,\n                        1\n                      ],\n                      \"steps\": 4,\n                      \"w\": 1\n                    },\n                    {\n                      \"cuda\": true,\n                      \"dtype\": \"torch.float32\",\n                      \"fail\": true,\n                      \"h\": 1,\n                      \"input_preserved\": true,\n                      \"kind\": \"rand\",\n                      \"max_abs_err\": 0.0045650796964764595,\n                      \"shape\": [\n                        1,\n                        1\n                      ],\n                      \"steps\": 8,\n                      \"w\": 1\n                    },\n                    {\n                      \"cuda\": true,\n                      \"dtype\": \"torch.float32\",\n                      \"fail\": true,\n                      \"h\": 1,\n                      \"input_preserved\": true,\n                      \"kind\": \"ones\",\n                      \"max_abs_err\": 0.07086181640625,\n                      \"shape\": [\n                        1,\n                        1\n                      ],\n                      \"steps\": 4,\n                      \"w\": 1\n                    },\n                    {\n                      \"cuda\": true,\n                      \"dtype\": \"torch.float32\",\n                      \"fail\": true,\n                      \"h\": 1,\n                      \"input_preserved\": true,\n                      \"kind\": \"ones\",\n                      \"max_abs_err\": 0.00557500496506691,\n                      \"shape\": [\n                        1,\n                        1\n                      ],\n                      \"steps\": 8,\n                      \"w\": 1\n                    },\n                    {\n                      \"cuda\": true,\n                      \"dtype\": \"torch.float32\",\n                      \"fail\": true,\n                      \"h\": 1,\n                      \"input_preserved\": true,\n                      \"kind\": \"impulse\",\n                      \"max_abs_err\": 0.07086181640625,\n                      \"shape\": [\n                        1,\n                        1\n                      ],\n                      \"steps\": 4,\n                      \"w\": 1\n                    }\n                  ],\n                  \"metric\": \"max abs error vs FP64 per-step reference, tolerance 2e-5\",\n                  \"n_cases\": 71,\n                  \"n_fail\": 70,\n                  \"reason\": \"contract requires every element within 2e-5 of U_steps over whole legal domain\",\n                  \"worst_max_abs_err\": 0.2109375\n                },\n                \"n_cases\": 71,\n                \"n_fail\": 70,\n                \"stderr\": \"\",\n                \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\", \\\"reason\\\": \\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\", \\\"n_cases\\\": 71, \\\"n_fail\\\": 70, \\\"worst_max_abs_err\\\": 0.2109375, \\\"fails\\\": [{\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.05802503228187561, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.0045650796964764595, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.00557500496506691, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"impulse\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}]}\\n\",\n                \"timed_out\": false,\n                \"timeout_s\": 60,\n                \"tolerance\": 2e-05,\n                \"worst_max_abs_err\": 0.2109375\n              },\n              \"id\": \"c1.e1\",\n              \"kind\": \"runtime_probe\",\n              \"summary\": \"Kernel output exceeds the 2e-5 tolerance on 70 of 71 legal test cases (shapes from 1x1 to 129x129, steps 4 and 8, random/ones/impulse/corner inputs), worst max abs error 0.21 vs the FP64 per-step reference. The fused 9-tap sweep re-imposes the zero exterior only every 4 steps instead of at each individual step, so boundary elements lose mass that the contract requires be truncated per step.\",\n              \"supports\": \"confirmed\",\n              \"tool_event_id\": \"t6\"\n            }\n          ],\n          \"id\": \"c1\",\n          \"raised_by\": \"solo\",\n          \"rationale\": \"The 9-tap binomial coefficients are the fourth power of the 1D [1,2,1]/4 kernel, so temporal fusion with per-step zero padding is mathematically equivalent; FP32 accumulation should stay within the 2e-5 tolerance.\",\n          \"scope\": \"in_scope\",\n          \"scope_evidence\": [\n            {\n              \"source\": \"problem.txt\",\n              \"summary\": \"Contract requires U_steps per the per-step 3x3 update with zero exterior every step, FP32 output, and abs(actual-U_steps)<=2e-5 over the whole legal domain.\"\n            }\n          ],\n          \"scope_rationale\": \"Contract requires every element within 2e-5 of U_steps for all legal inputs; any elementwise violation on an admitted input is a defect.\",\n          \"statement\": \"The kernel's output deviates from the FP64 per-step reference by more than 2e-5 on some legal input (shape/steps within the declared domain).\",\n          \"status\": \"confirmed\",\n          \"updated_at\": \"2026-10-03T22:13:50Z\"\n        },\n        \"evidence\": {\n          \"artifacts\": [],\n          \"created_at\": \"2026-10-03T22:13:50Z\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"c3c2f2278d9e65bbaf23675fdc34ef30b5741b213d4aa093a1d5915c1f5803bc\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"6039d4d8a52bfdd1523ebbadfb98e013f07d597a1fa08b8bb2e7ee10b2e9ac6e\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"9601e4409588ef6b2feeb96a7d40afdab174286b56c0f00b87d3c3222cef9129\"\n              }\n            ],\n            \"duration_s\": 10.614342,\n            \"exit_code\": 0,\n            \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"fails\": [\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.05802503228187561,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"rand\",\n                  \"max_abs_err\": 0.0045650796964764595,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"ones\",\n                  \"max_abs_err\": 0.00557500496506691,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 8,\n                  \"w\": 1\n                },\n                {\n                  \"cuda\": true,\n                  \"dtype\": \"torch.float32\",\n                  \"fail\": true,\n                  \"h\": 1,\n                  \"input_preserved\": true,\n                  \"kind\": \"impulse\",\n                  \"max_abs_err\": 0.07086181640625,\n                  \"shape\": [\n                    1,\n                    1\n                  ],\n                  \"steps\": 4,\n                  \"w\": 1\n                }\n              ],\n              \"metric\": \"max abs error vs FP64 per-step reference, tolerance 2e-5\",\n              \"n_cases\": 71,\n              \"n_fail\": 70,\n              \"reason\": \"contract requires every element within 2e-5 of U_steps over whole legal domain\",\n              \"worst_max_abs_err\": 0.2109375\n            },\n            \"n_cases\": 71,\n            \"n_fail\": 70,\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\", \\\"reason\\\": \\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\", \\\"n_cases\\\": 71, \\\"n_fail\\\": 70, \\\"worst_max_abs_err\\\": 0.2109375, \\\"fails\\\": [{\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.05802503228187561, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"rand\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.0045650796964764595, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"ones\\\", \\\"steps\\\": 8, \\\"max_abs_err\\\": 0.00557500496506691, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}, {\\\"h\\\": 1, \\\"w\\\": 1, \\\"kind\\\": \\\"impulse\\\", \\\"steps\\\": 4, \\\"max_abs_err\\\": 0.07086181640625, \\\"dtype\\\": \\\"torch.float32\\\", \\\"shape\\\": [1, 1], \\\"cuda\\\": true, \\\"input_preserved\\\": true, \\\"fail\\\": true}]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60,\n            \"tolerance\": 2e-05,\n            \"worst_max_abs_err\": 0.2109375\n          },\n          \"id\": \"c1.e1\",\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Kernel output exceeds the 2e-5 tolerance on 70 of 71 legal test cases (shapes from 1x1 to 129x129, steps 4 and 8, random/ones/impulse/corner inputs), worst max abs error 0.21 vs the FP64 per-step reference. The fused 9-tap sweep re-imposes the zero exterior only every 4 steps instead of at each individual step, so boundary elements lose mass that the contract requires be truncated per step.\",\n          \"supports\": \"confirmed\",\n          \"tool_event_id\": \"t6\"\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"finalize_probe_evidence\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

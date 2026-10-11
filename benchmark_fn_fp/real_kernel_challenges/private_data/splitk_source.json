@@ -1,0 +1,525 @@
+{
+  "case_ids": [
+    "case_116",
+    "case_117"
+  ],
+  "expected_labels": {
+    "case_116": "reject",
+    "case_117": "trust"
+  },
+  "status": "independently_T4_qualified_before_model_evaluation",
+  "classification": "Purpose-built standalone adaptation of the real Triton split-K scratch / final-reduction mechanism. The dtype mutation is synthetic, not a claimed historical upstream bug.",
+  "label_scope": "one fixed label per implementation over the entire fixed public contract; never per-input or per-seed",
+  "source": {
+    "repository": "https://github.com/triton-lang/triton",
+    "commit": "7d85777c747a342b7f67b8b3ed959f623a940c87",
+    "commit_date": "2026-10-01T16:50:17Z",
+    "primary_url": "https://github.com/triton-lang/triton/blob/7d85777c747a342b7f67b8b3ed959f623a940c87/python/triton_kernels/triton_kernels/matmul.py",
+    "license": "MIT",
+    "files": [
+      {
+        "path": "python/triton_kernels/triton_kernels/matmul.py",
+        "sha256": "71a016fad4dde78df8f5747ab73783f632a09f58a53b7738f50dafc0732de316",
+        "bytes": 51991
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "92640fb97222fd0a698ff28ce0c3782c172623f8d6c609b557636a80f28fb946",
+        "bytes": 1132
+      }
+    ],
+    "mechanism_evidence": [
+      "matmul.py lines 338-340 default intermediate_out_dtype to the accumulator dtype.",
+      "matmul.py lines 187-188 allocate split-K scratch using intermediate_out_dtype.",
+      "matmul.py lines 496-499 defer the fused activation / epilogue to final reduction when split_k>1."
+    ]
+  },
+  "adaptations": [
+    "Independent small contiguous FP16 GEMM implementation for NVIDIA T4; retain FP32 tensor-core accumulation, separate scratch per partition, and final FP32 reduction plus bias.",
+    "Fix tile sizes (16,16,32) and partition count to remove autotuning; reduce shape/value bounds for a low-cost pilot.",
+    "Remove ragged layouts, quantized formats, grouped routing, custom activations and distributed paths. This is mechanism reuse, not a verbatim production-kernel benchmark.",
+    "Add identical executable public input validator, FP64 full-matmul reference, contract, example generator and license to both implementations."
+  ],
+  "synthetic_mutation": {
+    "case_116": "work_dtype = a.dtype if split_k > 1 else torch.float32",
+    "case_117": "work_dtype = torch.float32",
+    "location": "run(), allocation of the split-K partial-result buffer",
+    "effect": "Finite partial sums are rounded to FP16 before FP32 final reduction; cancellation can expose lost low bits. No overflow is involved."
+  },
+  "contract_fixed_before_witness_search": {
+    "shapes": "1<=M,N<=64;1<=K<=512",
+    "inputs": "finite FP16 A/B with magnitude<=.5; FP32 bias with magnitude<=1; ordinary materialized tensors",
+    "partition": "split_k in {1,2,4,8}, including empty partitions and nondivisible K",
+    "tolerance": {
+      "atol": 0.01,
+      "rtol": 0.001
+    },
+    "objective": "all legal inputs; generator is only an example"
+  },
+  "numerical_argument": {
+    "exact_partial_bound": "K*.5*.5<=128; every exact partial and final dot sum is finite well below FP16 overflow.",
+    "fp32_bound": "FP16 products are exactly representable in FP32, including nonzero FP16 subnormal products. Conservatively allow a full FP32 ulp per accumulation (u=2^-23, allowing truncation): gamma_512*128 <0.007813; plus gamma_8*128 <0.000123 and one FP32 bias rounding <0.000016 gives <0.007952, below atol0.01. This is deliberately looser than the usual round-to-nearest bound.",
+    "subnormal": "FP16 subnormal products are >=2^-48 when nonzero, normal in FP32. Even complete loss of every subnormal FP16 operand contribution is bounded by512*2^-14*.5=0.015625, so subnormal acceptance additionally relies on standard FP16 tensor-core input semantics; independent T4 tests cover smallest and largest FP16 subnormals. FP32 bias subnormal loss is negligible relative to0.01.",
+    "assumptions": "Standard T4 FP16 tensor-core multiplication with FP32 accumulation as exposed by Triton 3.4; no unsafe compiler precision options. GPU verification required, not asserted from CPU emulation.",
+    "limitation": "Reviewed floating-point argument plus finite independent qualification, not machine-checked universal proof."
+  },
+  "cpu_audit": {
+    "passed": true,
+    "plans": [
+      {
+        "m": 1,
+        "n": 1,
+        "k": 1,
+        "split": 1,
+        "style": "random",
+        "seed": 100,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 15,
+        "k": 15,
+        "split": 2,
+        "style": "random",
+        "seed": 101,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.023006726862842837,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 31,
+        "n": 33,
+        "k": 31,
+        "split": 4,
+        "style": "random",
+        "seed": 102,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.04244935118353836,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 64,
+        "n": 64,
+        "k": 32,
+        "split": 8,
+        "style": "random",
+        "seed": 103,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.04797331725494877,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 1,
+        "n": 1,
+        "k": 33,
+        "split": 1,
+        "style": "random",
+        "seed": 104,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 1.5870760902063943e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 15,
+        "k": 63,
+        "split": 2,
+        "style": "random",
+        "seed": 105,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.04288936867377986,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 31,
+        "n": 33,
+        "k": 127,
+        "split": 4,
+        "style": "random",
+        "seed": 106,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.07180593373043985,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 64,
+        "n": 64,
+        "k": 128,
+        "split": 8,
+        "style": "random",
+        "seed": 107,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.07703139369207902,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 1,
+        "n": 1,
+        "k": 129,
+        "split": 1,
+        "style": "random",
+        "seed": 108,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 1.4396069809238394e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 15,
+        "k": 255,
+        "split": 2,
+        "style": "random",
+        "seed": 109,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.07707930451470058,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 31,
+        "n": 33,
+        "k": 256,
+        "split": 4,
+        "style": "random",
+        "seed": 110,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.1097286964035604,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 64,
+        "n": 64,
+        "k": 257,
+        "split": 8,
+        "style": "random",
+        "seed": 111,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.10809585322020888,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 1,
+        "n": 1,
+        "k": 511,
+        "split": 1,
+        "style": "random",
+        "seed": 112,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 9.52692889854499e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 15,
+        "k": 512,
+        "split": 2,
+        "style": "random",
+        "seed": 113,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.14728831388823477,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 17,
+        "k": 512,
+        "split": 1,
+        "style": "cancellation",
+        "seed": 200,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 33,
+        "k": 512,
+        "split": 1,
+        "style": "maximum",
+        "seed": 201,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 5,
+        "n": 19,
+        "k": 257,
+        "split": 1,
+        "style": "subnormal",
+        "seed": 202,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 1.421085417574611e-12,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 5,
+        "k": 512,
+        "split": 1,
+        "style": "subnormal_mixed",
+        "seed": 206,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 17,
+        "k": 512,
+        "split": 2,
+        "style": "cancellation",
+        "seed": 200,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 2.34192037470726,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 33,
+        "k": 512,
+        "split": 2,
+        "style": "maximum",
+        "seed": 201,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 5,
+        "n": 19,
+        "k": 257,
+        "split": 2,
+        "style": "subnormal",
+        "seed": 202,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 2.942379026450747e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 5,
+        "k": 512,
+        "split": 2,
+        "style": "subnormal_mixed",
+        "seed": 206,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 17,
+        "k": 512,
+        "split": 4,
+        "style": "cancellation",
+        "seed": 200,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.7806401249024201,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 33,
+        "k": 512,
+        "split": 4,
+        "style": "maximum",
+        "seed": 201,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 5,
+        "n": 19,
+        "k": 257,
+        "split": 4,
+        "style": "subnormal",
+        "seed": 202,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 2.942379026450747e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 5,
+        "k": 512,
+        "split": 4,
+        "style": "subnormal_mixed",
+        "seed": 206,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 17,
+        "k": 512,
+        "split": 8,
+        "style": "cancellation",
+        "seed": 200,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 33,
+        "k": 512,
+        "split": 8,
+        "style": "maximum",
+        "seed": 201,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 5,
+        "n": 19,
+        "k": 257,
+        "split": 8,
+        "style": "subnormal",
+        "seed": 202,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 9.722880264855786e-06,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 3,
+        "n": 5,
+        "k": 512,
+        "split": 8,
+        "style": "subnormal_mixed",
+        "seed": 206,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 17,
+        "n": 33,
+        "k": 511,
+        "split": 8,
+        "style": "alternating",
+        "seed": 203,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 2,
+        "n": 1,
+        "k": 1,
+        "split": 8,
+        "style": "zero",
+        "seed": 204,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.0,
+        "scratch_cast_model_only": true
+      },
+      {
+        "m": 31,
+        "n": 17,
+        "k": 127,
+        "split": 4,
+        "style": "storage_offset",
+        "seed": 205,
+        "reference_agreement_max_abs": 0.0,
+        "scratch_cast_model_error_ratio": 0.061781857800749844,
+        "scratch_cast_model_only": true
+      }
+    ],
+    "invalid_inputs": [
+      {
+        "kind": "bound",
+        "rejected": true,
+        "reason": "input magnitude outside domain"
+      },
+      {
+        "kind": "nan",
+        "rejected": true,
+        "reason": "finite values required"
+      },
+      {
+        "kind": "dtype",
+        "rejected": true,
+        "reason": "A/B must be FP16 and bias FP32"
+      },
+      {
+        "kind": "split",
+        "rejected": true,
+        "reason": "split_k must be 1, 2, 4 or 8"
+      },
+      {
+        "kind": "bool_split",
+        "rejected": true,
+        "reason": "split_k must be 1, 2, 4 or 8"
+      },
+      {
+        "kind": "grad",
+        "rejected": true,
+        "reason": "ordinary non-gradient tensors required"
+      },
+      {
+        "kind": "negative_view",
+        "rejected": true,
+        "reason": "materialized logical values required"
+      },
+      {
+        "kind": "inference_tensor",
+        "rejected": true,
+        "reason": "ordinary non-gradient tensors required"
+      },
+      {
+        "kind": "overlap",
+        "rejected": true,
+        "reason": "input storage ranges must be disjoint"
+      },
+      {
+        "kind": "noncontiguous",
+        "rejected": true,
+        "reason": "contiguous strided tensor required"
+      },
+      {
+        "kind": "oversized_k",
+        "rejected": true,
+        "reason": "shape outside supported domain"
+      }
+    ],
+    "fixed_counterexample": {
+      "plan": {
+        "m": 1,
+        "n": 1,
+        "k": 512,
+        "split": 2,
+        "style": "cancellation",
+        "seed": 200
+      },
+      "target": 0.0078125,
+      "fp32_model": 0.0078125,
+      "fp16_scratch_model": 0.03125,
+      "stored_fp16_partials": [
+        64.0,
+        -63.96875
+      ],
+      "allowed_error": 0.0100078125
+    },
+    "method": "Serial FP64 outer products vs public FP64 torch.matmul vs NumPy FP64 einsum. Scratch model is explanatory only; GPU execution required."
+  },
+  "public_files": {
+    "case_116": {
+      "kernel.py": "a7a8a29ff59ea749b05809a4bf7497e5a467fee13f3177a2f53a87b88427e752",
+      "problem.txt": "7c7bb2039fa7aec3d4152809318892c124991507c507e29c960f8052785e265d",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "LICENSE": "92640fb97222fd0a698ff28ce0c3782c172623f8d6c609b557636a80f28fb946"
+    },
+    "case_117": {
+      "kernel.py": "1401857db13e99e8a00737300a1e9bd91c0702d833782cbf8d6ae52e6d0b1e30",
+      "problem.txt": "7c7bb2039fa7aec3d4152809318892c124991507c507e29c960f8052785e265d",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "LICENSE": "92640fb97222fd0a698ff28ce0c3782c172623f8d6c609b557636a80f28fb946"
+    }
+  },
+  "qualification_evidence": "qualification/r8.json"
+}

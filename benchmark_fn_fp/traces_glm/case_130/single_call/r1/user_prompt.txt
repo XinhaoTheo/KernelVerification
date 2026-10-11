@@ -1,0 +1,120 @@
+## Problem statement (contract + reference behavior)
+
+Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,
+returning FP32 output. The mathematical target is
+
+  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])
+            = x[i] / (1 + exp(-x[i])).
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- EVERY finite FP16 value is legal, including both signed zeros, positive
+  and negative subnormal values, and both extrema +/-65504. NaN and infinity
+  are outside this input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x.
+Every output element must satisfy
+
+  abs(actual[i] - SiLU(x[i])) <= 1e-6.
+
+The relative tolerance is zero, and signed zeros are numerically equivalent.
+The target is defined in real arithmetic on the exact stored input value.
+No particular expression, exponential approximation or intermediate FP16
+rounding is part of the mathematical target. Algebraic rewrites, base-two
+exponentials, polynomial or other approximations are permitted if they
+satisfy this fixed absolute tolerance throughout the entire legal domain.
+Correctness is one verdict for the implementation, not a verdict per input,
+input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses a stable FP64 sigmoid expression and returns FP64; it accepts CPU
+inputs. make_inputs() supplies examples only. SiLU is a standard neural
+network activation; this is an original Triton implementation with a
+logistic-tail decomposition. It is a synthetic benchmark implementation,
+not a claim of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Elementwise SiLU using a stable logistic-tail decomposition.
+
+Original Triton implementation of the standard sigmoid-weighted activation.
+This is a synthetic benchmark implementation, not a claimed historical bug.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _silu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    active = index < N
+    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)
+    magnitude = tl.abs(x)
+    exponential = tl.exp2(-(magnitude * 1.4426950408889634))
+    tail = tl.div_rn(magnitude * exponential, 1.0 + exponential)
+    value = tl.where(x >= 0.0, x - tail, -tail)
+    tl.store(OUT + index, value, mask=active)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public input domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 1 and 1 <= x.numel() <= 131072,
+            "x must have shape [N] with N in [1,131072]")
+    require(x.dtype == torch.float16, "FP16 input required")
+    require(bool(torch.isfinite(x).all().item()), "all input values must be finite")
+    return {"valid": True, "size": x.numel()}
+
+
+def run(x):
+    """Return a fresh FP32 tensor approximating SiLU of each stored input value."""
+    validate_inputs(x)
+    n = x.numel()
+    with torch.cuda.device(x.device):
+        output = torch.empty((n,), dtype=torch.float32, device=x.device)
+        _silu_kernel[(triton.cdiv(n, 256),)](
+            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)
+    return output
+
+
+def reference(x):
+    """Evaluate the mathematical SiLU definition with a stable FP64 sigmoid."""
+    validate_inputs(x, require_cuda=False)
+    value = x.to(torch.float64)
+    exponential = torch.exp(-torch.abs(value))
+    numerator = torch.where(value >= 0, value, value * exponential)
+    return numerator / (1.0 + exponential)
+
+
+def make_inputs(device="cuda", size=4093, seed=0):
+    """Convenience example generator, not a restriction on the input domain."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)
+    return (x.to(device),)
+
+```
+
+Is this implementation correct?

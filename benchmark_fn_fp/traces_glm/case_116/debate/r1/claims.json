@@ -1,0 +1,584 @@
+[
+  {
+    "created_at": "2026-10-03T18:10:29Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T18:12:16Z",
+        "data": {
+          "K": 512,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "bc709a9efc67b0f3131caaef7a0fec79e0e62da4eeae31a115fb05a4382c4c05"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "84ae4aca24a8ad2adf545d33fec7d15552fac9ca180b1f220c090f93245dacfe"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "d1cd9d5d24a613e85ed157da70a94c92ff7778536f760cb67b31bc785c970475"
+            }
+          ],
+          "duration_s": 6.650716,
+          "exit_code": 0,
+          "expected_signal": "output error exceeding 0.01+0.001*|target| on cancellation inputs with split_k=4, caused by FP16 partial rounding",
+          "json_parse_error": null,
+          "json_result": {
+            "K": 512,
+            "dtype_out": "torch.float32",
+            "max_abs_err": 0.0,
+            "max_ref_abs": 0.0,
+            "metric": "max abs err vs FP64 ref, cancellation inputs",
+            "num_violations": 0,
+            "numel": 16,
+            "out_sample": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "ref_sample": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "shape": [
+              4,
+              4
+            ],
+            "split_k": 4,
+            "tol_at_max": 0.01
+          },
+          "max_abs_err": 0.0,
+          "max_ref_abs": 0.0,
+          "num_violations": 0,
+          "split_k": 4,
+          "stderr": "",
+          "stdout": "{\"metric\": \"max abs err vs FP64 ref, cancellation inputs\", \"max_abs_err\": 0.0, \"tol_at_max\": 0.01, \"max_ref_abs\": 0.0, \"num_violations\": 0, \"numel\": 16, \"dtype_out\": \"torch.float32\", \"shape\": [4, 4], \"split_k\": 4, \"K\": 512, \"ref_sample\": [0.0, 0.0, 0.0, 0.0], \"out_sample\": [0.0, 0.0, 0.0, 0.0]}\n",
+          "timed_out": false,
+          "timeout_s": 180
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Cancellation probe produced exact zeros everywhere (ref and out both exactly 0): the constructed partials were exactly \u00b132, which are exactly representable in FP16, so the suspected FP16 rounding path was never exercised. The probe design failed to test the hypothesis, so this is inconclusive for c1. A redesigned probe with non-representable partial magnitudes is needed.",
+        "supports": "inconclusive",
+        "tool_event_id": "t9"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T18:13:51Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t20_probe.py",
+              "sha256": "2ddea0d14b6d354e2707686d04571da7012080174e2341741c555f8e563a5e55"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t20_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t20_stderr.txt",
+              "sha256": "b9f666a414790408010f6950cdcebea5decb54185dc214e02e7a4b70702ef397"
+            }
+          ],
+          "duration_s": 2.378438,
+          "exit_code": 1,
+          "expected_signal": "max abs err > 0.01 with near-zero target on split_k=4, from FP16 partial rounding",
+          "failure": "probe-side shape error before kernel invocation",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_116/debate/probes/t20_probe.py\", line 16, in <module>\n    col_pos = torch.matmul(a.double(), pos_d).flatten()  # [N], magnitude ~22-28\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: mat1 and mat2 shapes cannot be multiplied (1x512 and 384x4)\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c1.e2",
+        "kind": "runtime_probe",
+        "summary": "t20 crashed before invoking the kernel: torch.matmul(a[1x512], pos_d[384x4]) shape mismatch (probe-side slicing bug \u2014 should have used a[:, :3*seg]). No kernel evidence; c1 remains open.",
+        "supports": "inconclusive",
+        "tool_event_id": "t20"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The problem explicitly says the tolerance \"accommodate[s] ordinary FP32 accumulation\" and that no intermediate rounding is part of the target, but the kernel deliberately switches WORK to a.dtype (FP16) whenever split_k > 1 \u2014 exactly the case where multiple partials must be reduced, so split_k=4 results depend on rounding the kernel was told not to introduce. FP16 rounding at magnitude 128 is 0.0625/2, far above the 0.01 base tolerance, and cancellation can make |target| small so the relative term gives no headroom.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "No intermediate rounding behavior is part of the target; tolerance abs(actual-target) <= 0.01 + 0.001*abs(target); partial sums can reach magnitude ~128 while the final target can be near zero (cancellation); correctness covers every legal shape, value and split count."
+      }
+    ],
+    "scope_rationale": "The contract states \"No intermediate rounding behavior is part of the target\", requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every output, covers all split_k in {1,2,4,8} and all legal values (magnitudes <= 0.5), and explicitly notes partial sums reach magnitude up to 128. An input where partials are large (near +/-128) but the true target is near zero is inside the contract and makes the FP16 rounding of partials (step ~2^-6 at magnitude 128) exceed the 0.01 absolute tolerance.",
+    "statement": "For split_k in {2,4,8}, run() stores per-split partial sums in an FP16 scratch buffer (kernel.py line 80), so each partial sum is rounded to FP16 before _finish sums them; with adversarial inputs (|A|,|B| <= 0.5) where partial sums are large (up to ~128) but the exact target is near zero by cancellation, the FP16 rounding error (up to ~2^-6 at magnitude 128) produces output error exceeding the tolerance 0.01 + 0.001*|target|.",
+    "status": "inconclusive",
+    "updated_at": "2026-10-03T18:13:51Z"
+  },
+  {
+    "created_at": "2026-10-03T18:10:29Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T18:12:16Z",
+        "data": {
+          "any_violation": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "fa06c09a51afb1826603018bb1043719e758630275227e4f4edf4cbcf43d8193"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "55ec154596f8bde24f5269100b595ff7b177a5b6895ec7dc3a72ec3487e45bf3"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "eba7e8fed60a25a20e42a9d295a1565c0a1dfb6835cbdf73a574b942a0bb4a07"
+            }
+          ],
+          "cases_tested": 11,
+          "duration_s": 7.414028,
+          "exit_code": 0,
+          "expected_signal": "some non-divisible (K, split_k) case shows error exceeding tolerance from dropped or double-counted K elements",
+          "json_parse_error": null,
+          "json_result": {
+            "any_violation": false,
+            "cases": [
+              {
+                "exceeds_5x_tol": false,
+                "k": 257,
+                "m": 17,
+                "max_abs_err": 0.001019624643959105,
+                "n": 33,
+                "split_k": 4,
+                "tol_min": 0.01000361322792014,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 512,
+                "m": 64,
+                "max_abs_err": 0.0016612529288977385,
+                "n": 64,
+                "split_k": 8,
+                "tol_min": 0.010001131529352279,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 1,
+                "m": 1,
+                "max_abs_err": 1.7464160919189453e-05,
+                "n": 1,
+                "split_k": 8,
+                "tol_min": 0.010647967994213104,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 33,
+                "m": 17,
+                "max_abs_err": 0.0004885215312242508,
+                "n": 33,
+                "split_k": 8,
+                "tol_min": 0.010000542134279386,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 33,
+                "m": 17,
+                "max_abs_err": 0.00050349161028862,
+                "n": 33,
+                "split_k": 4,
+                "tol_min": 0.010003763906657696,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 33,
+                "m": 2,
+                "max_abs_err": 0.00013685820158571005,
+                "n": 2,
+                "split_k": 2,
+                "tol_min": 0.010021771744359285,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 511,
+                "m": 7,
+                "max_abs_err": 0.000977837247774005,
+                "n": 5,
+                "split_k": 8,
+                "tol_min": 0.010026710205012933,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 512,
+                "m": 64,
+                "max_abs_err": 0.0018065744516206905,
+                "n": 64,
+                "split_k": 4,
+                "tol_min": 0.010000552220779354,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 257,
+                "m": 17,
+                "max_abs_err": 0.0010077165206894279,
+                "n": 33,
+                "split_k": 8,
+                "tol_min": 0.010001766644185409,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 257,
+                "m": 17,
+                "max_abs_err": 0.0013465429656207561,
+                "n": 33,
+                "split_k": 2,
+                "tol_min": 0.010001361165195703,
+                "violations": 0
+              },
+              {
+                "exceeds_5x_tol": false,
+                "k": 257,
+                "m": 17,
+                "max_abs_err": 2.4507753551006317e-06,
+                "n": 33,
+                "split_k": 1,
+                "tol_min": 0.010000109920954856,
+                "violations": 0
+              }
+            ],
+            "metric": "per-shape max abs err vs FP64 ref, divisibility edges",
+            "reason": "c2 claims dropped/double-counted K slices at non-divisible K/split_k/32"
+          },
+          "max_abs_err_overall": 0.0018065744516206905,
+          "stderr": "",
+          "stdout": "{\"metric\": \"per-shape max abs err vs FP64 ref, divisibility edges\", \"reason\": \"c2 claims dropped/double-counted K slices at non-divisible K/split_k/32\", \"cases\": [{\"m\": 17, \"n\": 33, \"k\": 257, \"split_k\": 4, \"max_abs_err\": 0.001019624643959105, \"tol_min\": 0.01000361322792014, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 64, \"n\": 64, \"k\": 512, \"split_k\": 8, \"max_abs_err\": 0.0016612529288977385, \"tol_min\": 0.010001131529352279, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 1, \"n\": 1, \"k\": 1, \"split_k\": 8, \"max_abs_err\": 1.7464160919189453e-05, \"tol_min\": 0.010647967994213104, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 8, \"max_abs_err\": 0.0004885215312242508, \"tol_min\": 0.010000542134279386, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 4, \"max_abs_err\": 0.00050349161028862, \"tol_min\": 0.010003763906657696, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 2, \"n\": 2, \"k\": 33, \"split_k\": 2, \"max_abs_err\": 0.00013685820158571005, \"tol_min\": 0.010021771744359285, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 7, \"n\": 5, \"k\": 511, \"split_k\": 8, \"max_abs_err\": 0.000977837247774005, \"tol_min\": 0.010026710205012933, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 64, \"n\": 64, \"k\": 512, \"split_k\": 4, \"max_abs_err\": 0.0018065744516206905, \"tol_min\": 0.010000552220779354, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 17, \"n\": 33, \"k\": 257, \"split_k\": 8, \"max_abs_err\": 0.0010077165206894279, \"tol_min\": 0.010001766644185409, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 17, \"n\": 33, \"k\": 257, \"split_k\": 2, \"max_abs_err\": 0.0013465429656207561, \"tol_min\": 0.010001361165195703, \"violations\": 0, \"exceeds_5x_tol\": false}, {\"m\": 17, \"n\": 33, \"k\": 257, \"split_k\": 1, \"max_abs_err\": 2.4507753551006317e-06, \"tol_min\": 0.010000109920954856, \"violations\": 0, \"exceeds_5x_tol\": false}], \"any_violation\": false}\n",
+          "timed_out": false,
+          "timeout_s": 300,
+          "tol_min_overall": 0.010000109920954856
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Sweep of 11 edge-divisibility shapes (K=33/257/511/512/1 with split_k 1/2/4/8, M/N from 1 to 64) shows zero tolerance violations; max abs err 0.0018 vs minimum tolerance 0.01. No evidence of dropped or double-counted K slices at non-divisible K/split_k/32 boundaries.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "tiles = cdiv(cdiv(k,32), split_k) rounds up per split, so split_k*tiles*32 >= K holds in general, but the check is worth pinning: if split*TILES+tile segments overlap or leave a gap for non-divisible K, some K elements are double-counted or dropped \u2014 a correctness failure for exactly the divisibility cases the contract highlights.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "K need not be divisible by split_k or 32; split_k never changes the required result; correctness covers every legal shape, value and split count."
+      }
+    ],
+    "scope_rationale": "problem.txt states \"K need not be divisible by split_k or 32\" and that split_k \"never changes the required result\", so edge divisibility cases like K=33 with split_k=8 (tiles per split = 1, segments 4..7 out of range) and K=257 with split_k=8 are in-scope and any missed or double-counted K-slice would violate the required target.",
+    "statement": "For K not divisible by split_k*32 coverage (e.g., K=33 with split_k=8, where tiles = cdiv(cdiv(33,32),8) = 1), the per-split tile loop may read beyond K or leave some splits idle, but specifically for cases like K=513 boundary shapes the masked inner load (inner < K) may drop required K elements or double-count them, causing result error exceeding tolerance.",
+    "status": "rebutted",
+    "updated_at": "2026-10-03T18:12:16Z"
+  },
+  {
+    "created_at": "2026-10-03T18:10:29Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T18:12:16Z",
+        "data": {
+          "any_bias_error": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "4efbb8d57177daa7812be8e1b7ce2b8b998a9b1466d83f5214f50526a0ef0c6f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "4fc3f4b5fd33251902b7112ed9f9be84135841bc99a48f4659f48ec74de0e2d0"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "7e746ddee277062b1f5a511c81469772ec207c3ec71b13cb5bd8f9b295596000"
+            }
+          ],
+          "cases_tested": 20,
+          "duration_s": 8.028332,
+          "exit_code": 0,
+          "expected_signal": "out[i,j] != bias[j] for some (m,N,split_k) with N=33 or m*n not multiple of 256, indicating wrong column bias application",
+          "json_parse_error": null,
+          "json_result": {
+            "any_bias_error": false,
+            "cases": [
+              {
+                "k": 33,
+                "m": 17,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 49,
+                "n": 33,
+                "split_k": 1,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 17,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 49,
+                "n": 33,
+                "split_k": 2,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 17,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 49,
+                "n": 33,
+                "split_k": 4,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 17,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 49,
+                "n": 33,
+                "split_k": 8,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 1,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 1,
+                "n": 1,
+                "split_k": 1,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 1,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 1,
+                "n": 1,
+                "split_k": 2,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 1,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 1,
+                "n": 1,
+                "split_k": 4,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 1,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 1,
+                "n": 1,
+                "split_k": 8,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 2,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 4,
+                "n": 2,
+                "split_k": 1,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 2,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 4,
+                "n": 2,
+                "split_k": 2,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 2,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 4,
+                "n": 2,
+                "split_k": 4,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 2,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 4,
+                "n": 2,
+                "split_k": 8,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 64,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 64,
+                "n": 33,
+                "split_k": 1,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 64,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 64,
+                "n": 33,
+                "split_k": 2,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 64,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 64,
+                "n": 33,
+                "split_k": 4,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 64,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 64,
+                "n": 33,
+                "split_k": 8,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 3,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 192,
+                "n": 64,
+                "split_k": 1,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 3,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 192,
+                "n": 64,
+                "split_k": 2,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 3,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 192,
+                "n": 64,
+                "split_k": 4,
+                "wrong_cols": 0
+              },
+              {
+                "k": 33,
+                "m": 3,
+                "max_bias_err": 0.0,
+                "mn_mod_256": 192,
+                "n": 64,
+                "split_k": 8,
+                "wrong_cols": 0
+              }
+            ],
+            "metric": "max |out - bias[j]| per element with zeroed matmul",
+            "reason": "c3 claims bias[index % N] misindexes columns for N=33 / m*n not multiple of 256"
+          },
+          "max_bias_err_overall": 0.0,
+          "n_values_tested": [
+            1,
+            2,
+            33,
+            64
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"max |out - bias[j]| per element with zeroed matmul\", \"reason\": \"c3 claims bias[index % N] misindexes columns for N=33 / m*n not multiple of 256\", \"cases\": [{\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 1, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 49}, {\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 2, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 49}, {\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 4, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 49}, {\"m\": 17, \"n\": 33, \"k\": 33, \"split_k\": 8, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 49}, {\"m\": 1, \"n\": 1, \"k\": 33, \"split_k\": 1, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 1}, {\"m\": 1, \"n\": 1, \"k\": 33, \"split_k\": 2, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 1}, {\"m\": 1, \"n\": 1, \"k\": 33, \"split_k\": 4, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 1}, {\"m\": 1, \"n\": 1, \"k\": 33, \"split_k\": 8, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 1}, {\"m\": 2, \"n\": 2, \"k\": 33, \"split_k\": 1, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 4}, {\"m\": 2, \"n\": 2, \"k\": 33, \"split_k\": 2, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 4}, {\"m\": 2, \"n\": 2, \"k\": 33, \"split_k\": 4, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 4}, {\"m\": 2, \"n\": 2, \"k\": 33, \"split_k\": 8, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 4}, {\"m\": 64, \"n\": 33, \"k\": 33, \"split_k\": 1, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 64}, {\"m\": 64, \"n\": 33, \"k\": 33, \"split_k\": 2, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 64}, {\"m\": 64, \"n\": 33, \"k\": 33, \"split_k\": 4, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 64}, {\"m\": 64, \"n\": 33, \"k\": 33, \"split_k\": 8, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 64}, {\"m\": 3, \"n\": 64, \"k\": 33, \"split_k\": 1, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 192}, {\"m\": 3, \"n\": 64, \"k\": 33, \"split_k\": 2, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 192}, {\"m\": 3, \"n\": 64, \"k\": 33, \"split_k\": 4, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 192}, {\"m\": 3, \"n\": 64, \"k\": 33, \"split_k\": 8, \"max_bias_err\": 0.0, \"wrong_cols\": 0, \"mn_mod_256\": 192}], \"any_bias_error\": false}\n",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Bias-column identification test with zeroed matmul: out[i,j] equals bias[j] exactly (max error 0.0) for N=1,2,33,64 across split_k 1/2/4/8, including N=33 with m*n=561 (49 mod 256) and other non-256-aligned sizes. The flat index % N bias indexing is correct for all tested layouts.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "_finish uses flat index % N for the bias column; if index ranges beyond M*N inside the last block, the mask guards stores, but any misalignment between row-major flat indexing and % N for N like 33 would put wrong bias values \u2014 worth a direct probe comparing each column's bias offset.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Correctness covers every legal shape, value and split count; tolerance must hold for all outputs; split_k never changes the required result."
+      }
+    ],
+    "scope_rationale": "problem.txt: \"correctness covers every legal shape, value and split count, not the generator's seeds\" and split_k \"never changes the required result\", so run(..., split_k=1) must also satisfy the tolerance; the dtype switch on line 80 makes split_k=1 a distinct numeric path that the split_k>1 probes do not cover.",
+    "statement": "When split_k > 1 and a split index has no K-segments assigned (e.g., K=1 with split_k=8 gives tiles=1 but splits 4..7 see no inner index < K), _partials stores tl.zeros for those splits, which is harmless, but if instead K is large and the last split's tiles read inner >= K the masked loads with other=0 should zero-pad \u2014 the risk is that _finish then adds bias[index % N] to a wrong-indexed column or OUT indexing wraps, so bias may be applied to the wrong column for N not dividing the block layout (e.g., N=33, m*n=561 not multiple of 256).",
+    "status": "rebutted",
+    "updated_at": "2026-10-03T18:12:16Z"
+  }
+]

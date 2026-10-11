@@ -1,0 +1,1861 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "LICENSE",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_119",
+    "has_error": null,
+    "kernel_code": "\"\"\"Standalone routed expert projection adapted from vLLM's fused MoE kernel.\n\nCopyright contributors to the vLLM project. Apache-2.0; see LICENSE.\n2026 adaptation: one projection with explicit routing preparation and reduction,\nfixed T4 launch configuration, executable input contract and FP64 reference.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _expert_projection(X, W, ROUTE_WEIGHT, SORTED, EXPERT, ROUTED,\n                       K: tl.constexpr, N: tl.constexpr, TOPK: tl.constexpr,\n                       R: tl.constexpr, EM: tl.constexpr,\n                       BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,\n                       GROUP_M: tl.constexpr):\n    pid = tl.program_id(0)\n    num_pid_m = tl.cdiv(EM, BM)\n    num_pid_n = tl.cdiv(N, BN)\n    num_pid_in_group = GROUP_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_M\n    group_size_m = tl.minimum(num_pid_m - first_pid_m, GROUP_M)\n    pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m\n    pid_n = (pid % num_pid_in_group) // GROUP_M\n    route = tl.load(SORTED + pid_m * BM + tl.arange(0, BM))\n    valid = route < R\n    expert = tl.load(EXPERT + pid_m)\n    cols = pid_n * BN + tl.arange(0, BN)\n    inner = tl.arange(0, BK)\n    accumulator = tl.zeros((BM, BN), tl.float32)\n    for block in range(tl.cdiv(K, BK)):\n        kk = block * BK + inner\n        x = tl.load(X + (route[:, None] // TOPK) * K + kk[None, :],\n                    mask=valid[:, None] & (kk[None, :] < K), other=0.0)\n        w = tl.load(W + (expert * K + kk[:, None]) * N + cols[None, :],\n                    mask=(kk[:, None] < K) & (cols[None, :] < N), other=0.0)\n        accumulator = tl.dot(x, w, accumulator)\n    weight = tl.load(ROUTE_WEIGHT + route, mask=valid, other=0.0)\n    accumulator *= weight[:, None]\n    tl.store(ROUTED + route[:, None] * N + cols[None, :], accumulator,\n             mask=valid[:, None] & (cols[None, :] < N))\n\n\n@triton.jit\ndef _combine_routes(ROUTED, OUT, M: tl.constexpr, N: tl.constexpr,\n                    TOPK: tl.constexpr, B: tl.constexpr):\n    token = tl.program_id(0)\n    cols = tl.program_id(1) * B + tl.arange(0, B)\n    value = tl.zeros((B,), tl.float32)\n    for choice in range(TOPK):\n        value += tl.load(ROUTED + (token * TOPK + choice) * N + cols,\n                         mask=cols < N, other=0.0)\n    tl.store(OUT + token * N + cols, value, mask=cols < N)\n\n\ndef validate_inputs(x, expert_weights, topk_ids, topk_weights, require_cuda=True):\n    \"\"\"Check the entire public domain; also usable for CPU reference inputs.\"\"\"\n    values = (x, expert_weights, topk_ids, topk_weights)\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for tensor in values:\n        require(type(tensor) is torch.Tensor, \"standard torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(), \"contiguous strided tensor required\")\n        require(not tensor.requires_grad and not tensor.is_inference(), \"ordinary non-gradient tensors required\")\n        require(not tensor.is_neg() and not tensor.is_conj(), \"materialized tensors without logical view flags required\")\n    require(all(t.device == x.device for t in values), \"inputs must share one device\")\n    require(not require_cuda or x.is_cuda, \"CUDA tensors required by run\")\n    require(x.ndim == 2 and expert_weights.ndim == 3 and topk_ids.ndim == 2,\n            \"expected x[M,K], weights[E,K,N], ids[M,Q]\")\n    m, k = x.shape\n    experts, wk, n = expert_weights.shape\n    q = topk_ids.shape[1]\n    require(1 <= m <= 129 and 1 <= k <= 129 and 1 <= n <= 129,\n            \"M, K and N must be in [1,129]\")\n    require(1 <= experts <= 8 and 1 <= q <= min(4, experts), \"E/Q outside supported domain\")\n    require(wk == k and topk_ids.shape[0] == m and topk_weights.shape == (m, q),\n            \"input shapes disagree\")\n    require(x.dtype == expert_weights.dtype == torch.float16, \"x and expert weights must be FP16\")\n    require(topk_ids.dtype == torch.int32 and topk_weights.dtype == torch.float32,\n            \"ids must be int32 and route weights FP32\")\n    for tensor in (x, expert_weights, topk_weights):\n        require(bool(torch.isfinite(tensor).all().item()), \"numeric inputs must be finite\")\n    require(bool((x.abs() <= .5).all().item()) and bool((expert_weights.abs() <= .5).all().item()),\n            \"x and expert-weight magnitudes must be at most 0.5\")\n    require(bool(((topk_ids >= 0) & (topk_ids < experts)).all().item()), \"expert index out of range\")\n    require(bool(((topk_weights >= 0) & (topk_weights <= 1)).all().item()), \"routing weights outside [0,1]\")\n    require(bool((topk_weights.double().sum(dim=1) <= 1).all().item()), \"route weights sum exceeds one\")\n    if q > 1:\n        ordered = topk_ids.sort(dim=1).values\n        require(bool((ordered[:, 1:] != ordered[:, :-1]).all().item()), \"each token must choose distinct experts\")\n    intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]\n    require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)\n                for b0, b1 in intervals[i + 1:]), \"input storage ranges must be disjoint\")\n    return {\"valid\": True, \"tokens\": m, \"experts\": experts, \"topk\": q,\n            \"input_width\": k, \"output_width\": n}\n\n\ndef _prepare_routes(topk_ids, experts, block_m):\n    ids = topk_ids.reshape(-1)\n    order = torch.argsort(ids, stable=True)\n    counts = torch.bincount(ids.long(), minlength=experts)\n    padded = ((counts + block_m - 1) // block_m) * block_m\n    starts = padded.cumsum(0) - padded\n    ranks = torch.arange(ids.numel(), device=ids.device) - torch.repeat_interleave(counts.cumsum(0) - counts, counts)\n    slots = torch.repeat_interleave(starts, counts) + ranks\n    size = int(padded.sum().item())\n    sorted_ids = torch.full((size,), ids.numel(), device=ids.device, dtype=torch.int32)\n    sorted_ids[slots] = order.to(torch.int32)\n    expert_blocks = torch.repeat_interleave(torch.arange(experts, device=ids.device, dtype=torch.int32), padded // block_m)\n    return sorted_ids, expert_blocks\n\n\ndef run(x, expert_weights, topk_ids, topk_weights):\n    \"\"\"Return a fresh FP32 [M,N] weighted expert projection; preserve inputs.\"\"\"\n    validate_inputs(x, expert_weights, topk_ids, topk_weights)\n    m, k = x.shape\n    experts, _, n = expert_weights.shape\n    q = topk_ids.shape[1]\n    with torch.cuda.device(x.device):\n        sorted_ids, expert_blocks = _prepare_routes(topk_ids, experts, 16)\n        routed = torch.zeros((m * q, n), device=x.device, dtype=torch.float32)\n        output = torch.empty((m, n), device=x.device, dtype=torch.float32)\n        grid = (expert_blocks.numel() * triton.cdiv(n, 32),)\n        group_m = 4 if expert_blocks.numel() >= 4 else 1\n        _expert_projection[grid](x, expert_weights, topk_weights, sorted_ids,\n            expert_blocks, routed, K=k, N=n, TOPK=q, R=m*q, EM=sorted_ids.numel(),\n            BM=16, BN=32, BK=32, GROUP_M=group_m, num_warps=4)\n        _combine_routes[(m, triton.cdiv(n, 128))](routed, output, M=m, N=n,\n                                              TOPK=q, B=128, num_warps=4)\n    return output\n\n\ndef reference(x, expert_weights, topk_ids, topk_weights):\n    \"\"\"Independent token/choice FP64 target; no expert sorting or tile schedule.\"\"\"\n    validate_inputs(x, expert_weights, topk_ids, topk_weights, require_cuda=False)\n    m, k = x.shape\n    n = expert_weights.shape[2]\n    result = torch.zeros((m, n), device=x.device, dtype=torch.float64)\n    for choice in range(topk_ids.shape[1]):\n        matrices = expert_weights[topk_ids[:, choice].long()].double()\n        projected = torch.bmm(x.double().reshape(m, 1, k), matrices).squeeze(1)\n        result += topk_weights[:, choice].double()[:, None] * projected\n    return result\n\n\ndef make_inputs(device=\"cuda\", tokens=37, experts=4, topk=2, input_width=33, output_width=65, seed=0):\n    \"\"\"One convenience generator, not a restriction on legal inputs.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (torch.rand((tokens, input_width), generator=generator) - .5).half()\n    weights = (torch.rand((experts, input_width, output_width), generator=generator) - .5).half()\n    ids = torch.rand((tokens, experts), generator=generator).argsort(dim=1)[:, :topk].int().contiguous()\n    route = torch.rand((tokens, topk), generator=generator)\n    route = (route / (route.sum(dim=1, keepdim=True) + .125)).float()\n    return x.to(device), weights.to(device), ids.to(device), route.to(device)\n",
+    "passed": null,
+    "problem_text": "Compute a routed mixture-of-experts linear projection. Each token selects Q\nexperts; the result is the weighted sum of their projections. This is the\nprojection stage, not a complete nonlinear MoE layer or a router/top-k search.\n\nInputs:\n- x: FP16 [M,K], finite, magnitude at most 0.5.\n- expert_weights: FP16 [E,K,N], finite, magnitude at most 0.5.\n- topk_ids: int32 [M,Q], each entry in [0,E). The Q choices within one token\n  are distinct; choices may occur in any order. Tokens may share experts;\n  an expert may receive zero routes or any number of routes up to M.\n- topk_weights: FP32 [M,Q], finite, each in [0,1], and each row's sum\n  evaluated in FP64 at most one. Zero weights and all-zero rows are legal.\n- 1 <= M,K,N <= 129, 1 <= E <= 8, 1 <= Q <= min(4,E).\n\nAll inputs are ordinary torch.Tensor objects (not subclasses), dense, strided,\ncontiguous and on one CUDA device, with disjoint storage ranges. Inputs have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nexecute in ordinary non-inference mode with no concurrent external input writes.\nThe interface handles materialized numerical buffers and does not provide autograd.\n\nIn real arithmetic on the stored input values, define:\n  target[m,n] = sum over q=0..Q-1 of\n    topk_weights[m,q] * sum over k=0..K-1 of\n      x[m,k] * expert_weights[topk_ids[m,q],k,n].\nReturn a fresh finite FP32 CUDA tensor of shape [M,N]. Preserve every input.\nEvery output must satisfy\n  abs(actual - target) <= 0.01 + 0.0002 * abs(target).\nInput and weight bounds, row weight sums and K imply |target| < 32.251\n(including the tiny rounding margin of the FP64 row-sum check).\nThis tolerance accommodates the bounded FP16-input/FP32-accumulation path,\nincluding conservative allowance for small FP16 contributions. It does not\npermit missing routes, output tiles or expert projections.\n\nGrouping, expert order, padding and tile sizes are implementation choices and\ndo not change the target. Permuting each token's choices together with its\nweights, or consistently relabeling experts and their matrices, preserves the\nrequired result. Correctness covers every legal shape, value and routing layout;\nthere is one verdict for this fixed implementation, not a verdict per seed.\n\nvalidate_inputs() enforces this public domain and is called by run(). reference()\nis an independent FP64 implementation and accepts CPU or CUDA inputs.\nmake_inputs() is only a convenience example; it does not define the input domain.\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_119",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-03T18:15:00Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T18:16:01Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "c1f99271c6c8db4c7581e98afc975f83a5cb812722c7984c9674217c3e80eb5d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "36b1673b39d822cb8a0c128f8557b02a72402e32c642339d12e5b563b987cc97"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "30ce6704d147b12d11a9878b309b3b6119225e41e0e471271262437fa5200cdb"
+              }
+            ],
+            "duration_s": 9.032764,
+            "exit_code": 0,
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "elementwise |actual-target| vs 0.01+0.0002|target|",
+              "results": [
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 37,
+                  "max_abs_err": 2.0683828649836755e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 11,
+                  "blocks_mod4": 3,
+                  "e": 4,
+                  "k": 33,
+                  "m": 65,
+                  "max_abs_err": 0.7740450336290141,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 18
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 17,
+                  "m": 50,
+                  "max_abs_err": 1.231563944159575e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 97,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 14,
+                  "blocks_mod4": 2,
+                  "e": 4,
+                  "k": 33,
+                  "m": 100,
+                  "max_abs_err": 0.606355655120168,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 32
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 36,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 129,
+                  "max_abs_err": 1.630182655532053e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 4,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 15,
+                  "blocks_mod4": 3,
+                  "e": 3,
+                  "k": 33,
+                  "m": 70,
+                  "max_abs_err": 0.5347650338869808,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 27
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 44,
+                  "max_abs_err": 2.2223582674119058e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    32,
+                    33,
+                    34,
+                    35,
+                    36,
+                    37,
+                    38,
+                    39,
+                    40,
+                    41,
+                    42,
+                    43,
+                    44,
+                    45,
+                    46,
+                    47,
+                    48,
+                    49,
+                    50,
+                    51,
+                    52,
+                    53,
+                    54,
+                    55,
+                    56,
+                    57,
+                    58,
+                    59,
+                    60,
+                    61,
+                    62,
+                    63,
+                    64
+                  ],
+                  "blocks": 5,
+                  "blocks_mod4": 1,
+                  "e": 5,
+                  "k": 33,
+                  "m": 21,
+                  "max_abs_err": 0.7857462332804216,
+                  "n_bad_cols": 33,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 361
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 6,
+                  "blocks_mod4": 2,
+                  "e": 6,
+                  "k": 33,
+                  "m": 33,
+                  "max_abs_err": 0.9258448906474682,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 17
+                }
+              ],
+              "worst_max_abs_err": 0.9258448906474682
+            },
+            "sample_cases": [
+              {
+                "blocks": 11,
+                "blocks_mod4": 3,
+                "m": 65,
+                "max_abs_err": 0.7740450336290141,
+                "n_bad_cols": 1,
+                "violations": 18
+              },
+              {
+                "blocks": 14,
+                "blocks_mod4": 2,
+                "m": 100,
+                "max_abs_err": 0.606355655120168,
+                "n_bad_cols": 1,
+                "violations": 32
+              },
+              {
+                "blocks": 36,
+                "blocks_mod4": 0,
+                "m": 129,
+                "max_abs_err": 1.63e-07,
+                "violations": 0
+              },
+              {
+                "blocks": 5,
+                "blocks_mod4": 1,
+                "m": 21,
+                "max_abs_err": 0.7857462332804216,
+                "n_bad_cols": 33,
+                "violations": 361
+              }
+            ],
+            "stderr": "",
+            "stdout": "{'m': 37, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.0683828649836755e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 65, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 11, 'blocks_mod4': 3, 'violations': 18, 'max_abs_err': 0.7740450336290141, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 50, 'e': 4, 'q': 2, 'k': 17, 'out_n': 97, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.231563944159575e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 100, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 14, 'blocks_mod4': 2, 'violations': 32, 'max_abs_err': 0.606355655120168, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 129, 'e': 4, 'q': 4, 'k': 33, 'out_n': 65, 'blocks': 36, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.630182655532053e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 70, 'e': 3, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 15, 'blocks_mod4': 3, 'violations': 27, 'max_abs_err': 0.5347650338869808, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 44, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.2223582674119058e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 21, 'e': 5, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 5, 'blocks_mod4': 1, 'violations': 361, 'max_abs_err': 0.7857462332804216, 'bad_col_indices': [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], 'n_bad_cols': 33}\n{'m': 33, 'e': 6, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 6, 'blocks_mod4': 2, 'violations': 17, 'max_abs_err': 0.9258448906474682, 'bad_col_indices': [64], 'n_bad_cols': 1}\nWORST 0.9258448906474682\n{\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\", \"worst_max_abs_err\": 0.9258448906474682, \"results\": [{\"m\": 37, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.0683828649836755e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 65, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 11, \"blocks_mod4\": 3, \"violations\": 18, \"max_abs_err\": 0.7740450336290141, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 50, \"e\": 4, \"q\": 2, \"k\": 17, \"out_n\": 97, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.231563944159575e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 100, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 14, \"blocks_mod4\": 2, \"violations\": 32, \"max_abs_err\": 0.606355655120168, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 129, \"e\": 4, \"q\": 4, \"k\": 33, \"out_n\": 65, \"blocks\": 36, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.630182655532053e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 70, \"e\": 3, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 15, \"blocks_mod4\": 3, \"violations\": 27, \"max_abs_err\": 0.5347650338869808, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 44, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.2223582674119058e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 21, \"e\": 5, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 5, \"blocks_mod4\": 1, \"violations\": 361, \"max_abs_err\": 0.7857462332804216, \"bad_col_indices\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], \"n_bad_cols\": 33}, {\"m\": 33, \"e\": 6, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 6, \"blocks_mod4\": 2, \"violations\": 17, \"max_abs_err\": 0.9258448906474682, \"bad_col_indices\": [64], \"n_bad_cols\": 1}]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_max_abs_err": 0.9258448906474682
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "GPU probe (event t8): legal in-domain inputs (e.g. M=65,E=4,Q=2,K=33,N=65 -> 11 expert blocks, 11%4=3) produce tolerance violations exactly in the high column tile (index 64) skipped by the pid_n swizzle: max |actual-target| = 0.774 vs tolerance ~0.01, 18 violating elements. The M=21,E=5,Q=3 case (5 blocks) skips 33 whole columns (32-64), 361 violations, max err 0.786. All cases with blocks%4==0 (M=37,50,44,129) pass with max err ~2e-7. The failing columns coincide precisely with the skipped pid_n tiles, confirming missing output columns, which the contract explicitly forbids ('does not permit missing routes, output tiles or expert projections').",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "pid_n = (pid % (GROUP_M*num_pid_n)) // GROUP_M while pid_m uses % group_size_m; when the final group has group_size_m < GROUP_M (total block count not divisible by 4 with GROUP_M=4), x ranges over [0, group_size_m*num_pid_n) so pid_n never reaches num_pid_n-1, leaving some output columns of that expert block unwritten (zeros in `routed`), which then feeds the combine kernel as missing contributions.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "tolerance 'does not permit missing routes, output tiles or expert projections' \u2014 skipping high-pid_n tiles is exactly a missing output tile."
+        }
+      ],
+      "scope_rationale": "Contract requires every output satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and explicitly states the tolerance does not permit missing output tiles.",
+      "statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+      "status": "confirmed",
+      "updated_at": "2026-10-03T18:16:01Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_119",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_119"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_119"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_119"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_119",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 37.099178554,
+      "role": "solo",
+      "round": 2,
+      "text": "The grouped-swizzle indexing in `_expert_projection` uses `GROUP_M` (not the clamped `group_size_m`) when computing `pid_n`, which can skip high-`pid_n` tiles whenever the last M-group is smaller than `GROUP_M`. Let me record that claim and test it on the GPU.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "pid_n = (pid % (GROUP_M*num_pid_n)) // GROUP_M while pid_m uses % group_size_m; when the final group has group_size_m < GROUP_M (total block count not divisible by 4 with GROUP_M=4), x ranges over [0, group_size_m*num_pid_n) so pid_n never reaches num_pid_n-1, leaving some output columns of that expert block unwritten (zeros in `routed`), which then feeds the combine kernel as missing contributions.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "tolerance 'does not permit missing routes, output tiles or expert projections' \u2014 skipping high-pid_n tiles is exactly a missing output tile."
+              }
+            ],
+            "scope_rationale": "Contract requires every output satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and explicitly states the tolerance does not permit missing output tiles.",
+            "statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 37.099,
+        "input_tokens": 11695,
+        "output_tokens": 1940
+      }
+    },
+    {
+      "duration_s": 15.248317198999999,
+      "role": "solo",
+      "round": 3,
+      "text": "The open claim c1 is about the GROUP_M swizzle skipping column tiles. I'll run a probe that exercises configurations where the expert-block count is \u22654 but not a multiple of 4, comparing `run` against `reference`.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.randint(0, e, (m, q), generator=g)\n    # enforce distinct experts per token\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    # aim: many blocks, last group ragged, multiple column tiles (N>32)\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    # replicate block accounting\n    c = torch.bincount(ids.reshape(-1).long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    results.append(dict(m=m,e=e,q=q,k=k,n=n,blocks=nblocks,\n                        group_m=4 if nblocks>=4 else 1, violations=viol,\n                        max_abs_err=maxerr, cols_with_err=int((err.max(dim=0).values>0.02).sum().item()),\n                        col_indices_of_bad=(err.max(dim=0).values > 0.02).nonzero().flatten().tolist()[:20]))\n    print(results[-1])\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"results\": results}))\n",
+            "expected_signal": "violations>0 with errors concentrated in high column indices when blocks%4 != 0"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.248,
+        "input_tokens": 13085,
+        "output_tokens": 874
+      }
+    },
+    {
+      "duration_s": 11.254853017999999,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed on a dtype issue in my generator (ids created as int64, ids[t] assignment). I'll fix the generator to produce int32 ids directly and re-run.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.zeros((m, q), dtype=torch.int32)\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n    (21, 5, 3, 33, 65, 7),\n    (33, 6, 2, 33, 65, 8),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    c = torch.bincount(ids.reshape(-1).cpu().long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    bad_cols = (err > tol).any(dim=0).nonzero().flatten().tolist()\n    results.append(dict(m=m,e=e,q=q,k=k,n=n,blocks=nblocks,\n                        blocks_mod4=nblocks%4,\n                        violations=viol, max_abs_err=maxerr,\n                        bad_col_indices=bad_cols[:40], n_bad_cols=len(bad_cols),\n                        n=int(n)))\n    print(results[-1])\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"worst_max_abs_err\": worst, \"results\": results}))\n",
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.255,
+        "input_tokens": 16113,
+        "output_tokens": 783
+      }
+    },
+    {
+      "duration_s": 11.884446666000002,
+      "role": "solo",
+      "round": 5,
+      "text": "The last probe failed only on my syntax error (repeated keyword `n`). I'll fix and re-run.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.zeros((m, q), dtype=torch.int32)\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n    (21, 5, 3, 33, 65, 7),\n    (33, 6, 2, 33, 65, 8),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    c = torch.bincount(ids.reshape(-1).cpu().long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    bad_cols = (err > tol).any(dim=0).nonzero().flatten().tolist()\n    results.append(dict(m=m,e=e,q=q,k=k,out_n=n,blocks=nblocks,\n                        blocks_mod4=nblocks%4,\n                        violations=viol, max_abs_err=maxerr,\n                        bad_col_indices=bad_cols[:40], n_bad_cols=len(bad_cols)))\n    print(results[-1], flush=True)\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"worst_max_abs_err\": worst, \"results\": results}))\n",
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.884,
+        "input_tokens": 18878,
+        "output_tokens": 753
+      }
+    },
+    {
+      "duration_s": 10.450931298,
+      "role": "solo",
+      "round": 6,
+      "text": "The t8 probe confirms the claim decisively: whenever the expert-block count is not a multiple of GROUP_M, output columns are skipped (bad_col_indices exactly at high pid_n tiles), with max errors up to ~0.93, far above tolerance, while multiple-of-4 block counts show ~1e-7 error. I'll finalize the evidence, update the claim status, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "sample_cases": [
+                {
+                  "blocks": 11,
+                  "blocks_mod4": 3,
+                  "m": 65,
+                  "max_abs_err": 0.7740450336290141,
+                  "n_bad_cols": 1,
+                  "violations": 18
+                },
+                {
+                  "blocks": 14,
+                  "blocks_mod4": 2,
+                  "m": 100,
+                  "max_abs_err": 0.606355655120168,
+                  "n_bad_cols": 1,
+                  "violations": 32
+                },
+                {
+                  "blocks": 36,
+                  "blocks_mod4": 0,
+                  "m": 129,
+                  "max_abs_err": 1.63e-07,
+                  "violations": 0
+                },
+                {
+                  "blocks": 5,
+                  "blocks_mod4": 1,
+                  "m": 21,
+                  "max_abs_err": 0.7857462332804216,
+                  "n_bad_cols": 33,
+                  "violations": 361
+                }
+              ],
+              "worst_max_abs_err": 0.9258448906474682
+            },
+            "event_id": "t8",
+            "summary": "GPU probe (event t8): legal in-domain inputs (e.g. M=65,E=4,Q=2,K=33,N=65 -> 11 expert blocks, 11%4=3) produce tolerance violations exactly in the high column tile (index 64) skipped by the pid_n swizzle: max |actual-target| = 0.774 vs tolerance ~0.01, 18 violating elements. The M=21,E=5,Q=3 case (5 blocks) skips 33 whole columns (32-64), 361 violations, max err 0.786. All cases with blocks%4==0 (M=37,50,44,129) pass with max err ~2e-7. The failing columns coincide precisely with the skipped pid_n tiles, confirming missing output columns, which the contract explicitly forbids ('does not permit missing routes, output tiles or expert projections').",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.451,
+        "input_tokens": 27656,
+        "output_tokens": 555
+      }
+    },
+    {
+      "duration_s": 9.881809393000012,
+      "role": "solo",
+      "round": 7,
+      "text": "The decisive claim c1 is confirmed and scoped in-contract. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "GPU probe (event t8) compared run() against the FP64 reference on legal inputs inside the declared domain (all within M,K,N<=129, E<=8, Q<=min(4,E), FP16 inputs, distinct experts per token, weights in [0,1] with row sums <=1). Whenever the padded expert-block count is not a multiple of GROUP_M=4, the _expert_projection pid_n swizzle ((pid % (GROUP_M*num_pid_n)) // GROUP_M, instead of using the clamped group_size_m) skips high column tiles of the last expert blocks, leaving those routed contributions zero and producing missing output columns: e.g. M=65,E=4,Q=2,N=65 (11 blocks) has 18 violating elements in column 64 with max error 0.774 vs tolerance ~0.01; M=21,E=5,Q=3 (5 blocks) drops 33 whole columns (361 violations, max err 0.786). All multiple-of-4 block counts pass with max err ~2e-7, confirming the failure is exactly the skipped tiles, not numeric tolerance. The contract explicitly requires every output element to satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and states the tolerance 'does not permit missing routes, output tiles or expert projections'. This is a confirmed in-scope contract violation.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.882,
+        "input_tokens": 40995,
+        "output_tokens": 359
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_119"
+      },
+      "created_at": "2026-10-03T18:14:21Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "LICENSE",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_119",
+        "has_error": null,
+        "kernel_code": "\"\"\"Standalone routed expert projection adapted from vLLM's fused MoE kernel.\n\nCopyright contributors to the vLLM project. Apache-2.0; see LICENSE.\n2026 adaptation: one projection with explicit routing preparation and reduction,\nfixed T4 launch configuration, executable input contract and FP64 reference.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _expert_projection(X, W, ROUTE_WEIGHT, SORTED, EXPERT, ROUTED,\n                       K: tl.constexpr, N: tl.constexpr, TOPK: tl.constexpr,\n                       R: tl.constexpr, EM: tl.constexpr,\n                       BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,\n                       GROUP_M: tl.constexpr):\n    pid = tl.program_id(0)\n    num_pid_m = tl.cdiv(EM, BM)\n    num_pid_n = tl.cdiv(N, BN)\n    num_pid_in_group = GROUP_M * num_pid_n\n    group_id = pid // num_pid_in_group\n    first_pid_m = group_id * GROUP_M\n    group_size_m = tl.minimum(num_pid_m - first_pid_m, GROUP_M)\n    pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m\n    pid_n = (pid % num_pid_in_group) // GROUP_M\n    route = tl.load(SORTED + pid_m * BM + tl.arange(0, BM))\n    valid = route < R\n    expert = tl.load(EXPERT + pid_m)\n    cols = pid_n * BN + tl.arange(0, BN)\n    inner = tl.arange(0, BK)\n    accumulator = tl.zeros((BM, BN), tl.float32)\n    for block in range(tl.cdiv(K, BK)):\n        kk = block * BK + inner\n        x = tl.load(X + (route[:, None] // TOPK) * K + kk[None, :],\n                    mask=valid[:, None] & (kk[None, :] < K), other=0.0)\n        w = tl.load(W + (expert * K + kk[:, None]) * N + cols[None, :],\n                    mask=(kk[:, None] < K) & (cols[None, :] < N), other=0.0)\n        accumulator = tl.dot(x, w, accumulator)\n    weight = tl.load(ROUTE_WEIGHT + route, mask=valid, other=0.0)\n    accumulator *= weight[:, None]\n    tl.store(ROUTED + route[:, None] * N + cols[None, :], accumulator,\n             mask=valid[:, None] & (cols[None, :] < N))\n\n\n@triton.jit\ndef _combine_routes(ROUTED, OUT, M: tl.constexpr, N: tl.constexpr,\n                    TOPK: tl.constexpr, B: tl.constexpr):\n    token = tl.program_id(0)\n    cols = tl.program_id(1) * B + tl.arange(0, B)\n    value = tl.zeros((B,), tl.float32)\n    for choice in range(TOPK):\n        value += tl.load(ROUTED + (token * TOPK + choice) * N + cols,\n                         mask=cols < N, other=0.0)\n    tl.store(OUT + token * N + cols, value, mask=cols < N)\n\n\ndef validate_inputs(x, expert_weights, topk_ids, topk_weights, require_cuda=True):\n    \"\"\"Check the entire public domain; also usable for CPU reference inputs.\"\"\"\n    values = (x, expert_weights, topk_ids, topk_weights)\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for tensor in values:\n        require(type(tensor) is torch.Tensor, \"standard torch.Tensor required\")\n        require(tensor.layout == torch.strided and tensor.is_contiguous(), \"contiguous strided tensor required\")\n        require(not tensor.requires_grad and not tensor.is_inference(), \"ordinary non-gradient tensors required\")\n        require(not tensor.is_neg() and not tensor.is_conj(), \"materialized tensors without logical view flags required\")\n    require(all(t.device == x.device for t in values), \"inputs must share one device\")\n    require(not require_cuda or x.is_cuda, \"CUDA tensors required by run\")\n    require(x.ndim == 2 and expert_weights.ndim == 3 and topk_ids.ndim == 2,\n            \"expected x[M,K], weights[E,K,N], ids[M,Q]\")\n    m, k = x.shape\n    experts, wk, n = expert_weights.shape\n    q = topk_ids.shape[1]\n    require(1 <= m <= 129 and 1 <= k <= 129 and 1 <= n <= 129,\n            \"M, K and N must be in [1,129]\")\n    require(1 <= experts <= 8 and 1 <= q <= min(4, experts), \"E/Q outside supported domain\")\n    require(wk == k and topk_ids.shape[0] == m and topk_weights.shape == (m, q),\n            \"input shapes disagree\")\n    require(x.dtype == expert_weights.dtype == torch.float16, \"x and expert weights must be FP16\")\n    require(topk_ids.dtype == torch.int32 and topk_weights.dtype == torch.float32,\n            \"ids must be int32 and route weights FP32\")\n    for tensor in (x, expert_weights, topk_weights):\n        require(bool(torch.isfinite(tensor).all().item()), \"numeric inputs must be finite\")\n    require(bool((x.abs() <= .5).all().item()) and bool((expert_weights.abs() <= .5).all().item()),\n            \"x and expert-weight magnitudes must be at most 0.5\")\n    require(bool(((topk_ids >= 0) & (topk_ids < experts)).all().item()), \"expert index out of range\")\n    require(bool(((topk_weights >= 0) & (topk_weights <= 1)).all().item()), \"routing weights outside [0,1]\")\n    require(bool((topk_weights.double().sum(dim=1) <= 1).all().item()), \"route weights sum exceeds one\")\n    if q > 1:\n        ordered = topk_ids.sort(dim=1).values\n        require(bool((ordered[:, 1:] != ordered[:, :-1]).all().item()), \"each token must choose distinct experts\")\n    intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]\n    require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)\n                for b0, b1 in intervals[i + 1:]), \"input storage ranges must be disjoint\")\n    return {\"valid\": True, \"tokens\": m, \"experts\": experts, \"topk\": q,\n            \"input_width\": k, \"output_width\": n}\n\n\ndef _prepare_routes(topk_ids, experts, block_m):\n    ids = topk_ids.reshape(-1)\n    order = torch.argsort(ids, stable=True)\n    counts = torch.bincount(ids.long(), minlength=experts)\n    padded = ((counts + block_m - 1) // block_m) * block_m\n    starts = padded.cumsum(0) - padded\n    ranks = torch.arange(ids.numel(), device=ids.device) - torch.repeat_interleave(counts.cumsum(0) - counts, counts)\n    slots = torch.repeat_interleave(starts, counts) + ranks\n    size = int(padded.sum().item())\n    sorted_ids = torch.full((size,), ids.numel(), device=ids.device, dtype=torch.int32)\n    sorted_ids[slots] = order.to(torch.int32)\n    expert_blocks = torch.repeat_interleave(torch.arange(experts, device=ids.device, dtype=torch.int32), padded // block_m)\n    return sorted_ids, expert_blocks\n\n\ndef run(x, expert_weights, topk_ids, topk_weights):\n    \"\"\"Return a fresh FP32 [M,N] weighted expert projection; preserve inputs.\"\"\"\n    validate_inputs(x, expert_weights, topk_ids, topk_weights)\n    m, k = x.shape\n    experts, _, n = expert_weights.shape\n    q = topk_ids.shape[1]\n    with torch.cuda.device(x.device):\n        sorted_ids, expert_blocks = _prepare_routes(topk_ids, experts, 16)\n        routed = torch.zeros((m * q, n), device=x.device, dtype=torch.float32)\n        output = torch.empty((m, n), device=x.device, dtype=torch.float32)\n        grid = (expert_blocks.numel() * triton.cdiv(n, 32),)\n        group_m = 4 if expert_blocks.numel() >= 4 else 1\n        _expert_projection[grid](x, expert_weights, topk_weights, sorted_ids,\n            expert_blocks, routed, K=k, N=n, TOPK=q, R=m*q, EM=sorted_ids.numel(),\n            BM=16, BN=32, BK=32, GROUP_M=group_m, num_warps=4)\n        _combine_routes[(m, triton.cdiv(n, 128))](routed, output, M=m, N=n,\n                                              TOPK=q, B=128, num_warps=4)\n    return output\n\n\ndef reference(x, expert_weights, topk_ids, topk_weights):\n    \"\"\"Independent token/choice FP64 target; no expert sorting or tile schedule.\"\"\"\n    validate_inputs(x, expert_weights, topk_ids, topk_weights, require_cuda=False)\n    m, k = x.shape\n    n = expert_weights.shape[2]\n    result = torch.zeros((m, n), device=x.device, dtype=torch.float64)\n    for choice in range(topk_ids.shape[1]):\n        matrices = expert_weights[topk_ids[:, choice].long()].double()\n        projected = torch.bmm(x.double().reshape(m, 1, k), matrices).squeeze(1)\n        result += topk_weights[:, choice].double()[:, None] * projected\n    return result\n\n\ndef make_inputs(device=\"cuda\", tokens=37, experts=4, topk=2, input_width=33, output_width=65, seed=0):\n    \"\"\"One convenience generator, not a restriction on legal inputs.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (torch.rand((tokens, input_width), generator=generator) - .5).half()\n    weights = (torch.rand((experts, input_width, output_width), generator=generator) - .5).half()\n    ids = torch.rand((tokens, experts), generator=generator).argsort(dim=1)[:, :topk].int().contiguous()\n    route = torch.rand((tokens, topk), generator=generator)\n    route = (route / (route.sum(dim=1, keepdim=True) + .125)).float()\n    return x.to(device), weights.to(device), ids.to(device), route.to(device)\n",
+        "passed": null,
+        "problem_text": "Compute a routed mixture-of-experts linear projection. Each token selects Q\nexperts; the result is the weighted sum of their projections. This is the\nprojection stage, not a complete nonlinear MoE layer or a router/top-k search.\n\nInputs:\n- x: FP16 [M,K], finite, magnitude at most 0.5.\n- expert_weights: FP16 [E,K,N], finite, magnitude at most 0.5.\n- topk_ids: int32 [M,Q], each entry in [0,E). The Q choices within one token\n  are distinct; choices may occur in any order. Tokens may share experts;\n  an expert may receive zero routes or any number of routes up to M.\n- topk_weights: FP32 [M,Q], finite, each in [0,1], and each row's sum\n  evaluated in FP64 at most one. Zero weights and all-zero rows are legal.\n- 1 <= M,K,N <= 129, 1 <= E <= 8, 1 <= Q <= min(4,E).\n\nAll inputs are ordinary torch.Tensor objects (not subclasses), dense, strided,\ncontiguous and on one CUDA device, with disjoint storage ranges. Inputs have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nexecute in ordinary non-inference mode with no concurrent external input writes.\nThe interface handles materialized numerical buffers and does not provide autograd.\n\nIn real arithmetic on the stored input values, define:\n  target[m,n] = sum over q=0..Q-1 of\n    topk_weights[m,q] * sum over k=0..K-1 of\n      x[m,k] * expert_weights[topk_ids[m,q],k,n].\nReturn a fresh finite FP32 CUDA tensor of shape [M,N]. Preserve every input.\nEvery output must satisfy\n  abs(actual - target) <= 0.01 + 0.0002 * abs(target).\nInput and weight bounds, row weight sums and K imply |target| < 32.251\n(including the tiny rounding margin of the FP64 row-sum check).\nThis tolerance accommodates the bounded FP16-input/FP32-accumulation path,\nincluding conservative allowance for small FP16 contributions. It does not\npermit missing routes, output tiles or expert projections.\n\nGrouping, expert order, padding and tile sizes are implementation choices and\ndo not change the target. Permuting each token's choices together with its\nweights, or consistently relabeling experts and their matrices, preserves the\nrequired result. Correctness covers every legal shape, value and routing layout;\nthere is one verdict for this fixed implementation, not a verdict per seed.\n\nvalidate_inputs() enforces this public domain and is called by run(). reference()\nis an independent FP64 implementation and accepts CPU or CUDA inputs.\nmake_inputs() is only a convenience example; it does not define the input domain.\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_119",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_119"
+      },
+      "created_at": "2026-10-03T18:14:21Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute a routed mixture-of-experts linear projection. Each token selects Q\nexperts; the result is the weighted sum of their projections. This is the\nprojection stage, not a complete nonlinear MoE layer or a router/top-k search.\n\nInputs:\n- x: FP16 [M,K], finite, magnitude at most 0.5.\n- expert_weights: FP16 [E,K,N], finite, magnitude at most 0.5.\n- topk_ids: int32 [M,Q], each entry in [0,E). The Q choices within one token\n  are distinct; choices may occur in any order. Tokens may share experts;\n  an expert may receive zero routes or any number of routes up to M.\n- topk_weights: FP32 [M,Q], finite, each in [0,1], and each row's sum\n  evaluated in FP64 at most one. Zero weights and all-zero rows are legal.\n- 1 <= M,K,N <= 129, 1 <= E <= 8, 1 <= Q <= min(4,E).\n\nAll inputs are ordinary torch.Tensor objects (not subclasses), dense, strided,\ncontiguous and on one CUDA device, with disjoint storage ranges. Inputs have\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\nexecute in ordinary non-inference mode with no concurrent external input writes.\nThe interface handles materialized numerical buffers and does not provide autograd.\n\nIn real arithmetic on the stored input values, define:\n  target[m,n] = sum over q=0..Q-1 of\n    topk_weights[m,q] * sum over k=0..K-1 of\n      x[m,k] * expert_weights[topk_ids[m,q],k,n].\nReturn a fresh finite FP32 CUDA tensor of shape [M,N]. Preserve every input.\nEvery output must satisfy\n  abs(actual - target) <= 0.01 + 0.0002 * abs(target).\nInput and weight bounds, row weight sums and K imply |target| < 32.251\n(including the tiny rounding margin of the FP64 row-sum check).\nThis tolerance accommodates the bounded FP16-input/FP32-accumulation path,\nincluding conservative allowance for small FP16 contributions. It does not\npermit missing routes, output tiles or expert projections.\n\nGrouping, expert order, padding and tile sizes are implementation choices and\ndo not change the target. Permuting each token's choices together with its\nweights, or consistently relabeling experts and their matrices, preserves the\nrequired result. Correctness covers every legal shape, value and routing layout;\nthere is one verdict for this fixed implementation, not a verdict per seed.\n\nvalidate_inputs() enforces this public domain and is called by run(). reference()\nis an independent FP64 implementation and accepts CPU or CUDA inputs.\nmake_inputs() is only a convenience example; it does not define the input domain.\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_119",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_119"
+      },
+      "created_at": "2026-10-03T18:14:21Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_119",
+        "files": [
+          {
+            "kind": "other",
+            "path": "LICENSE",
+            "size_bytes": 11357
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 8640
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2543
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_119",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-03T18:14:21Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_119",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "pid_n = (pid % (GROUP_M*num_pid_n)) // GROUP_M while pid_m uses % group_size_m; when the final group has group_size_m < GROUP_M (total block count not divisible by 4 with GROUP_M=4), x ranges over [0, group_size_m*num_pid_n) so pid_n never reaches num_pid_n-1, leaving some output columns of that expert block unwritten (zeros in `routed`), which then feeds the combine kernel as missing contributions.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "tolerance 'does not permit missing routes, output tiles or expert projections' \u2014 skipping high-pid_n tiles is exactly a missing output tile."
+          }
+        ],
+        "scope_rationale": "Contract requires every output satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and explicitly states the tolerance does not permit missing output tiles.",
+        "statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance."
+      },
+      "created_at": "2026-10-03T18:15:00Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-03T18:15:00Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "pid_n = (pid % (GROUP_M*num_pid_n)) // GROUP_M while pid_m uses % group_size_m; when the final group has group_size_m < GROUP_M (total block count not divisible by 4 with GROUP_M=4), x ranges over [0, group_size_m*num_pid_n) so pid_n never reaches num_pid_n-1, leaving some output columns of that expert block unwritten (zeros in `routed`), which then feeds the combine kernel as missing contributions.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "tolerance 'does not permit missing routes, output tiles or expert projections' \u2014 skipping high-pid_n tiles is exactly a missing output tile."
+          }
+        ],
+        "scope_rationale": "Contract requires every output satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and explicitly states the tolerance does not permit missing output tiles.",
+        "statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+        "status": "open",
+        "updated_at": "2026-10-03T18:15:00Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.randint(0, e, (m, q), generator=g)\n    # enforce distinct experts per token\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    # aim: many blocks, last group ragged, multiple column tiles (N>32)\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    # replicate block accounting\n    c = torch.bincount(ids.reshape(-1).long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    results.append(dict(m=m,e=e,q=q,k=k,n=n,blocks=nblocks,\n                        group_m=4 if nblocks>=4 else 1, violations=viol,\n                        max_abs_err=maxerr, cols_with_err=int((err.max(dim=0).values>0.02).sum().item()),\n                        col_indices_of_bad=(err.max(dim=0).values > 0.02).nonzero().flatten().tolist()[:20]))\n    print(results[-1])\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"results\": results}))\n",
+        "expected_signal": "violations>0 with errors concentrated in high column indices when blocks%4 != 0"
+      },
+      "created_at": "2026-10-03T18:15:18Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "2babe685976701a25d3262da61c27d6c954c125de3eb62b75517f4bbe30962a8"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "f5e8bb14c7a69b58ffdd78def5cfdd051884bff5527329b1343d17fe73b7b019"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+        "cwd": "/root/cases/case_119",
+        "duration_s": 3.380211,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "2babe685976701a25d3262da61c27d6c954c125de3eb62b75517f4bbe30962a8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "f5e8bb14c7a69b58ffdd78def5cfdd051884bff5527329b1343d17fe73b7b019"
+              }
+            ],
+            "duration_s": 3.380211,
+            "exit_code": 1,
+            "expected_signal": "violations>0 with errors concentrated in high column indices when blocks%4 != 0",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_119/solo/probes/t6_probe.py\", line 37, in <module>\n    out = kernel.run(x,w,ids,rw)\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_119/kernel.py\", line 119, in run\n    validate_inputs(x, expert_weights, topk_ids, topk_weights)\n  File \"/root/cases/case_119/kernel.py\", line 83, in validate_inputs\n    require(topk_ids.dtype == torch.int32 and topk_weights.dtype == torch.float32,\n  File \"/root/cases/case_119/kernel.py\", line 63, in require\n    raise ValueError(message)\nValueError: ids must be int32 and route weights FP32\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": "violations>0 with errors concentrated in high column indices when blocks%4 != 0",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_119/solo/probes/t6_probe.py\", line 37, in <module>\n    out = kernel.run(x,w,ids,rw)\n          ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/cases/case_119/kernel.py\", line 119, in run\n    validate_inputs(x, expert_weights, topk_ids, topk_weights)\n  File \"/root/cases/case_119/kernel.py\", line 83, in validate_inputs\n    require(topk_ids.dtype == torch.int32 and topk_weights.dtype == torch.float32,\n  File \"/root/cases/case_119/kernel.py\", line 63, in require\n    raise ValueError(message)\nValueError: ids must be int32 and route weights FP32\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.zeros((m, q), dtype=torch.int32)\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n    (21, 5, 3, 33, 65, 7),\n    (33, 6, 2, 33, 65, 8),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    c = torch.bincount(ids.reshape(-1).cpu().long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    bad_cols = (err > tol).any(dim=0).nonzero().flatten().tolist()\n    results.append(dict(m=m,e=e,q=q,k=k,n=n,blocks=nblocks,\n                        blocks_mod4=nblocks%4,\n                        violations=viol, max_abs_err=maxerr,\n                        bad_col_indices=bad_cols[:40], n_bad_cols=len(bad_cols),\n                        n=int(n)))\n    print(results[-1])\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"worst_max_abs_err\": worst, \"results\": results}))\n",
+        "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0"
+      },
+      "created_at": "2026-10-03T18:15:29Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "24cc52295e4a0dbdd6035aa7e933b9e4693305eac94da991ecde9fcfea1d3087"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "c5e6d3ef93df3e38ac0b18e585eb90acab9a54661a7471598b450d1aee66b6e2"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+        "cwd": "/root/cases/case_119",
+        "duration_s": 0.025499,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "24cc52295e4a0dbdd6035aa7e933b9e4693305eac94da991ecde9fcfea1d3087"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "c5e6d3ef93df3e38ac0b18e585eb90acab9a54661a7471598b450d1aee66b6e2"
+              }
+            ],
+            "duration_s": 0.025499,
+            "exit_code": 1,
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "  File \"/root/trace_runs/r1/real_kernel_challenges/case_119/solo/probes/t7_probe.py\", line 48\n    n=int(n)))\n    ^^^^^^^^\nSyntaxError: keyword argument repeated: n\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "  File \"/root/trace_runs/r1/real_kernel_challenges/case_119/solo/probes/t7_probe.py\", line 48\n    n=int(n)))\n    ^^^^^^^^\nSyntaxError: keyword argument repeated: n\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_119\")\nimport kernel\n\ndef make(m, e, q, k, n, seed):\n    g = torch.Generator(\"cpu\").manual_seed(seed)\n    x = (torch.rand((m, k), generator=g) - .5).half()\n    w = (torch.rand((e, k, n), generator=g) - .5).half()\n    ids = torch.zeros((m, q), dtype=torch.int32)\n    for t in range(m):\n        uniq = torch.randperm(e, generator=g)[:q]\n        ids[t] = uniq.to(torch.int32)\n    route = torch.rand((m, q), generator=g)\n    route = route / (route.sum(dim=1, keepdim=True) + .125)\n    return x.cuda(), w.cuda(), ids.cuda().contiguous(), route.float().cuda()\n\nresults = []\ncases = [\n    (37, 4, 2, 33, 65, 0),\n    (65, 4, 2, 33, 65, 1),\n    (50, 4, 2, 17, 97, 2),\n    (100, 4, 2, 33, 65, 3),\n    (129, 4, 4, 33, 65, 4),\n    (70, 3, 3, 33, 65, 5),\n    (44, 4, 2, 33, 65, 6),\n    (21, 5, 3, 33, 65, 7),\n    (33, 6, 2, 33, 65, 8),\n]\nworst = 0.0\nfor (m,e,q,k,n,seed) in cases:\n    x,w,ids,rw = make(m,e,q,k,n,seed)\n    c = torch.bincount(ids.reshape(-1).cpu().long(), minlength=e)\n    padded = ((c + 15)//16)*16\n    nblocks = int((padded.sum()//16).item())\n    out = kernel.run(x,w,ids,rw)\n    ref = kernel.reference(x,w,ids,rw)\n    err = (out.double() - ref).abs()\n    tol = 0.01 + 0.0002*ref.abs()\n    viol = int((err > tol).sum().item())\n    maxerr = err.max().item()\n    worst = max(worst, maxerr)\n    bad_cols = (err > tol).any(dim=0).nonzero().flatten().tolist()\n    results.append(dict(m=m,e=e,q=q,k=k,out_n=n,blocks=nblocks,\n                        blocks_mod4=nblocks%4,\n                        violations=viol, max_abs_err=maxerr,\n                        bad_col_indices=bad_cols[:40], n_bad_cols=len(bad_cols)))\n    print(results[-1], flush=True)\n\nprint(\"WORST\", worst)\nprint(json.dumps({\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\",\n                  \"worst_max_abs_err\": worst, \"results\": results}))\n",
+        "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0"
+      },
+      "created_at": "2026-10-03T18:15:50Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "c1f99271c6c8db4c7581e98afc975f83a5cb812722c7984c9674217c3e80eb5d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "36b1673b39d822cb8a0c128f8557b02a72402e32c642339d12e5b563b987cc97"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "30ce6704d147b12d11a9878b309b3b6119225e41e0e471271262437fa5200cdb"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+        "cwd": "/root/cases/case_119",
+        "duration_s": 9.032764,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "c1f99271c6c8db4c7581e98afc975f83a5cb812722c7984c9674217c3e80eb5d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "36b1673b39d822cb8a0c128f8557b02a72402e32c642339d12e5b563b987cc97"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "30ce6704d147b12d11a9878b309b3b6119225e41e0e471271262437fa5200cdb"
+              }
+            ],
+            "duration_s": 9.032764,
+            "exit_code": 0,
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "elementwise |actual-target| vs 0.01+0.0002|target|",
+              "results": [
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 37,
+                  "max_abs_err": 2.0683828649836755e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 11,
+                  "blocks_mod4": 3,
+                  "e": 4,
+                  "k": 33,
+                  "m": 65,
+                  "max_abs_err": 0.7740450336290141,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 18
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 17,
+                  "m": 50,
+                  "max_abs_err": 1.231563944159575e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 97,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 14,
+                  "blocks_mod4": 2,
+                  "e": 4,
+                  "k": 33,
+                  "m": 100,
+                  "max_abs_err": 0.606355655120168,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 32
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 36,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 129,
+                  "max_abs_err": 1.630182655532053e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 4,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 15,
+                  "blocks_mod4": 3,
+                  "e": 3,
+                  "k": 33,
+                  "m": 70,
+                  "max_abs_err": 0.5347650338869808,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 27
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 44,
+                  "max_abs_err": 2.2223582674119058e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    32,
+                    33,
+                    34,
+                    35,
+                    36,
+                    37,
+                    38,
+                    39,
+                    40,
+                    41,
+                    42,
+                    43,
+                    44,
+                    45,
+                    46,
+                    47,
+                    48,
+                    49,
+                    50,
+                    51,
+                    52,
+                    53,
+                    54,
+                    55,
+                    56,
+                    57,
+                    58,
+                    59,
+                    60,
+                    61,
+                    62,
+                    63,
+                    64
+                  ],
+                  "blocks": 5,
+                  "blocks_mod4": 1,
+                  "e": 5,
+                  "k": 33,
+                  "m": 21,
+                  "max_abs_err": 0.7857462332804216,
+                  "n_bad_cols": 33,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 361
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 6,
+                  "blocks_mod4": 2,
+                  "e": 6,
+                  "k": 33,
+                  "m": 33,
+                  "max_abs_err": 0.9258448906474682,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 17
+                }
+              ],
+              "worst_max_abs_err": 0.9258448906474682
+            },
+            "stderr": "",
+            "stdout": "{'m': 37, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.0683828649836755e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 65, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 11, 'blocks_mod4': 3, 'violations': 18, 'max_abs_err': 0.7740450336290141, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 50, 'e': 4, 'q': 2, 'k': 17, 'out_n': 97, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.231563944159575e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 100, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 14, 'blocks_mod4': 2, 'violations': 32, 'max_abs_err': 0.606355655120168, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 129, 'e': 4, 'q': 4, 'k': 33, 'out_n': 65, 'blocks': 36, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.630182655532053e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 70, 'e': 3, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 15, 'blocks_mod4': 3, 'violations': 27, 'max_abs_err': 0.5347650338869808, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 44, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.2223582674119058e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 21, 'e': 5, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 5, 'blocks_mod4': 1, 'violations': 361, 'max_abs_err': 0.7857462332804216, 'bad_col_indices': [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], 'n_bad_cols': 33}\n{'m': 33, 'e': 6, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 6, 'blocks_mod4': 2, 'violations': 17, 'max_abs_err': 0.9258448906474682, 'bad_col_indices': [64], 'n_bad_cols': 1}\nWORST 0.9258448906474682\n{\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\", \"worst_max_abs_err\": 0.9258448906474682, \"results\": [{\"m\": 37, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.0683828649836755e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 65, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 11, \"blocks_mod4\": 3, \"violations\": 18, \"max_abs_err\": 0.7740450336290141, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 50, \"e\": 4, \"q\": 2, \"k\": 17, \"out_n\": 97, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.231563944159575e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 100, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 14, \"blocks_mod4\": 2, \"violations\": 32, \"max_abs_err\": 0.606355655120168, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 129, \"e\": 4, \"q\": 4, \"k\": 33, \"out_n\": 65, \"blocks\": 36, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.630182655532053e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 70, \"e\": 3, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 15, \"blocks_mod4\": 3, \"violations\": 27, \"max_abs_err\": 0.5347650338869808, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 44, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.2223582674119058e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 21, \"e\": 5, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 5, \"blocks_mod4\": 1, \"violations\": 361, \"max_abs_err\": 0.7857462332804216, \"bad_col_indices\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], \"n_bad_cols\": 33}, {\"m\": 33, \"e\": 6, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 6, \"blocks_mod4\": 2, \"violations\": 17, \"max_abs_err\": 0.9258448906474682, \"bad_col_indices\": [64], \"n_bad_cols\": 1}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+        "json_parse_error": null,
+        "json_result": {
+          "metric": "elementwise |actual-target| vs 0.01+0.0002|target|",
+          "results": [
+            {
+              "bad_col_indices": [],
+              "blocks": 8,
+              "blocks_mod4": 0,
+              "e": 4,
+              "k": 33,
+              "m": 37,
+              "max_abs_err": 2.0683828649836755e-07,
+              "n_bad_cols": 0,
+              "out_n": 65,
+              "q": 2,
+              "violations": 0
+            },
+            {
+              "bad_col_indices": [
+                64
+              ],
+              "blocks": 11,
+              "blocks_mod4": 3,
+              "e": 4,
+              "k": 33,
+              "m": 65,
+              "max_abs_err": 0.7740450336290141,
+              "n_bad_cols": 1,
+              "out_n": 65,
+              "q": 2,
+              "violations": 18
+            },
+            {
+              "bad_col_indices": [],
+              "blocks": 8,
+              "blocks_mod4": 0,
+              "e": 4,
+              "k": 17,
+              "m": 50,
+              "max_abs_err": 1.231563944159575e-07,
+              "n_bad_cols": 0,
+              "out_n": 97,
+              "q": 2,
+              "violations": 0
+            },
+            {
+              "bad_col_indices": [
+                64
+              ],
+              "blocks": 14,
+              "blocks_mod4": 2,
+              "e": 4,
+              "k": 33,
+              "m": 100,
+              "max_abs_err": 0.606355655120168,
+              "n_bad_cols": 1,
+              "out_n": 65,
+              "q": 2,
+              "violations": 32
+            },
+            {
+              "bad_col_indices": [],
+              "blocks": 36,
+              "blocks_mod4": 0,
+              "e": 4,
+              "k": 33,
+              "m": 129,
+              "max_abs_err": 1.630182655532053e-07,
+              "n_bad_cols": 0,
+              "out_n": 65,
+              "q": 4,
+              "violations": 0
+            },
+            {
+              "bad_col_indices": [
+                64
+              ],
+              "blocks": 15,
+              "blocks_mod4": 3,
+              "e": 3,
+              "k": 33,
+              "m": 70,
+              "max_abs_err": 0.5347650338869808,
+              "n_bad_cols": 1,
+              "out_n": 65,
+              "q": 3,
+              "violations": 27
+            },
+            {
+              "bad_col_indices": [],
+              "blocks": 8,
+              "blocks_mod4": 0,
+              "e": 4,
+              "k": 33,
+              "m": 44,
+              "max_abs_err": 2.2223582674119058e-07,
+              "n_bad_cols": 0,
+              "out_n": 65,
+              "q": 2,
+              "violations": 0
+            },
+            {
+              "bad_col_indices": [
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                48,
+                49,
+                50,
+                51,
+                52,
+                53,
+                54,
+                55,
+                56,
+                57,
+                58,
+                59,
+                60,
+                61,
+                62,
+                63,
+                64
+              ],
+              "blocks": 5,
+              "blocks_mod4": 1,
+              "e": 5,
+              "k": 33,
+              "m": 21,
+              "max_abs_err": 0.7857462332804216,
+              "n_bad_cols": 33,
+              "out_n": 65,
+              "q": 3,
+              "violations": 361
+            },
+            {
+              "bad_col_indices": [
+                64
+              ],
+              "blocks": 6,
+              "blocks_mod4": 2,
+              "e": 6,
+              "k": 33,
+              "m": 33,
+              "max_abs_err": 0.9258448906474682,
+              "n_bad_cols": 1,
+              "out_n": 65,
+              "q": 2,
+              "violations": 17
+            }
+          ],
+          "worst_max_abs_err": 0.9258448906474682
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{'m': 37, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.0683828649836755e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 65, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 11, 'blocks_mod4': 3, 'violations': 18, 'max_abs_err': 0.7740450336290141, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 50, 'e': 4, 'q': 2, 'k': 17, 'out_n': 97, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.231563944159575e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 100, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 14, 'blocks_mod4': 2, 'violations': 32, 'max_abs_err': 0.606355655120168, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 129, 'e': 4, 'q': 4, 'k': 33, 'out_n': 65, 'blocks': 36, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.630182655532053e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 70, 'e': 3, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 15, 'blocks_mod4': 3, 'violations': 27, 'max_abs_err': 0.5347650338869808, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 44, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.2223582674119058e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 21, 'e': 5, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 5, 'blocks_mod4': 1, 'violations': 361, 'max_abs_err': 0.7857462332804216, 'bad_col_indices': [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], 'n_bad_cols': 33}\n{'m': 33, 'e': 6, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 6, 'blocks_mod4': 2, 'violations': 17, 'max_abs_err': 0.9258448906474682, 'bad_col_indices': [64], 'n_bad_cols': 1}\nWORST 0.9258448906474682\n{\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\", \"worst_max_abs_err\": 0.9258448906474682, \"results\": [{\"m\": 37, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.0683828649836755e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 65, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 11, \"blocks_mod4\": 3, \"violations\": 18, \"max_abs_err\": 0.7740450336290141, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 50, \"e\": 4, \"q\": 2, \"k\": 17, \"out_n\": 97, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.231563944159575e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 100, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 14, \"blocks_mod4\": 2, \"violations\": 32, \"max_abs_err\": 0.606355655120168, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 129, \"e\": 4, \"q\": 4, \"k\": 33, \"out_n\": 65, \"blocks\": 36, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.630182655532053e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 70, \"e\": 3, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 15, \"blocks_mod4\": 3, \"violations\": 27, \"max_abs_err\": 0.5347650338869808, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 44, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.2223582674119058e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 21, \"e\": 5, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 5, \"blocks_mod4\": 1, \"violations\": 361, \"max_abs_err\": 0.7857462332804216, \"bad_col_indices\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], \"n_bad_cols\": 33}, {\"m\": 33, \"e\": 6, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 6, \"blocks_mod4\": 2, \"violations\": 17, \"max_abs_err\": 0.9258448906474682, \"bad_col_indices\": [64], \"n_bad_cols\": 1}]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "sample_cases": [
+            {
+              "blocks": 11,
+              "blocks_mod4": 3,
+              "m": 65,
+              "max_abs_err": 0.7740450336290141,
+              "n_bad_cols": 1,
+              "violations": 18
+            },
+            {
+              "blocks": 14,
+              "blocks_mod4": 2,
+              "m": 100,
+              "max_abs_err": 0.606355655120168,
+              "n_bad_cols": 1,
+              "violations": 32
+            },
+            {
+              "blocks": 36,
+              "blocks_mod4": 0,
+              "m": 129,
+              "max_abs_err": 1.63e-07,
+              "violations": 0
+            },
+            {
+              "blocks": 5,
+              "blocks_mod4": 1,
+              "m": 21,
+              "max_abs_err": 0.7857462332804216,
+              "n_bad_cols": 33,
+              "violations": 361
+            }
+          ],
+          "worst_max_abs_err": 0.9258448906474682
+        },
+        "event_id": "t8",
+        "summary": "GPU probe (event t8): legal in-domain inputs (e.g. M=65,E=4,Q=2,K=33,N=65 -> 11 expert blocks, 11%4=3) produce tolerance violations exactly in the high column tile (index 64) skipped by the pid_n swizzle: max |actual-target| = 0.774 vs tolerance ~0.01, 18 violating elements. The M=21,E=5,Q=3 case (5 blocks) skips 33 whole columns (32-64), 361 violations, max err 0.786. All cases with blocks%4==0 (M=37,50,44,129) pass with max err ~2e-7. The failing columns coincide precisely with the skipped pid_n tiles, confirming missing output columns, which the contract explicitly forbids ('does not permit missing routes, output tiles or expert projections').",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-03T18:16:01Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T18:15:00Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T18:16:01Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "c1f99271c6c8db4c7581e98afc975f83a5cb812722c7984c9674217c3e80eb5d"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "36b1673b39d822cb8a0c128f8557b02a72402e32c642339d12e5b563b987cc97"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "30ce6704d147b12d11a9878b309b3b6119225e41e0e471271262437fa5200cdb"
+                  }
+                ],
+                "duration_s": 9.032764,
+                "exit_code": 0,
+                "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+                "json_parse_error": null,
+                "json_result": {
+                  "metric": "elementwise |actual-target| vs 0.01+0.0002|target|",
+                  "results": [
+                    {
+                      "bad_col_indices": [],
+                      "blocks": 8,
+                      "blocks_mod4": 0,
+                      "e": 4,
+                      "k": 33,
+                      "m": 37,
+                      "max_abs_err": 2.0683828649836755e-07,
+                      "n_bad_cols": 0,
+                      "out_n": 65,
+                      "q": 2,
+                      "violations": 0
+                    },
+                    {
+                      "bad_col_indices": [
+                        64
+                      ],
+                      "blocks": 11,
+                      "blocks_mod4": 3,
+                      "e": 4,
+                      "k": 33,
+                      "m": 65,
+                      "max_abs_err": 0.7740450336290141,
+                      "n_bad_cols": 1,
+                      "out_n": 65,
+                      "q": 2,
+                      "violations": 18
+                    },
+                    {
+                      "bad_col_indices": [],
+                      "blocks": 8,
+                      "blocks_mod4": 0,
+                      "e": 4,
+                      "k": 17,
+                      "m": 50,
+                      "max_abs_err": 1.231563944159575e-07,
+                      "n_bad_cols": 0,
+                      "out_n": 97,
+                      "q": 2,
+                      "violations": 0
+                    },
+                    {
+                      "bad_col_indices": [
+                        64
+                      ],
+                      "blocks": 14,
+                      "blocks_mod4": 2,
+                      "e": 4,
+                      "k": 33,
+                      "m": 100,
+                      "max_abs_err": 0.606355655120168,
+                      "n_bad_cols": 1,
+                      "out_n": 65,
+                      "q": 2,
+                      "violations": 32
+                    },
+                    {
+                      "bad_col_indices": [],
+                      "blocks": 36,
+                      "blocks_mod4": 0,
+                      "e": 4,
+                      "k": 33,
+                      "m": 129,
+                      "max_abs_err": 1.630182655532053e-07,
+                      "n_bad_cols": 0,
+                      "out_n": 65,
+                      "q": 4,
+                      "violations": 0
+                    },
+                    {
+                      "bad_col_indices": [
+                        64
+                      ],
+                      "blocks": 15,
+                      "blocks_mod4": 3,
+                      "e": 3,
+                      "k": 33,
+                      "m": 70,
+                      "max_abs_err": 0.5347650338869808,
+                      "n_bad_cols": 1,
+                      "out_n": 65,
+                      "q": 3,
+                      "violations": 27
+                    },
+                    {
+                      "bad_col_indices": [],
+                      "blocks": 8,
+                      "blocks_mod4": 0,
+                      "e": 4,
+                      "k": 33,
+                      "m": 44,
+                      "max_abs_err": 2.2223582674119058e-07,
+                      "n_bad_cols": 0,
+                      "out_n": 65,
+                      "q": 2,
+                      "violations": 0
+                    },
+                    {
+                      "bad_col_indices": [
+                        32,
+                        33,
+                        34,
+                        35,
+                        36,
+                        37,
+                        38,
+                        39,
+                        40,
+                        41,
+                        42,
+                        43,
+                        44,
+                        45,
+                        46,
+                        47,
+                        48,
+                        49,
+                        50,
+                        51,
+                        52,
+                        53,
+                        54,
+                        55,
+                        56,
+                        57,
+                        58,
+                        59,
+                        60,
+                        61,
+                        62,
+                        63,
+                        64
+                      ],
+                      "blocks": 5,
+                      "blocks_mod4": 1,
+                      "e": 5,
+                      "k": 33,
+                      "m": 21,
+                      "max_abs_err": 0.7857462332804216,
+                      "n_bad_cols": 33,
+                      "out_n": 65,
+                      "q": 3,
+                      "violations": 361
+                    },
+                    {
+                      "bad_col_indices": [
+                        64
+                      ],
+                      "blocks": 6,
+                      "blocks_mod4": 2,
+                      "e": 6,
+                      "k": 33,
+                      "m": 33,
+                      "max_abs_err": 0.9258448906474682,
+                      "n_bad_cols": 1,
+                      "out_n": 65,
+                      "q": 2,
+                      "violations": 17
+                    }
+                  ],
+                  "worst_max_abs_err": 0.9258448906474682
+                },
+                "sample_cases": [
+                  {
+                    "blocks": 11,
+                    "blocks_mod4": 3,
+                    "m": 65,
+                    "max_abs_err": 0.7740450336290141,
+                    "n_bad_cols": 1,
+                    "violations": 18
+                  },
+                  {
+                    "blocks": 14,
+                    "blocks_mod4": 2,
+                    "m": 100,
+                    "max_abs_err": 0.606355655120168,
+                    "n_bad_cols": 1,
+                    "violations": 32
+                  },
+                  {
+                    "blocks": 36,
+                    "blocks_mod4": 0,
+                    "m": 129,
+                    "max_abs_err": 1.63e-07,
+                    "violations": 0
+                  },
+                  {
+                    "blocks": 5,
+                    "blocks_mod4": 1,
+                    "m": 21,
+                    "max_abs_err": 0.7857462332804216,
+                    "n_bad_cols": 33,
+                    "violations": 361
+                  }
+                ],
+                "stderr": "",
+                "stdout": "{'m': 37, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.0683828649836755e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 65, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 11, 'blocks_mod4': 3, 'violations': 18, 'max_abs_err': 0.7740450336290141, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 50, 'e': 4, 'q': 2, 'k': 17, 'out_n': 97, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.231563944159575e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 100, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 14, 'blocks_mod4': 2, 'violations': 32, 'max_abs_err': 0.606355655120168, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 129, 'e': 4, 'q': 4, 'k': 33, 'out_n': 65, 'blocks': 36, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.630182655532053e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 70, 'e': 3, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 15, 'blocks_mod4': 3, 'violations': 27, 'max_abs_err': 0.5347650338869808, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 44, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.2223582674119058e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 21, 'e': 5, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 5, 'blocks_mod4': 1, 'violations': 361, 'max_abs_err': 0.7857462332804216, 'bad_col_indices': [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], 'n_bad_cols': 33}\n{'m': 33, 'e': 6, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 6, 'blocks_mod4': 2, 'violations': 17, 'max_abs_err': 0.9258448906474682, 'bad_col_indices': [64], 'n_bad_cols': 1}\nWORST 0.9258448906474682\n{\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\", \"worst_max_abs_err\": 0.9258448906474682, \"results\": [{\"m\": 37, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.0683828649836755e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 65, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 11, \"blocks_mod4\": 3, \"violations\": 18, \"max_abs_err\": 0.7740450336290141, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 50, \"e\": 4, \"q\": 2, \"k\": 17, \"out_n\": 97, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.231563944159575e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 100, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 14, \"blocks_mod4\": 2, \"violations\": 32, \"max_abs_err\": 0.606355655120168, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 129, \"e\": 4, \"q\": 4, \"k\": 33, \"out_n\": 65, \"blocks\": 36, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.630182655532053e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 70, \"e\": 3, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 15, \"blocks_mod4\": 3, \"violations\": 27, \"max_abs_err\": 0.5347650338869808, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 44, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.2223582674119058e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 21, \"e\": 5, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 5, \"blocks_mod4\": 1, \"violations\": 361, \"max_abs_err\": 0.7857462332804216, \"bad_col_indices\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], \"n_bad_cols\": 33}, {\"m\": 33, \"e\": 6, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 6, \"blocks_mod4\": 2, \"violations\": 17, \"max_abs_err\": 0.9258448906474682, \"bad_col_indices\": [64], \"n_bad_cols\": 1}]}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "worst_max_abs_err": 0.9258448906474682
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "GPU probe (event t8): legal in-domain inputs (e.g. M=65,E=4,Q=2,K=33,N=65 -> 11 expert blocks, 11%4=3) produce tolerance violations exactly in the high column tile (index 64) skipped by the pid_n swizzle: max |actual-target| = 0.774 vs tolerance ~0.01, 18 violating elements. The M=21,E=5,Q=3 case (5 blocks) skips 33 whole columns (32-64), 361 violations, max err 0.786. All cases with blocks%4==0 (M=37,50,44,129) pass with max err ~2e-7. The failing columns coincide precisely with the skipped pid_n tiles, confirming missing output columns, which the contract explicitly forbids ('does not permit missing routes, output tiles or expert projections').",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "pid_n = (pid % (GROUP_M*num_pid_n)) // GROUP_M while pid_m uses % group_size_m; when the final group has group_size_m < GROUP_M (total block count not divisible by 4 with GROUP_M=4), x ranges over [0, group_size_m*num_pid_n) so pid_n never reaches num_pid_n-1, leaving some output columns of that expert block unwritten (zeros in `routed`), which then feeds the combine kernel as missing contributions.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "tolerance 'does not permit missing routes, output tiles or expert projections' \u2014 skipping high-pid_n tiles is exactly a missing output tile."
+            }
+          ],
+          "scope_rationale": "Contract requires every output satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and explicitly states the tolerance does not permit missing output tiles.",
+          "statement": "When expert_blocks.numel() >= 4 but not a multiple of 4, the pid_n swizzle formula skips high column tiles of the last expert blocks, producing missing output columns that violate the tolerance.",
+          "status": "confirmed",
+          "updated_at": "2026-10-03T18:16:01Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T18:16:01Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "c1f99271c6c8db4c7581e98afc975f83a5cb812722c7984c9674217c3e80eb5d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "36b1673b39d822cb8a0c128f8557b02a72402e32c642339d12e5b563b987cc97"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "30ce6704d147b12d11a9878b309b3b6119225e41e0e471271262437fa5200cdb"
+              }
+            ],
+            "duration_s": 9.032764,
+            "exit_code": 0,
+            "expected_signal": "violations>0 with bad columns at high pid_n indices when blocks%4 != 0",
+            "json_parse_error": null,
+            "json_result": {
+              "metric": "elementwise |actual-target| vs 0.01+0.0002|target|",
+              "results": [
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 37,
+                  "max_abs_err": 2.0683828649836755e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 11,
+                  "blocks_mod4": 3,
+                  "e": 4,
+                  "k": 33,
+                  "m": 65,
+                  "max_abs_err": 0.7740450336290141,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 18
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 17,
+                  "m": 50,
+                  "max_abs_err": 1.231563944159575e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 97,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 14,
+                  "blocks_mod4": 2,
+                  "e": 4,
+                  "k": 33,
+                  "m": 100,
+                  "max_abs_err": 0.606355655120168,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 32
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 36,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 129,
+                  "max_abs_err": 1.630182655532053e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 4,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 15,
+                  "blocks_mod4": 3,
+                  "e": 3,
+                  "k": 33,
+                  "m": 70,
+                  "max_abs_err": 0.5347650338869808,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 27
+                },
+                {
+                  "bad_col_indices": [],
+                  "blocks": 8,
+                  "blocks_mod4": 0,
+                  "e": 4,
+                  "k": 33,
+                  "m": 44,
+                  "max_abs_err": 2.2223582674119058e-07,
+                  "n_bad_cols": 0,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 0
+                },
+                {
+                  "bad_col_indices": [
+                    32,
+                    33,
+                    34,
+                    35,
+                    36,
+                    37,
+                    38,
+                    39,
+                    40,
+                    41,
+                    42,
+                    43,
+                    44,
+                    45,
+                    46,
+                    47,
+                    48,
+                    49,
+                    50,
+                    51,
+                    52,
+                    53,
+                    54,
+                    55,
+                    56,
+                    57,
+                    58,
+                    59,
+                    60,
+                    61,
+                    62,
+                    63,
+                    64
+                  ],
+                  "blocks": 5,
+                  "blocks_mod4": 1,
+                  "e": 5,
+                  "k": 33,
+                  "m": 21,
+                  "max_abs_err": 0.7857462332804216,
+                  "n_bad_cols": 33,
+                  "out_n": 65,
+                  "q": 3,
+                  "violations": 361
+                },
+                {
+                  "bad_col_indices": [
+                    64
+                  ],
+                  "blocks": 6,
+                  "blocks_mod4": 2,
+                  "e": 6,
+                  "k": 33,
+                  "m": 33,
+                  "max_abs_err": 0.9258448906474682,
+                  "n_bad_cols": 1,
+                  "out_n": 65,
+                  "q": 2,
+                  "violations": 17
+                }
+              ],
+              "worst_max_abs_err": 0.9258448906474682
+            },
+            "sample_cases": [
+              {
+                "blocks": 11,
+                "blocks_mod4": 3,
+                "m": 65,
+                "max_abs_err": 0.7740450336290141,
+                "n_bad_cols": 1,
+                "violations": 18
+              },
+              {
+                "blocks": 14,
+                "blocks_mod4": 2,
+                "m": 100,
+                "max_abs_err": 0.606355655120168,
+                "n_bad_cols": 1,
+                "violations": 32
+              },
+              {
+                "blocks": 36,
+                "blocks_mod4": 0,
+                "m": 129,
+                "max_abs_err": 1.63e-07,
+                "violations": 0
+              },
+              {
+                "blocks": 5,
+                "blocks_mod4": 1,
+                "m": 21,
+                "max_abs_err": 0.7857462332804216,
+                "n_bad_cols": 33,
+                "violations": 361
+              }
+            ],
+            "stderr": "",
+            "stdout": "{'m': 37, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.0683828649836755e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 65, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 11, 'blocks_mod4': 3, 'violations': 18, 'max_abs_err': 0.7740450336290141, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 50, 'e': 4, 'q': 2, 'k': 17, 'out_n': 97, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.231563944159575e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 100, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 14, 'blocks_mod4': 2, 'violations': 32, 'max_abs_err': 0.606355655120168, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 129, 'e': 4, 'q': 4, 'k': 33, 'out_n': 65, 'blocks': 36, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 1.630182655532053e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 70, 'e': 3, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 15, 'blocks_mod4': 3, 'violations': 27, 'max_abs_err': 0.5347650338869808, 'bad_col_indices': [64], 'n_bad_cols': 1}\n{'m': 44, 'e': 4, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 8, 'blocks_mod4': 0, 'violations': 0, 'max_abs_err': 2.2223582674119058e-07, 'bad_col_indices': [], 'n_bad_cols': 0}\n{'m': 21, 'e': 5, 'q': 3, 'k': 33, 'out_n': 65, 'blocks': 5, 'blocks_mod4': 1, 'violations': 361, 'max_abs_err': 0.7857462332804216, 'bad_col_indices': [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], 'n_bad_cols': 33}\n{'m': 33, 'e': 6, 'q': 2, 'k': 33, 'out_n': 65, 'blocks': 6, 'blocks_mod4': 2, 'violations': 17, 'max_abs_err': 0.9258448906474682, 'bad_col_indices': [64], 'n_bad_cols': 1}\nWORST 0.9258448906474682\n{\"metric\": \"elementwise |actual-target| vs 0.01+0.0002|target|\", \"worst_max_abs_err\": 0.9258448906474682, \"results\": [{\"m\": 37, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.0683828649836755e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 65, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 11, \"blocks_mod4\": 3, \"violations\": 18, \"max_abs_err\": 0.7740450336290141, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 50, \"e\": 4, \"q\": 2, \"k\": 17, \"out_n\": 97, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.231563944159575e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 100, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 14, \"blocks_mod4\": 2, \"violations\": 32, \"max_abs_err\": 0.606355655120168, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 129, \"e\": 4, \"q\": 4, \"k\": 33, \"out_n\": 65, \"blocks\": 36, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 1.630182655532053e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 70, \"e\": 3, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 15, \"blocks_mod4\": 3, \"violations\": 27, \"max_abs_err\": 0.5347650338869808, \"bad_col_indices\": [64], \"n_bad_cols\": 1}, {\"m\": 44, \"e\": 4, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 8, \"blocks_mod4\": 0, \"violations\": 0, \"max_abs_err\": 2.2223582674119058e-07, \"bad_col_indices\": [], \"n_bad_cols\": 0}, {\"m\": 21, \"e\": 5, \"q\": 3, \"k\": 33, \"out_n\": 65, \"blocks\": 5, \"blocks_mod4\": 1, \"violations\": 361, \"max_abs_err\": 0.7857462332804216, \"bad_col_indices\": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64], \"n_bad_cols\": 33}, {\"m\": 33, \"e\": 6, \"q\": 2, \"k\": 33, \"out_n\": 65, \"blocks\": 6, \"blocks_mod4\": 2, \"violations\": 17, \"max_abs_err\": 0.9258448906474682, \"bad_col_indices\": [64], \"n_bad_cols\": 1}]}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "worst_max_abs_err": 0.9258448906474682
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "GPU probe (event t8): legal in-domain inputs (e.g. M=65,E=4,Q=2,K=33,N=65 -> 11 expert blocks, 11%4=3) produce tolerance violations exactly in the high column tile (index 64) skipped by the pid_n swizzle: max |actual-target| = 0.774 vs tolerance ~0.01, 18 violating elements. The M=21,E=5,Q=3 case (5 blocks) skips 33 whole columns (32-64), 361 violations, max err 0.786. All cases with blocks%4==0 (M=37,50,44,129) pass with max err ~2e-7. The failing columns coincide precisely with the skipped pid_n tiles, confirming missing output columns, which the contract explicitly forbids ('does not permit missing routes, output tiles or expert projections').",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "GPU probe (event t8) compared run() against the FP64 reference on legal inputs inside the declared domain (all within M,K,N<=129, E<=8, Q<=min(4,E), FP16 inputs, distinct experts per token, weights in [0,1] with row sums <=1). Whenever the padded expert-block count is not a multiple of GROUP_M=4, the _expert_projection pid_n swizzle ((pid % (GROUP_M*num_pid_n)) // GROUP_M, instead of using the clamped group_size_m) skips high column tiles of the last expert blocks, leaving those routed contributions zero and producing missing output columns: e.g. M=65,E=4,Q=2,N=65 (11 blocks) has 18 violating elements in column 64 with max error 0.774 vs tolerance ~0.01; M=21,E=5,Q=3 (5 blocks) drops 33 whole columns (361 violations, max err 0.786). All multiple-of-4 block counts pass with max err ~2e-7, confirming the failure is exactly the skipped tiles, not numeric tolerance. The contract explicitly requires every output element to satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and states the tolerance 'does not permit missing routes, output tiles or expert projections'. This is a confirmed in-scope contract violation.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-03T18:16:11Z",
+      "id": "t10",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-03T18:16:11Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "GPU probe (event t8) compared run() against the FP64 reference on legal inputs inside the declared domain (all within M,K,N<=129, E<=8, Q<=min(4,E), FP16 inputs, distinct experts per token, weights in [0,1] with row sums <=1). Whenever the padded expert-block count is not a multiple of GROUP_M=4, the _expert_projection pid_n swizzle ((pid % (GROUP_M*num_pid_n)) // GROUP_M, instead of using the clamped group_size_m) skips high column tiles of the last expert blocks, leaving those routed contributions zero and producing missing output columns: e.g. M=65,E=4,Q=2,N=65 (11 blocks) has 18 violating elements in column 64 with max error 0.774 vs tolerance ~0.01; M=21,E=5,Q=3 (5 blocks) drops 33 whole columns (361 violations, max err 0.786). All multiple-of-4 block counts pass with max err ~2e-7, confirming the failure is exactly the skipped tiles, not numeric tolerance. The contract explicitly requires every output element to satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and states the tolerance 'does not permit missing routes, output tiles or expert projections'. This is a confirmed in-scope contract violation.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-03T18:16:11Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "GPU probe (event t8) compared run() against the FP64 reference on legal inputs inside the declared domain (all within M,K,N<=129, E<=8, Q<=min(4,E), FP16 inputs, distinct experts per token, weights in [0,1] with row sums <=1). Whenever the padded expert-block count is not a multiple of GROUP_M=4, the _expert_projection pid_n swizzle ((pid % (GROUP_M*num_pid_n)) // GROUP_M, instead of using the clamped group_size_m) skips high column tiles of the last expert blocks, leaving those routed contributions zero and producing missing output columns: e.g. M=65,E=4,Q=2,N=65 (11 blocks) has 18 violating elements in column 64 with max error 0.774 vs tolerance ~0.01; M=21,E=5,Q=3 (5 blocks) drops 33 whole columns (361 violations, max err 0.786). All multiple-of-4 block counts pass with max err ~2e-7, confirming the failure is exactly the skipped tiles, not numeric tolerance. The contract explicitly requires every output element to satisfy abs(actual-target) <= 0.01+0.0002*abs(target) and states the tolerance 'does not permit missing routes, output tiles or expert projections'. This is a confirmed in-scope contract violation.",
+    "verdict": "reject"
+  }
+}

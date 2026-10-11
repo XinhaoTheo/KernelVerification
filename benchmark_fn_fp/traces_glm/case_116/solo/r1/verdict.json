@@ -1,0 +1,9 @@
+{
+  "confidence": 0.95,
+  "created_at": "2026-10-03T18:11:51Z",
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The kernel stores split-K partial sums in an FP16 work buffer when split_k>1 (kernel.py line 80: work_dtype = a.dtype if split_k > 1 else torch.float32), rounding each partial before the final reduction. The contract (problem.txt) states \"No intermediate rounding behavior is part of the target\" and requires abs(actual-target) <= 0.01 + 0.001*abs(target) for every legal split_k in {1,2,4,8}. Runtime probe t9 (claim c1 evidence e2) confirmed tolerance violations on fully legal inputs (m=4, n=8, k=512, FP16 |A|,|B|<=0.5, bias<=1): 40 violating outputs across 180 tested configs, worst case actual=-0.390625 vs target=-0.40584, diff=0.01521 > tolerance 0.01041. The mechanism is FP16 rounding of large (~8-16 magnitude) cancelling partials (ulp ~0.0078-0.0156 at that magnitude) before summation. An initial probe (t6) using exactly \u00b10.5 values was inconclusive because such partials are exactly FP16-representable; the adversarial probe with non-representable cancelling partials exposed the defect. Source inspection (kernel.py lines 80-81) corroborates the FP16 work buffer. The claim is in_scope with scope evidence from problem.txt's tolerance and split_k requirements.",
+  "verdict": "reject"
+}

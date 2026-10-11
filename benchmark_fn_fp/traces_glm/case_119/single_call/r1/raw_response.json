@@ -1,0 +1,41 @@
+{
+  "id": "chatcmpl-19558e0e",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.9, \"reason\": \"The swizzle in _expert_projection computes pid_n with '// GROUP_M' instead of '// group_size_m' (the vLLM original). When the last M-group is partial (total expert blocks not a multiple of GROUP_M=4), offsets in that group yield pid_n values that skip whole N-tiles (e.g. with a single trailing block, pid_n = offset//4 = 0 for all offsets, so only the first N-block is computed), leaving output columns wrong/zero.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Let me analyze the kernel. The MoE kernel: sorted_ids per expert blocks, EXPERT array indexed by pid_m \u2014 but pid_m is block index across all expert blocks, and EXPERT has one entry per block, so tl.load(EXPERT + pid_m) is correct since pid_m indexes blocks 0..num_blocks-1. Good.\n\nWait, grid = expert_blocks.numel() * cdiv(n,32). The pid mapping: pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m. pid_n = (pid % num_pid_in_group) // GROUP_M. Hmm, standard vLLM swizzle uses group_size_m not GROUP_M for pid_n. In vLLM: pid_n = (pid % num_pid_in_group) // group_size_m. Using GROUP_M instead of group_size_m: when last group has fewer rows, pid_n could exceed num_pid_n? Let's check: pid ranges over total = num_pid_m*num_pid_n grid size. num_pid_in_group = GROUP_M*num_pid_n. In last group, pid offsets 0..(group_size_m*num_pid_n - 1). With GROUP_M: pid_n = offset // GROUP_M can reach up to (group_size_m*num_pid_n-1)//GROUP_M which may be >= num_pid_n if group_size_m < GROUP_M. E.g. GROUP_M=4, num_pid_n=5, group_size_m=2: offsets up to 9, pid_n up to 9//4=2 < 5 fine. Actually max pid_n = (group_size_m*num_pid_n-1)//GROUP_M < num_pid_n when group_size_m <= GROUP_M? group_size_m*num_pid_n/GROUP_M <= num_pid_n iff group_size_m <= GROUP_M. Yes so pid_n < num_pid_n. Good. But pid_m: offset % num_pid_in_group could be >= group_size_m*num_pid_n? No \u2014 grid size limits offsets within group to group_size_m*num_pid_n... actually grid total = num_pid_m*num_pid_n. Last group offsets range 0..(remaining*num_pid_n - 1) where remaining = group_size_m. So offset % num_pid_in_group = offset (since offset < num_pid_in_group? offset max = group_size_m*num_pid_n-1 <= GROUP_M*num_pid_n -1, yes). pid_m = first + offset % group_size_m. Coverage: each (pid_m within group, pid_n) pair? offset spans 0..G*N-1; pid_n=offset//GROUP_M, pid_m=offset%group_size_m. Are all (m,n) combos covered? offset o: for o in 0..G*N-1, pairs (o%g, o//GROUP_M). Since g<=GROUP_M, some pairs may be missed and some duplicated? Let's check: g=2, GROUP_M=4, N(num_pid_n)=5, offsets 0..9. o//4: 0,0,0,0,1,1,1,1,2,2. o%2: 0,1,0,1,0,1,0,1,0,1. pid_n=2 has pid_m {0,1}. pid_n=0: {0,1}, pid_n=1: {0,1}. All 10 pairs distinct? o=0\u2192(0,0), 1\u2192(1,0), 2\u2192(0,0)?? o=2: pid_n=0, pid_m=2%2=0. Duplicate (0,0)! And pid_n=3 missing. So tile (0, n-col 0) computed twice and tile pid_n=3 never computed \u2192 missing output tiles. That's the standard swizzle bug \u2014 vLLM uses group_size_m for pid_n division. Here using GROUP_M causes duplicates and missed tiles when last group is partial.\n\nWait but check standard vLLM: pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m; pid_n = (pid % num_pid_in_group) // group_size_m. Yes. Here GROUP_M is used instead. Bug confirmed... but wait, group_m = 4 if expert_blocks.numel() >= 4 else 1. When does the last group become partial? num_pid_m = EM blocks = total expert blocks. If expert_blocks.numel() not multiple of 4, last group partial \u2192 missed tiles. E.g. 5 blocks: groups {0-3},{4}. Group 1 has group_size_m=1, GROUP_M=4. offsets 0..num_pid_n-1. pid_n = offset//4 = 0 always! Only pid_n=0 computed; pid_n 1.. missed. So yes real defect.\n\nWait\u2014but pid_m computed = first + offset % group_size_m = first + 0 = correct block. pid_n = offset//4 = 0 for offset<num_pid_n. So all N tiles except n-block 0 are never computed \u2192 routed zeros \u2192 wrong output. Reject.\n\nAlso check: does last group partial occur commonly? Yes whenever total blocks % 4 != 0 with GROUP_M=4. Definite reject.\n\nAlso check pid_n indexing generally: even in a full group, GROUP_M == group_size_m so fine. So bug only in partial groups, which occur for many expert counts (e.g. 5 blocks). Definitely a real defect."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791050984,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1270,
+    "prompt_tokens": 3259,
+    "total_tokens": 4529,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -141,6 +141,32 @@ def test_malformed_tool_arguments_keep_raw_response(tmp_path, monkeypatch):
     assert metadata["response_saved"] is True
 
 
+@pytest.mark.parametrize("arguments", [[], ["{}"], ["{}", '{"code":"unfinished']])
+def test_length_discards_the_entire_tool_batch_and_retains_raw_usage(
+    tmp_path, monkeypatch, arguments,
+):
+    monkeypatch.setenv("AGENTIC_LLM_TRACE_DIR", str(tmp_path))
+    payload = completion(content="I am running a probe.", finish_reason="length", tool_calls=[
+        {"id": f"call_{i}", "type": "function",
+         "function": {"name": "probe", "arguments": value}}
+        for i, value in enumerate(arguments)
+    ])
+    tools = [{"name": "probe", "description": "Inspect the kernel.",
+              "input_schema": {"type": "object", "properties": {}}}]
+    with offline_client(monkeypatch, lambda request: httpx.Response(200, json=payload)) as client:
+        result = json.loads(client.call(system="JSON", user="Inspect.", tools=tools))
+        assert client.last_metrics.output_tokens == 256
+    assert result["tool_calls"] == []
+    assert result["message"].startswith("[output_truncated]")
+    assert "I am running a probe" not in result["message"]
+    call, = tmp_path.iterdir()
+    saved = read(call / "response.json")
+    assert [item["function"]["arguments"] for item in saved["choices"][0]["message"]["tool_calls"]] == arguments
+    assert saved["usage"]["completion_tokens"] == 256
+    assert read(call / "metadata.json")["response_saved"] is True
+    assert not (call / "error.json").exists()
+
+
 def test_unwritable_trace_prevents_paid_request(tmp_path, monkeypatch):
     root = tmp_path / "not_a_directory"
     root.write_text("occupied")

@@ -1,0 +1,39 @@
+Compute repeated finite-domain binomial diffusion, a separable image/stencil
+operation. The input is x[H,W], and the update below is applied steps times.
+
+Inputs and complete public domain:
+- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.
+- steps is a Python int in {4,8}.
+- x must be an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Define U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to
+steps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set
+
+  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)
+                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,
+  where a[-1]=1, a[0]=2, a[1]=1.
+
+The zero exterior is imposed at EVERY individual time step. Only values within
+the finite rectangle are retained as the state for the next step.
+The target is U_steps in real arithmetic on the stored input values; no
+intermediate FP16 rounding is part of the target definition.
+
+Return a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.
+Every element must obey abs(actual-U_steps)<=2e-5. The implementation may use
+separability, temporal fusion, alternative boundary evaluation and FP32
+arithmetic, provided the complete finite-domain target is preserved within
+this fixed tolerance. Correctness is one verdict over the whole legal domain,
+not a verdict per input or shape.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+implements the individual three-by-three updates in FP64 and accepts CPU
+inputs. make_inputs() supplies examples only. The implementation is a synthetic
+benchmark in the standard finite-domain stencil family, not a claim of an
+upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

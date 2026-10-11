@@ -268,6 +268,118 @@ def test_closeout_option_does_not_cap_solo(monkeypatch):
     assert requests[0]["max_tokens"] == 32768
 
 
+@pytest.mark.parametrize("truncated_closeout", [None, "evidence", "review", "judge", "all"])
+def test_truncated_normal_turn_preserves_8192_closeout_and_records_usage(
+    monkeypatch, tmp_path, truncated_closeout,
+):
+    """Reproduce 24,003 + 573 tokens, including truncation during closeout."""
+    from verifier.agentic.agents.base import LLMAgent
+    from verifier.agentic.ledger import ClaimLedger
+    from verifier.agentic.orchestrator import AgenticOrchestrator
+    from verifier.agentic.state import Role, ToolEvent
+
+    monkeypatch.setenv("AGENTIC_TOTAL_OUTPUT_TOKEN_BUDGET", "32768")
+    monkeypatch.setenv("AGENTIC_DEBATE_BUDGET_CLOSEOUT", "1")
+    trace_root = tmp_path / "llm_calls"
+    monkeypatch.setenv("AGENTIC_LLM_TRACE_DIR", str(trace_root))
+    requests = []
+    warmup_usage = [2476, 8192, 8192, 1565, 1212, 2366]
+    phases = {8: "evidence", 9: "review", 10: "judge"}
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        index = len(requests)
+        assert index <= 10, "Truncation must not create unbudgeted retries"
+        payload = completion(warmup_usage[index - 1] if index <= 6 else body["max_tokens"])
+        calls = []
+        if index == 7:
+            calls = [("run_python_probe", {"code": "raise AssertionError('must not run')"})]
+        elif index == 8:
+            calls = [("finalize_probe_evidence", {
+                "event_id": "t1", "supports": "inconclusive",
+                "summary": "The probe failed before executing the kernel; it proves no claim.",
+            })]
+        elif index == 9:
+            calls = [("record_no_new_claims", {"reason": "Existing evidence remains insufficient.",
+                                              "reviewed_claims": ["c1"]})]
+        elif index == 10:
+            calls = [("record_verdict", {
+                "verdict": "needs_more_evidence", "confidence": 0.5, "decisive_claims": [],
+                "reason": "No successful probe resolved the claim; exhaustion is not evidence.",
+            })]
+        message = payload["choices"][0]["message"]
+        message["tool_calls"] = [
+            {"id": f"call_{i}", "type": "function", "function": {
+                "name": name, "arguments": json.dumps(args)}}
+            for i, (name, args) in enumerate(calls)
+        ]
+        if index == 7 or (index in phases and truncated_closeout in {phases[index], "all"}):
+            payload["choices"][0]["finish_reason"] = "length"
+            # Even the complete action above must not be applied before this
+            # malformed suffix is discovered (especially a complete verdict).
+            message["tool_calls"].append({"id": "unfinished", "type": "function",
+                "function": {"name": "run_claim_probe", "arguments": '{"code":"unfinished'}})
+        return httpx.Response(200, json=payload)
+
+    with offline_client(monkeypatch, respond) as client:
+        agents = [LLMAgent(role, f"You are {role.value}.", client, max_tokens=8192)
+                  for role in (Role.DESCRIBER, Role.SKEPTIC, Role.EXPERIMENTER, Role.JUDGE)]
+        orchestrator = AgenticOrchestrator(run_dir=tmp_path)
+        ClaimLedger(orchestrator.state).record_claim(
+            statement="Rounding may differ from the contract.", rationale="A tie needs verification.",
+            scope="in_scope", scope_rationale="The contract covers exact ties.",
+            scope_evidence=[{"source": "problem.txt", "summary": "Every int32 value is legal."}],
+        )
+        orchestrator.state.tool_events.append(ToolEvent(
+            id="t1", tool="run_claim_probe", args={}, status="ok",
+            output={"claim_id": "c1", "exit_code": 1, "stderr": "invalid input shape"},
+        ))
+        for name in ("run_python_probe", "run_claim_probe"):
+            orchestrator.registry.get(name).handler = (
+                lambda context, args: pytest.fail("truncated response executed a probe"))
+        # Spend the observed prefix via real SDK calls, not a patched counter.
+        for _ in warmup_usage:
+            orchestrator.run_agent_once(agents[2])
+        assert client._output_budget.used == 24003
+        result = orchestrator.run_verification_workflow(
+            agents, max_debate_rounds=4, max_claim_rounds=2,
+        )
+        assert client._output_budget.used == 32768
+        assert [turn.role for turn in orchestrator.state.history[-3:]] == [
+            Role.EXPERIMENTER, Role.SKEPTIC, Role.JUDGE]
+        truncated_turn = orchestrator.state.history[6]
+        assert truncated_turn.text.startswith("[output_truncated]")
+        assert truncated_turn.tool_calls == []
+        assert truncated_turn.usage["output_tokens"] == 573
+        if truncated_closeout in {"judge", "all"}:
+            assert result.stop_reason == "output_budget_closeout"
+            assert orchestrator.state.verdict is None
+        else:
+            assert result.stop_reason == "verdict_recorded"
+            assert orchestrator.state.verdict["verdict"] == "needs_more_evidence"
+            assert orchestrator.state.verdict["output_budget_closeout"]["started_remaining_tokens"] == 8192
+        if truncated_closeout in {"review", "all"}:
+            assert orchestrator.state.skeptic_review is None
+        if truncated_closeout in {"evidence", "all"}:
+            assert not any(e.tool == "finalize_probe_evidence" for e in orchestrator.state.tool_events)
+        saved = json.loads(orchestrator.persist().run_json.read_text())
+        assert sum(turn["usage"]["output_tokens"] for turn in saved["history"]) == 32768
+
+    assert [body["max_tokens"] for body in requests] == [
+        8192, 8192, 8192, 5716, 4151, 2939, 573, 4096, 1024, 3072]
+    for index, phase in phases.items():
+        assert f'"debate_phase": "{phase}"' in requests[index - 1]["messages"][1]["content"]
+    calls = sorted(trace_root.iterdir())
+    assert len(calls) == 10
+    assert all((call / "request.json").exists() and (call / "response.json").exists() for call in calls)
+    assert sum(json.loads((call / "response.json").read_text())["usage"]["completion_tokens"]
+               for call in calls) == 32768
+    seventh = json.loads((calls[6] / "response.json").read_text())
+    assert seventh["choices"][0]["message"]["tool_calls"][-1]["function"]["arguments"] == '{"code":"unfinished'
+    assert all(not (call / "error.json").exists() for call in calls)
+
+
 def test_explicit_scope_schema_keeps_unknown_legal_and_legacy_default(monkeypatch, tmp_path):
     from verifier.agentic.orchestrator import AgenticOrchestrator
     from verifier.agentic.protocol import AgentResponse

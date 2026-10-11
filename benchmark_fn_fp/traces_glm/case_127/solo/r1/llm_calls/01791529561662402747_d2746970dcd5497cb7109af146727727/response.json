@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-d71d0e41",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the exhaustive claim by sweeping every finite FP16 value through the actual kernel.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b06f4fb3e6153032",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport kernel\\n\\n# all finite FP16 values\\nallbits = np.arange(65536, dtype=np.uint16)\\nx16 = torch.from_numpy(allbits.view(np.float16).copy())\\nfinite = torch.isfinite(x16)\\nxf = x16[finite].cuda().contiguous()  # finite values, N <= 131072\\nprint(\\\"N =\\\", xf.numel())\\n\\nout = kernel.run(xf)\\nref = torch.erf(xf.to(torch.float64)).to(torch.float32)\\nerr = (out.double() - ref.double()).abs()\\nmaxerr = err.max().item()\\nworst = int(err.argmax())\\nviol = (err > 1e-6).sum().item()\\nresult = {\\n  \\\"metric\\\": \\\"max abs error vs FP64 erf reference, over ALL finite FP16 values\\\",\\n  \\\"N\\\": int(xf.numel()),\\n  \\\"max_abs_error\\\": maxerr,\\n  \\\"violations_gt_1e-6\\\": int(viol),\\n  \\\"worst_input\\\": float(xf.cpu()[worst]),\\n  \\\"worst_actual\\\": float(out.cpu()[worst]),\\n  \\\"worst_target\\\": float(ref.cpu()[worst]),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"pass\\\": bool(viol == 0 and maxerr <= 1e-6),\\n}\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"max abs error and violation count over all finite FP16 values\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive sweep over all finite FP16 values. There are ~65536 values. Feed them to run() in chunks (N<=131072, all 65408 finite values fits in one tensor... but N max is 131072, so one tensor works). Compute reference in FP64, find max abs error."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791529563,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 441,
+    "prompt_tokens": 10346,
+    "total_tokens": 10787,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6227,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

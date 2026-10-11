@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-2392b9e6a5324e0bade871c069cc1386",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The domain sweep failed every case, which suggests a real defect — but I want to rule out probe artifacts (e.g., negative int32 words) and confirm against an independent decode on a small controlled case and with the kernel's own `make_inputs`.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-95a1577f802a5da3",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_121/kernel.py\\\")\\nK = importlib.util.module_from_spec(spec); spec.loader.exec_module(K)\\ndev=\\\"cuda\\\"\\n\\ndef indep_ref(x,qw,sc,qz,ids,gs):\\n    m,k = x.shape; n = qw.shape[1]; G = sc.shape[0]\\n    cols = torch.arange(n)\\n    D = torch.empty((k,n),dtype=torch.float64)\\n    for r in range(k):\\n        q = (qw[r//8].long() >> (4*(r%8))) & 15\\n        g = int(ids[r].item())\\n        z = ((qz[g, cols//8].long() >> (4*(cols%8))) & 15) + 1\\n        D[r] = ((q - z).double() * sc[g].double()).half().double()\\n    return x.double() @ D\\n\\n# 1) benign make_inputs cases (non-negative packed words, standard layout)\\nbenign_fails = 0; benign_tests = 0; bw=0\\nfor seed in range(5):\\n    for gs in (16,32,64):\\n        args = K.make_inputs(device=dev, rows=7, input_width=64, output_width=65, group_size=gs, seed=seed)\\n        x,qw,sc,qz,ids,g = args[0],args[1],args[2],args[3],args[4],args[5]\\n        out = K.run(x,qw,sc,qz,ids,g)\\n        ref = indep_ref(x,qw,sc,qz,ids,g)\\n        err = (out.double()-ref).abs(); tol = 0.01+0.001*ref.abs()\\n        benign_tests+=1; bw=max(bw,(err/tol).max().item())\\n        if (err>tol).any(): benign_fails+=1\\n\\n# 2) tiny controlled case: K=16, N=8, M=2, group_size=16, monotone g_idx, nibble codes set explicitly\\nrng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nk,n,m,gs = 16,8,2,16\\ncodes = torch.randint(0,16,((k,n)),generator=rng)\\nqw = torch.zeros(((k+7)//8,n),dtype=torch.int32)\\nfor i in range(8): qw |= codes[i::8].int() << (4*i)\\nzcodes = torch.randint(0,16,(1,n),generator=rng)\\nqz = torch.zeros(1,(n+7)//8,dtype=torch.int32)\\nfor i in range(8): qz |= zcodes[:,i::8].int() << (4*i)\\nsc = (.002+.029*torch.rand((1,n),generator=rng)).half()\\nx = (torch.rand((m,k),generator=rng)-.5).half()\\nids = torch.zeros(k,dtype=torch.int32)\\nargs = [t.to(dev) for t in (x,qw,sc,qz,ids)]\\nout = K.run(*args, gs)\\nref = indep_ref(*args, gs)\\nerr = (out.double()-ref).abs(); tol=0.01+0.001*ref.abs()\\nprint(\\\"tiny maxerr\\\", err.max().item(), \\\"viol\\\", int((err>tol).sum()))\\n# locate a worst cell\\nidx = (err/tol).argmax()\\nprint(\\\"worst cell m,n:\\\", idx.item()//n, idx.item()%n, \\\"out\\\", out.flatten()[idx].item(), \\\"ref\\\", ref.flatten()[idx].item())\\n# decoded weight diff for that column: recompute D and kernel's implied D via least squares? just report codes\\nprint(json.dumps({\\\"benign_tests\\\":benign_tests,\\\"benign_fails\\\":benign_fails,\\\"benign_worst_ratio\\\":bw}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "All 36 tests failed massively. But wait — need to check whether the kernel is genuinely wrong or my probe's qweight generation is broken. My gen used randint over full int32 range for qweight, meaning weight codes are effectively random — that's legal per contract. All fails with huge errors even at K=1 (maxerr 0.21, 771 violations) — suspicious. Errors of ~0.6 even for small K suggest a systematic bug... or my probe error. Hmm, worst_err_over_tol 167 for a K=127 case.\n\nBut wait — the kernel passed presumably in generation? Let me sanity check: with K=1, m=50, n=54, err 0.21 with 771 violations out of 2700. That means many entries wrong. That suggests a real unpacking bug. But before rejecting, verify with a simpler controlled case: verify a small case where I compute reference manually (e.g., identity-like) and check one specific (m,n) discrepancy — maybe the reference in kernel.py itself is trustworthy though. Also verify reference vs my own independent decode.\n\nPotential bug: in _int4_gemm, weight is computed as ((quant-zero)*scale).to(fp16) — matches D. Group = kk // GROUP_SIZE where kk is sorted index; since rows are sorted by g_idx, group boundaries align — fine if GROUP_SIZE divides... actually with sorted rows, group of sorted index kk equals g_idx[original_k] only if groups are contiguous after sorting — stable argsort makes groups contiguous, and counts match histogram, so g_idx[order[kk]] == kk//group_size? No — group sizes are exactly group_size except final partial, sorted order puts group 0 rows first, etc. So kk//group_size = group id. OK.\n\nLikely real bug in repack permutation indexing. But also possible my probe is wrong: I used codes randint full int32 — negative words. Contract says legal. In _repack, value.to(tl.uint32) then shifts — fine.\n\nRather than debug deeply, run one focused probe: single case, compare kernel output vs an independent decode (not kernel's reference, to rule out both sharing a bug — but reference is straightforward canonical decode, hard to get wrong). Check a tiny case like K=16, M=1, N=8, with known nibble patterns and see where mismatch is. Also test with benign non-negative qweight words (make_inputs) — maybe negative words break it, or maybe permutation bug affects everything.\n\nActually make_inputs is the generator the kernel authors presumably tested; if kernel fails even there, it's a clear bug. Let me run a quick probe with make_inputs and with controlled small case, computing reference independently in Python.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791054372,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1486,
+    "prompt_tokens": 19633,
+    "total_tokens": 21119,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 570,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 570
+    }
+  }
+}

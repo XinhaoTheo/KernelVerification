@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-ec9c20397ff44ae7a12063722a7ad57d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The c1 sweep (300 combos) and c2 worst-case tolerance probe passed cleanly; the c3 probe failed on a syntax error I need to fix and rerun.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8e53be8b12eea9de",
+            "function": {
+              "arguments": "{\"data\": {\"all_ok\": true, \"max_split_invariance_diff\": 2.15e-06, \"n_combos\": 300, \"n_fail\": 0, \"n_violations\": 0}, \"event_id\": \"t9\", \"status\": \"rebutted\", \"summary\": \"Swept 300 K/split_k combos (K=1..64 plus boundary Ks 96..512, sk 1/2/4/8): no exceptions, no tolerance violations vs FP64 reference; split-invariance max diff ~2.1e-6 (far below tolerance). No uncovered/double-counted K index or per-K failure found.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-8408f0064bb277f2",
+            "function": {
+              "arguments": "{\"data\": {\"cases_tested\": 6, \"max_abs_err\": 0.0, \"max_excess\": -0.01, \"n_viol\": 0, \"tolerance\": \"0.01 + 0.001*abs(target)\"}, \"event_id\": \"t10\", \"status\": \"rebutted\", \"summary\": \"K=512 with |a|=|b|=0.5 adversarial cancellation, sign-flip, and random max-magnitude cases, sk=1 and 8: FP32 tensor-core accumulation matched the FP64 reference exactly (max_abs_err 0.0, 0 violations, max_excess -0.01). Tolerance claim not reproduced.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-b88c6102485e6b56",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_117\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ngen = torch.Generator(device=\\\"cpu\\\").manual_seed(11)\\nshapes = [(1,1,7),(1,1,512),(1,64,33),(63,63,257),(17,33,257),(64,63,511),(3,5,2),(63,1,511),(1,33,1),(31,47,100)]\\nworst = None; fails = []\\nfor M, N, K in shapes:\\n    a = ((torch.rand((M, K), generator=gen) - .5)).half().to(dev)\\n    b = ((torch.rand((K, N), generator=gen) - .5)).half().to(dev)\\n    bias = (2 * torch.rand((N,), generator=gen) - 1).float().to(dev)\\n    try:\\n        out = kernel.run(a, b, bias, 4)\\n        out8 = kernel.run(a, b, bias, 8)\\n    except Exception as e:\\n        fails.append({\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, \\\"error\\\": str(e)[:150]})\\n        continue\\n    ref = torch.matmul(a.double(), b.double()) + bias.double()[None, :]\\n    for tag, o in [(\\\"sk4\\\", out), (\\\"sk8\\\", out8)]:\\n        err = (o.double() - ref).abs()\\n        tol = 0.01 + 0.001 * ref.abs()\\n        viol = err > tol\\n        exc = float((err - tol).max())\\n        if viol.any():\\n            fails.append({\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, \\\"variant\\\": tag, \\\"n_viol\\\": int(viol.sum()), \\\"max_excess\\\": exc})\\n        if worst is None or exc > worst[\\\"max_excess\\\"]:\\n            worst = {\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, \\\"variant\\\": tag, \\\"max_excess\\\": exc, \\\"max_abs_err\\\": float(err.max())}\\n# input preservation check\\na = ((torch.rand((63, 33), generator=gen) - .5)).half().to(dev)\\nb = ((torch.rand((33, 47), generator=gen) - .5)).half().to(dev)\\nbias = (2 * torch.rand((47,), generator=gen) - 1).float().to(dev)\\na0, b0, bi0 = a.clone(), b.clone(), bias.clone()\\n_ = kernel.run(a, b, bias, 4)\\npreserved = bool((a == a0).all() and (b == b0).all() and (bias == bi0).all())\\nresult = {\\\"n_shapes\\\": len(shapes), \\\"violations\\\": fails, \\\"worst\\\": worst, \\\"inputs_preserved\\\": preserved, \\\"claim_confirmed\\\": len(fails) > 0}\\nprint(\\\"SUMMARY_LINE\\\")\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"whether any non-multiple-of-16 shape produces tolerance violations in tail rows/cols\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "c1 and c2 passed; c3 probe had a syntax error — rerun with fixed code. Also finalize t9, t10.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051134,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1086,
+    "prompt_tokens": 31803,
+    "total_tokens": 32889,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 29,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 29
+    }
+  }
+}

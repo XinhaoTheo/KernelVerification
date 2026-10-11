@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"LICENSE\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_116\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Standalone split-K matrix multiplication with a bias epilogue.\\n2: \\n3: Inspired by Triton's split-K scratch / final-reduction design.\\n4: Copyright 2018-2020 Philippe Tillet; Copyright 2020-2022 OpenAI.\\n5: MIT license; see LICENSE. This is a bounded T4 adaptation, not upstream code.\\n6: \\\"\\\"\\\"\\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _partials(A, B, WORK, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,\\n14:               TILES: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,\\n15:               BK: tl.constexpr):\\n16:     row = tl.program_id(0) * BM + tl.arange(0, BM)\\n17:     col = tl.program_id(1) * BN + tl.arange(0, BN)\\n18:     split = tl.program_id(2)\\n19:     lane = tl.arange(0, BK)\\n20:     accum = tl.zeros((BM, BN), tl.float32)\\n21:     for tile in range(TILES):\\n22:         inner = (split * TILES + tile) * BK + lane\\n23:         left = tl.load(A + row[:, None] * K + inner[None, :],\\n24:                        mask=(row[:, None] < M) & (inner[None, :] < K), other=0.)\\n25:         right = tl.load(B + inner[:, None] * N + col[None, :],\\n26:                         mask=(inner[:, None] < K) & (col[None, :] < N), other=0.)\\n27:         accum = tl.dot(left, right, accum)\\n28:     offset = split * M * N + row[:, None] * N + col[None, :]\\n29:     tl.store(WORK + offset, accum, mask=(row[:, None] < M) & (col[None, :] < N))\\n30: \\n31: \\n32: @triton.jit\\n33: def _finish(WORK, BIAS, OUT, M: tl.constexpr, N: tl.constexpr,\\n34:             SPLITS: tl.constexpr, BLOCK: tl.constexpr):\\n35:     index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n36:     value = tl.zeros((BLOCK,), tl.float32)\\n37:     for split in range(SPLITS):\\n38:         partial = tl.load(WORK + split * M * N + index, mask=index < M * N, other=0.)\\n39:         value += partial.to(tl.float32)\\n40:     bias = tl.load(BIAS + index % N, mask=index < M * N, other=0.)\\n41:     tl.store(OUT + index, value + bias, mask=index < M * N)\\n42: \\n43: \\n44: def validate_inputs(a, b, bias, split_k, require_cuda=True):\\n45:     \\\"\\\"\\\"Check the complete public domain; reference checks can also run on CPU.\\\"\\\"\\\"\\n46:     def require(condition, message):\\n47:         if not condition:\\n48:             raise ValueError(message)\\n49:     values = (a, b, bias)\\n50:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n51:     for tensor in values:\\n52:         require(type(tensor) is torch.Tensor, \\\"standard torch.Tensor required\\\")\\n53:         require(tensor.layout == torch.strided and tensor.is_contiguous(), \\\"contiguous strided tensor required\\\")\\n54:         require(not tensor.requires_grad and not tensor.is_inference(), \\\"ordinary non-gradient tensors required\\\")\\n55:         require(not tensor.is_neg() and not tensor.is_conj(), \\\"materialized logical values required\\\")\\n56:     require(all(t.device == a.device for t in values), \\\"all tensors must share a device\\\")\\n57:     require(not require_cuda or a.is_cuda, \\\"run requires CUDA\\\")\\n58:     require(a.ndim == b.ndim == 2 and bias.ndim == 1, \\\"expected two matrices and a bias vector\\\")\\n59:     m, k = a.shape\\n60:     kb, n = b.shape\\n61:     require(k == kb and bias.shape == (n,), \\\"matrix and bias dimensions disagree\\\")\\n62:     require(1 <= m <= 64 and 1 <= n <= 64 and 1 <= k <= 512, \\\"shape outside supported domain\\\")\\n63:     require(a.dtype == b.dtype == torch.float16 and bias.dtype == torch.float32, \\\"A/B must be FP16 and bias FP32\\\")\\n64:     require(type(split_k) is int and split_k in (1, 2, 4, 8), \\\"split_k must be 1, 2, 4 or 8\\\")\\n65:     for tensor, bound in ((a, .5), (b, .5), (bias, 1.)):\\n66:         require(bool(torch.isfinite(tensor).all().item()), \\\"finite values required\\\")\\n67:         require(bool((tensor.abs() <= bound).all().item()), \\\"input magnitude outside domain\\\")\\n68:     intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]\\n69:     require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)\\n70:                 for b0, b1 in intervals[i + 1:]), \\\"input storage ranges must be disjoint\\\")\\n71:     return {\\\"valid\\\": True, \\\"m\\\": m, \\\"n\\\": n, \\\"k\\\": k, \\\"split_k\\\": split_k}\\n72: \\n73: \\n74: def run(a, b, bias, split_k=4):\\n75:     \\\"\\\"\\\"Return a fresh FP32 CUDA result; input buffers are preserved.\\\"\\\"\\\"\\n76:     validate_inputs(a, b, bias, split_k)\\n77:     m, k = a.shape\\n78:     n = b.shape[1]\\n79:     tiles = triton.cdiv(triton.cdiv(k, 32), split_k)\\n80:     work_dtype = a.dtype if split_k > 1 else torch.float32\\n81:     work = torch.empty((split_k, m, n), dtype=work_dtype, device=a.device)\\n82:     out = torch.empty((m, n), dtype=torch.float32, device=a.device)\\n83:     with torch.cuda.device(a.device):\\n84:         _partials[(triton.cdiv(m, 16), triton.cdiv(n, 16), split_k)](\\n85:             a, b, work, M=m, N=n, K=k, TILES=tiles, BM=16, BN=16, BK=32,\\n86:             num_warps=4, num_stages=2)\\n87:         _finish[(triton.cdiv(m * n, 256),)](\\n88:             work, bias, out, M=m, N=n, SPLITS=split_k, BLOCK=256, num_warps=4)\\n89:     return out\\n90: \\n91: \\n92: def reference(a, b, bias, split_k=4):\\n93:     \\\"\\\"\\\"FP64 full matrix product; independent of split count and scratch layout.\\\"\\\"\\\"\\n94:     validate_inputs(a, b, bias, split_k, require_cuda=False)\\n95:     return torch.matmul(a.double(), b.double()) + bias.double()[None, :]\\n96: \\n97: \\n98: def make_inputs(device=\\\"cuda\\\", m=17, n=33, k=257, split_k=4, seed=0):\\n99:     \\\"\\\"\\\"A convenience example, not a restriction on the legal input values.\\\"\\\"\\\"\\n100:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n101:     a = (torch.rand((m, k), generator=generator) - .5).half()\\n102:     b = (torch.rand((k, n), generator=generator) - .5).half()\\n103:     bias = (2 * torch.rand((n,), generator=generator) - 1).float()\\n104:     return a.to(device), b.to(device), bias.to(device), split_k\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute a matrix product followed by a column-bias epilogue:\\n  target[i,j] = sum(A[i,k] * B[k,j], k=0..K-1) + bias[j].\\nThe target is real arithmetic on the values of the provided tensors. This is\\nforward linear-layer evaluation, not a definition of rounded intermediate\\nresults. An implementation may partition the inner dimension (split-K).\\n\\nInputs:\\n- A is FP16 [M,K] and B is FP16 [K,N], with all magnitudes <= 0.5.\\n- bias is FP32 [N], with all magnitudes <= 1.\\n- 1 <= M <= 64, 1 <= N <= 64, 1 <= K <= 512.\\n- split_k is a Python int in {1,2,4,8}; it is only a partition parameter and\\n  never changes the required result. K need not be divisible by split_k or 32.\\n\\nAll values are finite; zeros and subnormal values are permitted. All tensors\\nmust be ordinary torch.Tensor objects (not subclasses), dense, strided,\\ncontiguous, on the same CUDA device, with disjoint occupied storage ranges.\\nThey have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\nThis interface consumes materialized numerical buffers and does not provide\\nautograd. Calls use ordinary non-inference execution mode with no concurrent\\nexternal writes. Nonzero storage offsets are permitted when these conditions\\nhold. Preserve every input.\\n\\nReturn a new FP32 CUDA tensor [M,N] on the input device. Each output must be\\nfinite and satisfy abs(actual-target) <= 0.01 + 0.001 * abs(target).\\nNo intermediate rounding behavior is part of the target. The bounded domain\\nand tolerance accommodate ordinary FP32 accumulation; the largest exact\\nunscaled partial-sum magnitude is at most 128, well within finite FP16 range.\\n\\nvalidate_inputs() is public and is actually invoked by run(). reference()\\nindependently uses a full FP64 matrix multiplication and accepts CPU inputs.\\nmake_inputs() gives one example only; correctness covers every legal shape,\\nvalue and split count, not the generator's seeds. Frozen environment: NVIDIA\\nT4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_116\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-03T18:09:56Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"run() sets work_dtype = a.dtype (FP16) when split_k>1; partials are rounded to FP16 before final summation, so up to 8 rounded partials per output can accumulate rounding error exceeding abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Each output must be finite and satisfy abs(actual-target) <= 0.01 + 0.001*abs(target); split_k never changes the required result and covers all legal split counts {1,2,4,8}.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires each output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) for all legal split_k in {1,2,4,8}; storing split partials in FP16 may violate this tolerance for split_k>1.\",\n      \"statement\": \"Storing split-K partial sums in FP16 introduces intermediate rounding that violates the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-03T18:09:56Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_116\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_116\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_116\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_116\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_116\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The suspicious detail here: when `split_k > 1`, partial results are stored in FP16 (`work_dtype = a.dtype`), which introduces intermediate rounding that the tolerance (0.01) may not absorb. Let me record the claim and probe it.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"run() sets work_dtype = a.dtype (FP16) when split_k>1; partials are rounded to FP16 before final summation, so up to 8 rounded partials per output can accumulate rounding error exceeding abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Each output must be finite and satisfy abs(actual-target) <= 0.01 + 0.001*abs(target); split_k never changes the required result and covers all legal split counts {1,2,4,8}.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires each output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) for all legal split_k in {1,2,4,8}; storing split partials in FP16 may violate this tolerance for split_k>1.\",\n            \"statement\": \"Storing split-K partial sums in FP16 introduces intermediate rounding that violates the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll run a probe for claim c1, searching over random worst-case inputs (K=512, split_k=8) for tolerance violations caused by the FP16 partial buffer.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\n\\nresults = []\\nworst = None\\nfor trial in range(120):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(trial)\\n    m, n, k = 64, 64, 512\\n    a = ((torch.rand((m, k), generator=gen) - .5)).half() * 2 * .5  # in [-.5,.5]\\n    b = ((torch.rand((k, n), generator=gen) - .5)).half() * 2 * .5\\n    bias = (2 * torch.rand((n,), generator=gen) - 1).float()\\n    a, b, bias = a.to(device), b.to(device), bias.to(device)\\n    # worst magnitude: push to max 0.5 by sign trick\\n    a = a.sign() * 0.5\\n    b = b.sign() * 0.5\\n    for sk in (8, 4, 2):\\n        out = kernel.run(a, b, bias, sk)\\n        ref = kernel.reference(a, b, bias, sk)\\n        diff = (out - ref).abs()\\n        viol = (diff > tol(ref))\\n        nv = int(viol.sum())\\n        if nv > 0 and (worst is None or diff.max() > worst[\\\"max_diff\\\"]):\\n            worst = {\\\"trial\\\": trial, \\\"split_k\\\": sk, \\\"violations\\\": nv,\\n                     \\\"max_diff\\\": float(diff.max()), \\\"max_tol\\\": float(tol(ref).max()),\\n                     \\\"max_ref\\\": float(ref.abs().max())}\\n        if nv > 0:\\n            results.append({\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv, \\\"max_diff\\\": float(diff.max())})\\n\\nprint(json.dumps({\\\"violating_configs\\\": len(results), \\\"worst\\\": worst,\\n                  \\\"note\\\": \\\"A,B set to +/-0.5 exactly (max magnitude), K=512\\\"}))\",\n            \"expected_signal\": \"violation of abs(actual-target) <= 0.01+0.001*|target| for split_k>1\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The first probe found no violations, but it only used values of exactly \\u00b10.5, which makes every partial sum a multiple of 0.25 \\u2014 exactly representable in FP16, so it never exercised the suspected rounding at all. I need a probe where partials are large but *not* FP16-representable, and where large partials cancel so the tolerance floor (0.01) has to absorb up to 8 FP16 roundings.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\nworst = None\\nnviol_total = 0\\nn_cases = 0\\n\\n# Adversarial construction: within each split segment, B aligns with A's signs so\\n# each partial is large (~16, not FP16-representable), but alignment flips across\\n# split halves so partials cancel and the target is near 0.\\nfor trial in range(60):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(1000 + trial)\\n    m, n, k = 4, 8, 512\\n    A = (torch.rand((m, k), generator=gen) * 0.5).half()  # magnitudes in (0,0.5]\\n    # sign pattern of A restricted to row 0 drives B; use row 0's signs\\n    signs = torch.sign(A[0]).half()\\n    Bsign = signs[:, None].repeat(1, n).clone()\\n    seg = k // 8\\n    Bsign[4*seg:, :] = -Bsign[4*seg:, :]  # flip alignment in last 4 splits\\n    B = (Bsign * 0.5).half().t().contiguous().t()  # ensure [K,N] contiguous\\n    B = torch.where(B == 0, torch.tensor(0.5, dtype=torch.float16), B)\\n    bias = torch.zeros(n, dtype=torch.float32, device=\\\"cpu\\\")\\n    A, B, bias = A.to(device), B.to(device), bias.to(device)\\n    for sk in (8, 4):\\n        out = kernel.run(A, B, bias, sk)\\n        ref = kernel.reference(A, B, bias, sk)\\n        diff = (out - ref).abs()\\n        v = diff > tol(ref)\\n        nv = int(v.sum())\\n        n_cases += 1\\n        if nv > 0:\\n            nviol_total += nv\\n            if worst is None or diff.max() > worst[\\\"max_diff\\\"]:\\n                worst = {\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv,\\n                        \\\"max_diff\\\": float(diff.max()),\\n                        \\\"max_tol_at_viol\\\": float(tol(ref)[v].max()),\\n                        \\\"max_ref\\\": float(ref.abs().max()),\\n                        \\\"min_ref_at_viol\\\": float(ref.abs()[v].min()),\\n                        \\\"example_actual\\\": float(out[v][0]),\\n                        \\\"example_target\\\": float(ref[v][0])}\\n        # diagnostics even when passing\\n        if worst is None and diff.max() > 0.002:\\n            pass\\n\\n...[truncated, 181 more chars]\",\n            \"expected_signal\": \"tolerance violation when large partials cancel to near-zero target\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_116\"\n      },\n      \"created_at\": \"2026-10-03T18:09:38Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"LICENSE\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_116\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Standalone split-K matrix multiplication with a bias epilogue.\\n\\nInspired by Triton's split-K scratch / final-reduction design.\\nCopyright 2018-2020 Philippe Tillet; Copyright 2020-2022 OpenAI.\\nMIT license; see LICENSE. This is a bounded T4 adaptation, not upstream code.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _partials(A, B, WORK, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,\\n              TILES: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,\\n              BK: tl.constexpr):\\n    row = tl.program_id(0) * BM + tl.arange(0, BM)\\n    col = tl.program_id(1) * BN + tl.arange(0, BN)\\n    split = tl.program_id(2)\\n    lane = tl.arange(0, BK)\\n    accum = tl.zeros((BM, BN), tl.float32)\\n    for tile in range(TILES):\\n        inner = (split * TILES + tile) * BK + lane\\n        left = tl.load(A + row[:, None] * K + inner[None, :],\\n                       mask=(row[:, None] < M) & (inner[None, :] < K), other=0.)\\n        right = tl.load(B + inner[:, None] * N + col[None, :],\\n                        mask=(inner[:, None] < K) & (col[None, :] < N), other=0.)\\n        accum = tl.dot(left, right, accum)\\n    offset = split * M * N + row[:, None] * N + col[None, :]\\n    tl.store(WORK + offset, accum, mask=(row[:, None] < M) & (col[None, :] < N))\\n\\n\\n@triton.jit\\ndef _finish(WORK, BIAS, OUT, M: tl.constexpr, N: tl.constexpr,\\n            SPLITS: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    value = tl.zeros((BLOCK,), tl.float32)\\n    for split in range(SPLITS):\\n        partial = tl.load(WORK + split * M * N + index, mask=index < M * N, other=0.)\\n        value += partial.to(tl.float32)\\n    bias = tl.load(BIAS + index % N, mask=index < M * N, other=0.)\\n    tl.store(OUT + index, value + bias, mask=index < M * N)\\n\\n\\ndef validate_inputs(a, b, bias, split_k, require_cuda=True):\\n    \\\"\\\"\\\"Check the complete public domain; reference checks can also run on CPU.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n    values = (a, b, bias)\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    for tensor in values:\\n        require(type(tensor) is torch.Tensor, \\\"standard torch.Tensor required\\\")\\n        require(tensor.layout == torch.strided and tensor.is_contiguous(), \\\"contiguous strided tensor required\\\")\\n        require(not tensor.requires_grad and not tensor.is_inference(), \\\"ordinary non-gradient tensors required\\\")\\n        require(not tensor.is_neg() and not tensor.is_conj(), \\\"materialized logical values required\\\")\\n    require(all(t.device == a.device for t in values), \\\"all tensors must share a device\\\")\\n    require(not require_cuda or a.is_cuda, \\\"run requires CUDA\\\")\\n    require(a.ndim == b.ndim == 2 and bias.ndim == 1, \\\"expected two matrices and a bias vector\\\")\\n    m, k = a.shape\\n    kb, n = b.shape\\n    require(k == kb and bias.shape == (n,), \\\"matrix and bias dimensions disagree\\\")\\n    require(1 <= m <= 64 and 1 <= n <= 64 and 1 <= k <= 512, \\\"shape outside supported domain\\\")\\n    require(a.dtype == b.dtype == torch.float16 and bias.dtype == torch.float32, \\\"A/B must be FP16 and bias FP32\\\")\\n    require(type(split_k) is int and split_k in (1, 2, 4, 8), \\\"split_k must be 1, 2, 4 or 8\\\")\\n    for tensor, bound in ((a, .5), (b, .5), (bias, 1.)):\\n        require(bool(torch.isfinite(tensor).all().item()), \\\"finite values required\\\")\\n        require(bool((tensor.abs() <= bound).all().item()), \\\"input magnitude outside domain\\\")\\n    intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]\\n    require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)\\n                for b0, b1 in intervals[i + 1:]), \\\"input storage ranges must be disjoint\\\")\\n    return {\\\"valid\\\": True, \\\"m\\\": m, \\\"n\\\": n, \\\"k\\\": k, \\\"split_k\\\": split_k}\\n\\n\\ndef run(a, b, bias, split_k=4):\\n    \\\"\\\"\\\"Return a fresh FP32 CUDA result; input buffers are preserved.\\\"\\\"\\\"\\n    validate_inputs(a, b, bias, split_k)\\n...[truncated, 1379 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute a matrix product followed by a column-bias epilogue:\\n  target[i,j] = sum(A[i,k] * B[k,j], k=0..K-1) + bias[j].\\nThe target is real arithmetic on the values of the provided tensors. This is\\nforward linear-layer evaluation, not a definition of rounded intermediate\\nresults. An implementation may partition the inner dimension (split-K).\\n\\nInputs:\\n- A is FP16 [M,K] and B is FP16 [K,N], with all magnitudes <= 0.5.\\n- bias is FP32 [N], with all magnitudes <= 1.\\n- 1 <= M <= 64, 1 <= N <= 64, 1 <= K <= 512.\\n- split_k is a Python int in {1,2,4,8}; it is only a partition parameter and\\n  never changes the required result. K need not be divisible by split_k or 32.\\n\\nAll values are finite; zeros and subnormal values are permitted. All tensors\\nmust be ordinary torch.Tensor objects (not subclasses), dense, strided,\\ncontiguous, on the same CUDA device, with disjoint occupied storage ranges.\\nThey have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\nThis interface consumes materialized numerical buffers and does not provide\\nautograd. Calls use ordinary non-inference execution mode with no concurrent\\nexternal writes. Nonzero storage offsets are permitted when these conditions\\nhold. Preserve every input.\\n\\nReturn a new FP32 CUDA tensor [M,N] on the input device. Each output must be\\nfinite and satisfy abs(actual-target) <= 0.01 + 0.001 * abs(target).\\nNo intermediate rounding behavior is part of the target. The bounded domain\\nand tolerance accommodate ordinary FP32 accumulation; the largest exact\\nunscaled partial-sum magnitude is at most 128, well within finite FP16 range.\\n\\nvalidate_inputs() is public and is actually invoked by run(). reference()\\nindependently uses a full FP64 matrix multiplication and accepts CPU inputs.\\nmake_inputs() gives one example only; correctness covers every legal shape,\\nvalue and split count, not the generator's seeds. Frozen environment: NVIDIA\\nT4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_116\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_116\"\n      },\n      \"created_at\": \"2026-10-03T18:09:38Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute a matrix product followed by a column-bias epilogue:\\n  target[i,j] = sum(A[i,k] * B[k,j], k=0..K-1) + bias[j].\\nThe target is real arithmetic on the values of the provided tensors. This is\\nforward linear-layer evaluation, not a definition of rounded intermediate\\nresults. An implementation may partition the inner dimension (split-K).\\n\\nInputs:\\n- A is FP16 [M,K] and B is FP16 [K,N], with all magnitudes <= 0.5.\\n- bias is FP32 [N], with all magnitudes <= 1.\\n- 1 <= M <= 64, 1 <= N <= 64, 1 <= K <= 512.\\n- split_k is a Python int in {1,2,4,8}; it is only a partition parameter and\\n  never changes the required result. K need not be divisible by split_k or 32.\\n\\nAll values are finite; zeros and subnormal values are permitted. All tensors\\nmust be ordinary torch.Tensor objects (not subclasses), dense, strided,\\ncontiguous, on the same CUDA device, with disjoint occupied storage ranges.\\nThey have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\nThis interface consumes materialized numerical buffers and does not provide\\nautograd. Calls use ordinary non-inference execution mode with no concurrent\\nexternal writes. Nonzero storage offsets are permitted when these conditions\\nhold. Preserve every input.\\n\\nReturn a new FP32 CUDA tensor [M,N] on the input device. Each output must be\\nfinite and satisfy abs(actual-target) <= 0.01 + 0.001 * abs(target).\\nNo intermediate rounding behavior is part of the target. The bounded domain\\nand tolerance accommodate ordinary FP32 accumulation; the largest exact\\nunscaled partial-sum magnitude is at most 128, well within finite FP16 range.\\n\\nvalidate_inputs() is public and is actually invoked by run(). reference()\\nindependently uses a full FP64 matrix multiplication and accepts CPU inputs.\\nmake_inputs() gives one example only; correctness covers every legal shape,\\nvalue and split count, not the generator's seeds. Frozen environment: NVIDIA\\nT4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"entry\": \"case_116\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_116\"\n      },\n      \"created_at\": \"2026-10-03T18:09:38Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_116\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"LICENSE\",\n            \"size_bytes\": 1132\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 5369\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1940\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_116\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T18:09:38Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_116\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"run() sets work_dtype = a.dtype (FP16) when split_k>1; partials are rounded to FP16 before final summation, so up to 8 rounded partials per output can accumulate rounding error exceeding abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Each output must be finite and satisfy abs(actual-target) <= 0.01 + 0.001*abs(target); split_k never changes the required result and covers all legal split counts {1,2,4,8}.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires each output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) for all legal split_k in {1,2,4,8}; storing split partials in FP16 may violate this tolerance for split_k>1.\",\n        \"statement\": \"Storing split-K partial sums in FP16 introduces intermediate rounding that violates the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input.\"\n      },\n      \"created_at\": \"2026-10-03T18:09:56Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-03T18:09:56Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"run() sets work_dtype = a.dtype (FP16) when split_k>1; partials are rounded to FP16 before final summation, so up to 8 rounded partials per output can accumulate rounding error exceeding abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Each output must be finite and satisfy abs(actual-target) <= 0.01 + 0.001*abs(target); split_k never changes the required result and covers all legal split counts {1,2,4,8}.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires each output to satisfy abs(actual-target) <= 0.01 + 0.001*abs(target) for all legal split_k in {1,2,4,8}; storing split partials in FP16 may violate this tolerance for split_k>1.\",\n        \"statement\": \"Storing split-K partial sums in FP16 introduces intermediate rounding that violates the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-03T18:09:56Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\n\\nresults = []\\nworst = None\\nfor trial in range(120):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(trial)\\n    m, n, k = 64, 64, 512\\n    a = ((torch.rand((m, k), generator=gen) - .5)).half() * 2 * .5  # in [-.5,.5]\\n    b = ((torch.rand((k, n), generator=gen) - .5)).half() * 2 * .5\\n    bias = (2 * torch.rand((n,), generator=gen) - 1).float()\\n    a, b, bias = a.to(device), b.to(device), bias.to(device)\\n    # worst magnitude: push to max 0.5 by sign trick\\n    a = a.sign() * 0.5\\n    b = b.sign() * 0.5\\n    for sk in (8, 4, 2):\\n        out = kernel.run(a, b, bias, sk)\\n        ref = kernel.reference(a, b, bias, sk)\\n        diff = (out - ref).abs()\\n        viol = (diff > tol(ref))\\n        nv = int(viol.sum())\\n        if nv > 0 and (worst is None or diff.max() > worst[\\\"max_diff\\\"]):\\n            worst = {\\\"trial\\\": trial, \\\"split_k\\\": sk, \\\"violations\\\": nv,\\n                     \\\"max_diff\\\": float(diff.max()), \\\"max_tol\\\": float(tol(ref).max()),\\n                     \\\"max_ref\\\": float(ref.abs().max())}\\n        if nv > 0:\\n            results.append({\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv, \\\"max_diff\\\": float(diff.max())})\\n\\nprint(json.dumps({\\\"violating_configs\\\": len(results), \\\"worst\\\": worst,\\n                  \\\"note\\\": \\\"A,B set to +/-0.5 exactly (max magnitude), K=512\\\"}))\",\n        \"expected_signal\": \"violation of abs(actual-target) <= 0.01+0.001*|target| for split_k>1\"\n      },\n      \"created_at\": \"2026-10-03T18:10:20Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"3ad9cf366e441e94dc46074eec005f2a45e4c4fad8f9312700967fd8c8cf67a7\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"8ac813415235b79df4bc5cb2e2f36a632b3c761b027d8b96569dd781e6c0d93d\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t6_json_result.json\",\n            \"sha256\": \"124d7a85f786ad20a6c1f9a11302c00a510507b86193d70ad6d696d5af018002\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"Storing split-K partial sums in FP16 introduces intermediate rounding that violates the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input.\",\n        \"cwd\": \"/root/cases/case_116\",\n        \"duration_s\": 10.251232,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"3ad9cf366e441e94dc46074eec005f2a45e4c4fad8f9312700967fd8c8cf67a7\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"8ac813415235b79df4bc5cb2e2f36a632b3c761b027d8b96569dd781e6c0d93d\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"124d7a85f786ad20a6c1f9a11302c00a510507b86193d70ad6d696d5af018002\"\n              }\n            ],\n            \"duration_s\": 10.251232,\n            \"exit_code\": 0,\n            \"expected_signal\": \"violation of abs(actual-target) <= 0.01+0.001*|target| for split_k>1\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"note\": \"A,B set to +/-0.5 exactly (max magnitude), K=512\",\n              \"violating_configs\": 0,\n              \"worst\": null\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"violating_configs\\\": 0, \\\"worst\\\": null, \\\"note\\\": \\\"A,B set to +/-0.5 exactly (max magnitude), K=512\\\"}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"violation of abs(actual-target) <= 0.01+0.001*|target| for split_k>1\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"note\": \"A,B set to +/-0.5 exactly (max magnitude), K=512\",\n          \"violating_configs\": 0,\n          \"worst\": null\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"violating_configs\\\": 0, \\\"worst\\\": null, \\\"note\\\": \\\"A,B set to +/-0.5 exactly (max magnitude), K=512\\\"}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\nworst = None\\nnviol_total = 0\\nn_cases = 0\\n\\n# Adversarial construction: within each split segment, B aligns with A's signs so\\n# each partial is large (~16, not FP16-representable), but alignment flips across\\n# split halves so partials cancel and the target is near 0.\\nfor trial in range(60):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(1000 + trial)\\n    m, n, k = 4, 8, 512\\n    A = (torch.rand((m, k), generator=gen) * 0.5).half()  # magnitudes in (0,0.5]\\n    # sign pattern of A restricted to row 0 drives B; use row 0's signs\\n    signs = torch.sign(A[0]).half()\\n    Bsign = signs[:, None].repeat(1, n).clone()\\n    seg = k // 8\\n    Bsign[4*seg:, :] = -Bsign[4*seg:, :]  # flip alignment in last 4 splits\\n    B = (Bsign * 0.5).half().t().contiguous().t()  # ensure [K,N] contiguous\\n    B = torch.where(B == 0, torch.tensor(0.5, dtype=torch.float16), B)\\n    bias = torch.zeros(n, dtype=torch.float32, device=\\\"cpu\\\")\\n    A, B, bias = A.to(device), B.to(device), bias.to(device)\\n    for sk in (8, 4):\\n        out = kernel.run(A, B, bias, sk)\\n        ref = kernel.reference(A, B, bias, sk)\\n        diff = (out - ref).abs()\\n        v = diff > tol(ref)\\n        nv = int(v.sum())\\n        n_cases += 1\\n        if nv > 0:\\n            nviol_total += nv\\n            if worst is None or diff.max() > worst[\\\"max_diff\\\"]:\\n                worst = {\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv,\\n                        \\\"max_diff\\\": float(diff.max()),\\n                        \\\"max_tol_at_viol\\\": float(tol(ref)[v].max()),\\n                        \\\"max_ref\\\": float(ref.abs().max()),\\n                        \\\"min_ref_at_viol\\\": float(ref.abs()[v].min()),\\n                        \\\"example_actual\\\": float(out[v][0]),\\n                        \\\"example_target\\\": float(ref[v][0])}\\n        # diagnostics even when passing\\n        if worst is None and diff.max() > 0.002:\\n            pass\\n\\nprint(json.dumps({\\\"cases\\\": n_cases, \\\"total_violations\\\": nviol_total, \\\"worst\\\": worst,\\n \\\"note\\\": \\\"large cancelling partials, target near 0, partials ~16 non-representable in FP16\\\"}))\\n\",\n        \"expected_signal\": \"tolerance violation when large partials cancel to near-zero target\"\n      },\n      \"created_at\": \"2026-10-03T18:11:03Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"error\": {\n          \"message\": \"claim c1 already has a successful probe you have not interpreted: event t6. Call finalize_probe_evidence(event_id='t6', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t6 first and then probe again.\",\n          \"recoverable\": true,\n          \"type\": \"LedgerError\"\n        },\n        \"error_type\": \"LedgerError\",\n        \"event_id\": \"t7\",\n        \"message\": \"claim c1 already has a successful probe you have not interpreted: event t6. Call finalize_probe_evidence(event_id='t6', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t6 first and then probe again.\",\n        \"ok\": false\n      },\n      \"status\": \"error\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

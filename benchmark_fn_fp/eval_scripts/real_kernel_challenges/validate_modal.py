@@ -22,10 +22,20 @@ FAMILIES = {"state_pair": ("case_106", "case_107"),
             "state_contract_audit": ("case_107", "case_110"),
             "norm_contract_audit": ("case_108", "case_111"),
             "segmented_state_pair": ("case_112", "case_113"),
-            "paged_attention_pair": ("case_114", "case_115")}
+            "paged_attention_pair": ("case_114", "case_115"),
+            "splitk_pair": ("case_116", "case_117"),
+            "moe_pair": ("case_118", "case_119"),
+            "int4_pair": ("case_120", "case_121"),
+            "stencil_pair": ("case_122", "case_123"),
+            "requant_pair": ("case_124", "case_125"),
+            "erf_pair": ("case_126", "case_127"),
+            "gelu_pair": ("case_128", "case_129"),
+            "silu_pair": ("case_130", "case_131"),
+            "sine_pair": ("case_132", "case_133")}
 app = modal.App("kv-real-kernel-qualification")
 image = (modal.Image.debian_slim(python_version="3.11")
-         .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4"))
+         .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4",
+                      "gmpy2==2.2.1", "mpmath==1.3.0"))
 if modal.is_local():
     image = (image.add_local_dir(str(BENCHMARK / "triton_eval_cases"), "/root/cases")
              .add_local_dir(str(HERE), "/root/oracles"))

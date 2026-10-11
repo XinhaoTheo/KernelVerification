@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-e0ab54d2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Running the domain-sweep probe for claim c1 against the kernel's own FP64 reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9a83f756d6078173",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, itertools, random, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_121/kernel.py\\\")\\nK = importlib.util.module_from_spec(spec); spec.loader.exec_module(K)\\ndev=\\\"cuda\\\"\\ndef gen(seed, m,k,n,gs):\\n    rng = torch.Generator(\\\"cpu\\\").manual_seed(seed)\\n    x = (torch.rand((m,k),generator=rng)-.5).half()\\n    codes = torch.randint(-2**31,2**31,(((k+7)//8),n),generator=rng,dtype=torch.int64).clamp(-2**31,2**31-1)\\n    qweight = codes.to(torch.int32)\\n    G = (k+gs-1)//gs\\n    zc = torch.randint(-2**31,2**31,(G,(n+7)//8),generator=rng,dtype=torch.int64).clamp(-2**31,2**31-1)\\n    qzeros = zc.to(torch.int32)\\n    scales = (.002+.029*torch.rand((G,n),generator=rng)).half()\\n    # valid g_idx histogram, permuted\\n    ids = torch.cat([torch.full((min(gs,k-g*gs),),g) for g in range(G)])\\n    ids = ids[torch.randperm(len(ids),generator=rng)].int()\\n    return (x.to(dev),qweight.to(dev),scales.to(dev),qzeros.to(dev),ids.to(dev),gs)\\nworst=0.0; worst_case=None; fails=0; tests=0\\nrandom.seed(0)\\ncases=[]\\nfor gs in (16,32,64):\\n    for k in (1,15,16,17,31,33,63,64,65,96,127,128):\\n        cases.append((random.randint(1,65),k,random.randint(1,96),gs))\\nfor seed,(m,k,n,gs) in enumerate(cases):\\n    x,qw,sc,qz,ids,gs2 = gen(seed+100,m,k,n,gs)\\n    out = K.run(x,qw,sc,qz,ids,gs2)\\n    ref = K.reference(x,qw,sc,qz,ids,gs2)\\n    tol = 0.01 + 0.001*ref.abs()\\n    err = (out.double()-ref.double()).abs()\\n    viol = (err > tol)\\n    tests+=1\\n    e=err.max().item()\\n    rel=(err/tol).max().item()\\n    if rel>worst: worst=rel; worst_case=(m,k,n,gs,seed)\\n    if viol.any():\\n        fails+=1\\n        print(\\\"FAIL\\\", m,k,n,gs,\\\"maxerr\\\",e,\\\"numviol\\\",int(viol.sum()))\\nprint(json.dumps({\\\"tests\\\":tests,\\\"fails\\\":fails,\\\"worst_err_over_tol\\\":worst,\\\"worst_case\\\":worst_case}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run the probe sweeping the domain."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791054331,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 672,
+    "prompt_tokens": 14666,
+    "total_tokens": 15338,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-fc471503df4f4746b460ec1af43e3e6f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing the kernel against the FP64 per-step reference across several shapes, both step counts, and boundary-stressing inputs.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9287f570e0596494",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_123\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = []\\nshapes = [(1,1),(1,129),(129,1),(129,129),(31,33),(128,127),(2,3)]\\ndef make(h, w, kind, seed):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    if kind == \\\"rand\\\":\\n        x = (2*torch.rand((h,w), generator=g)-1).half()\\n    elif kind == \\\"ones\\\":\\n        x = torch.ones((h,w)).half()\\n    elif kind == \\\"impulse\\\":\\n        x = torch.zeros((h,w)).half(); x[0,0]=1.0\\n    elif kind == \\\"corners\\\":\\n        x = torch.zeros((h,w)).half()\\n        x[0,0]=1.0; x[-1,-1]=-1.0; x[h//2,w//2]=1.0\\n    elif kind == \\\"neg\\\":\\n        x = -torch.ones((h,w)).half()\\n    return x.to(dev)\\n\\nworst = 0.0\\nfor (h,w) in shapes:\\n    for kind in [\\\"rand\\\",\\\"ones\\\",\\\"impulse\\\",\\\"corners\\\",\\\"neg\\\"]:\\n        for steps in (4,8):\\n            x = make(h,w,kind,hash((h,w,kind))%1000)\\n            out = kernel.run(x, steps)\\n            ref = kernel.reference(x, steps)\\n            err = (out.double()-ref).abs().max().item()\\n            worst = max(worst, err)\\n            results.append({\\\"h\\\":h,\\\"w\\\":w,\\\"kind\\\":kind,\\\"steps\\\":steps,\\\"max_abs_err\\\":err,\\n                            \\\"dtype\\\":str(out.dtype),\\\"shape\\\":list(out.shape),\\\"cuda\\\":out.is_cuda,\\n                            \\\"input_preserved\\\": bool(torch.equal(x, x.detach()))})\\n            if err > 2e-5:\\n                results[-1][\\\"fail\\\"] = True\\n\\n# contiguous view with nonzero storage offset is legal\\nbase = torch.randn(300, 300, generator=torch.Generator().manual_seed(1)).half().to(dev).clamp(-1,1)\\nview = base[10:139, 20:149].contiguous()  # actually contiguous slice with offset\\ntry:\\n    out = kernel.run(view, 4)\\n    ref = kernel.reference(view, 4)\\n    err = (out.double()-ref).abs().max().item()\\n    worst = max(worst, err)\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"err\\\":err})\\nexcept Exception as e:\\n    results.append({\\\"kind\\\":\\\"offset_view\\\",\\\"error\\\":str(e)})\\n\\nfails = [r for r in results if r.get(\\\"fail\\\")]\\nprint(json.dumps({\\\"metric\\\":\\\"max abs error vs FP64 per-step reference, tolerance 2e-5\\\",\\n \\\"reason\\\":\\\"contract requires every element within 2e-5 of U_steps over whole legal domain\\\",\\n \\\"n_cases\\\":len(results),\\\"n_fail\\\":len(fails),\\\"worst_max_abs_err\\\":worst,\\\"fails\\\":fails[:5]}))\", \"expected_signal\": \"max abs error over all cases, fail if > 2e-5\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Run a probe testing kernel vs reference across several shapes/steps, boundary-heavy inputs (e.g., all ones, random, impulse at corner), max abs error.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791065599,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 758,
+    "prompt_tokens": 11068,
+    "total_tokens": 11826,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 33,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 33
+    }
+  }
+}

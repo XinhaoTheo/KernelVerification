@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-86d5d2a6ae4844da82b5071847ba13d7",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll record the initial description model for this GPTQ INT4 projection kernel.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b7eb74887f4d2ef7",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Compute INT4 weight-only linear projection from canonical GPTQ buffers: target[m,n] = sum_k x[m,k]*D[k,n] with D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[g_idx[k],n]).\", \"qweight packed low-nibble-first along K in int32; qzeros packed low-nibble-first along N with zero = nibble+1 (range 1..16, no wrap).\", \"g_idx is per original row, order unrestricted (non-monotone); group histogram fixed: group g occurs min(group_size, K-g*group_size) times; group_size in {16,32,64}.\", \"Bounds: 1<=M<=65, 1<=K<=128, 1<=N<=96; unused high nibbles in final K pack and past N in qzeros are arbitrary and must not affect output.\", \"Input tensor hygiene: ordinary torch.Tensor (not subclasses), contiguous strided, one CUDA device, disjoint byte ranges, requires_grad=False, is_inference=False, non-neg/conj, non-inference mode.\", \"Output: fresh finite FP32 CUDA [M,N]; tolerance abs(actual-target) <= 0.01 + 0.001*abs(target); H16 round of decoded weight is part of the target definition; FP16 inputs / FP32 accumulation expected.\", \"validate_inputs() enforces the domain and is called by run(); reference() is an independent CPU-accepting FP64 decode; make_inputs() is only an example.\"], \"kernel_model\": [\"run() validates, then does a two-stage Triton pipeline: _repack reorders weights into Marlin-style packed layout, then _int4_gemm performs tiled FP16 tl.dot with FP32 accumulator.\", \"Ordering: order = argsort(g_idx, stable) maps sorted-k position -> original row k; _repack and _int4_gemm both index X and qweight via this order, so group index in sorted space is simply kk//GROUP_SIZE.\", \"_repack decodes canonical qweight for reordered rows and re-encodes into packed int32 words (128 words per (16,64) tile) using a precomputed 1024-entry layout permutation with an [0,4,1,5,2,6,3,7] interleave.\", \"_int4_gemm decodes packed words back to nibbles via word/lane arithmetic mirroring the repack layout, loads per-group scale and packed zero, computes weight=((quant-zero)*scale) cast to FP16, and accumulates tl.dot(activation, weight).\", \"Decoded weight path: (quant - (zero_nibble+1)) * scale cast to fp16 matches the contract's H16 semantics (single fp32 multiply then .half()).\", \"validate_inputs enforces shape bounds (M<=65,K<=128,N<=96), dtypes (FP16 x/scales, int32 qweight/qzeros/g_idx), finiteness, |x|<=0.5, scales in (0,1/32], g_idx range + histogram, and pairwise-disjoint byte ranges.\", \"GEMM grid: BM=16, BN=32, BK=32, masks handle M/N/K edges; scale/zero loads masked with other=0.0/0 (dead lanes).\", \"make_inputs builds random packed buffers with a permuted g_idx permutation to exercise activation-order behavior.\"], \"open_questions\": [\"Does tl.dot with K<16 tiles pad zeros correctly, and do all edge shapes (K in 1..15, K odd multiples of 8, N in 1..96 non-multiples of 8/64) satisfy tolerance against reference?\", \"Is the _repack permutation/interleave self-consistent with the GEMM decode, including all KK%2 and column%64 blocks?\", \"Does the hist check accept a group whose multiple rows land in the sorted tail group when the tail group begins mid-run (stable argsort interleave)?\", \"Are negative int32 qweight/qzero words handled identically to the reference (sign-extension via shifts on int32 vs unsigned shifts)?\", \"Do non-multiple-of-16 K values trigger any Triton constexpr/divisibility assumptions in _repack that could misplace word data?\"], \"risk_map\": [\"Packing/unpacking consistency: _repack encode and _int4_gemm decode word/lane arithmetic must be exact inverses across all K%16 and N%64 residues; any mismatch silently produces wrong weights.\", \"Masked dead lanes in GEMM load zero-word with other=0 and zero=nibble+1, scale other=0: dead columns could inject nonzero values into accumulation if masks are not perfectly aligned (dead column in BN tile but column<N not guaranteed).\", \"Group handling after reordering: kk//GROUP_SIZE in sorted space assumes g_idx sorted ascending groups exactly of size group_size with one partial tail group; verify histogram + stable argsort makes this exactly true for non-monotone g_idx (e.g. tail partial group interleaved).\", \"Bit-shift semantics: value.to(tl.uint32) then >> on negative int32 qweight words must extract correct nibbles (logical shift on unsigned cast); zero_word handled the same way; sign extension risk.\", \"Unused high nibbles of final K pack must not leak: _repack masks sorted_k<K but loads ORDER+0 for out-of-range; ensure masked nibbles are zero and decode side masks kk<K.\", \"Edge shapes: K not multiple of 16 or 8, N not multiple of 64/8, M not multiple of 16 (M up to 65); packed buffer size kt*nt*128 vs word addressing; BK=32 with K small (tl.dot needs K>=16 dims; K<32 blocks use masking with other=0 which should be safe but check tl.dot minimum).\", \"validate_inputs histogram check uses torch.bincount on permuted ids; also the disjoint-byte-range check may falsely reject views sharing a storage pool (contract says legal views with offsets, disjoint occupied ranges — data_ptr arithmetic should match contract).\", \"Tolerance headroom: FP16 weight rounding matches H16 by construction; accumulate in FP32 should stay well within 0.01+0.001|target|, but subnormal scales in (0,1/32] times small x could stress per-element error.\", \"is_neg()/is_conj() checks on plain tensors: these methods exist only for some dtypes/torch versions; may raise instead of returning bool (validation path robustness, not math).\"], \"scope_notes\": \"Verdict is a single correctness decision for this fixed implementation over the full legal domain (M 1..65, K 1..128, N 1..96, group_size 16/32/64), not per-input.\\\", \\\"Out of scope: autograd, inference-mode entries, non-contiguous inputs, CPU execution of run(), tensors sharing storage, and pre-quantization-original comparison.\\\", \\\"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; Marlin layout used only as a packing convention, not its CUDA kernel.\\\", \\\"FP16-precision adversarial distribution variation (tail/dominant entries) is less relevant than bit-level packing and edge-shape coverage here; the contract's decoded-H16 weight is exact and reproducible.\\\"]\", \"summary\": \"Initial description of case_121: GPTQ INT4 weight-only projection kernel with Marlin-layout repacking and Triton GEMM, plus a strict input-domain validator.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791054320,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1629,
+    "prompt_tokens": 10493,
+    "total_tokens": 12122,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "id": "chatcmpl-73c755b0",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Two open claims, both answerable by exhaustive FP16 sweeps. I'm batching two probes: c1 sweeps every finite FP16 value comparing the kernel against an FP64 erf reference against the 1e-6 bound; c2 isolates the FP32 evaluation drift by comparing kernel output against the same truncated formula evaluated in float64.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-93778947e0ec5726",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport kernel as K\\n\\n# all finite FP16 values\\nbits = torch.arange(65536, dtype=torch.int32)\\nfp16_all = torch.tensor(bits.view(torch.uint16).numpy(), dtype=torch.uint16).view(torch.float16)\\nfinite = torch.isfinite(fp16_all)\\nx_all = fp16_all[finite].to(dev)\\nprint(\\\"num_finite_values:\\\", x_all.numel(), \\\"N<=131072:\\\", x_all.numel() <= 131072)\\n\\nout = K.run(x_all) if dev == \\\"cuda\\\" else None\\nif dev == \\\"cuda\\\":\\n    ref = torch.erf(x_all.to(torch.float64))\\n    err = (out.to(torch.float64) - ref).abs()\\n    i = int(err.argmax())\\n    print(json.dumps({\\n        \\\"n_values\\\": x_all.numel(),\\n        \\\"max_abs_err\\\": float(err.max()),\\n        \\\"tolerance\\\": 1e-6,\\n        \\\"num_violations\\\": int((err > 1e-6).sum()),\\n        \\\"worst_x\\\": float(x_all[i]),\\n        \\\"worst_kernel_out\\\": float(out[i]),\\n        \\\"worst_ref_erf\\\": float(ref[i]),\\n        \\\"out_finite\\\": bool(torch.isfinite(out).all().item()),\\n    }))\\nelse:\\n    print(json.dumps({\\\"error\\\": \\\"no cuda\\\"}))\\n\", \"expected_signal\": \"max_abs_err vs FP64 erf over all finite FP16 values, checked against 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-94280af24d6a57bd",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nbits = torch.arange(65536, dtype=torch.int32)\\nfp16_all = torch.tensor(bits.view(torch.uint8).numpy().copy(), dtype=torch.uint8).view(torch.float16)\\nx_all = fp16_all[torch.isfinite(fp16_all)].to(dev)\\nout = K.run(x_all)\\n\\n# truncated formula evaluated in float64 (exact-formula baseline)\\nm = x_all.to(torch.float64).abs()\\nt = 1.0 / (1.0 + 0.3275911 * m)\\np = 1.06141*t - 1.45315\\np = p*t + 1.42141\\np = p*t - 0.28450\\np = p*t + 0.25483\\np = p*t\\nval = 1.0 - p*torch.exp(-(m*m))\\nval = torch.where(x_all.to(torch.float64) < 0, -val, val)\\n\\ndrift = (out.to(torch.float64) - val).abs()\\nerr_formula = (val - torch.erf(x_all.to(torch.float64))).abs()\\nerr_total = (out.to(torch.float64) - torch.erf(x_all.to(torch.float64))).abs()\\ni = int(drift.argmax())\\nprint(json.dumps({\\n    \\\"max_fp32_eval_drift\\\": float(drift.max()),\\n    \\\"drift_worst_x\\\": float(x_all[i]),\\n    \\\"max_truncated_formula_err_exact_arith\\\": float(err_formula.max()),\\n    \\\"max_total_err_kernel_vs_erf\\\": float(err_total.max()),\\n    \\\"num_drift_above_1e_6\\\": int((drift > 1e-6).sum()),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"out_finite\\\": bool(torch.isfinite(out).all().item()),\\n}))\\n\", \"expected_signal\": \"FP32 evaluation drift between kernel output and the same truncated formula in float64, plus total error vs erf, against 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "I'll launch two probes: c1 exhaustive sweep of all finite FP16 values vs FP64 erf; c2 comparing exact-arithmetic (float64 evaluation of truncated formula) vs kernel FP32 output to isolate drift contribution. Actually c2 is essentially a subset of c1's measurement. But we can run both independently. Actually a single exhaustive sweep answers both; but claims require per-claim probes. Launch both in one response.\n\nFor c1: sweep all 65536 FP16 bit patterns (finite only), run kernel on batches of 131072? Max N is 131072; finite FP16 values number 65534. Can run in one tensor. Compute FP64 erf reference.\n\nFor c2: compare kernel output vs float64 evaluation of the truncated formula (isolates FP32 drift), report max drift.\n\nBoth can be run in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791529599,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1090,
+    "prompt_tokens": 18260,
+    "total_tokens": 19350,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

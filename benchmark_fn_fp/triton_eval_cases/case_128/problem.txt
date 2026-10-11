@@ -1,0 +1,42 @@
+Compute GELU elementwise on stored FP16 input values and return FP32 output.
+The mathematical target is the Gaussian Error Linear Unit
+
+  target[i] = GELU(x[i]) = x[i] * Phi(x[i])
+            = 0.5 * x[i] * erfc(-x[i] / sqrt(2)),
+
+where Phi is the standard normal cumulative distribution function and
+  erfc(u) = (2/sqrt(pi)) * integral from u to infinity of exp(-t*t) dt.
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- EVERY finite FP16 value is legal, including both signed zeros, positive
+  and negative subnormal values, and both extrema +/-65504. NaN and infinity
+  are outside this input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x.
+Every output element must satisfy
+
+  abs(actual[i] - GELU(x[i])) <= 1e-6.
+
+The relative tolerance is zero, and signed zeros are numerically equivalent.
+The target is defined in real arithmetic on the exact stored input value.
+No intermediate FP16 rounding or particular polynomial is part of its
+mathematical definition. Polynomial, rational, tanh or other approximations
+are permitted if they satisfy this fixed absolute tolerance throughout the
+entire legal domain. Correctness is one verdict for the implementation,
+not a verdict per input, distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+evaluates the erfc definition in FP64 and returns FP64; it accepts CPU inputs.
+make_inputs() supplies examples only. This is an original Triton adaptation
+of the Abramowitz--Stegun five-coefficient Gaussian-tail approximation,
+composed with the GELU definition. It is a synthetic benchmark implementation,
+not a claim of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

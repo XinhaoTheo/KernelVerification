@@ -1,0 +1,1462 @@
+{
+  "experiment": "real-kernel-requant-pilot-2026-10-05",
+  "status": "completed",
+  "purpose_built": true,
+  "planned_cases": [
+    "case_124",
+    "case_125"
+  ],
+  "expected_labels": {
+    "case_124": "trust",
+    "case_125": "reject"
+  },
+  "provider": "fireworks",
+  "model": "accounts/fireworks/models/glm-5p3",
+  "reasoning_effort": "low",
+  "per_arm_total_output_tokens": 32768,
+  "single_call_max_tokens": 32768,
+  "tool_max_tokens": 8192,
+  "require_claim_scope_fields": true,
+  "debate_budget_closeout": {
+    "normal_turn_output_cap": 8192,
+    "closeout_reserve": 8192,
+    "stage_caps": {
+      "evidence": 4096,
+      "skeptic": 1024,
+      "judge": 3072
+    }
+  },
+  "truth_rule": "One fixed label per implementation under complete public contract; inputs provide witnesses, never input-dependent labels.",
+  "trace_location": "traces_glm/case_NN/{single_call,solo,debate}/rN",
+  "model_calls_started": true,
+  "gpu_cost_usd": null,
+  "selection": "Keep both planned implementations and every three-arm attempt. Freeze source, domain and tolerance before model calls. No best-of retries or post-model edits.",
+  "scoring": "Correct tool verdict vs incorrect no-tools verdict is classification gain; better evidence or within-run belief correction alone is not success.",
+  "source_kind": "Original synthetic Triton implementation of real gemmlowp two-stage fixed-point requantization semantics; carry scheduling mutation is not a claimed historical upstream bug.",
+  "source_references": [
+    {
+      "repository": "https://github.com/google/gemmlowp",
+      "commit": "16e8662c34917be0065110bfcd9cc27d30f52fdf",
+      "path": "fixedpoint/fixedpoint.h",
+      "url": "https://raw.githubusercontent.com/google/gemmlowp/16e8662c34917be0065110bfcd9cc27d30f52fdf/fixedpoint/fixedpoint.h",
+      "sha256": "f1b11e756ba138b42abd2f39095fd4d740a26b10ff1a8c682c2eb4d273658cf6",
+      "license": "Apache-2.0",
+      "role": "Semantic source of two-stage fixed-point requantization; synthetic Triton implementation, not claimed historical defect."
+    }
+  ],
+  "construction_design": {
+    "target": "Positive Q31 multiplier, first nearest ties toward positive infinity, then power-of-two division nearest ties away from zero; clamp to int8 then dequantize to continuous FP32 output",
+    "optimization": "Signed product high/low 32-bit limbs and fused two-stage bias/carry chain",
+    "synthetic_mutation": "Two low-word carry flags evaluated independently against original product low word instead of propagating the first addition into the second",
+    "qualification": "Independent Python big integers, algebraic limb/carry proof plus finite boundary partition checks, followed by GPU contract/numerical validation.",
+    "api": "run(acc, multipliers, right_shifts, zero_points, output_scales)",
+    "domain": "M1..4096,C1..257; fullint32acc; m2^30..2^31-1; rightshift0..31; z-128..127; FP32 output_scales exactly2^-8..1 powersoftwo; contiguous offsets and readonly aliases permitted",
+    "fixed_tolerance": {
+      "atol": 1e-06,
+      "rtol": 0
+    },
+    "proof_outline": [
+      "Write signed product P=hi*2^32+lo with0<=lo<2^32. Sequential uint32 additions plus carry flags exactly represent adding two low-word biases.",
+      "For r>=1, floor((floor((P+2^30)/2^31)+2^(r-1)-I(H<0))/2^r) equals one floor division by2^(31+r) after adding both biases. Kernel splits that sum across high/low words.",
+      "Using a<0 instead of H<0 agrees whenever H!=0; when H=0 both bias choices still yield R=0.",
+      "Positive multipliers guarantee P and combined bias fit signed64, and adjusted highword fits signed32. Dynamic shifts are clamped within0..30; r0 uses bit concatenation.",
+      "Clamping R to[-255,255] before adding z[-128,127] preserves finalclamp[-128,127] and preventsint32overflow.",
+      "(Q-z) lies[-255,255]; multiplication by allowed powers2 is exactlyrepresentableFP32, including signedzero equivalence."
+    ]
+  },
+  "base_git_commit": "afa506da7740ee3ca7b65cf89f0197e161dcce9e",
+  "protocol_changed_from_stencil": false,
+  "model_retries": 0,
+  "source_or_threshold_edits_after_models": false,
+  "pre_model_review": {
+    "reviewer": "independent subagent",
+    "scalar_integer_cases": 234752,
+    "arithmetic_mismatches": 0,
+    "public_contract_identical": true,
+    "correctness_blockers": [],
+    "overflow_bound": "Biased P in[-2^62+3*2^30,3*2^61-3*2^30+1]; final signedhigh in[-2^30,3*2^29-1].",
+    "secondary_exact_witness": {
+      "accumulator": -1073741825,
+      "multiplier": 1073741824,
+      "shift": 30,
+      "zero_point": 0,
+      "scale": 1,
+      "reference": -1,
+      "mutant": 0
+    },
+    "note": "Review and finite CPU modeling precede real T4 validation; not GPU proof."
+  },
+  "qualification_file": "qualification/r12.json",
+  "qualification_app": "ap-AUxR9A2rkzM30txUnINU2t",
+  "qualification_environment": {
+    "gpu": "Tesla T4",
+    "compute_capability": [
+      7,
+      5
+    ],
+    "torch": "2.8.0+cu128",
+    "triton": "3.4.0",
+    "numpy": "1.26.4",
+    "python": "3.11.12"
+  },
+  "qualification_summary": {
+    "case_124": {
+      "label": "trust",
+      "tests_total": 22,
+      "tests_passed": 22,
+      "max_abs_error": 0.0,
+      "max_error_ratio": 0.0,
+      "first_counterexample": null
+    },
+    "case_125": {
+      "label": "reject",
+      "tests_total": 22,
+      "tests_passed": 16,
+      "max_abs_error": 1.0,
+      "max_error_ratio": 1000000.0,
+      "first_counterexample": {
+        "rows": 1025,
+        "channels": 128,
+        "style": "small",
+        "seed": 125000,
+        "legal": true,
+        "passed": false,
+        "exact_match": false,
+        "max_abs_error": 1.0,
+        "max_error_ratio": 1000000.0,
+        "finite": true,
+        "inputs_preserved": true,
+        "output_fresh": true,
+        "shape_dtype_valid": true,
+        "storage_offsets": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "witness": {
+          "index": [
+            1,
+            9
+          ],
+          "accumulator": -511,
+          "multiplier": 1073741824,
+          "shift": 9,
+          "zero_point": 0,
+          "scale": 1.0,
+          "actual": -1.0,
+          "reference": 0.0,
+          "absolute_error": 1.0,
+          "allowed_error": 1e-06
+        }
+      }
+    }
+  },
+  "frozen_public_hashes": {
+    "case_124": {
+      "kernel.py": "4cccf9e78715e32dc8d435463758221f96458935c33e1e0742f632b7272499ba",
+      "problem.txt": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_125": {
+      "kernel.py": "80946be260742fd2df527250d25699d23ef4e85833c1832e0b94b1f68910b57d",
+      "problem.txt": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "oracle_sha256": "4a6b04c529f37cf01294d37e5f0bf62cdbbd675bfb3bd837eadacc6ade47bb39",
+  "public_sources_frozen_before_models": true,
+  "preflight": {
+    "fireworks_key_present": true,
+    "cases": {
+      "case_124": {
+        "kernel_sha256": "4cccf9e78715e32dc8d435463758221f96458935c33e1e0742f632b7272499ba",
+        "problem_sha256": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed",
+        "visible_cases": [
+          "case_124"
+        ],
+        "public_files_sha256": {
+          "kernel.py": "4cccf9e78715e32dc8d435463758221f96458935c33e1e0742f632b7272499ba",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+          "problem.txt": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed"
+        },
+        "previous_trace_root_removed": true
+      },
+      "case_125": {
+        "kernel_sha256": "80946be260742fd2df527250d25699d23ef4e85833c1832e0b94b1f68910b57d",
+        "problem_sha256": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed",
+        "visible_cases": [
+          "case_125"
+        ],
+        "public_files_sha256": {
+          "kernel.py": "80946be260742fd2df527250d25699d23ef4e85833c1832e0b94b1f68910b57d",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+          "problem.txt": "bb811a0e29d4018e97505f4467663a68c519437c59b730edee13a1dd470933ed"
+        },
+        "previous_trace_root_removed": true
+      }
+    },
+    "runtime": {
+      "python": "3.11.12",
+      "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+      "packages": {
+        "torch": "2.8.0",
+        "triton": "3.4.0",
+        "numpy": "1.26.4",
+        "openai": "3.19.0",
+        "anthropic": "1.8.0"
+      },
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "cuda_version": "12.8",
+      "gpu_devices": [
+        {
+          "name": "Tesla T4",
+          "capability": [
+            7,
+            5
+          ]
+        }
+      ]
+    },
+    "model_calls": 0
+  },
+  "preflight_app": "ap-DFXwJ5nQeB7vYu4uWgfngi",
+  "model_launch_raw_utc": "2026-10-05T06:54:23.158088+00:00",
+  "tool_model_app": "ap-FDOyioWSKF5V1NuqC4WCGu",
+  "local_checks": {
+    "pytest_command": "python -m pytest -q tests/test_case_numbering.py tests/test_agentic_modal_collection.py",
+    "pytest_passed": 70
+  },
+  "independent_semantic_crosscheck": {
+    "reviewer": "independent subagent",
+    "timing": "post-freeze read-only review",
+    "source": "pinned gemmlowp source",
+    "implementation": "Separate Python nudge/truncation plus remainder/threshold formulation; not compiled upstream execution",
+    "boundary_accumulators": [
+      -2147483648,
+      -2147483647,
+      -1073741824,
+      -65536,
+      -513,
+      -512,
+      -511,
+      -3,
+      -2,
+      -1,
+      0,
+      1,
+      2,
+      3,
+      511,
+      512,
+      513,
+      65536,
+      1073741824,
+      2147483646,
+      2147483647
+    ],
+    "boundary_multipliers": [
+      1073741824,
+      1073741825,
+      1073741826,
+      2147483645,
+      2147483646,
+      2147483647
+    ],
+    "right_shifts": "0..31",
+    "boundary_comparisons": 4032,
+    "random_comparisons": 200000,
+    "seed": 20261005,
+    "total_comparisons": 204032,
+    "mismatches": 0,
+    "formula": "P=a*m; nudge=2^30 if P>=0 else 1-2^30; H=trunc_to_zero((P+nudge)/2^31); mask=2^r-1; R=(H>>r)+((H&mask)>((mask>>1)+(H<0)))",
+    "limit": "Finite semantic cross-check, not a formal proof. Public reference and private oracle separately implement the same contract formula; independence is from candidate limb/carry implementation."
+  },
+  "checks": {
+    "frozen_public_hashes_unchanged": true,
+    "frozen_oracle_hash_unchanged": true,
+    "public_contracts_identical": true,
+    "trace_secret_scan_hits": 0,
+    "pytest_passed": 70,
+    "pytest_command": "python -m pytest -q tests/test_case_numbering.py tests/test_agentic_modal_collection.py",
+    "git_diff_check": "passed after final report and index refresh",
+    "raw_requests_responses_usage_complete": true,
+    "shared_verifier_fingerprint": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+    "record_consistency_audit_issues": 0,
+    "report_capture_regression_tests_passed": 6,
+    "report_capture_regression_command": "python -m pytest -q tests/test_real_kernel_report.py"
+  },
+  "api_sdk_calls": 32,
+  "trace_files": 202,
+  "probe_script_files": 12,
+  "observed_tool_gain_cases": [],
+  "model_launch_incidents": [
+    {
+      "arm": "single_call",
+      "stage": "before Python process started",
+      "error": "uv temporary interpreter path was removed after dependency check",
+      "model_calls": 0,
+      "trace_reserved": false,
+      "resolution": "Run the same pinned dependencies and baseline script within uv run; no API retry or result selection."
+    }
+  ],
+  "manual_trace_audit": {
+    "single_call": {
+      "case_124": {
+        "verdict": "trust",
+        "correct": true,
+        "output_tokens": 15291,
+        "mechanism": "After correcting intermediate arithmetic mistakes, derives r=0/r=1/r>=2 cases, sign(a) versus H=0, preclamp equivalence and indexing. More reasoning cost did not prevent static verification.",
+        "limitations": [
+          "No machine-checked full-program proof or explicit complete high_final range bound."
+        ]
+      },
+      "case_125": {
+        "verdict": "reject",
+        "correct": true,
+        "output_tokens": 12369,
+        "mechanism": "Identifies carry_b computed against original low instead of intermediate low_a, derives total carry error intervals and valid small-value arithmetic witness.",
+        "partial_witness": {
+          "a": 1,
+          "m": 1073741825,
+          "r": 1,
+          "H": 1,
+          "reference_R": 1,
+          "candidate_R": 0
+        },
+        "reviewer_completion": "Set M=C=1,z=0,scale=1 to complete legal executable input; these parameters were omitted from final model answer.",
+        "limitations": [
+          "One intermediate carry_b subinterval statement is inconsistent, but the total-carry partition and concrete witness are correct.",
+          "Generic claim that every R mismatch reaches output ignores saturation; the specific small-value witness avoids it."
+        ]
+      }
+    },
+    "solo": {
+      "case_124": {
+        "verdict": "trust",
+        "correct": true,
+        "sdk_calls": 4,
+        "output_tokens": 2950,
+        "probe_attempts": 1,
+        "completed_kernel_comparisons": 742,
+        "compared_elements": 950784,
+        "reported_max_abs_error": 0.0,
+        "pre_probe_reasoning": "Uncertain about rounding; finite tests resolve uncertainty, no prior definite reject verdict.",
+        "scripts": {
+          "t6": "8 random +5 shift/clamp +384 extreme +320 tie +25 mixed calls; 704 calls use constant32x32 matrices, including repeated -2^30."
+        },
+        "limitations": [
+          "Finite passes labelled exhaustive and existential defect claim rebutted without full-domain algebra.",
+          "No executed finite/input-preservation/fresh-output/offset/alias checks.",
+          "Comparison can miss NaN; no actual NaN evidence in this run.",
+          "Summary uses ambiguous +/-2^31 and +/-128 but actual script values are in legal int32 and zero-point ranges."
+        ]
+      },
+      "case_125": {
+        "verdict": "trust",
+        "correct": false,
+        "sdk_calls": 6,
+        "output_tokens": 6426,
+        "probe_attempts": 3,
+        "completed_kernel_comparisons": 1,
+        "compared_elements": 8832,
+        "reported_max_abs_error": 0.0,
+        "pre_probe_reasoning": "Does not identify carry_b dependency defect; chooses tests instead of completing limb proof.",
+        "scripts": {
+          "t6": "60.038s timeout during CPU input search, no kernel call.",
+          "t7": "3.216s IndexError during boolean-indexed candidate selection, no kernel call.",
+          "t8": "7.056s; one legal276x32 comparison, all reported equal."
+        },
+        "generator_defects": [
+          "Positive and negative R ties overwrite the same row.",
+          "Failed H tie searches silently remain zero.",
+          "Saturation target search for all channels gated by channel0 success.",
+          "Each shift bound to a single multiplier/zero-point/scale; r1 uses z127, often masking positive carry error.",
+          "400000x32 random pool is candidate search only, not kernel test coverage."
+        ],
+        "limitations": [
+          "Unverified generated categories presented as covered in final verdict.",
+          "Finite passes promoted to full-domain guarantee.",
+          "No executed storage-offset/alias or preservation/freshness checks."
+        ],
+        "diagnostic_cpu_replay": {
+          "environment": "local PyTorch2.9.1 CPU; original trace used T4/PyTorch2.8.0",
+          "kind": "Input-generator reconstruction and integer simulation, not new GPU evidence",
+          "R_tie_rows": 31,
+          "nonzero_R_tie_entries": 18,
+          "all_nonzero_R_ties_negative": true,
+          "H_tie_rows_all_zero": 32,
+          "saturation_rows_all_zero": 10,
+          "modeled_intermediate_R_mismatches": 118,
+          "modeled_final_output_mismatches": 0,
+          "note": "118 intermediate errors all hidden by saturation in this diagnostic reconstruction; do not report as original GPU observation."
+        }
+      }
+    },
+    "debate": {
+      "case_124": {
+        "verdict": null,
+        "correct": false,
+        "outcome": "token_limit",
+        "runner_status": "error",
+        "sdk_calls": 7,
+        "actual_output_tokens": 24576,
+        "history_output_tokens": 24003,
+        "input_tokens": 193797,
+        "closeout_reserve_unused": 8192,
+        "probe_attempts": 3,
+        "completed_kernel_comparisons": 0,
+        "scripts": {
+          "t10": "acc1x64 but channel parameters length1; validate raises before candidate kernel.",
+          "t11": "acc1x128 but channel parameters length1; same validation failure.",
+          "t12": "acc1x5 but channel parameters length1; same validation failure."
+        },
+        "pre_probe_reasoning": "Two skeptic turns exhaust8192tokens each without actions; incorrect fused-implies-single-rounding hypothesis is repeated into shared description.",
+        "failure_chain": [
+          "Normal-stage output allocations leave573tokens for final experimenter request.",
+          "Model identifies input should be Nx1, but code tool arguments truncate at finish_reason=length.",
+          "llm.py records raw response and usage before json.loads raises JSONDecodeError.",
+          "Orchestrator catches reserve exception but not parse exception, so8192-token closeout is never entered."
+        ],
+        "sdk_output_tokens": [
+          2476,
+          8192,
+          8192,
+          1565,
+          1212,
+          2366,
+          573
+        ],
+        "capture": "All7 requests/responses/usage preserved; only first6 parsed model turns in run.history.",
+        "cost_from_all_raw_responses_usd": 0.3794502,
+        "interpretation": "No kernel verdict, not wrong classification or voluntary abstention; total32768 budget was not exhausted."
+      },
+      "case_125": {
+        "verdict": "reject",
+        "correct": true,
+        "sdk_calls": 13,
+        "output_tokens": 21207,
+        "probe_attempts": 6,
+        "actual_probe_scripts": 5,
+        "completed_kernel_comparisons": 4,
+        "compared_elements": 637728,
+        "failed_element_comparisons": 6371,
+        "counts_include_cross_probe_duplicates": true,
+        "scripts": {
+          "t9": {
+            "shape": [
+              2049,
+              192
+            ],
+            "elements": 393408,
+            "mismatches": 3908,
+            "role": "First real output failures from small integer sweep."
+          },
+          "t10": {
+            "shape": [
+              2048,
+              64
+            ],
+            "elements": 131072,
+            "mismatches": 0
+          },
+          "t11": {
+            "shape": [
+              16385,
+              12
+            ],
+            "result": "M exceeds4096; validation failure before candidate kernel."
+          },
+          "t13": {
+            "result": "Ledger refusal before probe execution; no script file."
+          },
+          "t14": {
+            "shape": [
+              4095,
+              12
+            ],
+            "elements": 49140,
+            "mismatches": 1434
+          },
+          "t17": {
+            "shape": [
+              517,
+              124
+            ],
+            "elements": 64108,
+            "mismatches": 1029
+          }
+        },
+        "legal_witness": {
+          "a": -257,
+          "m": 1073741824,
+          "r": 8,
+          "z": 0,
+          "scale": 1,
+          "candidate": 0,
+          "reference": -1,
+          "probe": "t17"
+        },
+        "causal_order": "Incorrect/plausible rounding hypotheses -> small-value sweep observes real failures -> excludes some hypotheses -> further boundary evidence -> reject. Never accurately identifies carry_b dependency.",
+        "limitations": [
+          "Reject supported by valid counterexamples, but root-cause explanation falsely blames fusion itself;124 uses same fusion correctly.",
+          "t17 per-shift dictionaries overwrite earlier multiplier counts; total1029valid but subgroup sums not coverage totals.",
+          "One verdict attempt rejected by ledger before final valid verdict."
+        ]
+      }
+    }
+  },
+  "observed_debate_over_solo_cases": [
+    "case_125"
+  ],
+  "conclusion": "No tools-versus-no-tools classification gain: single_call2/2,solo1/2,debate1/2 valid correct with one truncated-response execution failure.125 debate beats solo locally, but no-tools also rejects correctly. Keep both cases as ordinary_candidate; no expansion based on this pilot.",
+  "totals": {
+    "attempts": 6,
+    "outcomes": {
+      "correct": 4,
+      "token_limit": 1,
+      "wrong_verdict": 1
+    },
+    "audited_correct": 4,
+    "audit_issue_attempts": 0,
+    "recorded_api_estimate_usd": 1.985968,
+    "unknown_cost_attempts": 0,
+    "partial_cost_attempts": 0,
+    "probes": 13
+  },
+  "arms": {
+    "single_call": {
+      "attempts": 2,
+      "outcomes": {
+        "correct": 2
+      },
+      "audited_correct": 2,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 0.129882,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 0
+    },
+    "solo": {
+      "attempts": 2,
+      "outcomes": {
+        "correct": 1,
+        "wrong_verdict": 1
+      },
+      "audited_correct": 1,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 0.277282,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 4
+    },
+    "debate": {
+      "attempts": 2,
+      "outcomes": {
+        "token_limit": 1,
+        "correct": 1
+      },
+      "audited_correct": 1,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 1.578804,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 9
+    }
+  },
+  "attempts": [
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": "trust",
+      "confidence": 0.85,
+      "reason": "I verified the fused arithmetic case by case (r=0 via the explicit q0 path, r=1 and r>=2 with sign-dependent rounding constants low_b/high_b) against the double-rounding definition, including the tie cases and the identity floor((X+c*2^31)/2^(31+r)) = floor((floor(X/2^31)+c)/2^r) for nonnegative values, and the equivalent away-from-zero handling for negatives; the limb/carry handling, the pre-clamp to \u00b1255 before adding z (shown equivalent to clamping R+z), saturation, and exact FP32 output all match the contract for the entire legal domain including a=-2^31.",
+      "stop_reason": "stop",
+      "turns": 1,
+      "claims": 0,
+      "probes": 0,
+      "input_tokens": 2920,
+      "output_tokens": 15291,
+      "usd": 0.071368,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 1,
+        "responses_saved": 1,
+        "responses_with_usage": 1,
+        "history_calls_with_usage": 0,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183305775868000_1bac913b565f4706bb421e5a6a134094",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "stop"
+          ]
+        }
+      ],
+      "case": "case_124",
+      "arm": "single_call",
+      "trial": "r1",
+      "batch": "run_20261005T065505_310931Z",
+      "path": "traces_glm/case_124/single_call/r1",
+      "truth": "trust",
+      "status": "completed",
+      "outcome": "correct",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183305775868000_1bac913b565f4706bb421e5a6a134094",
+          "status": "completed",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.13.5",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "packages": {
+          "torch": "2.9.1",
+          "triton": null,
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.4.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173"
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": 235.64757208433002,
+      "link": "traces_glm/case_124/single_call/r1/transcript.md",
+      "protocol": {
+        "max_tokens": 32768,
+        "total_output_token_budget": null,
+        "reasoning_effort": "low",
+        "max_rounds": null,
+        "debate_budget_closeout": null,
+        "require_claim_scope_fields": null,
+        "normal_turn_output_cap": null,
+        "closeout_reserve": null,
+        "closeout_stage_caps": null
+      }
+    },
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": "trust",
+      "confidence": 0.93,
+      "turns": 5,
+      "claims": 1,
+      "probes": 1,
+      "usd": 0.098821,
+      "input_tokens": 61315,
+      "output_tokens": 2950,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 4,
+        "responses_saved": 4,
+        "responses_with_usage": 4,
+        "history_calls_with_usage": 4,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183293307726655_7cc79d42ee274eebabc96c86f79aef2c",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183308081219510_f548bdcb943643e28dcbacac20c12b45",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183338172611254_17904090969040bea9c27f9c3fbf0d32",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183347032611101_3574a53e73f743daad4a8a5774ee1e03",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        }
+      ],
+      "case": "case_124",
+      "arm": "solo",
+      "trial": "r1",
+      "batch": "run_20261005T065447_344341Z",
+      "path": "traces_glm/case_124/solo/r1",
+      "truth": "trust",
+      "status": "completed",
+      "outcome": "correct",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183293307726655_7cc79d42ee274eebabc96c86f79aef2c",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183308081219510_f548bdcb943643e28dcbacac20c12b45",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183338172611254_17904090969040bea9c27f9c3fbf0d32",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183347032611101_3574a53e73f743daad4a8a5774ee1e03",
+          "status": "completed",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.11.12",
+        "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+        "packages": {
+          "torch": "2.8.0",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.8.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+        "cuda_version": "12.8",
+        "gpu_devices": [
+          {
+            "name": "Tesla T4",
+            "capability": [
+              7,
+              5
+            ]
+          }
+        ]
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": null,
+      "link": "traces_glm/case_124/solo/r1/transcript.md",
+      "reason": "Claim c1 (in-scope) hypothesized that the Triton limb-based double-rounding deviates from the contract's exact integer definition for some legal inputs. Runtime probe t6 compared K.run against K.reference (Python arbitrary-precision, two-stage definition with the contract's tie rules) on: 8 random seeds (29x64), all r in [0,31] with extreme accumulators \u00b12^31 and clamp interplay with z=\u00b1128, 12 extreme acc values x all 32 shifts with m=2^31-1, half-tie constructions (m=2^30, odd/negative a) across all shifts, and mixed random 128x64 trials for r in {0,1,2,3,31}. Result: max abs error 0.0, zero failures \u2014 every element exactly matches. The kernel also returns a fresh FP32 CUDA tensor via run(), preserves inputs, and validates the declared domain. No in-scope violation of the contract (abs error <=1e-6 across the ENTIRE legal domain) was found.",
+      "protocol": {
+        "max_tokens": 8192,
+        "total_output_token_budget": 32768,
+        "reasoning_effort": "low",
+        "max_rounds": 10,
+        "debate_budget_closeout": false,
+        "require_claim_scope_fields": true,
+        "normal_turn_output_cap": 8192,
+        "closeout_reserve": 0,
+        "closeout_stage_caps": null
+      }
+    },
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": null,
+      "confidence": null,
+      "turns": 7,
+      "claims": 3,
+      "probes": 3,
+      "usd": 0.37945,
+      "input_tokens": 193797,
+      "output_tokens": 24576,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 7,
+        "responses_saved": 7,
+        "responses_with_usage": 7,
+        "history_calls_with_usage": 6,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183292417469254_a5c2b6d28c8c4a0fb5d5ef1fbb3153f0",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183337333824423_f18cea65e4694d6a9950271869d3ea90",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "length"
+          ]
+        },
+        {
+          "call": "01791183477795797451_2ea657bfc7db4ddbbec03adca7840512",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "length"
+          ]
+        },
+        {
+          "call": "01791183612406731365_eff0bc23fa3f4b15922035a12121a5dd",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183642977610333_d1bed58708bf4c87ad19944a83289fbb",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183664193293083_d217a374a6544126994c2278742ac160",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183713568504515_d8ad9ef2cb064f0783c14be80b95f587",
+          "status": "error",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "length"
+          ]
+        }
+      ],
+      "case": "case_124",
+      "arm": "debate",
+      "trial": "r1",
+      "batch": "run_20261005T065447_344341Z",
+      "path": "traces_glm/case_124/debate/r1",
+      "truth": "trust",
+      "status": "error",
+      "outcome": "token_limit",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183292417469254_a5c2b6d28c8c4a0fb5d5ef1fbb3153f0",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183337333824423_f18cea65e4694d6a9950271869d3ea90",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183477795797451_2ea657bfc7db4ddbbec03adca7840512",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183612406731365_eff0bc23fa3f4b15922035a12121a5dd",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183642977610333_d1bed58708bf4c87ad19944a83289fbb",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183664193293083_d217a374a6544126994c2278742ac160",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183713568504515_d8ad9ef2cb064f0783c14be80b95f587",
+          "status": "error",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.11.12",
+        "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+        "packages": {
+          "torch": "2.8.0",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.8.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+        "cuda_version": "12.8",
+        "gpu_devices": [
+          {
+            "name": "Tesla T4",
+            "capability": [
+              7,
+              5
+            ]
+          }
+        ]
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": null,
+      "link": "traces_glm/case_124/debate/r1/transcript.md",
+      "reason": null,
+      "protocol": {
+        "max_tokens": 8192,
+        "total_output_token_budget": 32768,
+        "reasoning_effort": "low",
+        "max_rounds": 4,
+        "debate_budget_closeout": true,
+        "require_claim_scope_fields": true,
+        "normal_turn_output_cap": 8192,
+        "closeout_reserve": 8192,
+        "closeout_stage_caps": {
+          "evidence": 4096,
+          "skeptic": 1024,
+          "judge": 3072
+        }
+      }
+    },
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": "reject",
+      "confidence": 0.85,
+      "reason": "carry_b is computed from `low + low_b` instead of `low_a + low_b`, so the 64-bit rounding sum can be off by 2^32. Counterexample: a=1, m=0x40000001, r=1 gives P=0x40000001; reference H=1, R=1 (tie away from zero), but the kernel computes high_final=0 and q=0, an off-by-one that far exceeds the 1e-6 tolerance.",
+      "stop_reason": "stop",
+      "turns": 1,
+      "claims": 0,
+      "probes": 0,
+      "input_tokens": 2922,
+      "output_tokens": 12369,
+      "usd": 0.058514,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 1,
+        "responses_saved": 1,
+        "responses_with_usage": 1,
+        "history_calls_with_usage": 0,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183305775915000_f5bb8046f5344c258dcb95118c17a98f",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "stop"
+          ]
+        }
+      ],
+      "case": "case_125",
+      "arm": "single_call",
+      "trial": "r1",
+      "batch": "run_20261005T065505_310931Z",
+      "path": "traces_glm/case_125/single_call/r1",
+      "truth": "reject",
+      "status": "completed",
+      "outcome": "correct",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183305775915000_f5bb8046f5344c258dcb95118c17a98f",
+          "status": "completed",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.13.5",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "packages": {
+          "torch": "2.9.1",
+          "triton": null,
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.4.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173"
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": 196.4102866658941,
+      "link": "traces_glm/case_125/single_call/r1/transcript.md",
+      "protocol": {
+        "max_tokens": 32768,
+        "total_output_token_budget": null,
+        "reasoning_effort": "low",
+        "max_rounds": null,
+        "debate_budget_closeout": null,
+        "require_claim_scope_fields": null,
+        "normal_turn_output_cap": null,
+        "closeout_reserve": null,
+        "closeout_stage_caps": null
+      }
+    },
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": "trust",
+      "confidence": 0.95,
+      "turns": 7,
+      "claims": 1,
+      "probes": 3,
+      "usd": 0.178461,
+      "input_tokens": 107276,
+      "output_tokens": 6426,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 6,
+        "responses_saved": 6,
+        "responses_with_usage": 6,
+        "history_calls_with_usage": 6,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183293145581565_c519b48fda0f4ef1adeeb51ffa3cc15e",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183334257785972_2b882cc9d9974dbcb99807d5837e9480",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183418351181448_b05e13c019b4417c9c855d66eaf23b5e",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183436771207240_45f388febcb8421ebfaef19dc39299bc",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183457555057956_4d03a18e1acb40788934efe5c73d67f3",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183465720605207_9e2671d27ec24bfd84bd4f9e4f01625b",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        }
+      ],
+      "case": "case_125",
+      "arm": "solo",
+      "trial": "r1",
+      "batch": "run_20261005T065447_344341Z",
+      "path": "traces_glm/case_125/solo/r1",
+      "truth": "reject",
+      "status": "completed",
+      "outcome": "wrong_verdict",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183293145581565_c519b48fda0f4ef1adeeb51ffa3cc15e",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183334257785972_2b882cc9d9974dbcb99807d5837e9480",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183418351181448_b05e13c019b4417c9c855d66eaf23b5e",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183436771207240_45f388febcb8421ebfaef19dc39299bc",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183457555057956_4d03a18e1acb40788934efe5c73d67f3",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183465720605207_9e2671d27ec24bfd84bd4f9e4f01625b",
+          "status": "completed",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.11.12",
+        "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+        "packages": {
+          "torch": "2.8.0",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.8.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+        "cuda_version": "12.8",
+        "gpu_devices": [
+          {
+            "name": "Tesla T4",
+            "capability": [
+              7,
+              5
+            ]
+          }
+        ]
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": null,
+      "link": "traces_glm/case_125/solo/r1/transcript.md",
+      "reason": "The kernel implements the contract's gemmlowp double-rounding epilogue (H = floor((P+2^30)/2^31), R = nearest with half ties away from zero, saturation after zero-point addition, output (Q-z)*s). Probe t8 compared run() against the kernel's exact Python arbitrary-precision reference() on a [276,32] input covering all 32 shift values, multipliers in [2^30,2^31), zero points {0,127,-128}, all 9 power-of-two scales, accumulators \u00b12^31 and 2^31-1, exact R-stage half ties (both signs per channel), exact H-stage ties, saturation-boundary H values (\u00b1127/128/129/255/256), and 200 random int32 rows: max absolute error 0.0 and 0 mismatches >1e-6. Since the fused limb arithmetic reproduces the exact two-stage definition even at tie and overflow-prone extremes, the contract is satisfied; claim c1 was rebutted.",
+      "protocol": {
+        "max_tokens": 8192,
+        "total_output_token_budget": 32768,
+        "reasoning_effort": "low",
+        "max_rounds": 10,
+        "debate_budget_closeout": false,
+        "require_claim_scope_fields": true,
+        "normal_turn_output_cap": 8192,
+        "closeout_reserve": 0,
+        "closeout_stage_caps": null
+      }
+    },
+    {
+      "model": "accounts/fireworks/models/glm-5p3",
+      "verdict": "reject",
+      "confidence": 0.95,
+      "turns": 14,
+      "claims": 3,
+      "probes": 6,
+      "usd": 1.199354,
+      "input_tokens": 790031,
+      "output_tokens": 21207,
+      "usage_source": "raw_chat_responses",
+      "usage_coverage": {
+        "status": "complete",
+        "captured_calls": 13,
+        "responses_saved": 13,
+        "responses_with_usage": 13,
+        "history_calls_with_usage": 13,
+        "missing_response_calls": [],
+        "missing_usage_calls": [],
+        "note": "Coverage describes captured SDK calls; unrecorded responses or SDK retries may have additional charges. Legacy history does not certify complete API capture."
+      },
+      "usd_is_partial": false,
+      "call_finish_reasons": [
+        {
+          "call": "01791183293589418095_edfaf9c080714ed083c3a33b6885f8d3",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183357151730429_6b65bab90f774bb0b8b719b220a975fc",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183381190896898_a9c0e386007b4539873124259b80c905",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183495531351670_9fc3735708ba4459aa900a84952aa908",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183560339984855_942c6aa514c34221a1187f8150c8503a",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183596301707101_6ddc12e1b4704e648ddf2c927d59ff6d",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183608253360244_d468202582b148ac99415e70566bdace",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183624754868747_1ca1ebf4b7a24808bdc7fb7e05a9faba",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183636064773492_2cfd89531b904499920a17f9ba100f07",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183657759492001_3f0aa1f7b10e4814990853ddeccaa8f5",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183667400396627_1b6281fa76ca4611b54ca26d47d5d731",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183679003040848_495ad8e09e2943f18a7f1112cedc33c0",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        },
+        {
+          "call": "01791183688102352747_042c3832e97b4a9d8ff8ab48cd775719",
+          "status": "completed",
+          "response_saved": true,
+          "usage_saved": true,
+          "finish_reasons": [
+            "tool_calls"
+          ]
+        }
+      ],
+      "case": "case_125",
+      "arm": "debate",
+      "trial": "r1",
+      "batch": "run_20261005T065447_344341Z",
+      "path": "traces_glm/case_125/debate/r1",
+      "truth": "reject",
+      "status": "completed",
+      "outcome": "correct",
+      "audit_issues": [],
+      "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+      "captures": [
+        {
+          "call": "01791183293589418095_edfaf9c080714ed083c3a33b6885f8d3",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183357151730429_6b65bab90f774bb0b8b719b220a975fc",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183381190896898_a9c0e386007b4539873124259b80c905",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183495531351670_9fc3735708ba4459aa900a84952aa908",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183560339984855_942c6aa514c34221a1187f8150c8503a",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183596301707101_6ddc12e1b4704e648ddf2c927d59ff6d",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183608253360244_d468202582b148ac99415e70566bdace",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183624754868747_1ca1ebf4b7a24808bdc7fb7e05a9faba",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183636064773492_2cfd89531b904499920a17f9ba100f07",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183657759492001_3f0aa1f7b10e4814990853ddeccaa8f5",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183667400396627_1b6281fa76ca4611b54ca26d47d5d731",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183679003040848_495ad8e09e2943f18a7f1112cedc33c0",
+          "status": "completed",
+          "complete": true
+        },
+        {
+          "call": "01791183688102352747_042c3832e97b4a9d8ff8ab48cd775719",
+          "status": "completed",
+          "complete": true
+        }
+      ],
+      "runtime": {
+        "python": "3.11.12",
+        "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+        "packages": {
+          "torch": "2.8.0",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "openai": "3.19.0",
+          "anthropic": "1.8.0"
+        },
+        "verifier_sha256": "cffeab53de38aea27452c90904778c8137205c1a29139f8a51b061829c233173",
+        "cuda_version": "12.8",
+        "gpu_devices": [
+          {
+            "name": "Tesla T4",
+            "capability": [
+              7,
+              5
+            ]
+          }
+        ]
+      },
+      "pricing_source": "trace_snapshot",
+      "elapsed_s": null,
+      "link": "traces_glm/case_125/debate/r1/transcript.md",
+      "reason": "Confirmed in-scope claim c2: the kernel's fused single-shift rounding (adding the stage-1 constant 2^30 and the stage-2 rounding constants before one combined shift) diverges from the contract's sequential double rounding \u2014 floor((P+2^30)/2^31) followed by away-from-zero rounding of H/2^r \u2014 producing one-quantization-step output errors. Probe t17 measured 1029 mismatches (|out-ref|>1e-6) vs the artifact's own big-integer reference over tie-constructed inputs fully inside the legal domain (a near ties, m in {2^30, 2^30+1, 2^30+2^15, 2^31-1}, r=1..31), both on exact stage-2 half ties (514, e.g. a=-257, m=2^30, r=8: kernel 0.0 vs ref -1.0) and off-tie adjacent values (515, e.g. a=-258, r=2: kernel -33.0 vs ref -32.0). Probe t14 independently found 1434 mismatches at r=1 positive exact half ties (H=1: kernel 0 vs ref 1). The contract explicitly requires gemmlowp-compatible DOUBLE rounding over the ENTIRE legal domain with absolute tolerance 1e-6 and a single whole-domain verdict (\"Single-rounding requantization is a different operation\"), so these one-step errors are defects regardless of magnitude. Claims c1 (sign(a) vs sign(H) mechanism) and c3 (negative-tie/r=0 mechanisms) were rebutted by direct measurement \u2014 all 6144 r=1 negative odd-H ties and all r=0 elements matched \u2014 with the observed mismatches belonging to c2's divergence surface. No test.py/get_inputs narrows the domain (artifact holds only kernel.py, empty meta.json, and problem.txt), so problem.txt is the operative contract, and the mismatches were validated by the artifact's own validate_inputs against its own reference(). The Skeptic signed off after the final evidence with no new claims.",
+      "protocol": {
+        "max_tokens": 8192,
+        "total_output_token_budget": 32768,
+        "reasoning_effort": "low",
+        "max_rounds": 4,
+        "debate_budget_closeout": true,
+        "require_claim_scope_fields": true,
+        "normal_turn_output_cap": 8192,
+        "closeout_reserve": 8192,
+        "closeout_stage_caps": {
+          "evidence": 4096,
+          "skeptic": 1024,
+          "judge": 3072
+        }
+      }
+    }
+  ],
+  "model_attempts": 6,
+  "manual_audit_complete": true,
+  "probe_attempts": 13,
+  "integrity_vs_semantics": "Capture completeness is independent of model/probe correctness. All raw API responses/usage are saved, including124debate local parsing failure. Finite tests do not prove full-domain acceptance.",
+  "reporting_correction": {
+    "scope": "post-experiment report only; no verifier/runtime/protocol change",
+    "change": "Capture completeness now checks saved request/response/usage independently of local parsing status; failed outcome remains token_limit/error.",
+    "new_regression_tests": 6,
+    "display": "Label token_limit as output truncation/limit, not necessarily exhaustion of entire budget; label mutually exclusive other-error/no-verdict categories explicitly."
+  }
+}

@@ -1,0 +1,1898 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_131",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise SiLU using a stable logistic-tail decomposition.\n\nOriginal Triton implementation of the standard sigmoid-weighted activation.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _silu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    exponential = tl.exp2(-(magnitude * 1.4427))\n    tail = tl.div_rn(magnitude * exponential, 1.0 + exponential)\n    value = tl.where(x >= 0.0, x - tail, -tail)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating SiLU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _silu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical SiLU definition with a stable FP64 sigmoid.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    exponential = torch.exp(-torch.abs(value))\n    numerator = torch.where(value >= 0, value, value * exponential)\n    return numerator / (1.0 + exponential)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_131",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-09T08:13:20Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "fb89f929640414f793466b82cafece1b127dbc4fd6e7bf31cf70cf4e652f815a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "a9bcf0429ed0e9082f746f0d000561982bbfa8e23d7530ca0c37d9d4d2560a6c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8a7599f25486071591518394af9f8e238b99c4a0275900fb0fceb85e86a32559"
+              }
+            ],
+            "duration_s": 6.431893,
+            "exit_code": 0,
+            "expected_signal": "max abs error near |x|~2 exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference",
+              "n": 6146,
+              "n_violations": 5387,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875,
+              "worst_x_abs": 2.326171875,
+              "x_band": "[1,4] dense, both signs"
+            },
+            "max_abs_err": 1.651e-06,
+            "n_violations": 5387,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference\", \"n\": 6146, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 5387, \"worst_x\": 2.326171875, \"worst_x_abs\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"x_band\": \"[1,4] dense, both signs\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_x": 2.326171875
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Dense [1,4] band (both signs, n=6146): max abs error 1.651e-6 vs FP64 reference at x=2.326, with 5387 elements exceeding the 1e-6 tolerance. Confirms the truncated 1.4427 constant causes errors above tolerance near |x|~2.3.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "exp2(-(magnitude*1.4427)) approximates e^-|x| with relative error about |x|*3.4e-6 because 1.4427/log2(e) = 1 + ~3.44e-6/|x|-scaled bias; the induced error in SiLU peaks near |x|~2 at an estimated 1.5-3e-6, above the strict absolute tolerance 1e-6, and these inputs are common even in randn*2 sampling, so the violation should be directly observable.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6, and EVERY finite FP16 value is legal, so inputs near |x|~2 are squarely inside the contract."
+        }
+      ],
+      "scope_rationale": "problem.txt requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for every legal input, and every finite FP16 value including values near |x|=2 is explicitly in the legal domain.",
+      "statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6.",
+      "status": "confirmed",
+      "updated_at": "2026-10-09T08:14:02Z"
+    },
+    {
+      "created_at": "2026-10-09T08:13:20Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "all_out_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f4564b56435d50013b62ed4b939a7710cf427ca6351e41a46c0619d9e5eb203d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "fa0fe32663ab309e7d1fb1d8ea2b6ed3058cb0433e986a999beaa3e946148e21"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "e41aa68460f0c696972580fdc526a55d0f12128661d53774ed853baa0596bf3d"
+              }
+            ],
+            "duration_s": 4.134146,
+            "exit_code": 0,
+            "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "all_out_finite": true,
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference over exhaustive finite FP16 domain",
+              "n": 63488,
+              "n_violations": 3427,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875
+            },
+            "max_abs_err": 1.651e-06,
+            "n": 63488,
+            "n_violations": 3427,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\", \"n\": 63488, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 3427, \"worst_x\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"all_out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_x": 2.326171875
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, \u00b165504): max abs error 1.651e-6 at x=2.326171875, 3427 violations of the 1e-6 tolerance; all outputs finite. The violation is real and domain-wide, matching the peak-error band predicted.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "The contract is a single verdict over the whole domain, and the suspected error is a smooth function of |x| concentrated near the peak-error band; a full sweep (65536 values fits easily within N<=131072) is the decisive probe and may also expose edge behavior at subnormals and extrema that randn inputs miss.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Correctness is one verdict for the implementation over the entire legal domain, with N up to 131072, which permits sweeping all 65536 FP16 bit patterns in one call."
+        }
+      ],
+      "scope_rationale": "problem.txt defines correctness as one verdict over the entire legal domain, including subnormals and +/-65504, so exhaustive-domain probing is contractually required evidence, not a stress generalization.",
+      "statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band.",
+      "status": "confirmed",
+      "updated_at": "2026-10-09T08:14:02Z"
+    },
+    {
+      "created_at": "2026-10-09T08:13:20Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "686f135b72f3c086db5737c32c855d4565cb64dc3b5d7265c376962e82313ecf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "554951833a5b8c64ef8ad39cc929db9f68dccb54c50e8ab6b8e590689dbf8d1e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "077a9f6891e35a3e1ada8489a972106c4efb3004624be4c3709e6bc97a949524"
+              }
+            ],
+            "duration_s": 4.410529,
+            "exit_code": 0,
+            "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)",
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "max_abs_err": 1.6465359666817392e-06,
+              "metric": "max abs error of run(view) vs reference(view)",
+              "mismatch_vs_base0_prefix": 4.1533869035664575,
+              "n": 4093,
+              "n_violations": 740,
+              "offset": 511,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_view_vs_ref": 1.6465e-06,
+            "n": 4093,
+            "offset": 511,
+            "ref_view_vs_out_matches_base0_prefix": false,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error of run(view) vs reference(view)\", \"n\": 4093, \"offset\": 511, \"max_abs_err\": 1.6465359666817392e-06, \"tolerance\": 1e-06, \"n_violations\": 740, \"mismatch_vs_base0_prefix\": 4.1533869035664575, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Storage-offset view (base[511:4604]) is handled correctly: output matches the reference computed on the viewed elements, not on base[:n] (large mismatch 4.15 vs base-0 prefix proves correct addressing), input preserved, and errors (max 1.647e-6, 740 > 1e-6) are the same constant-truncation numeric error already captured by c1/c2, not an offset mishandling. The claim that offset views are mishandled is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "Triton receives the tensor's data pointer, which should include the storage offset, but the interaction of tl.load pointer arithmetic with masked blocks and the exact pointer passed for offset views is a classic off-by-offset failure surface; the contract explicitly makes such views legal, so a probe with a known-offset contiguous view directly tests this.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contiguous views with nonzero storage offsets are legal inputs within the public domain, so the kernel must compute SiLU on the viewed elements exactly."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly states contiguous views with nonzero storage offsets are legal inputs, so correct handling of them is part of the stated contract.",
+      "statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-10-09T08:14:02Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+      "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+      "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+      "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+      "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+      "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+      "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+      "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+    ],
+    "open_questions": [
+      "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+      "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+      "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+    ],
+    "risk_map": [
+      "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+      "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+      "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+      "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+      "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+      "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+    ],
+    "scope_notes": [
+      "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+      "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+      "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+        "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+        "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+        "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-09T08:13:01Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+        "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+        "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+        "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+        "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+      ],
+      "open_questions": [
+        "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+        "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+        "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+      ],
+      "risk_map": [
+        "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+        "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+        "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+        "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+        "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+        "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+      ],
+      "scope_notes": [
+        "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+        "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+        "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+      ],
+      "summary": "case_131: FP16->FP32 elementwise SiLU via logistic-tail decomposition; algebraically correct rewrite, but the truncated exp2 constant 1.4427 risks absolute errors of ~2e-6 near |x|~2 against the strict 1e-6 tolerance.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_131",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_131"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_131"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_131"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_131",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 41.365804906,
+      "role": "describer",
+      "round": 2,
+      "text": "The kernel is a compact elementwise SiLU using a logistic-tail decomposition with `exp2` and a truncated log2(e) constant (1.4427). The algebra looks right, but the truncated constant introduces an exponent-scale error that peaks near |x|\u22482, which is worth flagging against the strict 1e-6 absolute tolerance. I'll record the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+              "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+              "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+              "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+              "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+              "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+              "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+              "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+            ],
+            "open_questions": [
+              "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+              "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+              "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+            ],
+            "risk_map": [
+              "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+              "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+              "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+              "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+              "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+              "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+            ],
+            "scope_notes": [
+              "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+              "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+              "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+            ],
+            "summary": "case_131: FP16->FP32 elementwise SiLU via logistic-tail decomposition; algebraically correct rewrite, but the truncated exp2 constant 1.4427 risks absolute errors of ~2e-6 near |x|~2 against the strict 1e-6 tolerance."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 41.366,
+        "input_tokens": 6344,
+        "output_tokens": 2106
+      }
+    },
+    {
+      "duration_s": 18.736033413,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description model already identifies the highest-risk surface: the truncated exp2 constant vs the strict 1e-6 absolute tolerance over the full finite FP16 domain. I'll record that as the primary in-scope claim, plus two secondary testable ones covering domain-sweep coverage and storage-offset views.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "exp2(-(magnitude*1.4427)) approximates e^-|x| with relative error about |x|*3.4e-6 because 1.4427/log2(e) = 1 + ~3.44e-6/|x|-scaled bias; the induced error in SiLU peaks near |x|~2 at an estimated 1.5-3e-6, above the strict absolute tolerance 1e-6, and these inputs are common even in randn*2 sampling, so the violation should be directly observable.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6, and EVERY finite FP16 value is legal, so inputs near |x|~2 are squarely inside the contract."
+              }
+            ],
+            "scope_rationale": "problem.txt requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for every legal input, and every finite FP16 value including values near |x|=2 is explicitly in the legal domain.",
+            "statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The contract is a single verdict over the whole domain, and the suspected error is a smooth function of |x| concentrated near the peak-error band; a full sweep (65536 values fits easily within N<=131072) is the decisive probe and may also expose edge behavior at subnormals and extrema that randn inputs miss.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Correctness is one verdict for the implementation over the entire legal domain, with N up to 131072, which permits sweeping all 65536 FP16 bit patterns in one call."
+              }
+            ],
+            "scope_rationale": "problem.txt defines correctness as one verdict over the entire legal domain, including subnormals and +/-65504, so exhaustive-domain probing is contractually required evidence, not a stress generalization.",
+            "statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Triton receives the tensor's data pointer, which should include the storage offset, but the interaction of tl.load pointer arithmetic with masked blocks and the exact pointer passed for offset views is a classic off-by-offset failure surface; the contract explicitly makes such views legal, so a probe with a known-offset contiguous view directly tests this.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contiguous views with nonzero storage offsets are legal inputs within the public domain, so the kernel must compute SiLU on the viewed elements exactly."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly states contiguous views with nonzero storage offsets are legal inputs, so correct handling of them is part of the stated contract.",
+            "statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.736,
+        "input_tokens": 16050,
+        "output_tokens": 968
+      }
+    },
+    {
+      "duration_s": 13.31956511,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'm launching three independent probes: c1 tests the truncated-constant error in the |x|\u2248[1,4] band, c2 does the exhaustive finite FP16 sweep, and c3 tests a storage-offset contiguous view.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\n# FP16 values in |x| in [1,4], dense\nvals = torch.tensor([t/1024.0 for t in range(1024, 4097)], dtype=torch.float32).to(torch.float16)\nx = torch.cat([vals, -vals]).to(dev)\nout = k.run(x)\nref = k.reference(x.cpu().cuda() if False else x).cpu()\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ntol = 1e-6\nbad = (err > tol)\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error vs FP64 reference\",\n  \"n\": x.numel(),\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": tol,\n  \"n_violations\": int(bad.sum()),\n  \"worst_x\": float(x[i].item()),\n  \"worst_x_abs\": float(abs(x[i].item())),\n  \"out_at_worst\": float(out[i].item()),\n  \"ref_at_worst\": float(ref[i].item()),\n  \"x_band\": \"[1,4] dense, both signs\",\n}))",
+            "expected_signal": "max abs error near |x|~2 exceeds 1e-6"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json, numpy as np\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nbits = np.arange(65536, dtype=np.uint16)\nh = torch.from_numpy(bits.view(np.float16).copy())\nfinite = torch.isfinite(h)\nx = h[finite].to(dev)  # all finite FP16 values (includes subnormals, signed zeros, +/-65504)\nout = k.run(x)\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ntol = 1e-6\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\",\n  \"n\": x.numel(),\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": tol,\n  \"n_violations\": int((err > tol).sum()),\n  \"worst_x\": float(x[i].item()),\n  \"out_at_worst\": float(out[i].item()),\n  \"ref_at_worst\": float(ref[i].item()),\n  \"all_out_finite\": bool(torch.isfinite(out).all().item()),\n}))",
+            "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\ntorch.manual_seed(0)\nbase = torch.randn(5000, dtype=torch.float32).to(torch.float16).to(dev)\nn = 4093; off = 511\nx = base[off:off+n]  # contiguous view, nonzero storage offset\nassert x.is_contiguous() and x.storage_offset() == off\nout = k.run(x)\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ni = int(err.argmax())\n# also confirm output matches SiLU of the viewed elements (not base[0:n])\nref_base0 = k.reference(base[:n].cpu()).to(dev)\nprint(json.dumps({\n  \"metric\": \"max abs error of run(view) vs reference(view)\",\n  \"n\": n, \"offset\": off,\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": 1e-6,\n  \"n_violations\": int((err > 1e-6).sum()),\n  \"mismatch_vs_base0_prefix\": float((out - ref_base0).abs().max()),\n  \"input_preserved\": bool(torch.equal(x, base[off:off+n].cpu().to(dev)) if False else torch.equal(x.cpu(), base[off:off+n].cpu())),\n}))",
+            "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.32,
+        "input_tokens": 20568,
+        "output_tokens": 1117
+      }
+    },
+    {
+      "duration_s": 14.384284972999993,
+      "role": "experimenter",
+      "round": 5,
+      "text": "All three probes completed. c1 and c2 are confirmed: max abs error 1.651e-6 > 1e-6 at x=2.326 with thousands of violations, both in the |x|\u2208[1,4] band and the exhaustive finite FP16 sweep. c3 is rebutted: the offset view was computed from the correct elements (mismatch vs the base-0 prefix is large, confirming it addressed the view, not base), input preserved, and the observed errors are the same constant-truncation issue already covered by c1/c2 \u2014 not an offset mishandling.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 1.651e-06,
+              "n_violations": 5387,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Dense [1,4] band (both signs, n=6146): max abs error 1.651e-6 vs FP64 reference at x=2.326, with 5387 elements exceeding the 1e-6 tolerance. Confirms the truncated 1.4427 constant causes errors above tolerance near |x|~2.3.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "all_out_finite": true,
+              "max_abs_err": 1.651e-06,
+              "n": 63488,
+              "n_violations": 3427,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "Exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, \u00b165504): max abs error 1.651e-6 at x=2.326171875, 3427 violations of the 1e-6 tolerance; all outputs finite. The violation is real and domain-wide, matching the peak-error band predicted.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "max_abs_err_view_vs_ref": 1.6465e-06,
+              "n": 4093,
+              "offset": 511,
+              "ref_view_vs_out_matches_base0_prefix": false
+            },
+            "event_id": "t11",
+            "status": "rebutted",
+            "summary": "Storage-offset view (base[511:4604]) is handled correctly: output matches the reference computed on the viewed elements, not on base[:n] (large mismatch 4.15 vs base-0 prefix proves correct addressing), input preserved, and errors (max 1.647e-6, 740 > 1e-6) are the same constant-truncation numeric error already captured by c1/c2, not an offset mishandling. The claim that offset views are mishandled is rebutted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.384,
+        "input_tokens": 28065,
+        "output_tokens": 788
+      }
+    },
+    {
+      "duration_s": 6.530532161000011,
+      "role": "skeptic",
+      "round": 6,
+      "text": "All claims are resolved: c1 and c2 are confirmed with domain-wide evidence (max abs error 1.651e-6 > 1e-6 at x=2.326 across the exhaustive finite FP16 sweep), and c3 (offset views) is rebutted. The confirmed tolerance violation fully covers the defect; no additional material, testable, in-scope problem is exposed by the new evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the truncated log2(e) constant violation (c1/c2) is confirmed with exhaustive-domain evidence, and c3 (storage-offset views) is rebutted. The new probe evidence exposes no additional material, testable, in-scope problem beyond what existing claims already cover.",
+            "reviewed_claims": [
+              "c1",
+              "c2",
+              "c3"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.531,
+        "input_tokens": 36522,
+        "output_tokens": 205
+      }
+    },
+    {
+      "duration_s": 10.036659587000003,
+      "role": "judge",
+      "round": 7,
+      "text": "Decisive: exhaustive sweep of all finite FP16 values shows max abs error 1.651e-6 > 1e-6 tolerance, in-scope, contract explicitly requires <=1e-6. Reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt, the operative artifact here) requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 input value, with relative tolerance zero, over the entire legal domain. Confirmed in-scope evidence: (c2) an exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, +/-65504, N within the allowed [1,131072]) found 3427 elements violating the 1e-6 tolerance, with max absolute error 1.651e-6 at x=2.326171875, all outputs finite; (c1) a dense |x| in [1,4] probe independently reproduces the violation (max 1.651e-6, 5387 violations). The cause is the truncated exp2 scaling constant 1.4427 vs log2(e)=1.4426950408889634 (kernel line 17). This is not a contract-permitted approximation deviation: the contract explicitly permits base-2 exponentials and algebraic rewrites only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 and this one does not. The c3 offset-view concern was rebutted (views addressed correctly, input preserved). The violations are not near-zero outputs with negligible absolute difference (out=2.1192 vs ref=2.1192 at the worst point, absolute error above tolerance). Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.037,
+        "input_tokens": 37192,
+        "output_tokens": 423
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-09T08:14:09Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the truncated log2(e) constant violation (c1/c2) is confirmed with exhaustive-domain evidence, and c3 (storage-offset views) is rebutted. The new probe evidence exposes no additional material, testable, in-scope problem beyond what existing claims already cover.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reviewed_tool_event_count": 14,
+    "tool_event_id": "t15",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_131"
+      },
+      "created_at": "2026-10-09T08:12:18Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_131",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise SiLU using a stable logistic-tail decomposition.\n\nOriginal Triton implementation of the standard sigmoid-weighted activation.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _silu_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    exponential = tl.exp2(-(magnitude * 1.4427))\n    tail = tl.div_rn(magnitude * exponential, 1.0 + exponential)\n    value = tl.where(x >= 0.0, x - tail, -tail)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating SiLU of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _silu_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical SiLU definition with a stable FP64 sigmoid.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    exponential = torch.exp(-torch.abs(value))\n    numerator = torch.where(value >= 0, value, value * exponential)\n    return numerator / (1.0 + exponential)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_131",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_131"
+      },
+      "created_at": "2026-10-09T08:12:18Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the sigmoid linear unit (SiLU) elementwise on stored FP16 values,\nreturning FP32 output. The mathematical target is\n\n  target[i] = SiLU(x[i]) = x[i] * sigmoid(x[i])\n            = x[i] / (1 + exp(-x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - SiLU(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular expression, exponential approximation or intermediate FP16\nrounding is part of the mathematical target. Algebraic rewrites, base-two\nexponentials, polynomial or other approximations are permitted if they\nsatisfy this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 sigmoid expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. SiLU is a standard neural\nnetwork activation; this is an original Triton implementation with a\nlogistic-tail decomposition. It is a synthetic benchmark implementation,\nnot a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_131",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_131"
+      },
+      "created_at": "2026-10-09T08:12:18Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_131",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2841
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2048
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_131",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-09T08:12:18Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_131",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+          "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+          "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+          "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+          "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+          "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+          "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+          "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+        ],
+        "open_questions": [
+          "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+          "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+          "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+        ],
+        "risk_map": [
+          "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+          "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+          "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+          "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+          "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+          "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+        ],
+        "scope_notes": [
+          "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+          "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+          "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+        ],
+        "summary": "case_131: FP16->FP32 elementwise SiLU via logistic-tail decomposition; algebraically correct rewrite, but the truncated exp2 constant 1.4427 risks absolute errors of ~2e-6 near |x|~2 against the strict 1e-6 tolerance."
+      },
+      "created_at": "2026-10-09T08:13:01Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+            "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+            "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+            "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+            "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+            "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+            "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+            "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+          ],
+          "open_questions": [
+            "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+            "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+            "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+          ],
+          "risk_map": [
+            "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+            "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+            "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+            "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+            "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+            "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+          ],
+          "scope_notes": [
+            "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+            "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+            "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Elementwise SiLU on FP16 input x[N], N in [1,131072], output fresh FP32 tensor on same device; every finite FP16 value is legal including signed zeros, subnormals, and +/-65504.",
+            "Per-element accuracy: abs(actual - SiLU(x)) <= 1e-6, relative tolerance zero, target defined in real arithmetic on the exact stored FP16 value; any expression/approximation is allowed if it meets the absolute tolerance across the whole domain.",
+            "Single correctness verdict over the whole domain, not per-distribution; NaN/Inf inputs are out of domain and validated away.",
+            "Input is an ordinary contiguous strided FP16 1-D CUDA tensor, possibly a view with nonzero storage offset; run() must call validate_inputs() and must not modify x.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-09T08:13:01Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel computes per element in FP32: magnitude=|x|, exponential=exp2(-(magnitude*1.4427)), tail=div_rn(magnitude*exponential, 1+exponential), value = x>=0 ? x-tail : -tail (lines 15-19); algebraically this equals x/(1+e^-|x|) for x>=0 and -|x|e^-|x|/(1+e^-|x|) for x<0, i.e. correct SiLU rewrite.",
+            "exp2 uses the truncated constant 1.4427 instead of log2(e)=1.4426950408889634 (line 17), and the product magnitude*1.4427 is rounded in FP32 before the exp2; this shifts the exponent by about |x|*3.4e-6 in relative terms.",
+            "run() validates inputs, allocates fresh FP32 output, launches grid of 256-wide blocks with mask (index<N), enable_fp_fusion=False, num_warps=4; tail behavior at N not a multiple of 256 is masked (lines 13-14, 51-52).",
+            "validate_inputs enforces dtype/shape/contiguity/finiteness/CUDA and rejects inference mode, gradients, neg/conj views (lines 23-42); reference() is FP64 stable sigmoid on CPU (lines 56-62).",
+            "Triton indexing starts from the tensor's base data pointer, so contiguous views with nonzero storage offsets are addressed correctly; -0.0 maps to the x>=0 branch and yields -0.0-equivalent output (zeros numerically equivalent per contract)."
+          ],
+          "open_questions": [
+            "What is the measured max absolute error of the kernel versus the FP64 reference over dense FP16 sweeps near |x| in [1,4] and across the full finite domain (does it exceed 1e-6)?",
+            "Does Triton's exp2 on T4 introduce additional ulp error that compounds the constant-truncation error beyond tolerance?",
+            "Are there any FP16 inputs where magnitude*1.4427 overflow/underflow rounding or the div_rn divide produces a non-finite or unexpectedly large output (e.g., near +/-65504) that still violates the absolute tolerance?"
+          ],
+          "risk_map": [
+            "Truncated log2(e) constant 1.4427 (vs 1.4426950409...) plus FP32 rounding of the product gives a relative error in e^-|x| of roughly |x|*3.4e-6; the resulting absolute error in SiLU is approximately |x|^2*e^-|x|*3.4e-6, maximized near |x|~=2 at roughly 1.5-3e-6, which may exceed the 1e-6 absolute tolerance - the highest-priority risk surface.",
+            "The tolerance test must be over the full finite FP16 domain (dense sweep or boundary-focused sampling), not just randn-style inputs, since randn rarely concentrates error in the peak-error band.",
+            "Positive-branch rounding: x - tail computed in FP32 can lose precision when tail is close to x only for large x where SiLU is small; likely fine but worth a boundary check at x near 65504 and near subnormal magnitudes.",
+            "exp2 argument for x=65504 is about -94583; exp2 underflows to 0 cleanly, giving value=x for positive extrema and -0*...=0 tail for negative, matching FP64 reference within tolerance - verify no flush anomaly.",
+            "Masked tail block at N%256!=0 (e.g. N=4093 from make_inputs) must write all N outputs exactly once; masked load uses other=0.0 so inactive lanes are harmless.",
+            "Storage-offset views: Triton passes the tensor's data pointer including offset, so contiguous views should work; still worth one probe since the contract explicitly allows nonzero storage offsets."
+          ],
+          "scope_notes": [
+            "Domain is strictly finite FP16 1-D tensors; NaN/Inf, non-CUDA, non-FP16, non-contiguous, gradient/inference inputs are out of scope (rejected by validate_inputs).",
+            "make_inputs() (seeded randn*2, size 4093) is illustrative only; passing on it is not evidence of domain-wide correctness, especially since the suspected error peak is near |x|~2-4 where randn*2 does place mass.",
+            "Single fixed absolute tolerance 1e-6, relative tolerance zero, signed zeros equivalent; algebraic rewrites and base-2 exponentials are explicitly permitted by the contract."
+          ],
+          "summary": "case_131: FP16->FP32 elementwise SiLU via logistic-tail decomposition; algebraically correct rewrite, but the truncated exp2 constant 1.4427 risks absolute errors of ~2e-6 near |x|~2 against the strict 1e-6 tolerance.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "exp2(-(magnitude*1.4427)) approximates e^-|x| with relative error about |x|*3.4e-6 because 1.4427/log2(e) = 1 + ~3.44e-6/|x|-scaled bias; the induced error in SiLU peaks near |x|~2 at an estimated 1.5-3e-6, above the strict absolute tolerance 1e-6, and these inputs are common even in randn*2 sampling, so the violation should be directly observable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6, and EVERY finite FP16 value is legal, so inputs near |x|~2 are squarely inside the contract."
+          }
+        ],
+        "scope_rationale": "problem.txt requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for every legal input, and every finite FP16 value including values near |x|=2 is explicitly in the legal domain.",
+        "statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6."
+      },
+      "created_at": "2026-10-09T08:13:20Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-09T08:13:20Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "exp2(-(magnitude*1.4427)) approximates e^-|x| with relative error about |x|*3.4e-6 because 1.4427/log2(e) = 1 + ~3.44e-6/|x|-scaled bias; the induced error in SiLU peaks near |x|~2 at an estimated 1.5-3e-6, above the strict absolute tolerance 1e-6, and these inputs are common even in randn*2 sampling, so the violation should be directly observable.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6, and EVERY finite FP16 value is legal, so inputs near |x|~2 are squarely inside the contract."
+          }
+        ],
+        "scope_rationale": "problem.txt requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for every legal input, and every finite FP16 value including values near |x|=2 is explicitly in the legal domain.",
+        "statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6.",
+        "status": "open",
+        "updated_at": "2026-10-09T08:13:20Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The contract is a single verdict over the whole domain, and the suspected error is a smooth function of |x| concentrated near the peak-error band; a full sweep (65536 values fits easily within N<=131072) is the decisive probe and may also expose edge behavior at subnormals and extrema that randn inputs miss.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Correctness is one verdict for the implementation over the entire legal domain, with N up to 131072, which permits sweeping all 65536 FP16 bit patterns in one call."
+          }
+        ],
+        "scope_rationale": "problem.txt defines correctness as one verdict over the entire legal domain, including subnormals and +/-65504, so exhaustive-domain probing is contractually required evidence, not a stress generalization.",
+        "statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band."
+      },
+      "created_at": "2026-10-09T08:13:20Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-09T08:13:20Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "The contract is a single verdict over the whole domain, and the suspected error is a smooth function of |x| concentrated near the peak-error band; a full sweep (65536 values fits easily within N<=131072) is the decisive probe and may also expose edge behavior at subnormals and extrema that randn inputs miss.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Correctness is one verdict for the implementation over the entire legal domain, with N up to 131072, which permits sweeping all 65536 FP16 bit patterns in one call."
+          }
+        ],
+        "scope_rationale": "problem.txt defines correctness as one verdict over the entire legal domain, including subnormals and +/-65504, so exhaustive-domain probing is contractually required evidence, not a stress generalization.",
+        "statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band.",
+        "status": "open",
+        "updated_at": "2026-10-09T08:13:20Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Triton receives the tensor's data pointer, which should include the storage offset, but the interaction of tl.load pointer arithmetic with masked blocks and the exact pointer passed for offset views is a classic off-by-offset failure surface; the contract explicitly makes such views legal, so a probe with a known-offset contiguous view directly tests this.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contiguous views with nonzero storage offsets are legal inputs within the public domain, so the kernel must compute SiLU on the viewed elements exactly."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states contiguous views with nonzero storage offsets are legal inputs, so correct handling of them is part of the stated contract.",
+        "statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance."
+      },
+      "created_at": "2026-10-09T08:13:20Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-10-09T08:13:20Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "Triton receives the tensor's data pointer, which should include the storage offset, but the interaction of tl.load pointer arithmetic with masked blocks and the exact pointer passed for offset views is a classic off-by-offset failure surface; the contract explicitly makes such views legal, so a probe with a known-offset contiguous view directly tests this.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contiguous views with nonzero storage offsets are legal inputs within the public domain, so the kernel must compute SiLU on the viewed elements exactly."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states contiguous views with nonzero storage offsets are legal inputs, so correct handling of them is part of the stated contract.",
+        "statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance.",
+        "status": "open",
+        "updated_at": "2026-10-09T08:13:20Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\n# FP16 values in |x| in [1,4], dense\nvals = torch.tensor([t/1024.0 for t in range(1024, 4097)], dtype=torch.float32).to(torch.float16)\nx = torch.cat([vals, -vals]).to(dev)\nout = k.run(x)\nref = k.reference(x.cpu().cuda() if False else x).cpu()\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ntol = 1e-6\nbad = (err > tol)\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error vs FP64 reference\",\n  \"n\": x.numel(),\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": tol,\n  \"n_violations\": int(bad.sum()),\n  \"worst_x\": float(x[i].item()),\n  \"worst_x_abs\": float(abs(x[i].item())),\n  \"out_at_worst\": float(out[i].item()),\n  \"ref_at_worst\": float(ref[i].item()),\n  \"x_band\": \"[1,4] dense, both signs\",\n}))",
+        "expected_signal": "max abs error near |x|~2 exceeds 1e-6"
+      },
+      "created_at": "2026-10-09T08:13:39Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "fb89f929640414f793466b82cafece1b127dbc4fd6e7bf31cf70cf4e652f815a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "a9bcf0429ed0e9082f746f0d000561982bbfa8e23d7530ca0c37d9d4d2560a6c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "8a7599f25486071591518394af9f8e238b99c4a0275900fb0fceb85e86a32559"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6.",
+        "cwd": "/root/cases/case_131",
+        "duration_s": 6.431893,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "fb89f929640414f793466b82cafece1b127dbc4fd6e7bf31cf70cf4e652f815a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "a9bcf0429ed0e9082f746f0d000561982bbfa8e23d7530ca0c37d9d4d2560a6c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8a7599f25486071591518394af9f8e238b99c4a0275900fb0fceb85e86a32559"
+              }
+            ],
+            "duration_s": 6.431893,
+            "exit_code": 0,
+            "expected_signal": "max abs error near |x|~2 exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference",
+              "n": 6146,
+              "n_violations": 5387,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875,
+              "worst_x_abs": 2.326171875,
+              "x_band": "[1,4] dense, both signs"
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference\", \"n\": 6146, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 5387, \"worst_x\": 2.326171875, \"worst_x_abs\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"x_band\": \"[1,4] dense, both signs\"}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error near |x|~2 exceeds 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err": 1.651000609559361e-06,
+          "metric": "max abs error vs FP64 reference",
+          "n": 6146,
+          "n_violations": 5387,
+          "out_at_worst": 2.119194269180298,
+          "ref_at_worst": 2.1191926181796883,
+          "tolerance": 1e-06,
+          "worst_x": 2.326171875,
+          "worst_x_abs": 2.326171875,
+          "x_band": "[1,4] dense, both signs"
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error vs FP64 reference\", \"n\": 6146, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 5387, \"worst_x\": 2.326171875, \"worst_x_abs\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"x_band\": \"[1,4] dense, both signs\"}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json, numpy as np\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nbits = np.arange(65536, dtype=np.uint16)\nh = torch.from_numpy(bits.view(np.float16).copy())\nfinite = torch.isfinite(h)\nx = h[finite].to(dev)  # all finite FP16 values (includes subnormals, signed zeros, +/-65504)\nout = k.run(x)\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ntol = 1e-6\ni = int(err.argmax())\nprint(json.dumps({\n  \"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\",\n  \"n\": x.numel(),\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": tol,\n  \"n_violations\": int((err > tol).sum()),\n  \"worst_x\": float(x[i].item()),\n  \"out_at_worst\": float(out[i].item()),\n  \"ref_at_worst\": float(ref[i].item()),\n  \"all_out_finite\": bool(torch.isfinite(out).all().item()),\n}))",
+        "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance"
+      },
+      "created_at": "2026-10-09T08:13:43Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "f4564b56435d50013b62ed4b939a7710cf427ca6351e41a46c0619d9e5eb203d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "fa0fe32663ab309e7d1fb1d8ea2b6ed3058cb0433e986a999beaa3e946148e21"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "e41aa68460f0c696972580fdc526a55d0f12128661d53774ed853baa0596bf3d"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band.",
+        "cwd": "/root/cases/case_131",
+        "duration_s": 4.134146,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f4564b56435d50013b62ed4b939a7710cf427ca6351e41a46c0619d9e5eb203d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "fa0fe32663ab309e7d1fb1d8ea2b6ed3058cb0433e986a999beaa3e946148e21"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "e41aa68460f0c696972580fdc526a55d0f12128661d53774ed853baa0596bf3d"
+              }
+            ],
+            "duration_s": 4.134146,
+            "exit_code": 0,
+            "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "all_out_finite": true,
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference over exhaustive finite FP16 domain",
+              "n": 63488,
+              "n_violations": 3427,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\", \"n\": 63488, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 3427, \"worst_x\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"all_out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "all_out_finite": true,
+          "max_abs_err": 1.651000609559361e-06,
+          "metric": "max abs error vs FP64 reference over exhaustive finite FP16 domain",
+          "n": 63488,
+          "n_violations": 3427,
+          "out_at_worst": 2.119194269180298,
+          "ref_at_worst": 2.1191926181796883,
+          "tolerance": 1e-06,
+          "worst_x": 2.326171875
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\", \"n\": 63488, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 3427, \"worst_x\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"all_out_finite\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_131/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\ntorch.manual_seed(0)\nbase = torch.randn(5000, dtype=torch.float32).to(torch.float16).to(dev)\nn = 4093; off = 511\nx = base[off:off+n]  # contiguous view, nonzero storage offset\nassert x.is_contiguous() and x.storage_offset() == off\nout = k.run(x)\nref = k.reference(x.cpu()).to(dev)\nerr = (out - ref).abs()\ni = int(err.argmax())\n# also confirm output matches SiLU of the viewed elements (not base[0:n])\nref_base0 = k.reference(base[:n].cpu()).to(dev)\nprint(json.dumps({\n  \"metric\": \"max abs error of run(view) vs reference(view)\",\n  \"n\": n, \"offset\": off,\n  \"max_abs_err\": float(err[i]),\n  \"tolerance\": 1e-6,\n  \"n_violations\": int((err > 1e-6).sum()),\n  \"mismatch_vs_base0_prefix\": float((out - ref_base0).abs().max()),\n  \"input_preserved\": bool(torch.equal(x, base[off:off+n].cpu().to(dev)) if False else torch.equal(x.cpu(), base[off:off+n].cpu())),\n}))",
+        "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)"
+      },
+      "created_at": "2026-10-09T08:13:48Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "686f135b72f3c086db5737c32c855d4565cb64dc3b5d7265c376962e82313ecf"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "554951833a5b8c64ef8ad39cc929db9f68dccb54c50e8ab6b8e590689dbf8d1e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "077a9f6891e35a3e1ada8489a972106c4efb3004624be4c3709e6bc97a949524"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance.",
+        "cwd": "/root/cases/case_131",
+        "duration_s": 4.410529,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "686f135b72f3c086db5737c32c855d4565cb64dc3b5d7265c376962e82313ecf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "554951833a5b8c64ef8ad39cc929db9f68dccb54c50e8ab6b8e590689dbf8d1e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "077a9f6891e35a3e1ada8489a972106c4efb3004624be4c3709e6bc97a949524"
+              }
+            ],
+            "duration_s": 4.410529,
+            "exit_code": 0,
+            "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)",
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "max_abs_err": 1.6465359666817392e-06,
+              "metric": "max abs error of run(view) vs reference(view)",
+              "mismatch_vs_base0_prefix": 4.1533869035664575,
+              "n": 4093,
+              "n_violations": 740,
+              "offset": 511,
+              "tolerance": 1e-06
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error of run(view) vs reference(view)\", \"n\": 4093, \"offset\": 511, \"max_abs_err\": 1.6465359666817392e-06, \"tolerance\": 1e-06, \"n_violations\": 740, \"mismatch_vs_base0_prefix\": 4.1533869035664575, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)",
+        "json_parse_error": null,
+        "json_result": {
+          "input_preserved": true,
+          "max_abs_err": 1.6465359666817392e-06,
+          "metric": "max abs error of run(view) vs reference(view)",
+          "mismatch_vs_base0_prefix": 4.1533869035664575,
+          "n": 4093,
+          "n_violations": 740,
+          "offset": 511,
+          "tolerance": 1e-06
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"metric\": \"max abs error of run(view) vs reference(view)\", \"n\": 4093, \"offset\": 511, \"max_abs_err\": 1.6465359666817392e-06, \"tolerance\": 1e-06, \"n_violations\": 740, \"mismatch_vs_base0_prefix\": 4.1533869035664575, \"input_preserved\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 1.651e-06,
+          "n_violations": 5387,
+          "tolerance": 1e-06,
+          "worst_x": 2.326171875
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Dense [1,4] band (both signs, n=6146): max abs error 1.651e-6 vs FP64 reference at x=2.326, with 5387 elements exceeding the 1e-6 tolerance. Confirms the truncated 1.4427 constant causes errors above tolerance near |x|~2.3.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-09T08:14:02Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-09T08:13:20Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-09T08:14:02Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "fb89f929640414f793466b82cafece1b127dbc4fd6e7bf31cf70cf4e652f815a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "a9bcf0429ed0e9082f746f0d000561982bbfa8e23d7530ca0c37d9d4d2560a6c"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "8a7599f25486071591518394af9f8e238b99c4a0275900fb0fceb85e86a32559"
+                  }
+                ],
+                "duration_s": 6.431893,
+                "exit_code": 0,
+                "expected_signal": "max abs error near |x|~2 exceeds 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err": 1.651000609559361e-06,
+                  "metric": "max abs error vs FP64 reference",
+                  "n": 6146,
+                  "n_violations": 5387,
+                  "out_at_worst": 2.119194269180298,
+                  "ref_at_worst": 2.1191926181796883,
+                  "tolerance": 1e-06,
+                  "worst_x": 2.326171875,
+                  "worst_x_abs": 2.326171875,
+                  "x_band": "[1,4] dense, both signs"
+                },
+                "max_abs_err": 1.651e-06,
+                "n_violations": 5387,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error vs FP64 reference\", \"n\": 6146, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 5387, \"worst_x\": 2.326171875, \"worst_x_abs\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"x_band\": \"[1,4] dense, both signs\"}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "worst_x": 2.326171875
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Dense [1,4] band (both signs, n=6146): max abs error 1.651e-6 vs FP64 reference at x=2.326, with 5387 elements exceeding the 1e-6 tolerance. Confirms the truncated 1.4427 constant causes errors above tolerance near |x|~2.3.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "exp2(-(magnitude*1.4427)) approximates e^-|x| with relative error about |x|*3.4e-6 because 1.4427/log2(e) = 1 + ~3.44e-6/|x|-scaled bias; the induced error in SiLU peaks near |x|~2 at an estimated 1.5-3e-6, above the strict absolute tolerance 1e-6, and these inputs are common even in randn*2 sampling, so the violation should be directly observable.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - SiLU(x[i])) <= 1e-6, and EVERY finite FP16 value is legal, so inputs near |x|~2 are squarely inside the contract."
+            }
+          ],
+          "scope_rationale": "problem.txt requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for every legal input, and every finite FP16 value including values near |x|=2 is explicitly in the legal domain.",
+          "statement": "The kernel's truncated log2(e) constant (1.4427 instead of 1.4426950408889634) combined with FP32 rounding produces absolute SiLU errors exceeding the 1e-6 tolerance for some finite FP16 inputs near |x| in roughly [1,4], where the error |x|^2*e^-|x|*|x|*3.4e-6 peaks at approximately 2-3e-6.",
+          "status": "confirmed",
+          "updated_at": "2026-10-09T08:14:02Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "fb89f929640414f793466b82cafece1b127dbc4fd6e7bf31cf70cf4e652f815a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "a9bcf0429ed0e9082f746f0d000561982bbfa8e23d7530ca0c37d9d4d2560a6c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8a7599f25486071591518394af9f8e238b99c4a0275900fb0fceb85e86a32559"
+              }
+            ],
+            "duration_s": 6.431893,
+            "exit_code": 0,
+            "expected_signal": "max abs error near |x|~2 exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference",
+              "n": 6146,
+              "n_violations": 5387,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875,
+              "worst_x_abs": 2.326171875,
+              "x_band": "[1,4] dense, both signs"
+            },
+            "max_abs_err": 1.651e-06,
+            "n_violations": 5387,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference\", \"n\": 6146, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 5387, \"worst_x\": 2.326171875, \"worst_x_abs\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"x_band\": \"[1,4] dense, both signs\"}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_x": 2.326171875
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Dense [1,4] band (both signs, n=6146): max abs error 1.651e-6 vs FP64 reference at x=2.326, with 5387 elements exceeding the 1e-6 tolerance. Confirms the truncated 1.4427 constant causes errors above tolerance near |x|~2.3.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "all_out_finite": true,
+          "max_abs_err": 1.651e-06,
+          "n": 63488,
+          "n_violations": 3427,
+          "tolerance": 1e-06,
+          "worst_x": 2.326171875
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, \u00b165504): max abs error 1.651e-6 at x=2.326171875, 3427 violations of the 1e-6 tolerance; all outputs finite. The violation is real and domain-wide, matching the peak-error band predicted.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-09T08:14:02Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-09T08:13:20Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-09T08:14:02Z",
+              "data": {
+                "all_out_finite": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "f4564b56435d50013b62ed4b939a7710cf427ca6351e41a46c0619d9e5eb203d"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "fa0fe32663ab309e7d1fb1d8ea2b6ed3058cb0433e986a999beaa3e946148e21"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "e41aa68460f0c696972580fdc526a55d0f12128661d53774ed853baa0596bf3d"
+                  }
+                ],
+                "duration_s": 4.134146,
+                "exit_code": 0,
+                "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance",
+                "json_parse_error": null,
+                "json_result": {
+                  "all_out_finite": true,
+                  "max_abs_err": 1.651000609559361e-06,
+                  "metric": "max abs error vs FP64 reference over exhaustive finite FP16 domain",
+                  "n": 63488,
+                  "n_violations": 3427,
+                  "out_at_worst": 2.119194269180298,
+                  "ref_at_worst": 2.1191926181796883,
+                  "tolerance": 1e-06,
+                  "worst_x": 2.326171875
+                },
+                "max_abs_err": 1.651e-06,
+                "n": 63488,
+                "n_violations": 3427,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\", \"n\": 63488, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 3427, \"worst_x\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"all_out_finite\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "worst_x": 2.326171875
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, \u00b165504): max abs error 1.651e-6 at x=2.326171875, 3427 violations of the 1e-6 tolerance; all outputs finite. The violation is real and domain-wide, matching the peak-error band predicted.",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "The contract is a single verdict over the whole domain, and the suspected error is a smooth function of |x| concentrated near the peak-error band; a full sweep (65536 values fits easily within N<=131072) is the decisive probe and may also expose edge behavior at subnormals and extrema that randn inputs miss.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Correctness is one verdict for the implementation over the entire legal domain, with N up to 131072, which permits sweeping all 65536 FP16 bit patterns in one call."
+            }
+          ],
+          "scope_rationale": "problem.txt defines correctness as one verdict over the entire legal domain, including subnormals and +/-65504, so exhaustive-domain probing is contractually required evidence, not a stress generalization.",
+          "statement": "Dense-sweep testing over the full finite FP16 range (e.g., all positive/negative FP16 values including subnormals, signed zeros, and +/-65504) will reveal some element violating the 1e-6 absolute tolerance, whereas benign random sampling may hide it because the violation concentrates in a narrow |x| band.",
+          "status": "confirmed",
+          "updated_at": "2026-10-09T08:14:02Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "all_out_finite": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "f4564b56435d50013b62ed4b939a7710cf427ca6351e41a46c0619d9e5eb203d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "fa0fe32663ab309e7d1fb1d8ea2b6ed3058cb0433e986a999beaa3e946148e21"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "e41aa68460f0c696972580fdc526a55d0f12128661d53774ed853baa0596bf3d"
+              }
+            ],
+            "duration_s": 4.134146,
+            "exit_code": 0,
+            "expected_signal": "exhaustive sweep reveals element(s) exceeding 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "all_out_finite": true,
+              "max_abs_err": 1.651000609559361e-06,
+              "metric": "max abs error vs FP64 reference over exhaustive finite FP16 domain",
+              "n": 63488,
+              "n_violations": 3427,
+              "out_at_worst": 2.119194269180298,
+              "ref_at_worst": 2.1191926181796883,
+              "tolerance": 1e-06,
+              "worst_x": 2.326171875
+            },
+            "max_abs_err": 1.651e-06,
+            "n": 63488,
+            "n_violations": 3427,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error vs FP64 reference over exhaustive finite FP16 domain\", \"n\": 63488, \"max_abs_err\": 1.651000609559361e-06, \"tolerance\": 1e-06, \"n_violations\": 3427, \"worst_x\": 2.326171875, \"out_at_worst\": 2.119194269180298, \"ref_at_worst\": 2.1191926181796883, \"all_out_finite\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "worst_x": 2.326171875
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, \u00b165504): max abs error 1.651e-6 at x=2.326171875, 3427 violations of the 1e-6 tolerance; all outputs finite. The violation is real and domain-wide, matching the peak-error band predicted.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err_view_vs_ref": 1.6465e-06,
+          "n": 4093,
+          "offset": 511,
+          "ref_view_vs_out_matches_base0_prefix": false
+        },
+        "event_id": "t11",
+        "status": "rebutted",
+        "summary": "Storage-offset view (base[511:4604]) is handled correctly: output matches the reference computed on the viewed elements, not on base[:n] (large mismatch 4.15 vs base-0 prefix proves correct addressing), input preserved, and errors (max 1.647e-6, 740 > 1e-6) are the same constant-truncation numeric error already captured by c1/c2, not an offset mishandling. The claim that offset views are mishandled is rebutted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-09T08:14:02Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-09T08:13:20Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-09T08:14:02Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "686f135b72f3c086db5737c32c855d4565cb64dc3b5d7265c376962e82313ecf"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "554951833a5b8c64ef8ad39cc929db9f68dccb54c50e8ab6b8e590689dbf8d1e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "077a9f6891e35a3e1ada8489a972106c4efb3004624be4c3709e6bc97a949524"
+                  }
+                ],
+                "duration_s": 4.410529,
+                "exit_code": 0,
+                "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)",
+                "json_parse_error": null,
+                "json_result": {
+                  "input_preserved": true,
+                  "max_abs_err": 1.6465359666817392e-06,
+                  "metric": "max abs error of run(view) vs reference(view)",
+                  "mismatch_vs_base0_prefix": 4.1533869035664575,
+                  "n": 4093,
+                  "n_violations": 740,
+                  "offset": 511,
+                  "tolerance": 1e-06
+                },
+                "max_abs_err_view_vs_ref": 1.6465e-06,
+                "n": 4093,
+                "offset": 511,
+                "ref_view_vs_out_matches_base0_prefix": false,
+                "stderr": "",
+                "stdout": "{\"metric\": \"max abs error of run(view) vs reference(view)\", \"n\": 4093, \"offset\": 511, \"max_abs_err\": 1.6465359666817392e-06, \"tolerance\": 1e-06, \"n_violations\": 740, \"mismatch_vs_base0_prefix\": 4.1533869035664575, \"input_preserved\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "Storage-offset view (base[511:4604]) is handled correctly: output matches the reference computed on the viewed elements, not on base[:n] (large mismatch 4.15 vs base-0 prefix proves correct addressing), input preserved, and errors (max 1.647e-6, 740 > 1e-6) are the same constant-truncation numeric error already captured by c1/c2, not an offset mishandling. The claim that offset views are mishandled is rebutted.",
+              "supports": "rebutted",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "skeptic",
+          "rationale": "Triton receives the tensor's data pointer, which should include the storage offset, but the interaction of tl.load pointer arithmetic with masked blocks and the exact pointer passed for offset views is a classic off-by-offset failure surface; the contract explicitly makes such views legal, so a probe with a known-offset contiguous view directly tests this.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contiguous views with nonzero storage offsets are legal inputs within the public domain, so the kernel must compute SiLU on the viewed elements exactly."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly states contiguous views with nonzero storage offsets are legal inputs, so correct handling of them is part of the stated contract.",
+          "statement": "A contiguous FP16 view with a nonzero storage offset (e.g., x = base[k:k+N]) is mishandled: the Triton kernel indexes from the view's data pointer but run() launches with grid covering only the view length, so either outputs are computed from the wrong elements or the offset view produces mismatched results violating the 1e-6 tolerance.",
+          "status": "rebutted",
+          "updated_at": "2026-10-09T08:14:02Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-09T08:14:02Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "686f135b72f3c086db5737c32c855d4565cb64dc3b5d7265c376962e82313ecf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "554951833a5b8c64ef8ad39cc929db9f68dccb54c50e8ab6b8e590689dbf8d1e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "077a9f6891e35a3e1ada8489a972106c4efb3004624be4c3709e6bc97a949524"
+              }
+            ],
+            "duration_s": 4.410529,
+            "exit_code": 0,
+            "expected_signal": "offset view produces mismatched results (wrong elements or >1e-6 error)",
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "max_abs_err": 1.6465359666817392e-06,
+              "metric": "max abs error of run(view) vs reference(view)",
+              "mismatch_vs_base0_prefix": 4.1533869035664575,
+              "n": 4093,
+              "n_violations": 740,
+              "offset": 511,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_view_vs_ref": 1.6465e-06,
+            "n": 4093,
+            "offset": 511,
+            "ref_view_vs_out_matches_base0_prefix": false,
+            "stderr": "",
+            "stdout": "{\"metric\": \"max abs error of run(view) vs reference(view)\", \"n\": 4093, \"offset\": 511, \"max_abs_err\": 1.6465359666817392e-06, \"tolerance\": 1e-06, \"n_violations\": 740, \"mismatch_vs_base0_prefix\": 4.1533869035664575, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "Storage-offset view (base[511:4604]) is handled correctly: output matches the reference computed on the viewed elements, not on base[:n] (large mismatch 4.15 vs base-0 prefix proves correct addressing), input preserved, and errors (max 1.647e-6, 740 > 1e-6) are the same constant-truncation numeric error already captured by c1/c2, not an offset mishandling. The claim that offset views are mishandled is rebutted.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the truncated log2(e) constant violation (c1/c2) is confirmed with exhaustive-domain evidence, and c3 (storage-offset views) is rebutted. The new probe evidence exposes no additional material, testable, in-scope problem beyond what existing claims already cover.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ]
+      },
+      "created_at": "2026-10-09T08:14:09Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-10-09T08:14:09Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the truncated log2(e) constant violation (c1/c2) is confirmed with exhaustive-domain evidence, and c3 (storage-offset views) is rebutted. The new probe evidence exposes no additional material, testable, in-scope problem beyond what existing claims already cover.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact here) requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 input value, with relative tolerance zero, over the entire legal domain. Confirmed in-scope evidence: (c2) an exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, +/-65504, N within the allowed [1,131072]) found 3427 elements violating the 1e-6 tolerance, with max absolute error 1.651e-6 at x=2.326171875, all outputs finite; (c1) a dense |x| in [1,4] probe independently reproduces the violation (max 1.651e-6, 5387 violations). The cause is the truncated exp2 scaling constant 1.4427 vs log2(e)=1.4426950408889634 (kernel line 17). This is not a contract-permitted approximation deviation: the contract explicitly permits base-2 exponentials and algebraic rewrites only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 and this one does not. The c3 offset-view concern was rebutted (views addressed correctly, input preserved). The violations are not near-zero outputs with negligible absolute difference (out=2.1192 vs ref=2.1192 at the worst point, absolute error above tolerance). Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-09T08:14:19Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-09T08:14:19Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact here) requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 input value, with relative tolerance zero, over the entire legal domain. Confirmed in-scope evidence: (c2) an exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, +/-65504, N within the allowed [1,131072]) found 3427 elements violating the 1e-6 tolerance, with max absolute error 1.651e-6 at x=2.326171875, all outputs finite; (c1) a dense |x| in [1,4] probe independently reproduces the violation (max 1.651e-6, 5387 violations). The cause is the truncated exp2 scaling constant 1.4427 vs log2(e)=1.4426950408889634 (kernel line 17). This is not a contract-permitted approximation deviation: the contract explicitly permits base-2 exponentials and algebraic rewrites only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 and this one does not. The c3 offset-view concern was rebutted (views addressed correctly, input preserved). The violations are not near-zero outputs with negligible absolute difference (out=2.1192 vs ref=2.1192 at the worst point, absolute error above tolerance). Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-09T08:14:19Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt, the operative artifact here) requires abs(actual[i]-SiLU(x[i])) <= 1e-6 for EVERY finite FP16 input value, with relative tolerance zero, over the entire legal domain. Confirmed in-scope evidence: (c2) an exhaustive sweep of all 63488 finite FP16 values (subnormals, signed zeros, +/-65504, N within the allowed [1,131072]) found 3427 elements violating the 1e-6 tolerance, with max absolute error 1.651e-6 at x=2.326171875, all outputs finite; (c1) a dense |x| in [1,4] probe independently reproduces the violation (max 1.651e-6, 5387 violations). The cause is the truncated exp2 scaling constant 1.4427 vs log2(e)=1.4426950408889634 (kernel line 17). This is not a contract-permitted approximation deviation: the contract explicitly permits base-2 exponentials and algebraic rewrites only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 and this one does not. The c3 offset-view concern was rebutted (views addressed correctly, input preserved). The violations are not near-zero outputs with negligible absolute difference (out=2.1192 vs ref=2.1192 at the worst point, absolute error above tolerance). Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain. Verdict: reject.",
+    "verdict": "reject"
+  }
+}

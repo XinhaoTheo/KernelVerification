@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-1d09180e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: c1 (kernel output vs FP64 erfc over the mid-range band and full FP16 domain), c2 (same, with a counterfactual simulation using the exact A&S constant to isolate the truncation effect), and c3 (contiguous view with nonzero storage offset).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b496c660ef686ba2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport json, math, torch\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n# Build all positive FP16 values in the mid-range band [3, 13] plus a broad full-domain sample\\nvals = []\\nv = torch.tensor([0], dtype=torch.float16)\\n# enumerate all positive finite FP16 values via bit patterns\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nallf16 = bits.to(torch.uint16).view(torch.float16)\\npos = allf16[torch.isfinite(allf16) & (allf16 > 0)]\\nband = pos[(pos >= 2.0) & (pos <= 14.0)]\\nnegband = -band\\nx = torch.cat([band, negband]).to(dev)\\nout = K.run(x)\\nref = K.reference(x).to(torch.float64).to(dev)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-6\\nbad = err > tol\\ni = int(torch.argmax(err))\\nprint(json.dumps({\\n    \\\"n\\\": int(x.numel()),\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"tol\\\": tol,\\n    \\\"n_violations\\\": int(bad.sum()),\\n    \\\"worst_x\\\": float(x.flatten()[i]),\\n    \\\"worst_err\\\": float(err.flatten()[i]),\\n    \\\"dev\\\": dev,\\n}))\\n\", \"expected_signal\": \"max_abs_err over FP16 band vs FP64 erfc, compared to 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-8237a19ca7d4bc61",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport json, math, torch\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n# Full positive FP16 grid, finite, restricted to |x| where GELU error could matter (x <= 20)\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nallf16 = bits.to(torch.uint16).view(torch.float16)\\npos = allf16[torch.isfinite(allf16) & (allf16 > 0)]\\nsel = pos[pos <= 20.0]\\nx = torch.cat([sel, -sel]).to(dev)\\nout = K.run(x)\\nref = K.reference(x).to(torch.float64).to(dev)\\nerr = (out.to(torch.float64) - ref).abs()\\ni = int(torch.argmax(err))\\n\\n# Counterfactual: simulate kernel in FP32 math with exact A&S constant 0.3275911 (FP64 sim, no fp32 rounding) to isolate constant truncation\\ndef sim(x64, c):\\n    m = x64.abs()\\n    t = 1.0 / (1.0 + c * m / math.sqrt(2.0))\\n    p = 1.06141 * t - 1.45315\\n    p = p * t + 1.42141\\n    p = p * t - 0.28450\\n    p = p * t + 0.25483\\n    p = p * t\\n    tail = 0.5 * p * torch.exp(-0.5 * m * m)\\n    prob = torch.where(x64 < 0, tail, 1.0 - tail)\\n    return x64 * prob\\n\\nx64 = x.to(torch.float64)\\nref_exact = sim(x64, 0.3275911)\\nref_trunc = sim(x64, 0.3276)\\nprint(json.dumps({\\n    \\\"kernel_max_abs_err\\\": float(err.max()),\\n    \\\"tol\\\": 1e-6,\\n    \\\"kernel_violations\\\": int((err > 1e-6).sum()),\\n    \\\"worst_x\\\": float(x.flatten()[i]),\\n    \\\"sim_err_exact_const\\\": float((ref_exact - ref).abs().max()),\\n    \\\"sim_err_trunc_const\\\": float((ref_trunc - ref).abs().max()),\\n    \\\"sim_const_induced_extra\\\": float((ref_trunc - ref_exact).abs().max()),\\n    \\\"dev\\\": dev,\\n}))\\n\", \"expected_signal\": \"kernel max error vs 1e-6, and counterfactual error with exact constant 0.3275911\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-92863ef11e6e111e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport json, torch\\nimport kernel as K\\n\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\nbase = (2.0 * torch.randn((1000,), dtype=torch.float16)).to(dev)\\nx = base[300:]  # contiguous view, storage offset 300, size 700\\nassert x.storage_offset() == 300 and x.is_contiguous()\\nrejected = False\\ntry:\\n    out = K.run(x)\\nexcept Exception as e:\\n    rejected = True\\n    out = None\\n    msg = str(e)\\nref = K.reference(x).to(torch.float64).to(dev) if not rejected else None\\nerr = (out.to(torch.float64) - ref).abs() if out is not None else None\\nprint(json.dumps({\\n    \\\"rejected\\\": rejected,\\n    \\\"error_msg\\\": msg if rejected else None,\\n    \\\"n\\\": 700 if not rejected else None,\\n    \\\"max_abs_err\\\": float(err.max()) if err is not None else None,\\n    \\\"tol\\\": 1e-6,\\n    \\\"view_matches_full\\\": bool(torch.allclose(out, K.run(base)[300:].to(torch.float64), atol=0, rtol=0)) if out is not None else None,\\n    \\\"input_preserved\\\": bool(torch.equal(x, base[300:])) if out is not None else None,\\n    \\\"dev\\\": dev,\\n}))\\n\", \"expected_signal\": \"whether run() accepts a storage-offset view and output matches FP64 reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (mid-band FP16 values sweep), c2 (compare 0.3276 vs 0.3275911 effect — can compute simulated kernel in FP32 and compare; but better to run actual kernel vs both constants), c3 (view test).\n\nI'll write probes. c1: run kernel on FP16 values in [3,9] band, compare to FP64 erfc. c2: same sweep but quantify whether replacing constant fixes it — compute a NumPy FP32 simulation with both constants to isolate the constant's contribution; but runtime kernel is the decisive artifact for c1. For c2, decide whether the truncated constant is the cause: compare kernel max error vs simulated error with true constant. A simpler probe: run kernel over all FP16 values in band, and compute simulated error with both constants in FP32/FP64 on CPU; if error with 0.3275911 < 1e-6 but kernel > 1e-6, the truncation is decisive. Actually claim c2 states error exceeds 1e-6 due to truncation — a probe that computes kernel error and a counterfactual high-precision computation decides it.\n\nAll three independent — batch them."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791532894,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1575,
+    "prompt_tokens": 19736,
+    "total_tokens": 21311,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

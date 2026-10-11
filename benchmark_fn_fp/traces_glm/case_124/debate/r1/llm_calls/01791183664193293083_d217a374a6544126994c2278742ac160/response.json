@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-6268e10a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching three independent runtime probes in one batch: c1 (exact second-stage tie points, r∈{1,2,3}), c2 (negative accumulators with r=1 and odd H), c3 (r=0 extreme positive a=m=2^31−1). Each compares kernel.run against an exact Python big-integer computation of the contract.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9643ee3e3d25988c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, '/root/cases/case_124')\\nimport torch\\nimport kernel as K\\n\\ndev = 'cuda'\\n\\ndef contract(a, m, r, z, s):\\n    P = a*m\\n    H = (P + (1 << 30)) // (1 << 31)  # floor, ties toward +inf (exact for negatives too since Python floor)\\n    if r:\\n        mag = abs(H)\\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\\n        R = -Rmag if H < 0 else Rmag\\n    else:\\n        R = H\\n    Q = min(127, max(-128, R + z))\\n    return (Q - z) * s\\n\\nresults = {}\\nmismatches = []\\nfor r in (1, 2, 3):\\n    m = (1 << 30) + 3\\n    z = 0\\n    s = 1.0\\n    # scan a values, find exact tie residues H mod 2^r == 2^(r-1)\\n    tie_vals = []\\n    for a in range(-5000, 5001):\\n        H = (a*m + (1<<30)) // (1<<31)\\n        if H % (1 << r) == (1 << (r-1)):\\n            tie_vals.append(a)\\n        if len(tie_vals) >= 64:\\n            break\\n    if not tie_vals:\\n        results[f'r{r}'] = 'no tie values found'\\n        continue\\n    acc = torch.tensor([tie_vals], dtype=torch.int32, device=dev)\\n    mult = torch.tensor([m], dtype=torch.int32, device=dev)\\n    shift = torch.tensor([r], dtype=torch.int32, device=dev)\\n    zero = torch.tensor([z], dtype=torch.int32, device=dev)\\n    scale = torch.tensor([s], dtype=torch.float32, device=dev)\\n    out = K.run(acc, mult, shift, zero, scale).cpu()\\n    exp = [contract(a, m, r, z, s) for a in tie_vals]\\n    got = out[0].tolist()\\n    bad = [(a, e, g) for a, e, g in zip(tie_vals, exp, got) if e != g]\\n    mismatches.extend((r, *b) for b in bad)\\n    results[f'r{r}'] = {'n_tie': len(tie_vals), 'n_mismatch': len(bad),\\n                       'first_example': bad[0] if bad else None}\\n\\nprint(json.dumps({'claim': 'c1', 'results': results,\\n                  'any_mismatch': len(mismatches) > 0,\\n                  'example_r_a_expected_got': mismatches[:3]}))\", \"expected_signal\": \"kernel output differs from exact double rounding at constructed second-stage tie points\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-86d62331e9942e22",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json\\nsys.path.insert(0, '/root/cases/case_124')\\nimport torch\\nimport kernel as K\\n\\ndev = 'cuda'\\n\\ndef contract(a, m, r, z, s):\\n    P = a*m\\n    H = (P + (1 << 30)) // (1 << 31)\\n    if r:\\n        mag = abs(H)\\n        Rmag = (mag + (1 << (r-1))) // (1 << r)\\n        R = -Rmag if H < 0 else Rmag\\n    else:\\n        R = H\\n    Q = min(127, max(-128, R + z))\\n    return (Q - z) * s\\n\\nr = 1\\nm = (1 << 30) + 3\\nz = 0\\ns = 1.0\\n# negative a with H exactly odd (half-tie for /2, away-from-zero should round down i.e. more negative)\\nneg_tie = []\\na = -1\\nwhile len(neg_tie) < 128:\\n    H = (a*m + (1<<30)) // (1<<31)\\n    if H < 0 and (H % 2 == 1 or H % 2 == -1):\\n        neg_tie.append(a)\\n    a -= 1\\n\\nacc = torch.tensor([neg_tie], dtype=torch.int32, device=dev)\\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\\nout = K.run(acc, mult, shift, zero, scale).cpu()\\nexp = [contract(a, m, r, z, s) for a in neg_tie]\\ngot = out[0].tolist()\\nbad = [(a, e, g) for a, e, g in zip(neg_tie, exp, got) if e != g]\\n# also positive-side odd H for contrast\\npos_tie = []\\na = 1\\nwhile len(pos_tie) < 128:\\n    H = (a*m + (1<<30)) // (1<<31)\\n    if H % 2 == 1:\\n        pos_tie.append(a)\\n    a += 1\\naccp = torch.tensor([pos_tie], dtype=torch.int32, device=dev)\\noutp = K.run(accp, mult, shift, zero, scale).cpu()\\nexpp = [contract(a, m, r, z, s) for a in pos_tie]\\nbadp = [(a, e, g) for a, e, g in zip(pos_tie, expp, outp[0].tolist()) if e != g]\\n\\nprint(json.dumps({'claim': 'c2', 'r': r, 'm': m,\\n                  'n_neg_tie': len(neg_tie), 'neg_mismatches': len(bad),\\n                  'neg_first_example_a_expected_got': bad[0] if bad else None,\\n                  'n_pos_tie': len(pos_tie), 'pos_mismatches': len(badp),\\n                  'pos_first_example': badp[0] if badp else None}))\", \"expected_signal\": \"negative odd-H cases with r=1 mismatch contract away-from-zero rounding\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b93e58d0a7247240",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json\\nsys.path.insert(0, '/root/cases/case_124')\\nimport torch\\nimport kernel as K\\n\\ndev = 'cuda'\\n\\ndef contract(a, m, r, z, s):\\n    P = a*m\\n    H = (P + (1 << 30)) // (1 << 31)\\n    R = H\\n    Q = min(127, max(-128, R + z))\\n    return (Q - z) * s\\n\\nm = (1 << 31) - 1\\nr = 0\\nz = 0\\ns = 1.0\\na = (1 << 31) - 1\\nP = a*m\\nH = (P + (1 << 30)) // (1 << 31)\\nvals = [a, a-1, (1<<30), -(1<<31), -((1<<31)-1)]\\nacc = torch.tensor([vals], dtype=torch.int32, device=dev)\\nmult = torch.tensor([m], dtype=torch.int32, device=dev)\\nshift = torch.tensor([r], dtype=torch.int32, device=dev)\\nzero = torch.tensor([z], dtype=torch.int32, device=dev)\\nscale = torch.tensor([s], dtype=torch.float32, device=dev)\\nout = K.run(acc, mult, shift, zero, scale).cpu()\\nexp = [contract(v, m, r, z, s) for v in vals]\\ngot = out[0].tolist()\\nbad = [(v, e, g, H) for v, e, g in zip(vals, exp, got) if e != g]\\nprint(json.dumps({'claim': 'c3', 'a_max_int31_H': H, 'mismatches': bad,\\n                  'expected': exp, 'got': got}))\", \"expected_signal\": \"q0 int32 wrap for H=2^31-1 produces wrong Q vs contract\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Three open claims; batch probes for c1, c2, c3. All are independent runtime comparisons of kernel.run vs reference with constructed inputs. Write one probe per claim, each constructing targeted inputs.\n\nProbe design: import kernel module from artifact session dir (sys.path append /root/cases/case_124? Actually kernel.py). Build acc with specific values.\n\nc1: choose r=1..some, construct exact tie: pick m and a such that H is odd (H mod 2^r == 2^(r-1)). Simple: choose a so P = a*m; we need H = floor((P+2^30)/2^31) odd. Take m = 2^30, a = 4*2^30+something... Simpler: search offline in Python within probe: for a given r, iterate small candidate a values, compute double rounding via reference math, and find one where single rounding (simulated) differs — but we need kernel vs reference directly. Just scan: for r in {1,2,3}, m=2^30+1 (or 2^31-1), a over a set of values, find those where H mod 2^r == 2^(r-1), then run kernel on all of them (a row of many candidates) and compare vs reference. Easiest: build acc row of many a values covering residues, run kernel with that r and m, z=0, s=1, compare against Python exact computation of Q. Report count of mismatches and example.\n\nc2: same but negative a, r=1, H odd. Negative a, m positive; H negative odd. e.g. a=-3, m=2^30+... compute. Scan negative a values, filter H odd.\n\nc3: a=2^31-1, m=2^31-1, r=0. H should be ~2^31-1. Check kernel output vs exact Q.\n\nCompute exact expected in probe via Python big ints. Use kernel.run for kernel. Need CUDA available; use_gpu default true.\n\nWrite code: import sys; sys.path.insert(0,'/root/cases/case_124'); import kernel as K. Device 'cuda'.\n\nEach probe prints final JSON line. Launch all three together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791183668,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2366,
+    "prompt_tokens": 38053,
+    "total_tokens": 40419,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

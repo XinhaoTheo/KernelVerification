@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-cd0d72cf64954cbb8a55fe76954de7f3",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first probe found no violations, but it only used values of exactly ±0.5, which makes every partial sum a multiple of 0.25 — exactly representable in FP16, so it never exercised the suspected rounding at all. I need a probe where partials are large but *not* FP16-representable, and where large partials cancel so the tolerance floor (0.01) has to absorb up to 8 FP16 roundings.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b9bbe08656322cba",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_116\\\")\\nimport kernel\\n\\ndevice = \\\"cuda\\\"\\ntol = lambda t: 0.01 + 0.001 * t.abs()\\nworst = None\\nnviol_total = 0\\nn_cases = 0\\n\\n# Adversarial construction: within each split segment, B aligns with A's signs so\\n# each partial is large (~16, not FP16-representable), but alignment flips across\\n# split halves so partials cancel and the target is near 0.\\nfor trial in range(60):\\n    gen = torch.Generator(device=\\\"cpu\\\").manual_seed(1000 + trial)\\n    m, n, k = 4, 8, 512\\n    A = (torch.rand((m, k), generator=gen) * 0.5).half()  # magnitudes in (0,0.5]\\n    # sign pattern of A restricted to row 0 drives B; use row 0's signs\\n    signs = torch.sign(A[0]).half()\\n    Bsign = signs[:, None].repeat(1, n).clone()\\n    seg = k // 8\\n    Bsign[4*seg:, :] = -Bsign[4*seg:, :]  # flip alignment in last 4 splits\\n    B = (Bsign * 0.5).half().t().contiguous().t()  # ensure [K,N] contiguous\\n    B = torch.where(B == 0, torch.tensor(0.5, dtype=torch.float16), B)\\n    bias = torch.zeros(n, dtype=torch.float32, device=\\\"cpu\\\")\\n    A, B, bias = A.to(device), B.to(device), bias.to(device)\\n    for sk in (8, 4):\\n        out = kernel.run(A, B, bias, sk)\\n        ref = kernel.reference(A, B, bias, sk)\\n        diff = (out - ref).abs()\\n        v = diff > tol(ref)\\n        nv = int(v.sum())\\n        n_cases += 1\\n        if nv > 0:\\n            nviol_total += nv\\n            if worst is None or diff.max() > worst[\\\"max_diff\\\"]:\\n                worst = {\\\"trial\\\": trial, \\\"sk\\\": sk, \\\"violations\\\": nv,\\n                        \\\"max_diff\\\": float(diff.max()),\\n                        \\\"max_tol_at_viol\\\": float(tol(ref)[v].max()),\\n                        \\\"max_ref\\\": float(ref.abs().max()),\\n                        \\\"min_ref_at_viol\\\": float(ref.abs()[v].min()),\\n                        \\\"example_actual\\\": float(out[v][0]),\\n                        \\\"example_target\\\": float(ref[v][0])}\\n        # diagnostics even when passing\\n        if worst is None and diff.max() > 0.002:\\n            pass\\n\\nprint(json.dumps({\\\"cases\\\": n_cases, \\\"total_violations\\\": nviol_total, \\\"worst\\\": worst,\\n \\\"note\\\": \\\"large cancelling partials, target near 0, partials ~16 non-representable in FP16\\\"}))\\n\", \"expected_signal\": \"tolerance violation when large partials cancel to near-zero target\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "The probe found no violations. But wait: with A,B = ±0.5, products are ±0.25, partial sums are multiples of 0.25 — exactly representable in FP16, so no rounding. Need a case with non-representable partials. Also I should sanity-check the probe ran on GPU correctly (it did, exit 0). Let me finalize t6 as rebutted? Not yet — the probe only covers exactly-representable values. Better: run a targeted probe with random values where FP16 rounding of partials actually occurs, K=512, split 8, many trials.\n\nFP16 partial magnitude up to 128; ulp at 128 is 0.0625. With random ±0.5 values, partial sums ~ sqrt scale ~ 5; ulp at 4 is 0.002; 8 partials → error ~0.008, plus FP16 inputs themselves are exact. Hmm tolerance 0.01. Worst case partial ~128 requires near-all-aligned values — adversarial. Let's craft: A row all +0.5, B col random ±0.5 → each dot = 0.25 * sum(b) ~ up to 128. Partial sums may be non-representable? 0.25*b_k with b in FP16 random halves — values like 0.25*0.4995 = 0.12487, sums accumulate FP32 exactly within partial; partial ~16 per split, rounding error ulp(16)=0.0078 per partial, 8 partials → up to 0.06 error > 0.01 tolerance at target 128 (tol 0.138). Hmm tol scales: 0.01+0.001*128=0.138. Relative error of FP16 is ~2^-11 ≈ 5e-4 < 1e-3... So relative tolerance 0.001 essentially absorbs FP16 single rounding? FP16 relative ulp is 2^-11=4.88e-4, half-ulp 2.4e-4. Relative error from one FP16 rounding per partial then FP32 sum: relative error ≤ ~2.4e-4 of partial magnitude, partials sum to target magnitude (if same sign). So relative error ≤ 2.4e-4 < 1e-3? Actually if partials cancel, target small but errors don't cancel systematically... errors are rounding, could add up to 8 * half-ulp(|partial|). If target ≈ 0 due to cancellation while partials each ~128, absolute error up to 8*0.0625/2 = 0.25 > 0.01 + ~0. That's the failing case: large cancelling partials. Can we make partials large and cancel? E.g., split 0 partials all +, split 1 all −. A row: first half of columns... A is [M,K]; a single row r: A[r, :256]=+0.5, A[r,256:]=+0.5; B col j: B[:256,j]=+0.5, B[256:,j]=+0.5 gives no cancellation. To cancel: B[:,j] = +0.5 for k<256, -0.5 after; A[r,:]=0.5 → partial split0 = +32, split1 = -32, target 0. Partial values 32 exactly representable → no rounding. Need non-representable: use A values random halves (already FP16), B structured. A[r,:] random in ±0.5; B[:,j]=+0.5 for k<256 else -0.5. Partial split0 = 0.5*sum(A[r,:256]) ~ ±0.5*sqrt(128*0.25)... small. To make partial large: A entries large, sum large. Random A halves sum over 256 entries ~ N(0, 256/12)*... roughly ±5; times 0.5 → ~2.5. ulp(2.5)=0.001. 8 partials error ~ 0.005 < 0.01. Hmm.\n\nBetter: make partials large via B random and A structured? partial = dot of A row with B col over 64 ks: each split covers 64 columns (K=512, split=8 → 64 each). Max partial = 64*0.25=16. To get FP16 rounding error meaningful, want partial near 16 but non-representable, and target near 0. A[r,:]=+0.5 all; B[:,j]: first 4 splits columns +0.5, last 4 splits -0.5 → partials ±16 exactly representable (16 is power of two, exact). Need values in between: A[r,:]=0.5 (exact), B entries random halves → partial = 0.25*sum(64 random halves) ~ up to 16 but sums of FP16 values times 0.25... FP16 has 11 bits; values like 0.4995... 0.25*x may still need rounding. Random sum of 64 values in ±0.25, times... let me just probe computationally: simulate in Python FP16 rounding of partials and search for worst-case violation over many random trials, including constructed near-cancellation cases. Do a probe that: generates many random trials (various m,n,k,sk), computes the exact FP32-with-FP16-partials model (or just calls kernel.run) and checks tolerance; plus adversarial construction: A rows constant 0.5, B columns random halves with sign pattern forcing partial cancellation.\n\nActually simpler: directly probe with kernel.run on adversarial constructed inputs. Construct: K=512, split_k=8. A: all entries random ±0.5 chosen so each row's entries in each split segment have sum s with large magnitude; B column j: constant +0.5 in some splits, constant matching negative sign... hmm to cancel target we need weighted sums to cancel; we control both. Take A row r: entries = sign pattern; B col j: entries = A[r,k] * c pattern... Easiest: A[r,k] = +0.5 for k in splits 0-3, random for others? Overcomplicating. Just do randomized search with adversarial structure: A random half with magnitude near 0.5 (rand*0.5), B designed: B[:,j] = ±0.5 with the sign chosen to align A's signs within each split, and flip alignment across splits so partials are large and cancel. B[k,j] = sign(A[r,k]) for k in splits 0..3, = -sign(A[r,k]) for splits 4..7, with A magnitudes random near 0.5. Then each partial = sum|A| ≈ 64*0.25 ~ 16 (non-representable sums), total target ≈ 0. FP16 rounding of each partial ~ ulp(16)/2=0.0039, 8 → up to ~0.03 > 0.01. Do this for a few rows/columns. Run probe.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051021,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2315,
+    "prompt_tokens": 14144,
+    "total_tokens": 16459,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1542,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 1542
+    }
+  }
+}

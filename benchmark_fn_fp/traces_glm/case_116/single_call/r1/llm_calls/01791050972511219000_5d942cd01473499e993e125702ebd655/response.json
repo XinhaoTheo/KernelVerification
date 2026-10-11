@@ -1,0 +1,41 @@
+{
+  "id": "chatcmpl-b97dad44",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.8, \"reason\": \"When split_k > 1 the partial sums are stored in an FP16 workspace (work_dtype = a.dtype) and then accumulated, introducing intermediate FP16 rounding that the contract explicitly excludes ('no intermediate rounding behavior is part of the target'); worst-case per-split magnitudes near 128 have FP16 ulp up to 0.0625, so accumulated rounding error can exceed the 0.01 + 0.001*|target| tolerance (e.g., near-cancelling partials with small targets). Everything else (coverage of K, masking, bias indexing, disjointness check) looks sound.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Key issue: work dtype is FP16 when split_k > 1 — partial sums stored in FP16, then summed. Is that within tolerance? Max exact partial sum: 0.5*0.5*512 = 128, split-K partials smaller. FP16 rounding of partials... partial magnitude up to 128, FP16 precision ~2^-8 relative → error up to ~0.5 per split? Actually fp16 near 128 has ulp = 0.0625. Sum of 8 partials each rounded → up to ~0.25 error. Tolerance: 0.01 + 0.001*|target|. Target could be small (near zero) with error up to 0.25 → violation. Hmm, but actual errors: each partial up to |0.5·0.5·K/splits|·... With K=512, split=8, each partial magnitude ≤ 8, fp16 ulp at 8 is 0.0078... but intermediate accumulation in tl.dot is fp32, only final store rounded. So per-split rounding error ≤ ulp/2 ≈ 0.004. Sum of 8 → ≤0.03? Actually sum of errors ≤ 8*0.004 = 0.03 > 0.01. But magnitudes rarely max. Still contract says worst case must satisfy. Also: fp16 range fine (max 128 < 65504). Also could error exceed tolerance when target small? Partial could be 8 with target sum ≈ 0; error ~0.004 each, total ~0.03 > 0.01. This is a real defect risk. Standard Triton split-k examples store in input dtype... but contract explicitly says \"No intermediate rounding behavior is part of the target\" and tolerance accommodates ordinary FP32 accumulation. Storing partials in FP16 is a genuine defect (reject).\n\nAlso check bias indexing: index % N works for contiguous row-major. Fine.\n\ntiles computation: cdiv(cdiv(k,32), split_k)*BK*split_k may not cover K fully? tiles = cdiv(cdiv(k,32), split). Total inner coverage = split*tiles*32 ≥ cdiv(k,32)*32 ≥ k. Yes covered.\n\nSo reject due to FP16 partial storage."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791050973,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 636,
+    "prompt_tokens": 2302,
+    "total_tokens": 2938,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

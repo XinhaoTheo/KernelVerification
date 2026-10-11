@@ -1,0 +1,190 @@
+[
+  {
+    "created_at": "2026-10-03T22:14:25Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T22:15:16Z",
+        "data": {
+          "argmax_31x33": [
+            30,
+            22
+          ],
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "f510616105d9962bc7a1e952fb8905adc17d4b1b7f888dee04d047d2e7e8ea23"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "b7d8519f135d63fe6550323a7f0e833cc86422dd94f0a10b894ccb7966cf701e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "57e7e304b91c4bca38bb945f139014744038a9a7f8da369971db51b53388aaff"
+            }
+          ],
+          "duration_s": 4.702039,
+          "exit_code": 0,
+          "expected_signal": "steps=4 near-edge max abs error > 2e-5 vs FP64 per-step reference",
+          "json_parse_error": null,
+          "json_result": {
+            "31x33": {
+              "argmax": [
+                30,
+                22
+              ],
+              "max_err_interior": 2.3283064365386963e-08,
+              "max_err_near_edge": 0.07484998553991318,
+              "n_over_tol": 347
+            },
+            "5x9": {
+              "argmax": [
+                4,
+                0
+              ],
+              "max_err_interior": null,
+              "max_err_near_edge": 0.059676675125956535,
+              "n_over_tol": 45
+            },
+            "8x8": {
+              "argmax": [
+                7,
+                7
+              ],
+              "max_err_interior": null,
+              "max_err_near_edge": 0.10270466841757298,
+              "n_over_tol": 60
+            }
+          },
+          "max_err_interior_31x33": 2.33e-08,
+          "max_err_near_edge_31x33": 0.07485,
+          "max_err_near_edge_5x9": 0.05968,
+          "max_err_near_edge_8x8": 0.1027,
+          "n_over_tol_31x33": 347,
+          "n_over_tol_5x9": 45,
+          "n_over_tol_8x8": 60,
+          "stderr": "",
+          "stdout": "{\"31x33\": {\"max_err_near_edge\": 0.07484998553991318, \"max_err_interior\": 2.3283064365386963e-08, \"n_over_tol\": 347, \"argmax\": [30, 22]}, \"8x8\": {\"max_err_near_edge\": 0.10270466841757298, \"max_err_interior\": null, \"n_over_tol\": 60, \"argmax\": [7, 7]}, \"5x9\": {\"max_err_near_edge\": 0.059676675125956535, \"max_err_interior\": null, \"n_over_tol\": 45, \"argmax\": [4, 0]}}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 2e-05
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "steps=4 fused 9-tap passes vs FP64 per-step reference: near-edge max abs error 0.0748 (31x33), 0.1027 (8x8), 0.0597 (5x9) \u2014 3000-5000x the 2e-5 tolerance, with 347/60/45 elements over tolerance; interior error 2.3e-8 (essentially exact). Argmax at border row/col confirms mass leaking across the per-step zero exterior. Claim c1 confirmed: missing per-step zero-exterior re-imposition in the fused pass.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The true per-step operator truncates to the rectangle after each of the 4 steps inside a fused pass, deleting mass that flows outside and back; the kernel's single 9-tap evaluation with coefficients (1,8,28,56,70,56,28,8,1)/256 keeps that mass. Near-edge elements (within 4 of a border) and small domains (H or W <= 8) should diverge from reference() by more than 2e-5.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"The zero exterior is imposed at EVERY individual time step. Only values within the finite rectangle are retained as the state for the next step.\" Temporal fusion is permitted only \"provided the complete finite-domain target is preserved within this fixed tolerance\" of 2e-5 per element over the whole legal domain (1<=H,W<=129, steps in {4,8})."
+      }
+    ],
+    "scope_rationale": "The contract explicitly states the zero exterior is imposed at every individual time step and that separability/temporal fusion is allowed only if the finite-domain target is preserved within 2e-5. The kernel's fused 9-tap pass (kernel.py lines 20-37, applied via run() lines 68-76) zero-extends only at the input of each fused pass, not at each of the 4 intermediate steps, so this is a directly contract-relevant case (e.g., 31x33 steps=4 border rows/columns, or any H or W < 9).",
+    "statement": "For elements within 4 rows/columns of a domain border (including entire tensors with H or W <= 8), run()'s temporally fused 9-tap passes compute the infinite-domain 4-step binomial composition truncated only at the fused-pass boundary, which keeps mass that flows outside the rectangle and re-enters, whereas the target re-imposes the zero exterior at every step, so border elements deviate from U_steps by more than 2e-5.",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T22:15:16Z"
+  },
+  {
+    "created_at": "2026-10-03T22:14:25Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-03T22:15:02Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "ce8da4092db0c1db5e640dc7cf20a90f55766e0a8fddcacbece58030a200a98c"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "b6176e6cced14a9fc4aa1bec1dde366ac7470a4f46b07331ee2e414a5a89594b"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "9134a6538e6a8fd9e9ecee966aa4691f1eb6b1024e39ff2221502eed46778f9f"
+            }
+          ],
+          "duration_s": 5.050256,
+          "exit_code": 0,
+          "expected_signal": "steps=8 near-edge max abs error > 2e-5 vs FP64 per-step reference",
+          "json_parse_error": null,
+          "json_result": {
+            "16x16": {
+              "max_err_interior": 0.0007762266290995967,
+              "max_err_near_edge": 0.03682619981235291,
+              "n_over_tol": 238
+            },
+            "31x33": {
+              "max_err_interior": 0.0008706780581917428,
+              "max_err_near_edge": 0.039056612036773686,
+              "n_over_tol": 586
+            }
+          },
+          "max_err_interior_16x16": 0.00078,
+          "max_err_interior_31x33": 0.00087,
+          "max_err_near_edge_16x16": 0.03683,
+          "max_err_near_edge_31x33": 0.03906,
+          "n_over_tol_16x16": 238,
+          "n_over_tol_31x33": 586,
+          "stderr": "",
+          "stdout": "{\"31x33\": {\"max_err_near_edge\": 0.039056612036773686, \"max_err_interior\": 0.0008706780581917428, \"n_over_tol\": 586}, \"16x16\": {\"max_err_near_edge\": 0.03682619981235291, \"max_err_interior\": 0.0007762266290995967, \"n_over_tol\": 238}}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 2e-05
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "steps=8 fused rounds vs FP64 per-step reference: near-edge (within 4 of border) max abs error 0.0391 (31x33) and 0.0368 (16x16), ~1900x the 2e-5 tolerance, with 586 and 238 elements over tolerance; interior errors stay under 1e-3. Boundary leakage from missing per-step zero-exterior re-imposition is confirmed for steps=8.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Each round correctly re-zeroes only at its own boundary, but within a round (4 steps) the per-step truncation is missing; additionally the round structure imposes zero-extension after a full H+V round rather than after each 2D step, which can interact differently with diagonal mass flow near corners compared to the per-step reference.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires U_(t+1) computed from U_t extended by zero outside [0,H)x[0,W) for every t from 0 to steps-1, with only in-rectangle values retained between steps; tolerance 2e-5 per element over the whole legal domain including steps=8."
+      }
+    ],
+    "scope_rationale": "The contract requires per-step zero-exterior re-imposition for all steps in {4,8} with 2e-5 tolerance; the steps=8 path (run() lines 68-76 looping twice) is part of the legal domain and its fused rounds only zero-extend at round input boundaries, so a steps=8 probe against reference() directly tests a stated contract behavior.",
+    "statement": "For steps=8, the two fused rounds (H,V,H,V) re-impose the zero exterior only at round boundaries, not at each of the 8 individual steps, so accumulated boundary leakage over both rounds yields errors exceeding 2e-5 at near-edge elements relative to the FP64 per-step reference.",
+    "status": "confirmed",
+    "updated_at": "2026-10-03T22:15:02Z"
+  }
+]

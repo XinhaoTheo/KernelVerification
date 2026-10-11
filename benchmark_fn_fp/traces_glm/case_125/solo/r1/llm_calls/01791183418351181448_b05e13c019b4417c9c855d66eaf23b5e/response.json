@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-7f8330b1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first probe timed out during the slow Python-side tie search, so it produced no evidence. I'll rerun a leaner, vectorized version with a longer timeout.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b26dbdf676b18957",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, importlib.util, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\nC=32\\nshifts=torch.arange(0,32,dtype=torch.int32)\\ng=torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult=torch.randint(2**30,2**31,(C,),dtype=torch.int64,generator=g).to(torch.int32)\\nzeros=torch.tensor([0,127,-128]*11,dtype=torch.int32)[:C]\\nexps=torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0]*4,dtype=torch.int32)[:C]\\nscales=torch.pow(torch.tensor(2.0),exps.to(torch.float64)).to(torch.float32)\\nm64=mult.to(torch.int64)\\n\\n# Big pool of candidate accumulators (vectorized) — 300k random int32\\npool=torch.randint(-(2**31),2**31,(300000,C),dtype=torch.int64,generator=torch.Generator(\\\"cpu\\\").manual_seed(3))\\nP=pool*m64\\nH=(P+(1<<30))//((1<<31))\\n\\nrows=[(-2**31)*torch.ones(C,dtype=torch.int64),(2**31-1)*torch.ones(C,dtype=torch.int64),torch.zeros(C,dtype=torch.int64)]\\n# R-stage exact ties: positive and negative, per channel\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    for r in range(1,32):\\n        cand=pool[(H.sign()==sign)&(H.abs()%(1<<r)==(1<<(r-1)))]\\n        if cand.numel(): tie[r]=cand[0,r]\\n    rows.append(tie)\\n# H-stage exact ties (P+2^30 divisible by 2^31) pos/neg\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(P%(1<<31)==((-(1<<30))%(1<<31)))&(H.sign()==sign)&(H.abs()>0)]\\n    if cand.numel(): tie=cand[0]\\n    rows.append(tie)\\n# saturation-boundary H values\\nfor target in (127,128,129,-127,-128,-129,255,256,-255,-256):\\n    row=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(H==target)]\\n    if cand.numel(): row=cand[0]\\n    rows.append(row)\\n# random block\\nrows.append(pool[:200])\\nacc=torch.stack([r if r.dim()==1 else r[0] for r in rows]) if False else None\\nmat=torch.cat([r.reshape(-1,C) for r in rows],0)[:,:C]\\nacc=mat.to(torch.int32).to(dev)\\nparams=tuple(t.to(dev) for t in (mult,shifts,zeros,scales))\\nout=k.run(acc,*params)\\nref=k.reference(acc,*params)\\ndiff=(out.double()-ref.double()).abs()\\nmism=(diff>1e-6).sum().item()\\ninfo={\\\"shape\\\":list(acc.shape),\\\"max_abs_err\\\":diff.max().item(),\\\"mismatches\\\":mism}\\nif mism:\\n    idx=(diff>1e-6).nonzero()[:10]\\n    for i,j in idx.tolist():\\n        info[f\\\"mm{i}_{j}\\\"]={\\\"a\\\":int(acc[i,j]),\\\"m\\\":int(mult[j]),\\\"r\\\":int(shifts[j]),\\\"z\\\":int(zeros[j]),\\\"got\\\":out[i,j].item(),\\\"ref\\\":ref[i,j].item()}\\nprint(json.dumps(info))\\n\", \"expected_signal\": \"mismatches == 0 (or >0 with details)\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe timed out — CPU-side tie search was too slow. Rerun with faster precomputation (vectorized search) and a longer timeout, e.g. 300s, and simpler code."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791183419,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 917,
+    "prompt_tokens": 16162,
+    "total_tokens": 17079,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8927,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

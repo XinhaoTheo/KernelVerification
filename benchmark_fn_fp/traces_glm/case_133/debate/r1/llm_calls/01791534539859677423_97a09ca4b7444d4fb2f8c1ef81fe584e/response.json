@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-03d27e95",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch runtime probes for all three claims: they're independent — c1 tests large-magnitude inputs, c2 tests near-quadrant-boundary values, c3 tests odd-quadrant values with |r| near pi/4. Each compares kernel output vs FP64 torch.sin on the exact FP16 stored values.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9ac751e0e4f40e01",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_133\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\n# large-magnitude legal FP16 values\\nvals = [65504.0, -65504.0, 4096.0, 1024.0, 512.0, 256.0, 128.0, 64.0, 32.0, 20.0, 25.0, 40.0, 100.0, 1000.0]\\nx = torch.tensor(vals, dtype=torch.float16, device=dev)\\n# also large-magnitude distribution like make_inputs\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(0)\\nxr = (32.0 * torch.randn((4093,), generator=g)).to(torch.float16).to(dev)\\nxl = torch.randn((4093,), generator=torch.Generator(device=\\\"cpu\\\").manual_seed(1).get_state() if False else None) if False else None\\n\\nxall = torch.cat([x, xr])\\nout = kernel.run(xall)\\nref = torch.sin(xall.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\n\\nsel = err[:len(vals)]\\nres = {\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"n\\\": int(xall.numel()),\\n    \\\"n_violations_total\\\": int((err > 1e-6).sum().item()),\\n    \\\"n_violations_randn32\\\": int((err[len(vals):] > 1e-6).sum().item()),\\n    \\\"max_err_randn32\\\": float(err[len(vals):].max().item()),\\n    \\\"curated_vals\\\": [float(v) for v in vals],\\n    \\\"curated_errs\\\": [float(e) for e in sel],\\n    \\\"curated_violations\\\": [bool(e > 1e-6) for e in sel],\\n    \\\"worst_value_overall\\\": float(xall[int(err.argmax())].item()),\\n    \\\"max_err_overall\\\": float(err.max().item()),\\n}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"absolute errors above 1e-6 for large |x|\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-840293a19e2956ae",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys, math\\nsys.path.insert(0, \\\"/root/cases/case_133\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\n# find FP16 values where x*(2/pi)+0.5 is very close to an integer (near quadrant midpoints of reduction)\\n# quadrant boundaries at x ~ k*pi/2 + pi/4-ish; instead scan all FP16 values in a range around typical magnitude\\n# Brute force scan of all FP16 values in [-300, 300] plus sampling of full range near boundary points.\\nvals = []\\n# scan half the FP16 grid\\nfor e in range(-14, 16):\\n    for m in range(1, 1024):\\n        v = m * 2.0**e\\n        vals.append(v)\\n        vals.append(-v)\\nvals = sorted(set(vals))\\nvals = [v for v in vals if abs(v) <= 65504 and v != 0]\\nxs = torch.tensor(vals, dtype=torch.float32)\\nt = xs * (2.0/math.pi) + 0.5\\ndist = (t - torch.round(t)).abs()\\n# pick the FP16 values closest to a reduction boundary\\nidx = torch.argsort(dist)[:2048]\\ncand = vals[:0]\\nsel_vals = xs[idx].tolist()\\n# also include boundary neighborhood at large magnitude for exponent coverage\\nbig = [v for v in vals if 1024 <= abs(v) <= 65504]\\nsel_vals += big[:4096]\\n\\nx = torch.tensor(sel_vals, dtype=torch.float16, device=dev)\\nout = kernel.run(x)\\nref = torch.sin(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nviol = err > 1e-6\\nres = {\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"n\\\": int(x.numel()),\\n    \\\"min_boundary_dist\\\": float(dist.min().item()),\\n    \\\"n_violations\\\": int(viol.sum().item()),\\n    \\\"max_err\\\": float(err.max().item()),\\n    \\\"n_big_violations\\\": int(viol[len(sel_vals)-4096:].sum().item()) if len(sel_vals) > 4096 else 0,\\n    \\\"n_nearboundary_violations\\\": int(viol[:len(sel_vals)-4096].sum().item()) if len(sel_vals) > 4096 else int(viol.sum().item()),\\n}\\nif viol.any():\\n    vi = torch.nonzero(viol).flatten()\\n    res[\\\"example_violations\\\"] = [{\\\"x\\\": float(x[i].item()), \\\"err\\\": float(err[i].item()), \\\"actual\\\": float(out[i].item()), \\\"ref\\\": float(ref[i].item())} for i in vi[:10].tolist()]\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"q off-by-one near quadrant boundaries causing errors above 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b18458df9e19a50f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, sys, math\\nsys.path.insert(0, \\\"/root/cases/case_133\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\n# odd-quadrant inputs with |r| near pi/4: x near k*pi/2 + pi/4. FP16 quantizes, so take the closest FP16 values.\\nvals = []\\nkrange = range(-20000, 20001)\\ntargets = [k*math.pi/2 + math.pi/4 for k in krange if abs(k*math.pi/2 + math.pi/4) <= 65504]\\nts = torch.tensor(targets, dtype=torch.float64)\\nlo = ts * (1 - 2**-11); hi = ts * (1 + 2**-11)\\nlo16 = lo.to(torch.float16); hi16 = hi.to(torch.float16)\\ncand = torch.cat([lo16.to(torch.float64), hi16.to(torch.float64)]).unique()\\n# filter to ones whose reduced r is actually near pi/4\\ndef r_of(x):\\n    q = math.floor(x*(2/math.pi)+0.5)\\n    r = x - q*1.5703125 - q*0.00048382679489661923\\n    return r\\ncand_list = cand.tolist()\\nsel = [v for v in cand_list if v != 0 and abs(r_of(v)) > 0.7 and abs(r_of(v)) < 0.79]\\n# dedupe\\nsel = sorted(set(sel))\\n# also moderate-magnitude odd-quadrant examples near pi/2\\nextra = [math.pi/2 + m*1.0/16.0 for m in range(-64, 65)]\\nsel += extra\\nsel = sorted(set(sel))\\nsel = [v for v in sel if abs(v) <= 65504]\\n\\nx = torch.tensor(sel[:131072], dtype=torch.float16, device=dev)\\nout = kernel.run(x)\\nref = torch.sin(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nviol = err > 1e-6\\nres = {\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"n\\\": int(x.numel()),\\n    \\\"n_violations\\\": int(viol.sum().item()),\\n    \\\"max_err\\\": float(err.max().item()),\\n}\\nif viol.any():\\n    vi = torch.nonzero(viol).flatten()\\n    res[\\\"example_violations\\\"] = [{\\\"x\\\": float(x[i].item()), \\\"err\\\": float(err[i].item()), \\\"actual\\\": float(out[i].item()), \\\"ref\\\": float(ref[i].item())} for i in vi[:10].tolist()]\\n    res[\\\"worst_x\\\"] = float(x[int(err.argmax())].item())\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"cosine branch truncation error above 1e-6 near |r|=pi/4\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "I'll launch probes for c1, c2, c3. All can be tested by running the kernel on crafted inputs and comparing vs FP64 reference. Batch three run_claim_probe calls."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791534541,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1865,
+    "prompt_tokens": 20619,
+    "total_tokens": 22484,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-a5ae5f94",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The domain sweep passed with zero tolerance violations. Before issuing a verdict I'll run one more probe targeting boundary values the sweep's uniform random inputs may not hit: extreme magnitudes (±0.5, ±1.0), all-zero inputs, and subnormal values, plus verifying inputs are preserved.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9fc35ea935e8921f",
+            "function": {
+              "arguments": "{\"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_117\\\")\\nimport kernel\\n\\nfails = []\\ndef check(a, b, bias, sk, tag):\\n    out = kernel.run(a, b, bias, sk)\\n    ref = kernel.reference(a, b, bias, sk)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 0.01 + 0.001 * ref.double().abs()\\n    if not bool((err <= tol).all()):\\n        fails.append((tag, sk, err.max().item()))\\n\\ntorch.manual_seed(1)\\nfor sk in (1, 2, 4, 8):\\n    # extreme magnitudes\\n    a = (torch.sign(torch.randn(64, 512)) * 0.5).half().cuda()\\n    b = (torch.sign(torch.randn(512, 64)) * 0.5).half().cuda()\\n    bias = (torch.sign(torch.randn(64)) * 1.0).float().cuda()\\n    check(a, b, bias, sk, \\\"extreme\\\")\\n    # zeros\\n    a = torch.zeros(33, 129, dtype=torch.float16).cuda()\\n    b = torch.zeros(129, 17, dtype=torch.float16).cuda()\\n    bias = torch.zeros(17, dtype=torch.float32).cuda()\\n    check(a, b, bias, sk, \\\"zeros\\\")\\n    # subnormals in fp16\\n    a = (torch.randn(17, 65) * 1e-7).half().cuda()\\n    b = (torch.randn(65, 33) * 1e-7).half().cuda()\\n    bias = (torch.randn(33) * 1e-38).float().cuda()\\n    check(a, b, bias, sk, \\\"tiny\\\")\\n    # cancellation-prone: same distribution signs matched\\n    g = torch.Generator(\\\"cpu\\\").manual_seed(123)\\n    a = (torch.rand((64, 257), generator=g) - .5).half().cuda()\\n    b = (torch.rand((257, 64), generator=g) - .5).half().cuda()\\n    bias = (torch.rand((64,), generator=g) * 2 - 1).float().cuda()\\n    check(a, b, bias, sk, \\\"cancel\\\")\\n    # input preservation\\n    a0 = a.clone(); b0 = b.clone(); bias0 = bias.clone()\\n    kernel.run(a, b, bias, sk)\\n    if not (torch.equal(a, a0) and torch.equal(b, b0) and torch.equal(bias, bias0)):\\n        fails.append((\\\"preserve\\\", sk, 1.0))\\n    # output properties\\n    out = kernel.run(a, b, bias, sk)\\n    if out.dtype != torch.float32 or out.is_cuda == False or out.shape != (64, 64) or not bool(torch.isfinite(out).all()):\\n        fails.append((\\\"output_props\\\", sk, 1.0))\\n\\nprint(json.dumps({\\\"num_fail\\\": len(fails), \\\"fails\\\": fails[:10]}))\", \"timeout_s\": 300}",
+              "name": "run_python_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Sweep passed across full domain. Issue: the probe didn't test extreme values (magnitudes exactly 0.5, ±0.5) but tolerance is generous. Also the disjoint-storage check might reject legal inputs with nonzero storage offsets? Contract says nonzero offsets permitted when disjoint — validate_inputs checks disjointness so fine. One thing: work tensor uninitialized torch.empty — _finish reads WORK only where stored... stored masked (row<M)&(col<N), read masked index<M*N, so covered. Fine.\n\nI could run a quick probe with extreme magnitudes (all ±0.5, bias ±1, subnormals/zeros) to strengthen, then verdict. One more probe is cheap and covers boundary values."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791051197,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 884,
+    "prompt_tokens": 16705,
+    "total_tokens": 17589,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7131,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

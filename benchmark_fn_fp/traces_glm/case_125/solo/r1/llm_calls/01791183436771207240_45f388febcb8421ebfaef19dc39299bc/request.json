@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_125\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Fused fixed-point rescaling and dequantization for an integer GEMM epilogue.\\n2: \\n3: Synthetic Triton implementation of the gemmlowp double-rounding arithmetic.\\n4: The arithmetic specification is inspired by gemmlowp fixedpoint/fixedpoint.h;\\n5: this is not a port of an upstream kernel or a claim of a historical bug.\\n6: \\\"\\\"\\\"\\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _rescale(ACC, MULT, SHIFT, ZERO, SCALE, OUT,\\n14:              ROWS: tl.constexpr, CHANNELS: tl.constexpr, BLOCK: tl.constexpr):\\n15:     index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n16:     active = index < ROWS * CHANNELS\\n17:     channel = index % CHANNELS\\n18:     a = tl.load(ACC + index, mask=active, other=0)\\n19:     m = tl.load(MULT + channel, mask=active, other=1073741824)\\n20:     r = tl.load(SHIFT + channel, mask=active, other=0)\\n21:     z = tl.load(ZERO + channel, mask=active, other=0)\\n22:     scale = tl.load(SCALE + channel, mask=active, other=1.0)\\n23: \\n24:     # Signed upper product and modulo-2^32 lower product.\\n25:     high = tl.inline_asm_elementwise(\\n26:         \\\"mul.hi.s32 $0, $1, $2;\\\", constraints=\\\"=r,r,r\\\",\\n27:         args=[a, m], dtype=tl.int32, is_pure=True, pack=1)\\n28:     low = a.to(tl.uint32) * m.to(tl.uint32)\\n29:     low_a = low + tl.full((BLOCK,), 0x40000000, tl.uint32)\\n30:     carry_a = (low_a < low).to(tl.int32)\\n31: \\n32:     negative = a < 0\\n33:     low_b = tl.where(\\n34:         r == 1, tl.where(negative, 0, 0x80000000),\\n35:         tl.where((r > 1) & negative, 0x80000000, 0)).to(tl.uint32)\\n36:     high_b = tl.where(\\n37:         r >= 2, (1 << tl.maximum(r - 2, 0)) - negative.to(tl.int32), 0)\\n38:     low_final = low_a + low_b\\n39:     carry_b = ((low + low_b) < low).to(tl.int32)\\n40:     high_final = high + high_b + carry_a + carry_b\\n41: \\n42:     q0 = ((high_final.to(tl.uint32) << 1) | (low_final >> 31)).to(tl.int32)\\n43:     shifted = high_final >> tl.maximum(r - 1, 0)\\n44:     q = tl.where(r == 0, q0, shifted)\\n45:     q = tl.minimum(tl.maximum(q, -255), 255)\\n46:     q = tl.minimum(tl.maximum(q + z, -128), 127)\\n47:     result = (q - z).to(tl.float32) * scale\\n48:     tl.store(OUT + index, result, mask=active)\\n49: \\n50: \\n51: def validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\\n52:                     require_cuda=True):\\n53:     \\\"\\\"\\\"Validate the whole public domain; CPU validation is also available.\\\"\\\"\\\"\\n54:     def require(condition, message):\\n55:         if not condition:\\n56:             raise ValueError(message)\\n57: \\n58:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n59:     buffers = (acc, multipliers, right_shifts, zero_points, output_scales)\\n60:     for tensor in buffers:\\n61:         require(type(tensor) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n62:         require(tensor.layout == torch.strided and tensor.is_contiguous(),\\n63:                 \\\"contiguous strided tensors required\\\")\\n64:         require(not tensor.requires_grad and not tensor.is_inference(),\\n65:                 \\\"ordinary non-gradient buffers required\\\")\\n66:         require(not tensor.is_neg() and not tensor.is_conj(),\\n67:                 \\\"logical view flags are outside this domain\\\")\\n68:         require(not require_cuda or tensor.is_cuda, \\\"CUDA tensors required by run\\\")\\n69:     require(all(t.device == acc.device for t in buffers), \\\"one device required\\\")\\n70:     require(acc.ndim == 2 and acc.dtype == torch.int32, \\\"acc must be int32 [M,C]\\\")\\n71:     rows, channels = acc.shape\\n72:     require(1 <= rows <= 4096 and 1 <= channels <= 257,\\n73:             \\\"M must be in [1,4096] and C in [1,257]\\\")\\n74:     for tensor in (multipliers, right_shifts, zero_points):\\n75:         require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\\n76:                 \\\"integer channel parameters must be int32 [C]\\\")\\n77:     require(output_scales.dtype == torch.float32 and output_scales.shape == (channels,),\\n78:             \\\"output_scales must be FP32 [C]\\\")\\n79:     require(bool((multipliers >= (1 << 30)).all().item()),\\n80:             \\\"Q31 multipliers must be in [2^30,2^31-1]\\\")\\n81:     require(bool(((right_shifts >= 0) & (right_shifts <= 31)).all().item()),\\n82:             \\\"right shifts must be in [0,31]\\\")\\n83:     require(bool(((zero_points >= -128) & (zero_points <= 127)).all().item()),\\n84:             \\\"zero points must be in [-128,127]\\\")\\n85:     allowed_scale = torch.zeros_like(output_scales, dtype=torch.bool)\\n86:     for exponent in range(-8, 1):\\n87:         allowed_scale |= output_scales == 2.0 ** exponent\\n88:     require(bool(allowed_scale.all().item()), \\\"scales must be powers of two from 2^-8 to 1\\\")\\n89:     return {\\\"valid\\\": True, \\\"rows\\\": rows, \\\"channels\\\": channels}\\n90: \\n91: \\n92: def run(acc, multipliers, right_shifts, zero_points, output_scales):\\n93:     \\\"\\\"\\\"Return a fresh FP32 dequantized epilogue result.\\\"\\\"\\\"\\n94:     validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales)\\n95:     rows, channels = acc.shape\\n96:     with torch.cuda.device(acc.device):\\n97:         out = torch.empty((rows, channels), dtype=torch.float32, device=acc.device)\\n98:         _rescale[(triton.cdiv(rows * channels, 128),)](\\n99:             acc, multipliers, right_shifts, zero_points, output_scales, out,\\n100:             ROWS=rows, CHANNELS=channels, BLOCK=128, num_warps=4)\\n101:     return out\\n102: \\n103: \\n104: def reference(acc, multipliers, right_shifts, zero_points, output_scales):\\n105:     \\\"\\\"\\\"Independent scalar Python-integer definition of the two rounding stages.\\\"\\\"\\\"\\n106:     validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\\n107:                     require_cuda=False)\\n108:     matrix = acc.cpu().tolist()\\n109:     mult = multipliers.cpu().tolist()\\n110:     shifts = right_shifts.cpu().tolist()\\n111:     zeros = zero_points.cpu().tolist()\\n112:     scales = output_scales.cpu().tolist()\\n113:     result = []\\n114:     for row in matrix:\\n115:         out_row = []\\n116:         for a, m, r, z, scale in zip(row, mult, shifts, zeros, scales):\\n117:             product = a * m\\n118:             high_round = (product + (1 << 30)) // (1 << 31)\\n119:             magnitude = abs(high_round)\\n120:             if r:\\n121:                 magnitude = (magnitude + (1 << (r - 1))) // (1 << r)\\n122:             scaled = -magnitude if high_round < 0 else magnitude\\n123:             quantized = min(127, max(-128, scaled + z))\\n124:             out_row.append((quantized - z) * scale)\\n125:         result.append(out_row)\\n126:     return torch.tensor(result, dtype=torch.float32, device=acc.device)\\n127: \\n128: \\n129: def make_inputs(device=\\\"cuda\\\", rows=31, channels=33, seed=0):\\n130:     \\\"\\\"\\\"Example generator only; the legal accumulator domain is all int32 values.\\\"\\\"\\\"\\n131:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n132:     acc = torch.randint(-(1 << 31), 1 << 31, (rows, channels),\\n133:                         dtype=torch.int64, generator=generator).to(torch.int32)\\n134:     multipliers = torch.randint(1 << 30, 1 << 31, (channels,),\\n135:                                 dtype=torch.int64, generator=generator).to(torch.int32)\\n136:     shifts = torch.randint(0, 32, (channels,), dtype=torch.int32, generator=generator)\\n137:     zeros = torch.randint(-128, 128, (channels,), dtype=torch.int32, generator=generator)\\n138:     exponents = torch.randint(-8, 1, (channels,), generator=generator)\\n139:     scales = torch.pow(torch.tensor(2.0), exponents).to(torch.float32)\\n140:     return tuple(t.to(device) for t in (acc, multipliers, shifts, zeros, scales))\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the fixed-point requantization epilogue of an integer GEMM, returning\\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\\nrounding. Single-rounding requantization is a different operation.\\n\\nInputs and complete public domain:\\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\\n  value is legal, including -2^31 and 2^31-1.\\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\\n  positive Q31 fixed-point per-channel multipliers.\\n- right_shifts is int32 [C], with values in [0,31].\\n- zero_points is int32 [C], with values in [-128,127].\\n- output_scales is FP32 [C], with values exactly in\\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\\n  are legal. Inputs may share storage if each otherwise meets this contract.\\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external writes.\\n  This forward operation does not provide autograd.\\n\\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\\nmathematical integer arithmetic, without intermediate integer overflow:\\n\\n  P = a*m\\n  H = floor((P + 2^30) / 2^31)\\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\\n  Q = min(127, max(-128, R + z))\\n  target[i,c] = (Q-z)*s\\n\\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\\noperands cannot occur. Saturation is applied after the two rounding stages\\nand zero-point addition. The target is the requantized/dequantized result,\\nnot the pre-quantization real number. All target values are exactly\\nrepresentable in FP32 for this domain.\\n\\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\\ninputs. Require absolute error <=1e-6 for every element, with relative\\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\\nsmaller than the smallest nonzero quantization step in the public domain.\\nThe implementation may fuse stages, use fixed-width product limbs, or\\nrearrange the arithmetic if the target above is preserved for the ENTIRE\\nlegal domain. Correctness is one verdict for the implementation, not one\\nverdict per input, seed, shape or channel parameter configuration.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nuses Python arbitrary-precision integers and the direct two-stage definition;\\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\\nit does not claim to reproduce an upstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_125\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-05T06:55:34Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The kernel fuses H (round-half-up at 2^31) and R (round-half-away-from-zero at 2^r) into one limb computation with sign-dependent offsets; the fused arithmetic, its int32 overflow behavior at extreme accumulator values, or the R-stage tie rule may deviate from the exact contract definition.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Contract defines exact integer arithmetic: H = floor((P+2^30)/2^31), R = nearest to H/2^r with exact half ties AWAY from zero, Q = clamp, target = (Q-z)*s, absolute error <=1e-6 for the ENTIRE legal domain including every int32 accumulator value.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires the exact double-rounding target for every legal int32 accumulator value, per-channel multiplier in [2^30,2^31-1], shift in [0,31], zero point in [-128,127], and power-of-two scale; any elementwise mismatch >1e-6 on such inputs violates the contract.\",\n      \"statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-05T06:55:34Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_125\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_125\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_125\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_125\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_125\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"The kernel implements the gemmlowp double-rounding arithmetic via 64-bit limb manipulation. Rather than proving the limb algebra analytically, I'll record a claim that the fused Triton arithmetic may deviate from the contract's exact two-stage definition (especially tie handling and extreme values), then test against `reference()` on adversarial inputs including exact-tie cases.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The kernel fuses H (round-half-up at 2^31) and R (round-half-away-from-zero at 2^r) into one limb computation with sign-dependent offsets; the fused arithmetic, its int32 overflow behavior at extreme accumulator values, or the R-stage tie rule may deviate from the exact contract definition.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Contract defines exact integer arithmetic: H = floor((P+2^30)/2^31), R = nearest to H/2^r with exact half ties AWAY from zero, Q = clamp, target = (Q-z)*s, absolute error <=1e-6 for the ENTIRE legal domain including every int32 accumulator value.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires the exact double-rounding target for every legal int32 accumulator value, per-channel multiplier in [2^30,2^31-1], shift in [0,31], zero point in [-128,127], and power-of-two scale; any elementwise mismatch >1e-6 on such inputs violates the contract.\",\n            \"statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll run a decisive probe comparing `run()` against the contract's `reference()` on adversarial inputs: extreme accumulators, all shift values 0\\u201331, both tie directions at the R stage, and saturation-boundary cases.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import sys, torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\n# Channels: one per shift value 0..31, plus a couple of extras\\nshifts = torch.arange(0, 32, dtype=torch.int32)\\nC = 32\\nmult = torch.full((C,), 2**31 - 1, dtype=torch.int32)\\n# vary multipliers across channels\\ng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult = torch.randint(2**30, 2**31, (C,), dtype=torch.int64, generator=g).to(torch.int32)\\nzeros = torch.tensor([0,127,-128] * 11, dtype=torch.int32)[:C]\\nexps = torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0] * 4, dtype=torch.int32)[:C]\\nscales = torch.pow(torch.tensor(2.0), exps.to(torch.float64)).to(torch.float32)\\n\\ndef H_exact(a, m):\\n    P = int(a) * int(m)\\n    return (P + (1 << 30)) // (1 << 31)\\n\\n# Build adversarial accumulator values per channel\\nrows = []\\n# 1) extremes\\nrows.append([(-2**31)] * C); rows.append([2**31 - 1] * C); rows.append([0]*C)\\n# 2) exact R-stage tie accumulators (positive and negative) for each channel\\nrng = torch.Generator(\\\"cpu\\\").manual_seed(2)\\nfor trial in range(3):\\n    tie_pos, tie_neg = [], []\\n    for c in range(C):\\n        r = int(shifts[c]); m = int(mult[c])\\n        found_p, found_n = None, None\\n        for _ in range(20000):\\n            a = int(torch.randint(-(2**31), 2**31, (1,), dtype=torch.int64, generator=g).item())\\n            h = H_exact(a, m)\\n            if r > 0:\\n                if found_p is None and h > 0 and h % (1 << r) == (1 << (r - 1)):\\n                    found_p = a\\n                if found_n is None and h < 0 and (-h) % (1 << r) == (1 << (r - 1)):\\n                    found_n = a\\n            else:\\n                if found_p is None: found_p = a\\n                if found_n is None: found_n = -a\\n            if found_p is not None and found_n is not None: break\\n        tie_pos.append(found_p if found_p is not None else 0)\\n        tie_neg.append(found_n if found_n is not None else 0)\\n...[truncated, 1527 more chars]\",\n            \"expected_signal\": \"mismatches == 0 (or >0 with details)\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The first probe timed out during the slow Python-side tie search, so it produced no evidence. I'll rerun a leaner, vectorized version with a longer timeout.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, importlib.util, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\nC=32\\nshifts=torch.arange(0,32,dtype=torch.int32)\\ng=torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult=torch.randint(2**30,2**31,(C,),dtype=torch.int64,generator=g).to(torch.int32)\\nzeros=torch.tensor([0,127,-128]*11,dtype=torch.int32)[:C]\\nexps=torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0]*4,dtype=torch.int32)[:C]\\nscales=torch.pow(torch.tensor(2.0),exps.to(torch.float64)).to(torch.float32)\\nm64=mult.to(torch.int64)\\n\\n# Big pool of candidate accumulators (vectorized) \\u2014 300k random int32\\npool=torch.randint(-(2**31),2**31,(300000,C),dtype=torch.int64,generator=torch.Generator(\\\"cpu\\\").manual_seed(3))\\nP=pool*m64\\nH=(P+(1<<30))//((1<<31))\\n\\nrows=[(-2**31)*torch.ones(C,dtype=torch.int64),(2**31-1)*torch.ones(C,dtype=torch.int64),torch.zeros(C,dtype=torch.int64)]\\n# R-stage exact ties: positive and negative, per channel\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    for r in range(1,32):\\n        cand=pool[(H.sign()==sign)&(H.abs()%(1<<r)==(1<<(r-1)))]\\n        if cand.numel(): tie[r]=cand[0,r]\\n    rows.append(tie)\\n# H-stage exact ties (P+2^30 divisible by 2^31) pos/neg\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(P%(1<<31)==((-(1<<30))%(1<<31)))&(H.sign()==sign)&(H.abs()>0)]\\n    if cand.numel(): tie=cand[0]\\n    rows.append(tie)\\n# saturation-boundary H values\\nfor target in (127,128,129,-127,-128,-129,255,256,-255,-256):\\n    row=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(H==target)]\\n    if cand.numel(): row=cand[0]\\n    rows.append(row)\\n# random block\\nrows.append(pool[:200])\\nacc=torch.stack([r if r.dim()==1 else r[0] for r in rows]) if False else None\\nmat=torch.cat([r.reshape(-1,C) for r in rows],0)[:,:C]\\nacc=mat.to(torch.int32).to(dev)\\nparams=tuple(t.to(dev) for t in (mult,shifts,zeros,scales))\\nout=k.run(acc,*params)\\n...[truncated, 422 more chars]\",\n            \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n            \"timeout_s\": 300\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_125\"\n      },\n      \"created_at\": \"2026-10-05T06:54:51Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_125\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Fused fixed-point rescaling and dequantization for an integer GEMM epilogue.\\n\\nSynthetic Triton implementation of the gemmlowp double-rounding arithmetic.\\nThe arithmetic specification is inspired by gemmlowp fixedpoint/fixedpoint.h;\\nthis is not a port of an upstream kernel or a claim of a historical bug.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _rescale(ACC, MULT, SHIFT, ZERO, SCALE, OUT,\\n             ROWS: tl.constexpr, CHANNELS: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    active = index < ROWS * CHANNELS\\n    channel = index % CHANNELS\\n    a = tl.load(ACC + index, mask=active, other=0)\\n    m = tl.load(MULT + channel, mask=active, other=1073741824)\\n    r = tl.load(SHIFT + channel, mask=active, other=0)\\n    z = tl.load(ZERO + channel, mask=active, other=0)\\n    scale = tl.load(SCALE + channel, mask=active, other=1.0)\\n\\n    # Signed upper product and modulo-2^32 lower product.\\n    high = tl.inline_asm_elementwise(\\n        \\\"mul.hi.s32 $0, $1, $2;\\\", constraints=\\\"=r,r,r\\\",\\n        args=[a, m], dtype=tl.int32, is_pure=True, pack=1)\\n    low = a.to(tl.uint32) * m.to(tl.uint32)\\n    low_a = low + tl.full((BLOCK,), 0x40000000, tl.uint32)\\n    carry_a = (low_a < low).to(tl.int32)\\n\\n    negative = a < 0\\n    low_b = tl.where(\\n        r == 1, tl.where(negative, 0, 0x80000000),\\n        tl.where((r > 1) & negative, 0x80000000, 0)).to(tl.uint32)\\n    high_b = tl.where(\\n        r >= 2, (1 << tl.maximum(r - 2, 0)) - negative.to(tl.int32), 0)\\n    low_final = low_a + low_b\\n    carry_b = ((low + low_b) < low).to(tl.int32)\\n    high_final = high + high_b + carry_a + carry_b\\n\\n    q0 = ((high_final.to(tl.uint32) << 1) | (low_final >> 31)).to(tl.int32)\\n    shifted = high_final >> tl.maximum(r - 1, 0)\\n    q = tl.where(r == 0, q0, shifted)\\n    q = tl.minimum(tl.maximum(q, -255), 255)\\n    q = tl.minimum(tl.maximum(q + z, -128), 127)\\n    result = (q - z).to(tl.float32) * scale\\n    tl.store(OUT + index, result, mask=active)\\n\\n\\ndef validate_inputs(acc, multipliers, right_shifts, zero_points, output_scales,\\n                    require_cuda=True):\\n    \\\"\\\"\\\"Validate the whole public domain; CPU validation is also available.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    buffers = (acc, multipliers, right_shifts, zero_points, output_scales)\\n    for tensor in buffers:\\n        require(type(tensor) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n        require(tensor.layout == torch.strided and tensor.is_contiguous(),\\n                \\\"contiguous strided tensors required\\\")\\n        require(not tensor.requires_grad and not tensor.is_inference(),\\n                \\\"ordinary non-gradient buffers required\\\")\\n        require(not tensor.is_neg() and not tensor.is_conj(),\\n                \\\"logical view flags are outside this domain\\\")\\n        require(not require_cuda or tensor.is_cuda, \\\"CUDA tensors required by run\\\")\\n    require(all(t.device == acc.device for t in buffers), \\\"one device required\\\")\\n    require(acc.ndim == 2 and acc.dtype == torch.int32, \\\"acc must be int32 [M,C]\\\")\\n    rows, channels = acc.shape\\n    require(1 <= rows <= 4096 and 1 <= channels <= 257,\\n            \\\"M must be in [1,4096] and C in [1,257]\\\")\\n    for tensor in (multipliers, right_shifts, zero_points):\\n        require(tensor.dtype == torch.int32 and tensor.shape == (channels,),\\n                \\\"integer channel parameters must be int32 [C]\\\")\\n    require(output_scales.dtype == torch.float32 and output_scales.shape == (channels,),\\n            \\\"output_scales must be FP32 [C]\\\")\\n    require(bool((multipliers >= (1 << 30)).all().item()),\\n            \\\"Q31 multipliers must be in [2^30,2^31-1]\\\")\\n    require(bool(((right_shifts >= 0) & (right_shifts <= 31)).all().item()),\\n            \\\"right shifts must be in [0,31]\\\")\\n...[truncated, 3028 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the fixed-point requantization epilogue of an integer GEMM, returning\\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\\nrounding. Single-rounding requantization is a different operation.\\n\\nInputs and complete public domain:\\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\\n  value is legal, including -2^31 and 2^31-1.\\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\\n  positive Q31 fixed-point per-channel multipliers.\\n- right_shifts is int32 [C], with values in [0,31].\\n- zero_points is int32 [C], with values in [-128,127].\\n- output_scales is FP32 [C], with values exactly in\\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\\n  are legal. Inputs may share storage if each otherwise meets this contract.\\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external writes.\\n  This forward operation does not provide autograd.\\n\\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\\nmathematical integer arithmetic, without intermediate integer overflow:\\n\\n  P = a*m\\n  H = floor((P + 2^30) / 2^31)\\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\\n  Q = min(127, max(-128, R + z))\\n  target[i,c] = (Q-z)*s\\n\\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\\noperands cannot occur. Saturation is applied after the two rounding stages\\nand zero-point addition. The target is the requantized/dequantized result,\\nnot the pre-quantization real number. All target values are exactly\\nrepresentable in FP32 for this domain.\\n\\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\\ninputs. Require absolute error <=1e-6 for every element, with relative\\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\\nsmaller than the smallest nonzero quantization step in the public domain.\\nThe implementation may fuse stages, use fixed-width product limbs, or\\nrearrange the arithmetic if the target above is preserved for the ENTIRE\\nlegal domain. Correctness is one verdict for the implementation, not one\\nverdict per input, seed, shape or channel parameter configuration.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nuses Python arbitrary-precision integers and the direct two-stage definition;\\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\\nit does not claim to reproduce an upstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_125\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_125\"\n      },\n      \"created_at\": \"2026-10-05T06:54:51Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the fixed-point requantization epilogue of an integer GEMM, returning\\ndequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE\\nrounding. Single-rounding requantization is a different operation.\\n\\nInputs and complete public domain:\\n- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator\\n  value is legal, including -2^31 and 2^31-1.\\n- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are\\n  positive Q31 fixed-point per-channel multipliers.\\n- right_shifts is int32 [C], with values in [0,31].\\n- zero_points is int32 [C], with values in [-128,127].\\n- output_scales is FP32 [C], with values exactly in\\n  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.\\n- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,\\n  and on the same CUDA device. Contiguous views with nonzero storage offsets\\n  are legal. Inputs may share storage if each otherwise meets this contract.\\n  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external writes.\\n  This forward operation does not provide autograd.\\n\\nFor each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],\\nz=zero_points[c], and s=output_scales[c]. Define the following using exact\\nmathematical integer arithmetic, without intermediate integer overflow:\\n\\n  P = a*m\\n  H = floor((P + 2^30) / 2^31)\\n  R = nearest integer to H/2^r, with exact half ties AWAY from zero\\n  Q = min(127, max(-128, R + z))\\n  target[i,c] = (Q-z)*s\\n\\nThe H stage rounds to nearest with exact half ties toward POSITIVE infinity;\\nthe R stage has its separately stated tie rule. For r=0, R=H. Since m is\\npositive and at most 2^31-1, the exceptional saturating product of two -2^31\\noperands cannot occur. Saturation is applied after the two rounding stages\\nand zero-point addition. The target is the requantized/dequantized result,\\nnot the pre-quantization real number. All target values are exactly\\nrepresentable in FP32 for this domain.\\n\\nReturn a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all\\ninputs. Require absolute error <=1e-6 for every element, with relative\\ntolerance zero. Signed zeros are numerically equivalent. This tolerance is\\nsmaller than the smallest nonzero quantization step in the public domain.\\nThe implementation may fuse stages, use fixed-width product limbs, or\\nrearrange the arithmetic if the target above is preserved for the ENTIRE\\nlegal domain. Correctness is one verdict for the implementation, not one\\nverdict per input, seed, shape or channel parameter configuration.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference()\\nuses Python arbitrary-precision integers and the direct two-stage definition;\\nit accepts CPU inputs. make_inputs() supplies examples only. This is a\\nsynthetic implementation of gemmlowp's fixed-point epilogue arithmetic;\\nit does not claim to reproduce an upstream historical defect.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_125\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_125\"\n      },\n      \"created_at\": \"2026-10-05T06:54:51Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_125\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 6958\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 3025\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_125\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-05T06:54:51Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_125\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The kernel fuses H (round-half-up at 2^31) and R (round-half-away-from-zero at 2^r) into one limb computation with sign-dependent offsets; the fused arithmetic, its int32 overflow behavior at extreme accumulator values, or the R-stage tie rule may deviate from the exact contract definition.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract defines exact integer arithmetic: H = floor((P+2^30)/2^31), R = nearest to H/2^r with exact half ties AWAY from zero, Q = clamp, target = (Q-z)*s, absolute error <=1e-6 for the ENTIRE legal domain including every int32 accumulator value.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact double-rounding target for every legal int32 accumulator value, per-channel multiplier in [2^30,2^31-1], shift in [0,31], zero point in [-128,127], and power-of-two scale; any elementwise mismatch >1e-6 on such inputs violates the contract.\",\n        \"statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\"\n      },\n      \"created_at\": \"2026-10-05T06:55:34Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-05T06:55:34Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The kernel fuses H (round-half-up at 2^31) and R (round-half-away-from-zero at 2^r) into one limb computation with sign-dependent offsets; the fused arithmetic, its int32 overflow behavior at extreme accumulator values, or the R-stage tie rule may deviate from the exact contract definition.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract defines exact integer arithmetic: H = floor((P+2^30)/2^31), R = nearest to H/2^r with exact half ties AWAY from zero, Q = clamp, target = (Q-z)*s, absolute error <=1e-6 for the ENTIRE legal domain including every int32 accumulator value.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact double-rounding target for every legal int32 accumulator value, per-channel multiplier in [2^30,2^31-1], shift in [0,31], zero point in [-128,127], and power-of-two scale; any elementwise mismatch >1e-6 on such inputs violates the contract.\",\n        \"statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-05T06:55:34Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import sys, torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\n# Channels: one per shift value 0..31, plus a couple of extras\\nshifts = torch.arange(0, 32, dtype=torch.int32)\\nC = 32\\nmult = torch.full((C,), 2**31 - 1, dtype=torch.int32)\\n# vary multipliers across channels\\ng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult = torch.randint(2**30, 2**31, (C,), dtype=torch.int64, generator=g).to(torch.int32)\\nzeros = torch.tensor([0,127,-128] * 11, dtype=torch.int32)[:C]\\nexps = torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0] * 4, dtype=torch.int32)[:C]\\nscales = torch.pow(torch.tensor(2.0), exps.to(torch.float64)).to(torch.float32)\\n\\ndef H_exact(a, m):\\n    P = int(a) * int(m)\\n    return (P + (1 << 30)) // (1 << 31)\\n\\n# Build adversarial accumulator values per channel\\nrows = []\\n# 1) extremes\\nrows.append([(-2**31)] * C); rows.append([2**31 - 1] * C); rows.append([0]*C)\\n# 2) exact R-stage tie accumulators (positive and negative) for each channel\\nrng = torch.Generator(\\\"cpu\\\").manual_seed(2)\\nfor trial in range(3):\\n    tie_pos, tie_neg = [], []\\n    for c in range(C):\\n        r = int(shifts[c]); m = int(mult[c])\\n        found_p, found_n = None, None\\n        for _ in range(20000):\\n            a = int(torch.randint(-(2**31), 2**31, (1,), dtype=torch.int64, generator=g).item())\\n            h = H_exact(a, m)\\n            if r > 0:\\n                if found_p is None and h > 0 and h % (1 << r) == (1 << (r - 1)):\\n                    found_p = a\\n                if found_n is None and h < 0 and (-h) % (1 << r) == (1 << (r - 1)):\\n                    found_n = a\\n            else:\\n                if found_p is None: found_p = a\\n                if found_n is None: found_n = -a\\n            if found_p is not None and found_n is not None: break\\n        tie_pos.append(found_p if found_p is not None else 0)\\n        tie_neg.append(found_n if found_n is not None else 0)\\n    rows.append(tie_pos); rows.append(tie_neg)\\n# 3) values near saturation boundaries after rounding\\nrows.append([])\\nfor c in range(C):\\n    m = int(mult[c])\\n    # find a such that H (or R) lands near +-128-z\\n    vals = []\\n    for target in (127, 128, 129, -127, -128, -129, 255, 256, -255, -256):\\n        found = None\\n        for _ in range(30000):\\n            a = int(torch.randint(-(2**31), 2**31, (1,), dtype=torch.int64, generator=g).item())\\n            h = H_exact(a, m)\\n            if h == target: found = a; break\\n        vals.append(found if found is not None else 0)\\n    rows[-1] = vals\\nacc = torch.tensor(rows, dtype=torch.int32)\\nacc = torch.cat([acc, torch.randint(-(2**31), 2**31, (200, C), dtype=torch.int64, generator=torch.Generator(\\\"cpu\\\").manual_seed(3)).to(torch.int32)], 0).to(dev)\\n\\nparams = tuple(t.to(dev) for t in (mult, shifts, zeros, scales))\\nout = k.run(acc, *params)\\nref = k.reference(acc, *params)\\ndiff = (out.double() - ref.double()).abs()\\nmism = (diff > 1e-6).sum().item()\\nprint(\\\"shape\\\", tuple(acc.shape), \\\"max_abs_err\\\", diff.max().item(), \\\"mismatches\\\", mism)\\nif mism:\\n    idx = (diff > 1e-6).nonzero()[:10]\\n    for i, j in idx.tolist():\\n        print(\\\"MISMATCH\\\", i, j, \\\"a=\\\", int(acc[i,j]), \\\"m=\\\", int(mult[j]), \\\"r=\\\", int(shifts[j]), \\\"z=\\\", int(zeros[j]), \\\"s=\\\", float(scales[j]),\\n              \\\"got=\\\", out[i,j].item(), \\\"ref=\\\", ref[i,j].item(), \\\"H=\\\", H_exact(int(acc[i,j]), int(mult[j])))\\nimport json\\nprint(json.dumps({\\\"max_abs_err\\\": diff.max().item(), \\\"mismatches\\\": mism, \\\"shape\\\": list(acc.shape)}))\\n\",\n        \"expected_signal\": \"mismatches == 0 (or >0 with details)\"\n      },\n      \"created_at\": \"2026-10-05T06:56:58Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"1a0e5430e510a9c0364e839efce2f7c5b5b92f76ba5162f5af18a433bb842b3c\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\",\n        \"cwd\": \"/root/cases/case_125\",\n        \"duration_s\": 60.03762,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"1a0e5430e510a9c0364e839efce2f7c5b5b92f76ba5162f5af18a433bb842b3c\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              }\n            ],\n            \"duration_s\": 60.03762,\n            \"exit_code\": null,\n            \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"\",\n            \"stdout\": \"\",\n            \"timed_out\": true,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe timed out and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": null,\n        \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"\",\n        \"timed_out\": true,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, importlib.util, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_125/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\nC=32\\nshifts=torch.arange(0,32,dtype=torch.int32)\\ng=torch.Generator(\\\"cpu\\\").manual_seed(1)\\nmult=torch.randint(2**30,2**31,(C,),dtype=torch.int64,generator=g).to(torch.int32)\\nzeros=torch.tensor([0,127,-128]*11,dtype=torch.int32)[:C]\\nexps=torch.tensor([-8,-7,-6,-5,-4,-3,-2,-1,0]*4,dtype=torch.int32)[:C]\\nscales=torch.pow(torch.tensor(2.0),exps.to(torch.float64)).to(torch.float32)\\nm64=mult.to(torch.int64)\\n\\n# Big pool of candidate accumulators (vectorized) \\u2014 300k random int32\\npool=torch.randint(-(2**31),2**31,(300000,C),dtype=torch.int64,generator=torch.Generator(\\\"cpu\\\").manual_seed(3))\\nP=pool*m64\\nH=(P+(1<<30))//((1<<31))\\n\\nrows=[(-2**31)*torch.ones(C,dtype=torch.int64),(2**31-1)*torch.ones(C,dtype=torch.int64),torch.zeros(C,dtype=torch.int64)]\\n# R-stage exact ties: positive and negative, per channel\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    for r in range(1,32):\\n        cand=pool[(H.sign()==sign)&(H.abs()%(1<<r)==(1<<(r-1)))]\\n        if cand.numel(): tie[r]=cand[0,r]\\n    rows.append(tie)\\n# H-stage exact ties (P+2^30 divisible by 2^31) pos/neg\\nfor sign in (+1,-1):\\n    tie=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(P%(1<<31)==((-(1<<30))%(1<<31)))&(H.sign()==sign)&(H.abs()>0)]\\n    if cand.numel(): tie=cand[0]\\n    rows.append(tie)\\n# saturation-boundary H values\\nfor target in (127,128,129,-127,-128,-129,255,256,-255,-256):\\n    row=torch.zeros(C,dtype=torch.int64)\\n    cand=pool[(H==target)]\\n    if cand.numel(): row=cand[0]\\n    rows.append(row)\\n# random block\\nrows.append(pool[:200])\\nacc=torch.stack([r if r.dim()==1 else r[0] for r in rows]) if False else None\\nmat=torch.cat([r.reshape(-1,C) for r in rows],0)[:,:C]\\nacc=mat.to(torch.int32).to(dev)\\nparams=tuple(t.to(dev) for t in (mult,shifts,zeros,scales))\\nout=k.run(acc,*params)\\nref=k.reference(acc,*params)\\ndiff=(out.double()-ref.double()).abs()\\nmism=(diff>1e-6).sum().item()\\ninfo={\\\"shape\\\":list(acc.shape),\\\"max_abs_err\\\":diff.max().item(),\\\"mismatches\\\":mism}\\nif mism:\\n    idx=(diff>1e-6).nonzero()[:10]\\n    for i,j in idx.tolist():\\n        info[f\\\"mm{i}_{j}\\\"]={\\\"a\\\":int(acc[i,j]),\\\"m\\\":int(mult[j]),\\\"r\\\":int(shifts[j]),\\\"z\\\":int(zeros[j]),\\\"got\\\":out[i,j].item(),\\\"ref\\\":ref[i,j].item()}\\nprint(json.dumps(info))\\n\",\n        \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n        \"timeout_s\": 300\n      },\n      \"created_at\": \"2026-10-05T06:57:16Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"33670d35daa04fbcd928be1024776b2b750bd3105bf2ab9f0a7c90c4ae142511\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e633f54b0c046fe8b00c606fcac9daa92238155ee57f09eac6e105ddd3365bce\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's fused fixed-point computation deviates from the contract's exact two-stage rounding (H floor, R half-away-from-zero) on some legal input, producing elementwise absolute error > 1e-6.\",\n        \"cwd\": \"/root/cases/case_125\",\n        \"duration_s\": 3.215512,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"33670d35daa04fbcd928be1024776b2b750bd3105bf2ab9f0a7c90c4ae142511\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e633f54b0c046fe8b00c606fcac9daa92238155ee57f09eac6e105ddd3365bce\"\n              }\n            ],\n            \"duration_s\": 3.215512,\n            \"exit_code\": 1,\n            \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r1/real_kernel_challenges/case_125/solo/probes/t7_probe.py\\\", line 25, in <module>\\n    if cand.numel(): tie[r]=cand[0,r]\\n                            ~~~~^^^^^\\nIndexError: too many indices for tensor of dimension 1\\n\",\n            \"stdout\": \"\",\n            \"timed_out\": false,\n            \"timeout_s\": 300\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe failed or produced nonzero exit and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 1,\n        \"expected_signal\": \"mismatches == 0 (or >0 with details)\",\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 330,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r1/real_kernel_challenges/case_125/solo/probes/t7_probe.py\\\", line 25, in <module>\\n    if cand.numel(): tie[r]=cand[0,r]\\n                            ~~~~^^^^^\\nIndexError: too many indices for tensor of dimension 1\\n\",\n        \"stdout\": \"\",\n        \"timed_out\": false,\n        \"timeout_s\": 300,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

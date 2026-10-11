@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-82573199",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the kernel exhaustively over every finite FP16 value, comparing against a high-precision reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-98601a05c5a5f22c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, sys\\nsys.path.insert(0, \\\"/root/cases/case_130\\\")\\nimport kernel\\n\\n# All 65536 FP16 bit patterns\\nbits = np.arange(65536, dtype=np.uint16)\\nh = torch.from_numpy(bits.view(np.float16))\\nfinite = torch.isfinite(h)\\nx_all = h[finite]  # all finite FP16 values (~61440)\\nprint(\\\"num finite values:\\\", x_all.numel())\\n\\n# split into legal-size chunks (N<=131072; fits in one)\\nxs = x_all.to(\\\"cuda\\\")\\nout = kernel.run(xs)\\nref64 = kernel.reference(x_all).to(\\\"cuda\\\")\\nerr = (out.double() - ref64).abs()\\nmx = err.max().item()\\nbad = (err > 1e-6).sum().item()\\nidx = int(err.argmax())\\nprint(\\\"max_abs_err:\\\", mx)\\nprint(\\\"num_violations(>1e-6):\\\", bad)\\nprint(\\\"worst x:\\\", float(xs[idx]), \\\"kernel:\\\", float(out[idx]), \\\"ref:\\\", float(ref64[idx]))\\n# also check finiteness of output\\nprint(\\\"output finite:\\\", bool(torch.isfinite(out).all().item()))\\nimport json\\nprint(json.dumps({\\\"metric\\\":\\\"max abs error vs FP64 reference over all finite FP16 inputs\\\",\\\"max_abs_err\\\":mx,\\\"violations\\\":bad,\\\"tolerance\\\":1e-6}))\\n\", \"expected_signal\": \"max abs error over exhaustive finite FP16 domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive test: all finite FP16 values (65536 bit patterns minus inf/nan ~ 30720? finite = 65536 - 2048 = 61440... actually all finite bit patterns: exclude exponent 31 → 2*2048 = 4096 patterns; 65536-4096=61440 values, but split into chunks ≤131072 fits in one tensor. Compare against FP64 reference."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791533555,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 453,
+    "prompt_tokens": 10248,
+    "total_tokens": 10701,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

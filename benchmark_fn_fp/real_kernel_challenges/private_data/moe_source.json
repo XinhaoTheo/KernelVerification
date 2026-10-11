@@ -1,0 +1,2331 @@
+{
+  "case_ids": [
+    "case_118",
+    "case_119"
+  ],
+  "expected_labels": {
+    "case_118": "trust",
+    "case_119": "reject"
+  },
+  "status": "independently_T4_qualified_before_model_evaluation",
+  "label_scope": "Fixed implementation and complete public domain; no label changes with seed, routing or output.",
+  "classification": "Purpose-built small T4 adaptation of vLLM routed grouped-GEMM. case_119 is a synthetic tail-group tile decoder regression, NOT an upstream historical bug.",
+  "source": {
+    "repository": "https://github.com/vllm-project/vllm",
+    "commit": "8c1557a79c539ffe82d004d2a0c8d7b5e71159ce",
+    "commit_date": "2026-09-16T16:44:29Z",
+    "primary_url": "https://github.com/vllm-project/vllm/blob/8c1557a79c539ffe82d004d2a0c8d7b5e71159ce/vllm/model_executor/layers/fused_moe/fused_moe.py",
+    "files": [
+      {
+        "path": "vllm/model_executor/layers/fused_moe/fused_moe.py",
+        "sha256": "21860340e4b409b01666e2ba0f0edae66b0f97b859756b174b573bab895cfaf7",
+        "bytes": 63342
+      },
+      {
+        "path": "vllm/model_executor/layers/fused_moe/moe_align_block_size.py",
+        "sha256": "cf4b6f2238edb5842ff1d7421b719db06aa7bc8027829e993e7f2f2c1e552eb0",
+        "bytes": 8385
+      },
+      {
+        "path": "LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "bytes": 11357
+      }
+    ],
+    "license": "Apache-2.0",
+    "copyright": "Copyright contributors to the vLLM project",
+    "preserved_mechanism": "Stable expert grouping with sentinel padding; grouped GEMM program-id mapping; token input via original flattened route id // top_k; multiply original route weight; scatter to original route row; top-k sum."
+  },
+  "adaptations": [
+    "Extract one expert projection, not a complete nonlinear MoE layer or routing algorithm. Matrix storage is [E,K,N]; fixed dimensions, T4-compatible FP16 inputs and FP32 accumulator/output.",
+    "Replace vLLM custom C++ route alignment with public PyTorch stable sort/count/prefix/pad preparation of the same semantic buffers, removing a project runtime dependency.",
+    "Use exact padded allocation rather than an upper bound plus device num_tokens_post_padded. Empty experts produce zero blocks; all real routes are included once.",
+    "Choose GROUP_M=1 for fewer than four row tiles, otherwise GROUP_M=4; fixed BM16 BN32 BK32, no tuning or quantized path.",
+    "Zero initialize routed scratch, making missing-output counterexamples deterministic; no labels depend on allocator residue.",
+    "Remove bias, nonlinear activations, distributed expert maps and training; add full executable materialized-buffer contract and independent public FP64 token/choice reference."
+  ],
+  "synthetic_mutation": {
+    "location": "_expert_projection pid_n grouped-grid decode",
+    "case_118": "divide within-group program id by actual group_size_m",
+    "case_119": "divide within-group program id by nominal GROUP_M",
+    "effect": "A final group shorter than GROUP_M may repeat lower output tiles and omit higher output tiles. Full groups and one-column-tile grids can pass, but one legal missing-output witness rejects the whole implementation."
+  },
+  "domain_rationale": "One public contract for both versions; distinct top-k experts per token as normal top-k routing, any routing order/imbalance/empty experts, bounded finite ordinary materialized inputs. Input validation executes in run.",
+  "numerical_argument": {
+    "exact_bound": "For K<=129 and |x|,|w|<=0.5, each route has sum of absolute products <=32.25. Row weights are nonnegative with FP64 sum<=1; exact row sum can exceed one only by FP64 summation rounding (<4e-16). Consequently the weighted target is strictly below32.251 in magnitude, accounting for that tiny FP64 acceptance margin.",
+    "rounding_bound": "Use a conservative full-ulp FP32 unit2^-23, not an assumption of tensor-core round-to-nearest. gamma129(2^-23)*32.25 is about0.000496; FP32 route weighting and Q<=4 accumulation contribute less than0.00004, so ordinary-rounding error is below0.0006. Even conservatively flushing every subnormal FP16 operand incurs at most129*(2*0.5*2^-14+2^-28)<0.007875 additional absolute error. Combined error is below0.0085, within atol0.01. Intermediate route magnitudes remain at most32.25; the FP64 row-sum margin is negligible relative to the strict remaining margin. There is no FP16 output cast or nonlinear function.",
+    "indexing_argument": "Route preparation pads each expert separately, assigns every flattened route exactly once, and preserves its source and weight identity. Correct grouped mapping is a bijection for all bounded row/column tile counts. The final sum visits all Q route slots once.",
+    "limitation": "Reviewed algebra/error bound plus independent finite GPU qualification, not machine-checked proof. Mutation launches duplicate stores with identical computed values; concrete failure is an omitted nonzero tile, not race outcome or uninitialized data."
+  },
+  "cpu_audit": {
+    "passed": true,
+    "schedule_domain_checks": [
+      {
+        "row_blocks": 1,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 1,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 1,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 1,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 1,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 2,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 2,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 2,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 2,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 2,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 3,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 3,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 3,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 3,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 3,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 4,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 4,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 4,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 4,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 4,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 5,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 5,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          4,
+          1
+        ]
+      },
+      {
+        "row_blocks": 5,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          4,
+          1
+        ]
+      },
+      {
+        "row_blocks": 5,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          4,
+          1
+        ]
+      },
+      {
+        "row_blocks": 5,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          4,
+          2
+        ]
+      },
+      {
+        "row_blocks": 6,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 6,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          4,
+          1
+        ]
+      },
+      {
+        "row_blocks": 6,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          4,
+          2
+        ]
+      },
+      {
+        "row_blocks": 6,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          4,
+          2
+        ]
+      },
+      {
+        "row_blocks": 6,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          4,
+          3
+        ]
+      },
+      {
+        "row_blocks": 7,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 7,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          4,
+          1
+        ]
+      },
+      {
+        "row_blocks": 7,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          4,
+          2
+        ]
+      },
+      {
+        "row_blocks": 7,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          4,
+          3
+        ]
+      },
+      {
+        "row_blocks": 7,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          4,
+          4
+        ]
+      },
+      {
+        "row_blocks": 8,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 8,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 8,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 8,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 8,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 9,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 9,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          8,
+          1
+        ]
+      },
+      {
+        "row_blocks": 9,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          8,
+          1
+        ]
+      },
+      {
+        "row_blocks": 9,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          8,
+          1
+        ]
+      },
+      {
+        "row_blocks": 9,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          8,
+          2
+        ]
+      },
+      {
+        "row_blocks": 10,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 10,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          8,
+          1
+        ]
+      },
+      {
+        "row_blocks": 10,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          8,
+          2
+        ]
+      },
+      {
+        "row_blocks": 10,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          8,
+          2
+        ]
+      },
+      {
+        "row_blocks": 10,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          8,
+          3
+        ]
+      },
+      {
+        "row_blocks": 11,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 11,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          8,
+          1
+        ]
+      },
+      {
+        "row_blocks": 11,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          8,
+          2
+        ]
+      },
+      {
+        "row_blocks": 11,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          8,
+          3
+        ]
+      },
+      {
+        "row_blocks": 11,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          8,
+          4
+        ]
+      },
+      {
+        "row_blocks": 12,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 12,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 12,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 12,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 12,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 13,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 13,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          12,
+          1
+        ]
+      },
+      {
+        "row_blocks": 13,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          12,
+          1
+        ]
+      },
+      {
+        "row_blocks": 13,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          12,
+          1
+        ]
+      },
+      {
+        "row_blocks": 13,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          12,
+          2
+        ]
+      },
+      {
+        "row_blocks": 14,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 14,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          12,
+          1
+        ]
+      },
+      {
+        "row_blocks": 14,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          12,
+          2
+        ]
+      },
+      {
+        "row_blocks": 14,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          12,
+          2
+        ]
+      },
+      {
+        "row_blocks": 14,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          12,
+          3
+        ]
+      },
+      {
+        "row_blocks": 15,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 15,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          12,
+          1
+        ]
+      },
+      {
+        "row_blocks": 15,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          12,
+          2
+        ]
+      },
+      {
+        "row_blocks": 15,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          12,
+          3
+        ]
+      },
+      {
+        "row_blocks": 15,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          12,
+          4
+        ]
+      },
+      {
+        "row_blocks": 16,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 16,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 16,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 16,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 16,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 17,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 17,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          16,
+          1
+        ]
+      },
+      {
+        "row_blocks": 17,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          16,
+          1
+        ]
+      },
+      {
+        "row_blocks": 17,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          16,
+          1
+        ]
+      },
+      {
+        "row_blocks": 17,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          16,
+          2
+        ]
+      },
+      {
+        "row_blocks": 18,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 18,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          16,
+          1
+        ]
+      },
+      {
+        "row_blocks": 18,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          16,
+          2
+        ]
+      },
+      {
+        "row_blocks": 18,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          16,
+          2
+        ]
+      },
+      {
+        "row_blocks": 18,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          16,
+          3
+        ]
+      },
+      {
+        "row_blocks": 19,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 19,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          16,
+          1
+        ]
+      },
+      {
+        "row_blocks": 19,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          16,
+          2
+        ]
+      },
+      {
+        "row_blocks": 19,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          16,
+          3
+        ]
+      },
+      {
+        "row_blocks": 19,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          16,
+          4
+        ]
+      },
+      {
+        "row_blocks": 20,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 20,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 20,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 20,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 20,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 21,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 21,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          20,
+          1
+        ]
+      },
+      {
+        "row_blocks": 21,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          20,
+          1
+        ]
+      },
+      {
+        "row_blocks": 21,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          20,
+          1
+        ]
+      },
+      {
+        "row_blocks": 21,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          20,
+          2
+        ]
+      },
+      {
+        "row_blocks": 22,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 22,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          20,
+          1
+        ]
+      },
+      {
+        "row_blocks": 22,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          20,
+          2
+        ]
+      },
+      {
+        "row_blocks": 22,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          20,
+          2
+        ]
+      },
+      {
+        "row_blocks": 22,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          20,
+          3
+        ]
+      },
+      {
+        "row_blocks": 23,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 23,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          20,
+          1
+        ]
+      },
+      {
+        "row_blocks": 23,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          20,
+          2
+        ]
+      },
+      {
+        "row_blocks": 23,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          20,
+          3
+        ]
+      },
+      {
+        "row_blocks": 23,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          20,
+          4
+        ]
+      },
+      {
+        "row_blocks": 24,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 24,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 24,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 24,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 24,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 25,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 25,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          24,
+          1
+        ]
+      },
+      {
+        "row_blocks": 25,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          24,
+          1
+        ]
+      },
+      {
+        "row_blocks": 25,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          24,
+          1
+        ]
+      },
+      {
+        "row_blocks": 25,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          24,
+          2
+        ]
+      },
+      {
+        "row_blocks": 26,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 26,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          24,
+          1
+        ]
+      },
+      {
+        "row_blocks": 26,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          24,
+          2
+        ]
+      },
+      {
+        "row_blocks": 26,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          24,
+          2
+        ]
+      },
+      {
+        "row_blocks": 26,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          24,
+          3
+        ]
+      },
+      {
+        "row_blocks": 27,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 27,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          24,
+          1
+        ]
+      },
+      {
+        "row_blocks": 27,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          24,
+          2
+        ]
+      },
+      {
+        "row_blocks": 27,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          24,
+          3
+        ]
+      },
+      {
+        "row_blocks": 27,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          24,
+          4
+        ]
+      },
+      {
+        "row_blocks": 28,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 28,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 28,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 28,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 28,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 29,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 29,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          28,
+          1
+        ]
+      },
+      {
+        "row_blocks": 29,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          28,
+          1
+        ]
+      },
+      {
+        "row_blocks": 29,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          28,
+          1
+        ]
+      },
+      {
+        "row_blocks": 29,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          28,
+          2
+        ]
+      },
+      {
+        "row_blocks": 30,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 30,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          28,
+          1
+        ]
+      },
+      {
+        "row_blocks": 30,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          28,
+          2
+        ]
+      },
+      {
+        "row_blocks": 30,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          28,
+          2
+        ]
+      },
+      {
+        "row_blocks": 30,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          28,
+          3
+        ]
+      },
+      {
+        "row_blocks": 31,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 31,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          28,
+          1
+        ]
+      },
+      {
+        "row_blocks": 31,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          28,
+          2
+        ]
+      },
+      {
+        "row_blocks": 31,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          28,
+          3
+        ]
+      },
+      {
+        "row_blocks": 31,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          28,
+          4
+        ]
+      },
+      {
+        "row_blocks": 32,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 32,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 32,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 32,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 32,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 33,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 33,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          32,
+          1
+        ]
+      },
+      {
+        "row_blocks": 33,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          32,
+          1
+        ]
+      },
+      {
+        "row_blocks": 33,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          32,
+          1
+        ]
+      },
+      {
+        "row_blocks": 33,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          32,
+          2
+        ]
+      },
+      {
+        "row_blocks": 34,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 34,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          32,
+          1
+        ]
+      },
+      {
+        "row_blocks": 34,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          32,
+          2
+        ]
+      },
+      {
+        "row_blocks": 34,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          32,
+          2
+        ]
+      },
+      {
+        "row_blocks": 34,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          32,
+          3
+        ]
+      },
+      {
+        "row_blocks": 35,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 35,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          32,
+          1
+        ]
+      },
+      {
+        "row_blocks": 35,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          32,
+          2
+        ]
+      },
+      {
+        "row_blocks": 35,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          32,
+          3
+        ]
+      },
+      {
+        "row_blocks": 35,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          32,
+          4
+        ]
+      },
+      {
+        "row_blocks": 36,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 36,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 36,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 36,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 36,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 37,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 37,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          36,
+          1
+        ]
+      },
+      {
+        "row_blocks": 37,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          36,
+          1
+        ]
+      },
+      {
+        "row_blocks": 37,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          36,
+          1
+        ]
+      },
+      {
+        "row_blocks": 37,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          36,
+          2
+        ]
+      },
+      {
+        "row_blocks": 38,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 38,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          36,
+          1
+        ]
+      },
+      {
+        "row_blocks": 38,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          36,
+          2
+        ]
+      },
+      {
+        "row_blocks": 38,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          36,
+          2
+        ]
+      },
+      {
+        "row_blocks": 38,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 4,
+        "mutation_duplicate": 4,
+        "first_missing": [
+          36,
+          3
+        ]
+      },
+      {
+        "row_blocks": 39,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 39,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 1,
+        "mutation_duplicate": 1,
+        "first_missing": [
+          36,
+          1
+        ]
+      },
+      {
+        "row_blocks": 39,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 2,
+        "mutation_duplicate": 2,
+        "first_missing": [
+          36,
+          2
+        ]
+      },
+      {
+        "row_blocks": 39,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          36,
+          3
+        ]
+      },
+      {
+        "row_blocks": 39,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 3,
+        "mutation_duplicate": 3,
+        "first_missing": [
+          36,
+          4
+        ]
+      },
+      {
+        "row_blocks": 40,
+        "column_blocks": 1,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 40,
+        "column_blocks": 2,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 40,
+        "column_blocks": 3,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 40,
+        "column_blocks": 4,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      },
+      {
+        "row_blocks": 40,
+        "column_blocks": 5,
+        "correct_bijective": true,
+        "mutation_missing": 0,
+        "mutation_duplicate": 0,
+        "first_missing": null
+      }
+    ],
+    "plans": [
+      {
+        "m": 1,
+        "e": 1,
+        "q": 1,
+        "k": 1,
+        "n": 1,
+        "route": "single",
+        "style": "marker",
+        "seed": 1,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 1
+      },
+      {
+        "m": 1,
+        "e": 1,
+        "q": 1,
+        "k": 1,
+        "n": 33,
+        "route": "single",
+        "style": "marker",
+        "seed": 2,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 1
+      },
+      {
+        "m": 16,
+        "e": 4,
+        "q": 1,
+        "k": 31,
+        "n": 32,
+        "route": "balanced",
+        "style": "random",
+        "seed": 3,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 4
+      },
+      {
+        "m": 17,
+        "e": 5,
+        "q": 1,
+        "k": 33,
+        "n": 33,
+        "route": "balanced",
+        "style": "marker",
+        "seed": 4,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 8.25,
+        "row_blocks": 5
+      },
+      {
+        "m": 65,
+        "e": 1,
+        "q": 1,
+        "k": 1,
+        "n": 33,
+        "route": "single",
+        "style": "marker",
+        "seed": 5,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.25,
+        "row_blocks": 5
+      },
+      {
+        "m": 65,
+        "e": 2,
+        "q": 1,
+        "k": 32,
+        "n": 65,
+        "route": "single",
+        "style": "random",
+        "seed": 6,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.3257997723871574,
+        "row_blocks": 5
+      },
+      {
+        "m": 97,
+        "e": 1,
+        "q": 1,
+        "k": 65,
+        "n": 96,
+        "route": "single",
+        "style": "marker",
+        "seed": 7,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 16.25,
+        "row_blocks": 7
+      },
+      {
+        "m": 113,
+        "e": 1,
+        "q": 1,
+        "k": 129,
+        "n": 129,
+        "route": "single",
+        "style": "random",
+        "seed": 8,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 8
+      },
+      {
+        "m": 16,
+        "e": 8,
+        "q": 4,
+        "k": 17,
+        "n": 17,
+        "route": "balanced",
+        "style": "random",
+        "seed": 9,
+        "public_reference_max_error": 4.163336342344337e-17,
+        "correct_schedule_max_error": 4.163336342344337e-17,
+        "mutation_max_error": 4.163336342344337e-17,
+        "row_blocks": 8
+      },
+      {
+        "m": 17,
+        "e": 5,
+        "q": 2,
+        "k": 65,
+        "n": 65,
+        "route": "balanced",
+        "style": "random",
+        "seed": 10,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.9512907918453959,
+        "row_blocks": 5
+      },
+      {
+        "m": 33,
+        "e": 8,
+        "q": 3,
+        "k": 64,
+        "n": 64,
+        "route": "skew",
+        "style": "random",
+        "seed": 11,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.5591604321709134,
+        "row_blocks": 9
+      },
+      {
+        "m": 129,
+        "e": 8,
+        "q": 4,
+        "k": 129,
+        "n": 129,
+        "route": "random",
+        "style": "random",
+        "seed": 12,
+        "public_reference_max_error": 4.440892098500626e-16,
+        "correct_schedule_max_error": 4.440892098500626e-16,
+        "mutation_max_error": 4.440892098500626e-16,
+        "row_blocks": 36
+      },
+      {
+        "m": 129,
+        "e": 8,
+        "q": 4,
+        "k": 129,
+        "n": 129,
+        "route": "balanced",
+        "style": "positive",
+        "seed": 13,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 36
+      },
+      {
+        "m": 67,
+        "e": 7,
+        "q": 3,
+        "k": 127,
+        "n": 97,
+        "route": "random",
+        "style": "cancel",
+        "seed": 14,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 16
+      },
+      {
+        "m": 33,
+        "e": 8,
+        "q": 2,
+        "k": 33,
+        "n": 65,
+        "route": "skew",
+        "style": "zero",
+        "seed": 15,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 6
+      },
+      {
+        "m": 5,
+        "e": 5,
+        "q": 1,
+        "k": 1,
+        "n": 65,
+        "route": "balanced",
+        "style": "marker",
+        "seed": 16,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.25,
+        "row_blocks": 5
+      },
+      {
+        "m": 31,
+        "e": 4,
+        "q": 4,
+        "k": 129,
+        "n": 33,
+        "route": "balanced",
+        "style": "subnormal",
+        "seed": 17,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 8
+      },
+      {
+        "m": 97,
+        "e": 8,
+        "q": 2,
+        "k": 96,
+        "n": 128,
+        "route": "random",
+        "style": "random",
+        "seed": 18,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 1.0582518868656634,
+        "row_blocks": 17
+      },
+      {
+        "m": 129,
+        "e": 8,
+        "q": 1,
+        "k": 128,
+        "n": 127,
+        "route": "skew",
+        "style": "random",
+        "seed": 19,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 1.902065166278928,
+        "row_blocks": 9
+      },
+      {
+        "m": 64,
+        "e": 4,
+        "q": 1,
+        "k": 32,
+        "n": 64,
+        "route": "balanced",
+        "style": "marker",
+        "seed": 20,
+        "public_reference_max_error": 0.0,
+        "correct_schedule_max_error": 0.0,
+        "mutation_max_error": 0.0,
+        "row_blocks": 4
+      }
+    ],
+    "invalid_inputs": [
+      {
+        "kind": "bounds",
+        "correctly_rejected": true,
+        "reason": "x and expert-weight magnitudes must be at most 0.5"
+      },
+      {
+        "kind": "duplicate_route",
+        "correctly_rejected": true,
+        "reason": "each token must choose distinct experts"
+      },
+      {
+        "kind": "route_sum",
+        "correctly_rejected": true,
+        "reason": "route weights sum exceeds one"
+      },
+      {
+        "kind": "negative_view",
+        "correctly_rejected": true,
+        "reason": "materialized tensors without logical view flags required"
+      },
+      {
+        "kind": "grad",
+        "correctly_rejected": true,
+        "reason": "ordinary non-gradient tensors required"
+      },
+      {
+        "kind": "inference_tensor",
+        "correctly_rejected": true,
+        "reason": "ordinary non-gradient tensors required"
+      },
+      {
+        "kind": "ids_dtype",
+        "correctly_rejected": true,
+        "reason": "ids must be int32 and route weights FP32"
+      },
+      {
+        "kind": "overlap",
+        "correctly_rejected": true,
+        "reason": "input storage ranges must be disjoint"
+      }
+    ],
+    "method": "Exhaustive bounded tile-grid bijection; NumPy expert-major FP64 vs public token-major reference; actual public route preparation vs independent expert grouping."
+  },
+  "gpu_probe_plan": "20 fixed plans; base, joint choice permutation and consistent expert relabel controls (where applicable). Cover 1..4 choices, empty experts, hot experts, shared experts across tokens, full/partial groups, N/K tails, zeros, cancellation, positive bounds and FP16 subnormals. All plans retained independent of model outcomes. One additional nonzero storage-offset contiguous input variation, with input byte ranges and fresh output storage checked on every call; total45 calls per implementation.",
+  "public_hashes": {
+    "case_118": {
+      "kernel.py": "9cbead996c8c42d9101713e683ac7f186c5baf50a245620aa2f5ce450e44eaeb",
+      "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "problem.txt": "349f9a6045f0a827a0cdb93ac18478b22a047584af9af808bd24809e39a1b39a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_119": {
+      "kernel.py": "c9d60e071674accd285a9c0f8114336b1632641499b9147bbe13cb58971f3dfb",
+      "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "problem.txt": "349f9a6045f0a827a0cdb93ac18478b22a047584af9af808bd24809e39a1b39a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "public_semantic_diff": "--- case_118/kernel.py\n+++ case_119/kernel.py\n@@ -23,7 +23,7 @@\n     first_pid_m = group_id * GROUP_M\n     group_size_m = tl.minimum(num_pid_m - first_pid_m, GROUP_M)\n     pid_m = first_pid_m + (pid % num_pid_in_group) % group_size_m\n-    pid_n = (pid % num_pid_in_group) // group_size_m\n+    pid_n = (pid % num_pid_in_group) // GROUP_M\n     route = tl.load(SORTED + pid_m * BM + tl.arange(0, BM))\n     valid = route < R\n     expert = tl.load(EXPERT + pid_m)\n",
+  "qualification_evidence": "qualification/r9.json"
+}

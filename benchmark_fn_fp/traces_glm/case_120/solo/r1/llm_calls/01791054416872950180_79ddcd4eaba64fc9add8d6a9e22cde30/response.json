@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-69013ecd",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe timed out compiling many Triton variants. I'll rerun a smaller, targeted set with a longer timeout and incremental flushing so partial results survive.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8c1b12c4be5177d2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_120\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ndef gen(m, kk, n, gs, seed, neg_words=False, worst=False):\\n    rng = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    G = (kk+gs-1)//gs\\n    x = (torch.rand((m,kk), generator=rng)-.5).half().to(dev)\\n    codes = torch.randint(0,16,(((kk+7)//8)*8, n), generator=rng, dtype=torch.int64)\\n    qw = torch.zeros(((kk+7)//8, n), dtype=torch.int64)\\n    for i in range(8): qw |= codes[i::8] << (4*i)\\n    if neg_words:\\n        qw = qw | (torch.randint(0,2,qw.shape,generator=rng,dtype=torch.int64) * (1<<31))\\n    zc = torch.randint(0,16,(G, ((n+7)//8)*8), generator=rng, dtype=torch.int64)\\n    qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\\n    for i in range(8): qz |= zc[:,i::8] << (4*i)\\n    if neg_words:\\n        qz = qz | (torch.randint(0,2,qz.shape,generator=rng,dtype=torch.int64) * (1<<31))\\n    if worst:\\n        codes2 = (torch.rand(((kk+7)//8)*8, n, generator=rng) < .5).long()*15\\n        qw = torch.zeros(((kk+7)//8,n), dtype=torch.int64)\\n        for i in range(8): qw |= codes2[i::8] << (4*i)\\n        zc2 = torch.full((G,((n+7)//8)*8), 15, dtype=torch.int64)\\n        qz = torch.zeros((G,(n+7)//8), dtype=torch.int64)\\n        for i in range(8): qz |= zc2[:,i::8] << (4*i)\\n        sc = torch.full((G,n), 0.03125).half().to(dev)\\n    else:\\n        sc = (.002 + .029*torch.rand((G,n), generator=rng)).half().to(dev)\\n    ids = (torch.arange(kk)//gs)[torch.randperm(kk, generator=rng)].int().to(dev)\\n    return (x, qw.int().to(dev), sc, qz.int().to(dev), ids, gs)\\n\\nfails = []\\ntested = 0\\n# targeted edge shapes: K not mult of 8/16, N not mult of 64, M extremes\\ncases = [(1,1,1,16),(1,7,9,16),(5,9,63,16),(17,15,64,16),(65,17,65,16),\\n         (7,16,96,16),(16,31,33,16),(3,33,7,16),(2,63,65,32),(1,64,96,64),\\n         (65,127,96,16),(1,128,96,16),(33,65,1,16),(4,1,96,16)]\\nfor (m,kk,n,gs) in cases:\\n    for seed, neg, worst in ((0,False,False),(2,True,False),(3,False,True)):\\n        x,qw,sc,qz,ids,gs_ = gen(m,kk,n,gs,seed,neg_words=neg,worst=worst)\\n        try:\\n            out = K.run(x,qw,sc,qz,ids,gs_)\\n            ref = K.reference(x,qw,sc,qz,ids,gs_)\\n            err = (out.double()-ref.double()).abs()\\n            tol = 0.01 + 0.001*ref.double().abs()\\n            tested += 1\\n            if bool((err > tol).any()):\\n                fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,\\n                                  maxerr=float(err.max()), bad=int((err>tol).sum())))\\n        except Exception as e:\\n            fails.append(dict(m=m,k=kk,n=n,gs=gs,seed=seed,neg=neg,worst=worst,error=str(e)[:150]))\\n        print(\\\"done\\\", m,kk,n,gs,seed, len(fails), flush=True)\\nprint(json.dumps({\\\"tested\\\":tested,\\\"fails\\\":fails}), flush=True)\\n\", \"timeout_s\": 480}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe timed out (many Triton compile invocations). Rerun with fewer cases, longer timeout, and incremental printing. Use timeout 600."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791054418,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1071,
+    "prompt_tokens": 17671,
+    "total_tokens": 18742,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8983,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

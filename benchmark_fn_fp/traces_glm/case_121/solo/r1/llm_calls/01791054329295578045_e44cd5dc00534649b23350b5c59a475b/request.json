@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"LICENSE\",\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_121\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Standalone GPTQ-format INT4 projection with activation-order preparation.\\n2: \\n3: AutoGPTQ portions: Copyright (c) 2023 \\u6f58\\u5176\\u5a01(William), MIT.\\n4: Marlin packing layout: Copyright (C) Marlin.2024 Elias Frantar, Apache-2.0.\\n5: See LICENSE. 2026 adaptation: explicit T4-compatible Triton preparation/GEMM,\\n6: small shape bounds, GPTQ asymmetric zero points and independent public reference.\\n7: This uses the Marlin packed layout, not its Ampere-only CUDA execution kernel.\\n8: \\\"\\\"\\\"\\n9: import torch\\n10: import triton\\n11: import triton.language as tl\\n12: \\n13: \\n14: def _layout_permutation(device):\\n15:     permutation = []\\n16:     for i in range(32):\\n17:         column = i // 4\\n18:         within = []\\n19:         for block in (0, 1):\\n20:             for row in (2*(i % 4), 2*(i % 4)+1,\\n21:                         2*(i % 4+4), 2*(i % 4+4)+1):\\n22:                 within.append(16*row + column + 8*block)\\n23:         for j in range(4):\\n24:             permutation.extend(p + 256*j for p in within)\\n25:     permutation = torch.tensor(permutation, device=device, dtype=torch.int32)\\n26:     interleave = torch.tensor([0, 4, 1, 5, 2, 6, 3, 7], device=device)\\n27:     return permutation.reshape(-1, 8)[:, interleave].reshape(-1).contiguous()\\n28: \\n29: \\n30: @triton.jit\\n31: def _repack(QWEIGHT, ORDER, PERM, PACKED,\\n32:             K: tl.constexpr, N: tl.constexpr, NT: tl.constexpr,\\n33:             B: tl.constexpr):\\n34:     tile_k = tl.program_id(0)\\n35:     tile_n = tl.program_id(1)\\n36:     word = tl.arange(0, B)\\n37:     packed = tl.zeros((B,), tl.uint32)\\n38:     for nibble in tl.static_range(8):\\n39:         source = tl.load(PERM + word*8 + nibble)\\n40:         local_k = (source % 256) // 16\\n41:         local_n = (source // 256)*16 + source % 16\\n42:         sorted_k = tile_k*16 + local_k\\n43:         original_k = tl.load(ORDER + sorted_k, mask=sorted_k < K, other=0)\\n44:         column = tile_n*64 + local_n\\n45:         value = tl.load(QWEIGHT + (original_k // 8)*N + column,\\n46:                         mask=(sorted_k < K) & (column < N), other=0).to(tl.uint32)\\n47:         quant = (value >> (4*(original_k % 8))) & 15\\n48:         packed |= quant << (4*nibble)\\n49:     tl.store(PACKED + (tile_k*NT + tile_n)*128 + word, packed)\\n50: \\n51: \\n52: @triton.jit\\n53: def _int4_gemm(X, PACKED, SCALE, QZERO, ORDER, OUT,\\n54:                M: tl.constexpr, K: tl.constexpr, N: tl.constexpr,\\n55:                NT: tl.constexpr, ZN: tl.constexpr, GROUP_SIZE: tl.constexpr,\\n56:                BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):\\n57:     rows = tl.program_id(0)*BM + tl.arange(0, BM)\\n58:     columns = tl.program_id(1)*BN + tl.arange(0, BN)\\n59:     inner = tl.arange(0, BK)\\n60:     accumulator = tl.zeros((BM, BN), tl.float32)\\n61:     for block in range(tl.cdiv(K, BK)):\\n62:         kk = block*BK + inner\\n63:         original = tl.load(ORDER + kk, mask=kk < K, other=0)\\n64:         activation = tl.load(X + rows[:, None]*K + original[None, :],\\n65:                              mask=(rows[:, None] < M) & (kk[None, :] < K), other=0.0)\\n66:         word = 4*(4*(columns[None, :] % 8) + (kk[:, None] % 8)//2) + (columns[None, :] % 64)//16\\n67:         lane = 4*(kk[:, None] % 2) + 2*((columns[None, :] % 16)//8) + (kk[:, None] % 16)//8\\n68:         address = ((kk[:, None]//16)*NT + columns[None, :]//64)*128 + word\\n69:         packed = tl.load(PACKED + address,\\n70:                          mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\\n71:         quant = (packed >> (4*lane)) & 15\\n72:         group = kk // GROUP_SIZE\\n73:         scale = tl.load(SCALE + group[:, None]*N + columns[None, :],\\n74:                         mask=(kk[:, None] < K) & (columns[None, :] < N), other=0.0).to(tl.float32)\\n75:         zero_word = tl.load(QZERO + group[:, None]*ZN + columns[None, :]//8,\\n76:                             mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\\n77:         zero = ((zero_word >> (4*(columns[None, :] % 8))) & 15) + 1\\n78:         weight = ((quant.to(tl.int32)-zero.to(tl.int32)).to(tl.float32)*scale).to(tl.float16)\\n79:         accumulator = tl.dot(activation, weight, accumulator)\\n80:     tl.store(OUT + rows[:, None]*N + columns[None, :], accumulator,\\n81:              mask=(rows[:, None] < M) & (columns[None, :] < N))\\n82: \\n83: \\n84: def validate_inputs(x, qweight, scales, qzeros, g_idx, group_size, require_cuda=True):\\n85:     \\\"\\\"\\\"Enforce the full public contract; CPU validation is also available.\\\"\\\"\\\"\\n86:     tensors = (x, qweight, scales, qzeros, g_idx)\\n87:     def require(condition, message):\\n88:         if not condition:\\n89:             raise ValueError(message)\\n90:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n91:     for tensor in tensors:\\n92:         require(type(tensor) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n93:         require(tensor.layout == torch.strided and tensor.is_contiguous(), \\\"contiguous strided tensors required\\\")\\n94:         require(not tensor.requires_grad and not tensor.is_inference(), \\\"ordinary non-gradient materialized buffers required\\\")\\n95:         require(not tensor.is_neg() and not tensor.is_conj(), \\\"logical view flags are outside this domain\\\")\\n96:     require(all(t.device == x.device for t in tensors), \\\"all inputs must share one device\\\")\\n97:     require(not require_cuda or x.is_cuda, \\\"CUDA inputs required by run\\\")\\n98:     require(type(group_size) is int and group_size in (16,32,64), \\\"group_size must be16,32 or64\\\")\\n99:     require(x.ndim == 2 and qweight.ndim == 2 and scales.ndim == 2,\\n100:             \\\"expected x[M,K], qweight[ceil(K/8),N], scales[G,N]\\\")\\n101:     m,k = x.shape\\n102:     n = qweight.shape[1]\\n103:     groups = (k+group_size-1)//group_size\\n104:     require(1 <= m <= 65 and 1 <= k <= 128 and 1 <= n <= 96, \\\"shape outside supported bounds\\\")\\n105:     require(qweight.shape == ((k+7)//8,n) and scales.shape == (groups,n), \\\"qweight/scales shape mismatch\\\")\\n106:     require(qzeros.shape == (groups,(n+7)//8) and g_idx.shape == (k,), \\\"qzeros/g_idx shape mismatch\\\")\\n107:     require(x.dtype == scales.dtype == torch.float16, \\\"activations/scales must be FP16\\\")\\n108:     require(qweight.dtype == qzeros.dtype == g_idx.dtype == torch.int32, \\\"packed buffers and g_idx must be int32\\\")\\n109:     require(bool(torch.isfinite(x).all().item()) and bool(torch.isfinite(scales).all().item()), \\\"floating inputs must be finite\\\")\\n110:     require(bool((x.abs() <= .5).all().item()), \\\"activation magnitude exceeds0.5\\\")\\n111:     require(bool(((scales > 0) & (scales <= .03125)).all().item()), \\\"scales must be in(0,1/32]\\\")\\n112:     require(bool(((g_idx >= 0) & (g_idx < groups)).all().item()), \\\"group id out of range\\\")\\n113:     counts = torch.bincount(g_idx.long(), minlength=groups)\\n114:     expected = torch.tensor([min(group_size,k-g*group_size) for g in range(groups)],\\n115:                             device=x.device,dtype=counts.dtype)\\n116:     require(bool(torch.equal(counts,expected)), \\\"group histogram does not match group_size and final partial group\\\")\\n117:     intervals = [(t.data_ptr(),t.data_ptr()+t.numel()*t.element_size()) for t in tensors]\\n118:     require(all(a1 <= b0 or b1 <= a0 for i,(a0,a1) in enumerate(intervals)\\n119:                 for b0,b1 in intervals[i+1:]), \\\"input byte ranges must be disjoint\\\")\\n120:     return {\\\"valid\\\":True,\\\"rows\\\":m,\\\"input_width\\\":k,\\\"output_width\\\":n,\\n121:             \\\"groups\\\":groups,\\\"group_size\\\":group_size}\\n122: \\n123: \\n124: def run(x, qweight, scales, qzeros, g_idx, group_size):\\n125:     \\\"\\\"\\\"Prepare the packed representation, then return a fresh FP32 matrix.\\\"\\\"\\\"\\n126:     validate_inputs(x,qweight,scales,qzeros,g_idx,group_size)\\n127:     m,k = x.shape\\n128:     n = qweight.shape[1]\\n129:     with torch.cuda.device(x.device):\\n130:         order = torch.argsort(g_idx,stable=True).to(torch.int32)\\n131:         permutation = _layout_permutation(x.device)\\n132:         kt,nt = triton.cdiv(k,16),triton.cdiv(n,64)\\n133:         packed = torch.empty((kt*nt*128,),device=x.device,dtype=torch.int32)\\n134:         _repack[(kt,nt)](qweight,order,permutation,packed,K=k,N=n,NT=nt,B=128,num_warps=4)\\n135:         output = torch.empty((m,n),device=x.device,dtype=torch.float32)\\n136:         _int4_gemm[(triton.cdiv(m,16),triton.cdiv(n,32))](x,packed,scales,qzeros,\\n137:             order,output,M=m,K=k,N=n,NT=nt,ZN=triton.cdiv(n,8),GROUP_SIZE=group_size,\\n138:             BM=16,BN=32,BK=32,num_warps=4)\\n139:     return output\\n140: \\n141: \\n142: def reference(x, qweight, scales, qzeros, g_idx, group_size):\\n143:     \\\"\\\"\\\"Direct canonical bit decode, H16 weights, independent FP64 target.\\\"\\\"\\\"\\n144:     validate_inputs(x,qweight,scales,qzeros,g_idx,group_size,require_cuda=False)\\n145:     m,k = x.shape\\n146:     n = qweight.shape[1]\\n147:     columns = torch.arange(n,device=x.device)\\n148:     decoded = torch.empty((k,n),device=x.device,dtype=torch.float16)\\n149:     for row in range(k):\\n150:         quant = (qweight[row//8].long() >> (4*(row%8))) & 15\\n151:         group = int(g_idx[row].item())\\n152:         zero = ((qzeros[group,columns//8].long() >> (4*(columns%8))) & 15) + 1\\n153:         decoded[row] = ((quant-zero).double()*scales[group].double()).half()\\n154:     return x.double() @ decoded.double()\\n155: \\n156: \\n157: def make_inputs(device=\\\"cuda\\\", rows=7, input_width=64, output_width=65, group_size=16, seed=0):\\n158:     \\\"\\\"\\\"Convenience generator; not a restriction on the legal input domain.\\\"\\\"\\\"\\n159:     rng = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n160:     k,n = input_width,output_width\\n161:     groups = (k+group_size-1)//group_size\\n162:     x = (torch.rand((rows,k),generator=rng)-.5).half()\\n163:     codes = torch.randint(0,16,(((k+7)//8)*8,n),generator=rng,dtype=torch.int64)\\n164:     qweight = torch.zeros(((k+7)//8,n),dtype=torch.int64)\\n165:     for i in range(8):\\n166:         qweight |= codes[i::8] << (4*i)\\n167:     zero_codes = torch.randint(0,16,(groups,((n+7)//8)*8),generator=rng,dtype=torch.int64)\\n168:     qzeros = torch.zeros((groups,(n+7)//8),dtype=torch.int64)\\n169:     for i in range(8):\\n170:         qzeros |= zero_codes[:,i::8] << (4*i)\\n171:     scales = (.002 + .029*torch.rand((groups,n),generator=rng)).half()\\n172:     ids = (torch.arange(k)//group_size)[torch.randperm(k,generator=rng)].int()\\n173:     return (x.to(device),qweight.int().to(device),scales.to(device),\\n174:             qzeros.int().to(device),ids.to(device),group_size)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\\nbuffers. The target is the matrix decoded from these buffers, not a comparison\\nto any original, pre-quantization matrix. Input row order may be activation-order\\npermuted with respect to the quantization groups.\\n\\nInputs and complete canonical format:\\n- x: finite FP16 [M,K], every magnitude <=0.5.\\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\\n  Actual zero points range from1 through16; there is no wrap after adding one.\\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\\n  The group histogram is fixed, while its order is unrestricted.\\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\\nincluding negative signed words, is valid in qweight/qzeros. Packed word\\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\\n\\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\\nContiguous views with nonzero storage offsets are legal. Inputs must have\\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\\nrun in ordinary non-inference mode without concurrent external input writes.\\nThis is forward execution on materialized buffers and does not provide autograd.\\n\\nFor each k,n, define the decoded weight\\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\\nwhere the product uses the exact stored scale value and H16 means one IEEE\\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\\ntarget definition, not permission to round arbitrary later intermediates.\\nDefine the target in real arithmetic on those stored/decoded values:\\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\\nbounded FP16-input/FP32-accumulation implementation including small subnormal\\ncontributions. It does not change the canonical packing, group assignment or\\nspecified decoded-weight definition.\\n\\nThe implementation may reorder rows, change internal packing and tile the GEMM;\\nthese choices must preserve the complete target. Correctness is one verdict for\\nthis fixed implementation over the full legal domain, not a verdict per input.\\nvalidate_inputs() enforces the public domain and is called by run(). reference()\\ndecodes the canonical buffers directly in original order and computes the FP64\\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_121\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-03T19:05:29Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"run() repacks into a Marlin layout and runs a Triton GEMM; any indexing bug in the repack/unpack permutation, sorted-order group mapping, or asymmetric zero handling would show up as output error beyond the contract tolerance on some legal input.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Each output must obey abs(actual-target) <= 0.01 + 0.001*abs(target) for all inputs with 1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, non-monotone g_idx, arbitrary int32 bit patterns in qweight/qzeros including negative signed words, and arbitrary unused high nibbles.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract defines the target over the full legal input domain (shape bounds, group_size set {16,32,64}, non-monotone g_idx, arbitrary unused nibbles, negative int32 words) and requires every output within abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n      \"statement\": \"run() outputs violate the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input (shapes within M<=65,K<=128,N<=96, group_size in {16,32,64}, permuted g_idx, arbitrary unused high nibbles / negative int32 words).\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-03T19:05:29Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_121\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_121\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_121\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_121\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_121\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I'll test the kernel's numerical correctness across the full legal domain against its own FP64 reference, sweeping shapes, group sizes, permuted g_idx, and adversarial packed words (negative int32, arbitrary unused nibbles).\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"run() repacks into a Marlin layout and runs a Triton GEMM; any indexing bug in the repack/unpack permutation, sorted-order group mapping, or asymmetric zero handling would show up as output error beyond the contract tolerance on some legal input.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Each output must obey abs(actual-target) <= 0.01 + 0.001*abs(target) for all inputs with 1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, non-monotone g_idx, arbitrary int32 bit patterns in qweight/qzeros including negative signed words, and arbitrary unused high nibbles.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract defines the target over the full legal input domain (shape bounds, group_size set {16,32,64}, non-monotone g_idx, arbitrary unused nibbles, negative int32 words) and requires every output within abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n            \"statement\": \"run() outputs violate the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input (shapes within M<=65,K<=128,N<=96, group_size in {16,32,64}, permuted g_idx, arbitrary unused high nibbles / negative int32 words).\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_121\"\n      },\n      \"created_at\": \"2026-10-03T19:05:16Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"LICENSE\",\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_121\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Standalone GPTQ-format INT4 projection with activation-order preparation.\\n\\nAutoGPTQ portions: Copyright (c) 2023 \\u6f58\\u5176\\u5a01(William), MIT.\\nMarlin packing layout: Copyright (C) Marlin.2024 Elias Frantar, Apache-2.0.\\nSee LICENSE. 2026 adaptation: explicit T4-compatible Triton preparation/GEMM,\\nsmall shape bounds, GPTQ asymmetric zero points and independent public reference.\\nThis uses the Marlin packed layout, not its Ampere-only CUDA execution kernel.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\ndef _layout_permutation(device):\\n    permutation = []\\n    for i in range(32):\\n        column = i // 4\\n        within = []\\n        for block in (0, 1):\\n            for row in (2*(i % 4), 2*(i % 4)+1,\\n                        2*(i % 4+4), 2*(i % 4+4)+1):\\n                within.append(16*row + column + 8*block)\\n        for j in range(4):\\n            permutation.extend(p + 256*j for p in within)\\n    permutation = torch.tensor(permutation, device=device, dtype=torch.int32)\\n    interleave = torch.tensor([0, 4, 1, 5, 2, 6, 3, 7], device=device)\\n    return permutation.reshape(-1, 8)[:, interleave].reshape(-1).contiguous()\\n\\n\\n@triton.jit\\ndef _repack(QWEIGHT, ORDER, PERM, PACKED,\\n            K: tl.constexpr, N: tl.constexpr, NT: tl.constexpr,\\n            B: tl.constexpr):\\n    tile_k = tl.program_id(0)\\n    tile_n = tl.program_id(1)\\n    word = tl.arange(0, B)\\n    packed = tl.zeros((B,), tl.uint32)\\n    for nibble in tl.static_range(8):\\n        source = tl.load(PERM + word*8 + nibble)\\n        local_k = (source % 256) // 16\\n        local_n = (source // 256)*16 + source % 16\\n        sorted_k = tile_k*16 + local_k\\n        original_k = tl.load(ORDER + sorted_k, mask=sorted_k < K, other=0)\\n        column = tile_n*64 + local_n\\n        value = tl.load(QWEIGHT + (original_k // 8)*N + column,\\n                        mask=(sorted_k < K) & (column < N), other=0).to(tl.uint32)\\n        quant = (value >> (4*(original_k % 8))) & 15\\n        packed |= quant << (4*nibble)\\n    tl.store(PACKED + (tile_k*NT + tile_n)*128 + word, packed)\\n\\n\\n@triton.jit\\ndef _int4_gemm(X, PACKED, SCALE, QZERO, ORDER, OUT,\\n               M: tl.constexpr, K: tl.constexpr, N: tl.constexpr,\\n               NT: tl.constexpr, ZN: tl.constexpr, GROUP_SIZE: tl.constexpr,\\n               BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr):\\n    rows = tl.program_id(0)*BM + tl.arange(0, BM)\\n    columns = tl.program_id(1)*BN + tl.arange(0, BN)\\n    inner = tl.arange(0, BK)\\n    accumulator = tl.zeros((BM, BN), tl.float32)\\n    for block in range(tl.cdiv(K, BK)):\\n        kk = block*BK + inner\\n        original = tl.load(ORDER + kk, mask=kk < K, other=0)\\n        activation = tl.load(X + rows[:, None]*K + original[None, :],\\n                             mask=(rows[:, None] < M) & (kk[None, :] < K), other=0.0)\\n        word = 4*(4*(columns[None, :] % 8) + (kk[:, None] % 8)//2) + (columns[None, :] % 64)//16\\n        lane = 4*(kk[:, None] % 2) + 2*((columns[None, :] % 16)//8) + (kk[:, None] % 16)//8\\n        address = ((kk[:, None]//16)*NT + columns[None, :]//64)*128 + word\\n        packed = tl.load(PACKED + address,\\n                         mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\\n        quant = (packed >> (4*lane)) & 15\\n        group = kk // GROUP_SIZE\\n        scale = tl.load(SCALE + group[:, None]*N + columns[None, :],\\n                        mask=(kk[:, None] < K) & (columns[None, :] < N), other=0.0).to(tl.float32)\\n        zero_word = tl.load(QZERO + group[:, None]*ZN + columns[None, :]//8,\\n                            mask=(kk[:, None] < K) & (columns[None, :] < N), other=0).to(tl.uint32)\\n        zero = ((zero_word >> (4*(columns[None, :] % 8))) & 15) + 1\\n        weight = ((quant.to(tl.int32)-zero.to(tl.int32)).to(tl.float32)*scale).to(tl.float16)\\n        accumulator = tl.dot(activation, weight, accumulator)\\n    tl.store(OUT + rows[:, None]*N + columns[None, :], accumulator,\\n             mask=(rows[:, None] < M) & (columns[None, :] < N))\\n\\n\\n...[truncated, 5640 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\\nbuffers. The target is the matrix decoded from these buffers, not a comparison\\nto any original, pre-quantization matrix. Input row order may be activation-order\\npermuted with respect to the quantization groups.\\n\\nInputs and complete canonical format:\\n- x: finite FP16 [M,K], every magnitude <=0.5.\\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\\n  Actual zero points range from1 through16; there is no wrap after adding one.\\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\\n  The group histogram is fixed, while its order is unrestricted.\\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\\nincluding negative signed words, is valid in qweight/qzeros. Packed word\\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\\n\\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\\nContiguous views with nonzero storage offsets are legal. Inputs must have\\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\\nrun in ordinary non-inference mode without concurrent external input writes.\\nThis is forward execution on materialized buffers and does not provide autograd.\\n\\nFor each k,n, define the decoded weight\\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\\nwhere the product uses the exact stored scale value and H16 means one IEEE\\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\\ntarget definition, not permission to round arbitrary later intermediates.\\nDefine the target in real arithmetic on those stored/decoded values:\\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\\nbounded FP16-input/FP32-accumulation implementation including small subnormal\\ncontributions. It does not change the canonical packing, group assignment or\\nspecified decoded-weight definition.\\n\\nThe implementation may reorder rows, change internal packing and tile the GEMM;\\nthese choices must preserve the complete target. Correctness is one verdict for\\nthis fixed implementation over the full legal domain, not a verdict per input.\\nvalidate_inputs() enforces the public domain and is called by run(). reference()\\ndecodes the canonical buffers directly in original order and computes the FP64\\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_121\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_121\"\n      },\n      \"created_at\": \"2026-10-03T19:05:16Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute an INT4 weight-only linear projection from canonical stored GPTQ-format\\nbuffers. The target is the matrix decoded from these buffers, not a comparison\\nto any original, pre-quantization matrix. Input row order may be activation-order\\npermuted with respect to the quantization groups.\\n\\nInputs and complete canonical format:\\n- x: finite FP16 [M,K], every magnitude <=0.5.\\n- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:\\n    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.\\n  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.\\n- scales: FP16 [G,N], each finite stored value in (0,1/32].\\n- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:\\n    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.\\n  Actual zero points range from1 through16; there is no wrap after adding one.\\n- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to\\n  group g_idx[k]. It need not be monotone. Each value lies in [0,G).\\n- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).\\n  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.\\n  The group histogram is fixed, while its order is unrestricted.\\n- 1<=M<=65, 1<=K<=128, 1<=N<=96.\\nThe unused high weight nibbles in the final K pack and unused zero-point nibbles\\npast N are arbitrary and must not affect the result. Any int32 bit pattern,\\nincluding negative signed words, is valid in qweight/qzeros. Packed word\\nendianness here is defined by numerical shifts, not by host byte reinterpretation.\\n\\nAll five tensors must be ordinary torch.Tensor objects (not subclasses), dense,\\nstrided, contiguous, on one CUDA device, with disjoint occupied byte ranges.\\nContiguous views with nonzero storage offsets are legal. Inputs must have\\nrequires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls\\nrun in ordinary non-inference mode without concurrent external input writes.\\nThis is forward execution on materialized buffers and does not provide autograd.\\n\\nFor each k,n, define the decoded weight\\n  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),\\nwhere the product uses the exact stored scale value and H16 means one IEEE\\nbinary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the\\ntarget definition, not permission to round arbitrary later intermediates.\\nDefine the target in real arithmetic on those stored/decoded values:\\n  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].\\nReturn a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output\\nmust obey abs(actual-target) <= 0.01 + 0.001*abs(target).\\nThe domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the\\nbounded FP16-input/FP32-accumulation implementation including small subnormal\\ncontributions. It does not change the canonical packing, group assignment or\\nspecified decoded-weight definition.\\n\\nThe implementation may reorder rows, change internal packing and tile the GEMM;\\nthese choices must preserve the complete target. Correctness is one verdict for\\nthis fixed implementation over the full legal domain, not a verdict per input.\\nvalidate_inputs() enforces the public domain and is called by run(). reference()\\ndecodes the canonical buffers directly in original order and computes the FP64\\ntarget; it also accepts CPU inputs. make_inputs() is only an example generator.\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_121\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_121\"\n      },\n      \"created_at\": \"2026-10-03T19:05:16Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_121\",\n        \"files\": [\n          {\n            \"kind\": \"other\",\n            \"path\": \"LICENSE\",\n            \"size_bytes\": 12564\n          },\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 9612\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 3399\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_121\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-03T19:05:16Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_121\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"run() repacks into a Marlin layout and runs a Triton GEMM; any indexing bug in the repack/unpack permutation, sorted-order group mapping, or asymmetric zero handling would show up as output error beyond the contract tolerance on some legal input.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Each output must obey abs(actual-target) <= 0.01 + 0.001*abs(target) for all inputs with 1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, non-monotone g_idx, arbitrary int32 bit patterns in qweight/qzeros including negative signed words, and arbitrary unused high nibbles.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract defines the target over the full legal input domain (shape bounds, group_size set {16,32,64}, non-monotone g_idx, arbitrary unused nibbles, negative int32 words) and requires every output within abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n        \"statement\": \"run() outputs violate the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input (shapes within M<=65,K<=128,N<=96, group_size in {16,32,64}, permuted g_idx, arbitrary unused high nibbles / negative int32 words).\"\n      },\n      \"created_at\": \"2026-10-03T19:05:29Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-03T19:05:29Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"run() repacks into a Marlin layout and runs a Triton GEMM; any indexing bug in the repack/unpack permutation, sorted-order group mapping, or asymmetric zero handling would show up as output error beyond the contract tolerance on some legal input.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Each output must obey abs(actual-target) <= 0.01 + 0.001*abs(target) for all inputs with 1<=M<=65, 1<=K<=128, 1<=N<=96, group_size in {16,32,64}, non-monotone g_idx, arbitrary int32 bit patterns in qweight/qzeros including negative signed words, and arbitrary unused high nibbles.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract defines the target over the full legal input domain (shape bounds, group_size set {16,32,64}, non-monotone g_idx, arbitrary unused nibbles, negative int32 words) and requires every output within abs(actual-target) <= 0.01 + 0.001*abs(target).\",\n        \"statement\": \"run() outputs violate the contract tolerance abs(actual-target) <= 0.01 + 0.001*abs(target) for some legal input (shapes within M<=65,K<=128,N<=96, group_size in {16,32,64}, permuted g_idx, arbitrary unused high nibbles / negative int32 words).\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-03T19:05:29Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

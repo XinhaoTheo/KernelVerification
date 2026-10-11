@@ -1,0 +1,61 @@
+{
+  "id": "chatcmpl-0a1b50f1b0aa43869d9965d257849881",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I've reviewed the full contract and kernel source. The kernel uses a Marlin-style repack path: a host-built permutation, a `_repack` Triton kernel that gathers sorted rows via `argsort(g_idx)`, and an `_int4_gemm` that decodes the packed layout with computed word/lane indices. I'll record the structured description now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-926fe648d9fc09c0",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Target is the projection computed from canonical stored GPTQ buffers: D[k,n]=H16((q[k,n]-z[g_idx[k],n])*scales[g_idx[k],n]), target[m,n]=sum_k x[m,k]*D[k,n]; not comparison to pre-quantization weights.\", \"Packing: qweight int32 [ceil(K/8),N], low nibble first along k; qzeros int32 [G,ceil(N/8)] with zero point = stored nibble + 1 (range 1..16, no wrap).\", \"g_idx is per-original-row group assignment, order unrestricted but histogram fixed: group g occurs exactly min(group_size, K-g*group_size) times; group_size in {16,32,64}.\", \"Domain: 1<=M<=65, 1<=K<=128, 1<=N<=96; x FP16 finite with |x|<=0.5; scales FP16 in (0,1/32]; g_idx in [0,G).\", \"Unused high nibbles in the final K pack and zero-point nibbles past N are arbitrary and must not affect output; any int32 bit pattern including negative signed words is legal.\", \"Tolerance: abs(actual-target) <= 0.01 + 0.001*abs(target) per element, on a fresh FP32 CUDA output preserving all inputs.\", \"Input hygiene: ordinary torch.Tensor, dense/strided/contiguous, one CUDA device, disjoint occupied byte ranges, requires_grad=False, is_inference=False, is_neg/is_conj=False, ordinary non-inference mode; run() calls validate_inputs(); reference() is an independent FP64 decoder accepting CPU.\"], \"kernel_model\": [\"run() = validate_inputs, stable argsort of g_idx into 'order', host-built 1024-entry Marlin layout permutation, _repack Triton kernel packing (tile 16K x 64N, 128 words of 8 nibbles each), then _int4_gemm (BM=16,BN=32,BK=32) returning fresh FP32 [M,N].\", \"_repack maps each packed (word,nibble) slot via PERM: local_k=(source%256)//16, local_n=(source//256)*16+source%16, sorted_k=tile_k*16+local_k, original_k=ORDER[sorted_k]; stores at (tile_k*NT+tile_n)*128+word.\", \"_int4_gemm re-derives the same layout inversely: word=4*(4*(col%8)+(kk%8)//2)+(col%64)//16, lane=4*(kk%2)+2*((col%16)//8)+(kk%16)//8, address=((kk//16)*NT+col//64)*128+word; group = kk//GROUP_SIZE in sorted row order.\", \"Group assumption: because the g_idx histogram is exactly fixed, stable sorting makes sorted row kk belong to group kk//group_size, so scales/qzeros are indexed by sorted position instead of a per-row g_idx lookup.\", \"Decoded weight path: quant and zero as int32, (quant-zero)*scale in FP32 then one .to(fp16) round, matching D=H16(...) definition (4-bit int times fp16-exact scale is exact in fp32, so only the final fp16 round occurs).\", \"Dot product: fp16 activation times fp16 weight with fp32 accumulator via tl.dot; masked loads handle non-tile-multiple M/K/N with other=0 for codes and 0.0 for activations/scales.\", \"Negative int32 words handled by .to(tl.uint32) reinterpretation before shifts/masks; unused nibbles excluded by (kk<K)&(col<N) masks.\", \"validate_inputs enforces the full public domain including tensor type, contiguity, disjoint byte ranges, finiteness, magnitude bounds, scale range, g_idx range and histogram, and shape/dtype consistency.\"], \"open_questions\": [\"Does _int4_gemm's word/lane arithmetic exactly invert the PERM-based _repack layout for all 128*8 slots (needs cross-consistency probe)?\", \"Does the H16 decoded weight produced in-kernel match reference's ((quant-zero).double()*scale.double()).half() for all quant/zero/scale combinations, including ties-to-even?\", \"Does run() output stay within 0.01+0.001*|target| of reference across the full legal domain (edge shapes, all group sizes, extreme codes/scales, x near +/-0.5)?\", \"Are inputs preserved and the output fresh (no in-place modification) after run()?\"], \"risk_map\": [\"Cross-consistency of the three layout definitions: _layout_permutation, _repack's slot mapping, and _int4_gemm's word/lane/address decode must be exact inverses; any off-by-one or mismatched interleave silently permutes weights within a tile while still producing plausible-looking output.\", \"Group indexing by kk//GROUP_SIZE in the GEMM is valid only if the g_idx histogram is exactly the contract histogram AND the sort is stable; validate_inputs enforces the histogram, but a violation between validation and kernel launch or non-stable sort would break it.\", \"Out-of-range handling when K not a multiple of 16 (repack tile) or K/N not multiples of BK/BN (GEMM): masks use other=0 for codes and activations, but ORDER[masked kk]=0 could still pair an activation with a wrong-group scale for the masked (excluded) entries; verify excluded products are fully zeroed.\", \"N not a multiple of 64: repack masks column<N so unused columns pack zeros, GEMM masks col<N; but word/lane arithmetic uses col%64 and col%16 — verify no aliasing for the partial 64-column tile.\", \"Negative signed int32 qweight/qzeros: .to(tl.uint32) reinterpretation must preserve raw bits for both the repack load and GEMM zero_word path.\", \"Decoded-weight rounding: kernel does FP32 multiply then one fp16 cast; contract requires exactly one binary16 round-to-nearest-even of the exact product — subnormal fp16 scales/products and tie cases are the sensitive region.\", \"tl.dot fp16xfp16->fp32 accumulation and tolerance: accumulation over K<=128 with |x|,|D|<=0.5 gives |target|<=32; check tolerance headroom, especially cancellation-heavy or max-|target| cases.\", \"Return freshness: output is torch.empty then fully stored under masks; ensure every element of [M,N] is written (grid covers cdiv(M,16) x cdiv(N,32) with BN=32 while repack tiles are 64 wide — NT vs BN grid consistency).\", \"validate_inputs strictness vs contract: it also rejects overlapping byte ranges and non-fp16 x/scales; make_inputs generates zero codes 0..15 for qzeros — real qzeros nibble 15 +1 = 16 is the wrap-relevant edge; confirm kernel and reference agree there.\"], \"scope_notes\": \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict over the full legal input domain, not per-input.\\\", \\\"make_inputs() is only an example generator and does not restrict the legal domain; reference() is an independent public FP64 check (accepts CPU).\\\", \\\"Autograd, inference mode, CPU run() execution, non-contiguous or overlapping inputs are out of scope (rejected by validate_inputs).\\\", \\\"Out-of-scope: comparison to original pre-quantization weights; only the decoded-buffer target matters.\\\"]\", \"summary\": \"Described case_120: GPTQ INT4 weight-only projection with Marlin-style repack + Triton GEMM. Contract, kernel model, risks, scope and open questions recorded; primary suspicion is layout cross-consistency between _layout_permutation, _repack and _int4_gemm decode indices.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          }
+        ],
+        "reasoning_content": "Analyze the kernel and record a description update. Key risk: repack stores packed words to int32 packed tensor but stores uint32 values... Store target PACKED is int32 buffer; value = quant << nibble up to 28 bits, fits in 32-bit, fine.\n\nKey correctness surfaces:\n- _repack for k not multiple of 16 (kt*16 words): sorted_k >= K masked; original_k loaded with other=0 → original_k=0 for out-of-range, quant reads qweight row 0 nibble 0 (masked so other=0). OK since masked.\n- GEMM address computation matches repack layout: repack writes at word index (tile_k*NT+tile_n)*128 + word where word = arange(128); each word covers 8 nibbles with source = PERM[word*8+nibble]. GEMM computes word = 4*(4*(col%8) + (kk%8)//2) + (col%64)//16, lane = 4*(kk%2)+2*((col%16)//8)+(kk%16)//8. Whether these match PERM layout is a nontrivial risk — cross-consistency between _layout_permutation, _repack and _int4_gemm decode indices.\n- Group handling: GEMM uses group = kk // GROUP_SIZE where kk is sorted order index. After stable argsort of g_idx, sorted rows have groups in ascending order and each contiguous block corresponds to group floor(kk/group_size)? Yes — because histogram is exactly fixed (each group g occupies exactly min(group_size, k-g*gs) entries in sorted order), so sorted row kk belongs to group kk//group_size. Correct given histogram contract. But scale loaded with group from kk; weight uses that group's scale/zero — matches g_idx[original] after sort. OK.\n- H16 rounding: reference decodes to half; kernel computes (quant-zero)*scale in fp32 then casts to fp16 — that's one H16 round, matches D definition. Good.\n- unused nibbles past N in qzeros: kernel masks col < N. Fine.\n- Negative int32 qweight: `.to(tl.uint32)` reinterprets; shifts then mask 15 — fine.\n- Risk: PERM tensor device — interleave tensor created on device; fine.\n- Repack masked original_k when sorted_k >= K: mask on value load uses (sorted_k<K), ok.\n- Out-of-tile columns: tile_n*64 covers N up to nt*64; for n not multiple of 64, columns >= N masked.\n- BK=32, kk%16 fine.\n- Risk: tl.dot with BM=16, BK=32 — min dims fine.\n- M up to 65: grid cdiv(m,16), BM=16 masks fine.\n- Risk: activation loaded via ORDER index — X + rows*K + original; correct.\n- Potential risk: _repack stores into int32 PACKED buffer a uint32 — Triton stores value as int32; bits preserved.\n- One subtle: reference uses FP64 matmul of double; target def is real arithmetic on decoded values — reference computes x.double() @ decoded.double() with decoded from H16 — matches.\n- Open questions: whether GEMM word/lane decode matches PERM layout exactly (needs experiment); scale to fp32 then multiply then fp16 vs \"exact stored scale value\" product then H16 — (quant-zero) exact in fp32, scale fp32 exact from fp16, product fp32 then round to fp16: single rounding to H16, matches ties-to-even? fp32 mul is exact here? quant-zero is small integer exact in fp32; scale fp16 exact in fp32; product of small int * fp16 value in fp32 may need rounding (fp32 has 24 bits; product of 4-bit int and 11-bit mantissa fits in 15 bits — exact). Then one fp16 round. Matches.\n- tl.dot(activation fp16, weight fp16) accumulates fp32 — tolerance accommodates.\n\nRecord update.",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791054317,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2640,
+    "prompt_tokens": 10493,
+    "total_tokens": 13133,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 857,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 857
+    }
+  }
+}

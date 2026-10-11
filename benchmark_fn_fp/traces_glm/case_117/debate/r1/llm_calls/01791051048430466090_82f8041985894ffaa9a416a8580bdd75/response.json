@@ -1,0 +1,81 @@
+{
+  "id": "chatcmpl-b74d6a992abb4b2c92a509727eb035a9",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch probes for all three claims in one batch — they're independent: c1 sweeps split_k/K combinations for split-invariance and reference match, c2 tests the worst-case tolerance at K=512 with adversarial cancellation, c3 tests non-multiple-of-16 shapes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a5a1f081b7fc60f3",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch\\nsys.path.insert(0, \\\"/root/cases/case_117\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ngen = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\nworst = None\\nfail = None\\nn_fail = 0\\ncombos = []\\nfor K in list(range(1, 65)) + [96, 127, 128, 129, 255, 256, 257, 383, 384, 511, 512]:\\n    for sk in (1, 2, 4, 8):\\n        M, N = 17, 33\\n        a = ((torch.rand((M, K), generator=gen) - .5)).half()\\n        b = ((torch.rand((K, N), generator=gen) - .5)).half()\\n        bias = (2 * torch.rand((N,), generator=gen) - 1).float()\\n        a, b, bias = a.to(dev), b.to(dev), bias.to(dev)\\n        try:\\n            out = kernel.run(a, b, bias, sk)\\n        except Exception as e:\\n            fail = {\\\"K\\\": K, \\\"split_k\\\": sk, \\\"error\\\": str(e)[:200]}\\n            n_fail += 1\\n            combos.append(f\\\"K{K}/sk{sk}:EXC\\\")\\n            continue\\n        ref = torch.matmul(a.double(), b.double()) + bias.double()[None, :]\\n        err = (out.double() - ref).abs()\\n        tol = 0.01 + 0.001 * ref.abs()\\n        viol = (err > tol)\\n        max_excess = float((err - tol).max())\\n        combos.append(f\\\"K{K}/sk{sk}:{'OK' if not viol.any() else 'FAIL'}\\\")\\n        if viol.any() and (worst is None or max_excess > worst[\\\"max_excess\\\"]):\\n            worst = {\\\"K\\\": K, \\\"split_k\\\": sk, \\\"n_violations\\\": int(viol.sum().item()), \\\"max_excess\\\": max_excess, \\\"max_abs_err\\\": float(err.max())}\\n# also split-invariance check on one nontrivial K\\na = ((torch.rand((17, 257), generator=gen) - .5)).half().to(dev)\\nb = ((torch.rand((257, 33), generator=gen) - .5)).half().to(dev)\\nbias = (2 * torch.rand((33,), generator=gen) - 1).float().to(dev)\\nouts = {sk: kernel.run(a, b, bias, sk) for sk in (1,2,4,8)}\\ninv = {f\\\"sk{sk}_vs_sk1\\\": float((outs[sk] - outs[1]).abs().max()) for sk in (2,4,8)}\\nresult = {\\\"n_combos\\\": len(combos), \\\"n_fail\\\": n_fail, \\\"first_fail\\\": fail, \\\"worst_violation\\\": worst, \\\"split_invariance_max_diff\\\": inv, \\\"all_ok\\\": worst is None and fail is None}\\nprint(\\\"SUMMARY_LINE\\\")\\nimport json\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"whether any K/split_k combo fails or exceeds tolerance\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-bafeecc94eb6e94c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_117\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ngen = torch.Generator(device=\\\"cpu\\\").manual_seed(3)\\nK = 512\\nM, N = 64, 64\\n# adversarial: |a|=|b|=0.5 with sign patterns chosen for cancellation\\n# a columns alternate signs so per-column partial sums cancel; b all +0.5\\na = (torch.full((M, K), 0.5, dtype=torch.float16))\\na[:, 1::2] = -0.5\\nb = torch.full((K, N), 0.5, dtype=torch.float16)\\nbias = torch.zeros(N, dtype=torch.float32)\\na, b, bias = a.to(dev), b.to(dev), bias.to(dev)\\n# per-row sign flip variant to force near-zero targets with max magnitudes\\na2 = a.clone(); a2[1::2] *= -1\\nb2 = b.clone(); b2[:, 1::2] = -0.5\\nresults = {}\\nworst = None\\nfor name, aa, bb in [(\\\"cancel\\\", a, b), (\\\"cancel2\\\", a2, b2), (\\\"random_max\\\", None, None)]:\\n    if name == \\\"random_max\\\":\\n        aa = (torch.where(torch.rand((M, K), generator=gen) < .5, -0.5, 0.5)).half().to(dev)\\n        bb = (torch.where(torch.rand((K, N), generator=gen) < .5, -0.5, 0.5)).half().to(dev)\\n    for sk in (1, 8):\\n        out = kernel.run(aa, bb, bias, sk)\\n        ref = torch.matmul(aa.double(), bb.double()) + bias.double()[None, :]\\n        err = (out.double() - ref).abs()\\n        tol = 0.01 + 0.001 * ref.abs()\\n        excess = (err - tol).max().item()\\n        results[f\\\"{name}_sk{sk}\\\"] = {\\\"max_abs_err\\\": float(err.max()), \\\"max_excess\\\": float(excess), \\\"n_viol\\\": int((err > tol).sum().item()), \\\"min_ref_abs\\\": float(ref.abs().min())}\\n        if worst is None or excess > worst[\\\"max_excess\\\"]:\\n            worst = {\\\"case\\\": name, \\\"split_k\\\": sk, \\\"max_excess\\\": float(excess), \\\"max_abs_err\\\": float(err.max()), \\\"n_viol\\\": int((err > tol).sum().item())}\\nresult = {\\\"cases\\\": results, \\\"worst\\\": worst, \\\"claim_confirmed\\\": worst is not None and worst[\\\"max_excess\\\"] > 0}\\nprint(\\\"SUMMARY_LINE\\\")\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"max elementwise error excess over tolerance at K=512 max-magnitude cancellation cases\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1,
+            "name": null
+          },
+          {
+            "id": "chatcmpl-tool-adfd09f25dbaee2a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_117\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ngen = torch.Generator(device=\\\"cpu\\\").manual_seed(11)\\nshapes = [(1,1,7),(1,1,512),(1,64,33),(63,63,257),(17,33,257),(64,63,511),(3,5,2),(63,1,511),(1,33,1),(31,47,100)]\\nworst = None; fails = []\\nfor M, N, K in shapes:\\n    a = ((torch.rand((M, K), generator=gen) - .5)).half().to(dev)\\n    b = ((torch.rand((K, N), generator=gen) - .5)).half().to(dev)\\n    bias = (2 * torch.rand((N,), generator=gen) - 1).float().to(dev)\\n    try:\\n        out = kernel.run(a, b, bias, 4)\\n        out8 = kernel.run(a, b, bias, 8)\\n    except Exception as e:\\n        fails.append({\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, \\\"error\\\": str(e)[:150]})\\n        continue\\n    ref = torch.matmul(a.double(), b.double()) + bias.double()[None, :]\\n    for tag, o in [(\\\"sk4\\\", out), (\\\"sk8\\\", out8)]:\\n        err = (o.double() - ref).abs()\\n        tol = 0.01 + 0.001 * ref.abs()\\n        viol = err > tol\\n        exc = float((err - tol).max())\\n        if viol.any():\\n            idx = (err - tol).argmax().item()\\n            fails.append({\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, tag: tag, \\\"n_viol\\\": int(viol.sum()), \\\"max_excess\\\": exc, \\\"argmax_flat\\\": idx})\\n        if worst is None or exc > worst[\\\"max_excess\\\"]:\\n            worst = {\\\"M\\\": M, \\\"N\\\": N, \\\"K\\\": K, \\\"variant\\\": tag, \\\"max_excess\\\": exc, \\\"max_abs_err\\\": float(err.max())}\\n# input preservation check on one case\\na = ((torch.rand((63, 33, generator=gen)) if False else (torch.rand((63, 33), generator=gen) - .5)).half().to(dev)\\nb = ((torch.rand((33, 47), generator=gen) - .5)).half().to(dev)\\nbias = (2 * torch.rand((47,), generator=gen) - 1).float().to(dev)\\na0, b0, bi0 = a.clone(), b.clone(), bias.clone()\\n_ = kernel.run(a, b, bias, 4)\\npreserved = bool((a == a0).all() and (b == b0).all() and (bias == bi0).all())\\nresult = {\\\"n_shapes\\\": len(shapes), \\\"violations\\\": fails, \\\"worst\\\": worst, \\\"inputs_preserved\\\": preserved, \\\"claim_confirmed\\\": len(fails) > 0}\\nprint(\\\"SUMMARY_LINE\\\")\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"whether any non-multiple-of-16 shape produces tolerance violations in tail rows/cols\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2,
+            "name": null
+          }
+        ],
+        "reasoning_content": "",
+        "tools": null
+      }
+    }
+  ],
+  "created": 1791051049,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2145,
+    "prompt_tokens": 21744,
+    "total_tokens": 23889,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    },
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

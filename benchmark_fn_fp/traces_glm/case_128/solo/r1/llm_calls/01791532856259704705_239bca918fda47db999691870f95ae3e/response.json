@@ -1,0 +1,51 @@
+{
+  "id": "chatcmpl-5ce62f75",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the kernel against the entire finite FP16 domain, comparing to the FP64 erfc reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-91cbc41d97ff63ed",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_128\\\")\\nimport kernel\\n\\n# all finite FP16 values: every 16-bit pattern, then drop inf/nan\\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16)\\nx_all = bits.view(torch.float16).view(-1)\\nfinite_mask = torch.isfinite(x_all)\\nx = x_all[finite_mask]\\nprint(\\\"num finite fp16 values:\\\", x.numel())\\n\\nx_cuda = x.to(\\\"cuda\\\")\\nout = kernel.run(x_cuda)\\nref = kernel.reference(x_cuda).to(torch.float64)\\n\\ndiff = (out.to(torch.float64) - ref).abs()\\nmax_err = diff.max().item()\\nworst_i = int(diff.argmax())\\nprint(\\\"max abs err:\\\", max_err, \\\"at x =\\\", x[worst_i].item(), \\\"out:\\\", out[worst_i].item(), \\\"ref:\\\", ref[worst_i].item())\\nviol = (diff > 1e-6)\\nprint(\\\"num violations >1e-6:\\\", int(viol.sum()))\\nif viol.any():\\n    idx = viol.nonzero().flatten()\\n    print(\\\"first few violating x:\\\", x[idx[:10]].tolist())\\n    print(\\\"their errors:\\\", [float(diff[i]) for i in idx[:10]])\\n# also test random input via make_inputs and edge sizes\\nfor size in (1, 4093, 131072):\\n    xt = kernel.make_inputs(size=size)[0]\\n    o = kernel.run(xt); r = kernel.reference(xt)\\n    d = (o.to(torch.float64)-r).abs().max().item()\\n    print(f\\\"make_inputs size={size}: max err {d}\\\")\\nprint(json.dumps({\\\"max_abs_err_full_domain\\\": max_err, \\\"violations\\\": int(viol.sum()), \\\"worst_x\\\": x[worst_i].item()}))\\n\", \"expected_signal\": \"max absolute error over all finite FP16 values vs FP64 erfc reference, and count of violations of the 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Test full FP16 domain: 65536 possible bit patterns (finite ones = 65504). Run kernel on all finite FP16 values, compare to FP64 reference. N ≤ 131072 so whole domain fits in one call."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791532857,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 528,
+    "prompt_tokens": 10556,
+    "total_tokens": 11084,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6367,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

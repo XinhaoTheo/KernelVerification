@@ -1,0 +1,679 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_122",
+    "has_error": null,
+    "kernel_code": "\"\"\"Temporally fused, separable finite-domain binomial diffusion.\n\nSynthetic benchmark implementation of a standard image/stencil operation.\nThis is not an upstream project's kernel or an asserted historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _extend_coordinate(position, SIZE: tl.constexpr):\n    period: tl.constexpr = 2 * (SIZE + 1)\n    phase = (position + 1 + period) % period\n    forward = phase <= SIZE\n    coordinate = tl.where(forward, phase - 1, period - phase - 1)\n    sign = tl.where(forward, 1.0, -1.0)\n    valid = (phase != 0) & (phase != SIZE + 1)\n    return coordinate, sign, valid\n\n\n@triton.jit\ndef _sweep_four_steps(X, Y, H: tl.constexpr, W: tl.constexpr,\n                      VERTICAL: tl.constexpr, BLOCK: tl.constexpr):\n    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    rows = offsets // W\n    columns = offsets % W\n    active = offsets < H * W\n    coefficients: tl.constexpr = (1, 8, 28, 56, 70, 56, 28, 8, 1)\n    accumulator = tl.zeros((BLOCK,), tl.float32)\n    for tap in tl.static_range(9):\n        if VERTICAL:\n            source, sign, inside = _extend_coordinate(rows + tap - 4, H)\n            address = source * W + columns\n        else:\n            source, sign, inside = _extend_coordinate(columns + tap - 4, W)\n            address = rows * W + source\n        value = tl.load(X + address, mask=active & inside, other=0.0).to(tl.float32)\n        accumulator += value * sign * (coefficients[tap] / 256.0)\n    tl.store(Y + offsets, accumulator, mask=active)\n\n\ndef validate_inputs(x, steps, require_cuda=True):\n    \"\"\"Check the complete public input domain, also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient buffer required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2, \"expected x[H,W]\")\n    h, w = x.shape\n    require(1 <= h <= 129 and 1 <= w <= 129, \"H and W must be in [1,129]\")\n    require(x.dtype == torch.float16, \"x must be FP16\")\n    require(bool(torch.isfinite(x).all().item()), \"x must be finite\")\n    require(bool((x.abs() <= 1).all().item()), \"input magnitude must be at most one\")\n    require(type(steps) is int and steps in (4, 8), \"steps must be the Python integer 4 or 8\")\n    return {\"valid\": True, \"height\": h, \"width\": w, \"steps\": steps}\n\n\ndef run(x, steps):\n    \"\"\"Return a fresh FP32 field after the requested diffusion steps.\"\"\"\n    validate_inputs(x, steps)\n    h, w = x.shape\n    with torch.cuda.device(x.device):\n        current = x\n        for _ in range(steps // 4):\n            horizontal = torch.empty((h, w), dtype=torch.float32, device=x.device)\n            output = torch.empty((h, w), dtype=torch.float32, device=x.device)\n            grid = (triton.cdiv(h * w, 128),)\n            _sweep_four_steps[grid](current, horizontal, H=h, W=w,\n                                    VERTICAL=False, BLOCK=128, num_warps=4)\n            _sweep_four_steps[grid](horizontal, output, H=h, W=w,\n                                    VERTICAL=True, BLOCK=128, num_warps=4)\n            current = output\n    return current\n\n\ndef reference(x, steps):\n    \"\"\"Direct FP64 three-by-three update, with a new zero exterior each step.\"\"\"\n    validate_inputs(x, steps, require_cuda=False)\n    h, w = x.shape\n    current = x.double()\n    coefficients = (1.0, 2.0, 1.0)\n    for _ in range(steps):\n        padded = torch.zeros((h + 2, w + 2), dtype=torch.float64, device=x.device)\n        padded[1:h + 1, 1:w + 1] = current\n        output = torch.zeros_like(current)\n        for row in range(3):\n            for column in range(3):\n                output += (coefficients[row] * coefficients[column] / 16.0) * padded[row:row + h, column:column + w]\n        current = output\n    return current\n\n\ndef make_inputs(device=\"cuda\", height=31, width=33, steps=4, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.rand((height, width), generator=generator) - 1.0).half()\n    return x.to(device), steps\n",
+    "passed": null,
+    "problem_text": "Compute repeated finite-domain binomial diffusion, a separable image/stencil\noperation. The input is x[H,W], and the update below is applied steps times.\n\nInputs and complete public domain:\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\n- steps is a Python int in {4,8}.\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\n\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\n  where a[-1]=1, a[0]=2, a[1]=1.\n\nThe zero exterior is imposed at EVERY individual time step. Only values within\nthe finite rectangle are retained as the state for the next step.\nThe target is U_steps in real arithmetic on the stored input values; no\nintermediate FP16 rounding is part of the target definition.\n\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\nseparability, temporal fusion, alternative boundary evaluation and FP32\narithmetic, provided the complete finite-domain target is preserved within\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\nnot a verdict per input or shape.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nimplements the individual three-by-three updates in FP64 and accepts CPU\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\nbenchmark in the standard finite-domain stencil family, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_122",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-03T22:14:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-03T22:15:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "456e707ff99494e265698bee4f7d15c80140fddcf7dcb2c4e770ba3f884a1ed7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ac110d313ed442895d980572a87297265f53561f4f46bec3d0d70384c55c07bb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "delta_3x3_steps4": 0.0,
+            "delta_edge_steps8": 9.313225746154785e-10,
+            "duration_s": 7.069544,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "random_31x33_steps4": 3.585591912269592e-08,
+            "stderr": "",
+            "stdout": "{'delta_3x3_steps4': 0.0, 'delta_edge_steps8': 9.313225746154785e-10, 'random_31x33_steps4': 3.585591912269592e-08}\nJSON:{\"metric\": \"max abs error vs FP64 per-step reference\", \"tolerance\": 2e-05, \"errors\": {\"delta_3x3_steps4\": 0.0, \"delta_edge_steps8\": 9.313225746154785e-10, \"random_31x33_steps4\": 3.585591912269592e-08}}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 2e-05
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Max abs error vs the contract's FP64 per-step reference on boundary-delta and random in-domain inputs: delta at 3x3 corner steps=4 gives 0.0, delta at edge of 31x33 steps=8 gives 9.3e-10, random 31x33 steps=4 gives 3.6e-8 \u2014 all far below the 2e-5 tolerance. The odd (sign-folding) extension is algebraically equivalent to the zero exterior for the interior rectangle, so the suspected boundary defect does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The contract imposes a zero exterior at every individual step, so the fused 9-tap separable pass must read zero at positions outside [0,H)x[0,W). But _extend_coordinate folds out-of-bounds taps back inside with a sign (e.g. position -2 -> -x[0] with nonzero coefficient), which yields nonzero contributions where the zero extension requires zero; hand computation on a delta at a boundary gives ~0.1 error, far above 2e-5.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The zero exterior is imposed at EVERY individual time step; every element must obey abs(actual-U_steps)<=2e-5, and alternative boundary evaluation is allowed only 'provided the complete finite-domain target is preserved within this fixed tolerance'."
+        }
+      ],
+      "scope_rationale": "The contract requires the zero-exterior per-step semantics with tolerance 2e-5 over the whole legal domain; a boundary fold that alters out-of-bounds tap values violates that required behaviour on ordinary in-domain inputs (e.g. H=W=3, steps=4).",
+      "statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary.",
+      "status": "rebutted",
+      "updated_at": "2026-10-03T22:15:08Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_122",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_122"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_122"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_122"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_122",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 83.726411868,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel fuses 4 steps into a separable 9-tap binomial pass, using a sign-folding `_extend_coordinate` to handle out-of-bounds taps. Hand-checking a delta input at a boundary, the fold appears to produce nonzero contributions where the zero exterior requires 0 (e.g., tap at position -2 folding to -x[0]). I'll record that claim and test numerically against the contract's FP64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract imposes a zero exterior at every individual step, so the fused 9-tap separable pass must read zero at positions outside [0,H)x[0,W). But _extend_coordinate folds out-of-bounds taps back inside with a sign (e.g. position -2 -> -x[0] with nonzero coefficient), which yields nonzero contributions where the zero extension requires zero; hand computation on a delta at a boundary gives ~0.1 error, far above 2e-5.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The zero exterior is imposed at EVERY individual time step; every element must obey abs(actual-U_steps)<=2e-5, and alternative boundary evaluation is allowed only 'provided the complete finite-domain target is preserved within this fixed tolerance'."
+              }
+            ],
+            "scope_rationale": "The contract requires the zero-exterior per-step semantics with tolerance 2e-5 over the whole legal domain; a boundary fold that alters out-of-bounds tap values violates that required behaviour on ordinary in-domain inputs (e.g. H=W=3, steps=4).",
+            "statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 83.726,
+        "input_tokens": 10000,
+        "output_tokens": 4948
+      }
+    },
+    {
+      "duration_s": 7.709394688000003,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a probe comparing run() against the contract's FP64 reference on boundary-heavy in-domain inputs.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_122\")\nimport kernel as K\n\nresults = {}\n# case 1: delta at corner of a 3x3 field, steps=4\nx = torch.zeros(3,3, dtype=torch.float16, device=\"cuda\"); x[0,0]=1.0\nr = K.run(x, 4); ref = K.reference(x, 4)\nresults[\"delta_3x3_steps4\"] = (r-ref).abs().max().item()\n\n# case 2: delta at edge of a larger field, steps=8\nx2 = torch.zeros(31,33, dtype=torch.float16, device=\"cuda\"); x2[0,5]=1.0\nr2 = K.run(x2, 8); ref2 = K.reference(x2, 8)\nresults[\"delta_edge_steps8\"] = (r2-ref2).abs().max().item()\n\n# case 3: random in-domain input\nxr, steps = K.make_inputs()\nr3 = K.run(xr, steps); ref3 = K.reference(xr, steps)\nresults[\"random_31x33_steps4\"] = (r3-ref3).abs().max().item()\n\nprint({k: v for k,v in results.items()})\nimport json\nprint(\"JSON:\" + json.dumps({\"metric\":\"max abs error vs FP64 per-step reference\",\"tolerance\":2e-5,\"errors\":results}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.709,
+        "input_tokens": 11570,
+        "output_tokens": 370
+      }
+    },
+    {
+      "duration_s": 27.527544093000003,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe refutes the hand analysis: the sign-folding odd extension numerically reproduces the zero-exterior semantics to ~1e-8. I'll finalize that evidence and run a broader domain sweep (edge shapes like 1\u00d7129, 129\u00d71, corners) to confirm tolerance compliance domain-wide.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "delta_3x3_steps4": 0.0,
+              "delta_edge_steps8": 9.313225746154785e-10,
+              "random_31x33_steps4": 3.585591912269592e-08,
+              "tolerance": 2e-05
+            },
+            "event_id": "t6",
+            "status": "rebutted",
+            "summary": "Max abs error vs the contract's FP64 per-step reference on boundary-delta and random in-domain inputs: delta at 3x3 corner steps=4 gives 0.0, delta at edge of 31x33 steps=8 gives 9.3e-10, random 31x33 steps=4 gives 3.6e-8 \u2014 all far below the 2e-5 tolerance. The odd (sign-folding) extension is algebraically equivalent to the zero exterior for the interior rectangle, so the suspected boundary defect does not materialize.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_122\")\nimport kernel as K\n\nerrs = {}\nfor (h, w, steps) in [(1,1,4),(1,129,8),(129,1,4),(129,129,8),(2,3,4),(127,128,8),(3,3,8)]:\n    g = torch.Generator(device=\"cpu\").manual_seed(h*1000+w)\n    x = (2.0*torch.rand((h,w), generator=g)-1.0).half().cuda()\n    r = K.run(x, steps)\n    ref = K.reference(x, steps)\n    errs[f\"{h}x{w}_s{steps}\"] = (r-ref).abs().max().item()\n# preservation & output properties\nx = K.make_inputs()[0]\nxc = x.clone()\nr = K.run(x, 4)\nok_pres = torch.equal(x, xc)\nok_props = (r.dtype==torch.float32 and r.is_cuda and r.shape==x.shape and torch.isfinite(r).all().item())\nprint(\"preserve_x:\", ok_pres, \"output_props:\", ok_props)\nprint(\"JSON:\" + json.dumps({\"metric\":\"max abs error vs FP64 reference, domain sweep\",\"tolerance\":2e-5,\"errors\":errs,\"preserve_x\":ok_pres,\"output_props\":bool(ok_props)}))\n"
+          },
+          "tool": "run_python_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 27.528,
+        "input_tokens": 13629,
+        "output_tokens": 1381
+      }
+    },
+    {
+      "duration_s": 7.5643687099999966,
+      "role": "solo",
+      "round": 5,
+      "text": "The domain sweep (t8) confirms tolerance compliance across the full legal shape range (1\u00d71 through 129\u00d7129, both step counts), plus input preservation and correct output properties. The single opened claim c1 is rebutted. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The kernel's fused 9-tap separable sign-folding implementation was suspected to violate the per-step zero-exterior contract (claim c1). Runtime probes against the contract's FP64 reference rebut this: boundary-delta and random inputs give max abs error 0.0\u20133.6e-8 (t6), and a full domain sweep over shapes 1x1, 1x129, 129x1, 129x129, 2x3, 127x128, 3x3 at steps 4 and 8 gives max abs error <= 4.4e-8 (t8), all far below the 2e-5 tolerance. Probes also verified x is preserved unchanged and the output is a fresh finite FP32 CUDA tensor of the correct shape (t8). The sign-folding odd extension is algebraically equivalent to the zero exterior for interior evaluation, so the contract's required behaviour holds over the whole legal domain.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.564,
+        "input_tokens": 18106,
+        "output_tokens": 300
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_122"
+      },
+      "created_at": "2026-10-03T22:13:01Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_122",
+        "has_error": null,
+        "kernel_code": "\"\"\"Temporally fused, separable finite-domain binomial diffusion.\n\nSynthetic benchmark implementation of a standard image/stencil operation.\nThis is not an upstream project's kernel or an asserted historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _extend_coordinate(position, SIZE: tl.constexpr):\n    period: tl.constexpr = 2 * (SIZE + 1)\n    phase = (position + 1 + period) % period\n    forward = phase <= SIZE\n    coordinate = tl.where(forward, phase - 1, period - phase - 1)\n    sign = tl.where(forward, 1.0, -1.0)\n    valid = (phase != 0) & (phase != SIZE + 1)\n    return coordinate, sign, valid\n\n\n@triton.jit\ndef _sweep_four_steps(X, Y, H: tl.constexpr, W: tl.constexpr,\n                      VERTICAL: tl.constexpr, BLOCK: tl.constexpr):\n    offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    rows = offsets // W\n    columns = offsets % W\n    active = offsets < H * W\n    coefficients: tl.constexpr = (1, 8, 28, 56, 70, 56, 28, 8, 1)\n    accumulator = tl.zeros((BLOCK,), tl.float32)\n    for tap in tl.static_range(9):\n        if VERTICAL:\n            source, sign, inside = _extend_coordinate(rows + tap - 4, H)\n            address = source * W + columns\n        else:\n            source, sign, inside = _extend_coordinate(columns + tap - 4, W)\n            address = rows * W + source\n        value = tl.load(X + address, mask=active & inside, other=0.0).to(tl.float32)\n        accumulator += value * sign * (coefficients[tap] / 256.0)\n    tl.store(Y + offsets, accumulator, mask=active)\n\n\ndef validate_inputs(x, steps, require_cuda=True):\n    \"\"\"Check the complete public input domain, also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient buffer required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2, \"expected x[H,W]\")\n    h, w = x.shape\n    require(1 <= h <= 129 and 1 <= w <= 129, \"H and W must be in [1,129]\")\n    require(x.dtype == torch.float16, \"x must be FP16\")\n    require(bool(torch.isfinite(x).all().item()), \"x must be finite\")\n    require(bool((x.abs() <= 1).all().item()), \"input magnitude must be at most one\")\n    require(type(steps) is int and steps in (4, 8), \"steps must be the Python integer 4 or 8\")\n    return {\"valid\": True, \"height\": h, \"width\": w, \"steps\": steps}\n\n\ndef run(x, steps):\n    \"\"\"Return a fresh FP32 field after the requested diffusion steps.\"\"\"\n    validate_inputs(x, steps)\n    h, w = x.shape\n    with torch.cuda.device(x.device):\n        current = x\n        for _ in range(steps // 4):\n            horizontal = torch.empty((h, w), dtype=torch.float32, device=x.device)\n            output = torch.empty((h, w), dtype=torch.float32, device=x.device)\n            grid = (triton.cdiv(h * w, 128),)\n            _sweep_four_steps[grid](current, horizontal, H=h, W=w,\n                                    VERTICAL=False, BLOCK=128, num_warps=4)\n            _sweep_four_steps[grid](horizontal, output, H=h, W=w,\n                                    VERTICAL=True, BLOCK=128, num_warps=4)\n            current = output\n    return current\n\n\ndef reference(x, steps):\n    \"\"\"Direct FP64 three-by-three update, with a new zero exterior each step.\"\"\"\n    validate_inputs(x, steps, require_cuda=False)\n    h, w = x.shape\n    current = x.double()\n    coefficients = (1.0, 2.0, 1.0)\n    for _ in range(steps):\n        padded = torch.zeros((h + 2, w + 2), dtype=torch.float64, device=x.device)\n        padded[1:h + 1, 1:w + 1] = current\n        output = torch.zeros_like(current)\n        for row in range(3):\n            for column in range(3):\n                output += (coefficients[row] * coefficients[column] / 16.0) * padded[row:row + h, column:column + w]\n        current = output\n    return current\n\n\ndef make_inputs(device=\"cuda\", height=31, width=33, steps=4, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.rand((height, width), generator=generator) - 1.0).half()\n    return x.to(device), steps\n",
+        "passed": null,
+        "problem_text": "Compute repeated finite-domain binomial diffusion, a separable image/stencil\noperation. The input is x[H,W], and the update below is applied steps times.\n\nInputs and complete public domain:\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\n- steps is a Python int in {4,8}.\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\n\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\n  where a[-1]=1, a[0]=2, a[1]=1.\n\nThe zero exterior is imposed at EVERY individual time step. Only values within\nthe finite rectangle are retained as the state for the next step.\nThe target is U_steps in real arithmetic on the stored input values; no\nintermediate FP16 rounding is part of the target definition.\n\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\nseparability, temporal fusion, alternative boundary evaluation and FP32\narithmetic, provided the complete finite-domain target is preserved within\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\nnot a verdict per input or shape.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nimplements the individual three-by-three updates in FP64 and accepts CPU\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\nbenchmark in the standard finite-domain stencil family, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_122",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_122"
+      },
+      "created_at": "2026-10-03T22:13:01Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute repeated finite-domain binomial diffusion, a separable image/stencil\noperation. The input is x[H,W], and the update below is applied steps times.\n\nInputs and complete public domain:\n- x is a finite FP16 tensor with shape [H,W], 1<=H,W<=129, and |x[r,c]|<=1.\n- steps is a Python int in {4,8}.\n- x must be an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nDefine U_0[r,c] as the exact stored FP16 value x[r,c]. For every t from 0 to\nsteps-1, extend U_t by zero outside the finite rectangle [0,H)x[0,W), and set\n\n  U_(t+1)[r,c] = sum(dr=-1..1, dc=-1..1)\n                    a[dr] * a[dc] * U_t[r+dr,c+dc] / 16,\n  where a[-1]=1, a[0]=2, a[1]=1.\n\nThe zero exterior is imposed at EVERY individual time step. Only values within\nthe finite rectangle are retained as the state for the next step.\nThe target is U_steps in real arithmetic on the stored input values; no\nintermediate FP16 rounding is part of the target definition.\n\nReturn a fresh finite FP32 CUDA tensor [H,W] on x.device, preserving x.\nEvery element must obey abs(actual-U_steps)<=2e-5. The implementation may use\nseparability, temporal fusion, alternative boundary evaluation and FP32\narithmetic, provided the complete finite-domain target is preserved within\nthis fixed tolerance. Correctness is one verdict over the whole legal domain,\nnot a verdict per input or shape.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nimplements the individual three-by-three updates in FP64 and accepts CPU\ninputs. make_inputs() supplies examples only. The implementation is a synthetic\nbenchmark in the standard finite-domain stencil family, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_122",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_122"
+      },
+      "created_at": "2026-10-03T22:13:01Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_122",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 4567
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2067
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_122",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-03T22:13:01Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_122",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The contract imposes a zero exterior at every individual step, so the fused 9-tap separable pass must read zero at positions outside [0,H)x[0,W). But _extend_coordinate folds out-of-bounds taps back inside with a sign (e.g. position -2 -> -x[0] with nonzero coefficient), which yields nonzero contributions where the zero extension requires zero; hand computation on a delta at a boundary gives ~0.1 error, far above 2e-5.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The zero exterior is imposed at EVERY individual time step; every element must obey abs(actual-U_steps)<=2e-5, and alternative boundary evaluation is allowed only 'provided the complete finite-domain target is preserved within this fixed tolerance'."
+          }
+        ],
+        "scope_rationale": "The contract requires the zero-exterior per-step semantics with tolerance 2e-5 over the whole legal domain; a boundary fold that alters out-of-bounds tap values violates that required behaviour on ordinary in-domain inputs (e.g. H=W=3, steps=4).",
+        "statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary."
+      },
+      "created_at": "2026-10-03T22:14:26Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-03T22:14:26Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The contract imposes a zero exterior at every individual step, so the fused 9-tap separable pass must read zero at positions outside [0,H)x[0,W). But _extend_coordinate folds out-of-bounds taps back inside with a sign (e.g. position -2 -> -x[0] with nonzero coefficient), which yields nonzero contributions where the zero extension requires zero; hand computation on a delta at a boundary gives ~0.1 error, far above 2e-5.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The zero exterior is imposed at EVERY individual time step; every element must obey abs(actual-U_steps)<=2e-5, and alternative boundary evaluation is allowed only 'provided the complete finite-domain target is preserved within this fixed tolerance'."
+          }
+        ],
+        "scope_rationale": "The contract requires the zero-exterior per-step semantics with tolerance 2e-5 over the whole legal domain; a boundary fold that alters out-of-bounds tap values violates that required behaviour on ordinary in-domain inputs (e.g. H=W=3, steps=4).",
+        "statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary.",
+        "status": "open",
+        "updated_at": "2026-10-03T22:14:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_122\")\nimport kernel as K\n\nresults = {}\n# case 1: delta at corner of a 3x3 field, steps=4\nx = torch.zeros(3,3, dtype=torch.float16, device=\"cuda\"); x[0,0]=1.0\nr = K.run(x, 4); ref = K.reference(x, 4)\nresults[\"delta_3x3_steps4\"] = (r-ref).abs().max().item()\n\n# case 2: delta at edge of a larger field, steps=8\nx2 = torch.zeros(31,33, dtype=torch.float16, device=\"cuda\"); x2[0,5]=1.0\nr2 = K.run(x2, 8); ref2 = K.reference(x2, 8)\nresults[\"delta_edge_steps8\"] = (r2-ref2).abs().max().item()\n\n# case 3: random in-domain input\nxr, steps = K.make_inputs()\nr3 = K.run(xr, steps); ref3 = K.reference(xr, steps)\nresults[\"random_31x33_steps4\"] = (r3-ref3).abs().max().item()\n\nprint({k: v for k,v in results.items()})\nimport json\nprint(\"JSON:\" + json.dumps({\"metric\":\"max abs error vs FP64 per-step reference\",\"tolerance\":2e-5,\"errors\":results}))\n"
+      },
+      "created_at": "2026-10-03T22:14:41Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "456e707ff99494e265698bee4f7d15c80140fddcf7dcb2c4e770ba3f884a1ed7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "ac110d313ed442895d980572a87297265f53561f4f46bec3d0d70384c55c07bb"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary.",
+        "cwd": "/root/cases/case_122",
+        "duration_s": 7.069544,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "456e707ff99494e265698bee4f7d15c80140fddcf7dcb2c4e770ba3f884a1ed7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ac110d313ed442895d980572a87297265f53561f4f46bec3d0d70384c55c07bb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 7.069544,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{'delta_3x3_steps4': 0.0, 'delta_edge_steps8': 9.313225746154785e-10, 'random_31x33_steps4': 3.585591912269592e-08}\nJSON:{\"metric\": \"max abs error vs FP64 per-step reference\", \"tolerance\": 2e-05, \"errors\": {\"delta_3x3_steps4\": 0.0, \"delta_edge_steps8\": 9.313225746154785e-10, \"random_31x33_steps4\": 3.585591912269592e-08}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{'delta_3x3_steps4': 0.0, 'delta_edge_steps8': 9.313225746154785e-10, 'random_31x33_steps4': 3.585591912269592e-08}\nJSON:{\"metric\": \"max abs error vs FP64 per-step reference\", \"tolerance\": 2e-05, \"errors\": {\"delta_3x3_steps4\": 0.0, \"delta_edge_steps8\": 9.313225746154785e-10, \"random_31x33_steps4\": 3.585591912269592e-08}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "delta_3x3_steps4": 0.0,
+          "delta_edge_steps8": 9.313225746154785e-10,
+          "random_31x33_steps4": 3.585591912269592e-08,
+          "tolerance": 2e-05
+        },
+        "event_id": "t6",
+        "status": "rebutted",
+        "summary": "Max abs error vs the contract's FP64 per-step reference on boundary-delta and random in-domain inputs: delta at 3x3 corner steps=4 gives 0.0, delta at edge of 31x33 steps=8 gives 9.3e-10, random 31x33 steps=4 gives 3.6e-8 \u2014 all far below the 2e-5 tolerance. The odd (sign-folding) extension is algebraically equivalent to the zero exterior for the interior rectangle, so the suspected boundary defect does not materialize.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-03T22:15:08Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-03T22:14:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-03T22:15:08Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "456e707ff99494e265698bee4f7d15c80140fddcf7dcb2c4e770ba3f884a1ed7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "ac110d313ed442895d980572a87297265f53561f4f46bec3d0d70384c55c07bb"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "delta_3x3_steps4": 0.0,
+                "delta_edge_steps8": 9.313225746154785e-10,
+                "duration_s": 7.069544,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "random_31x33_steps4": 3.585591912269592e-08,
+                "stderr": "",
+                "stdout": "{'delta_3x3_steps4': 0.0, 'delta_edge_steps8': 9.313225746154785e-10, 'random_31x33_steps4': 3.585591912269592e-08}\nJSON:{\"metric\": \"max abs error vs FP64 per-step reference\", \"tolerance\": 2e-05, \"errors\": {\"delta_3x3_steps4\": 0.0, \"delta_edge_steps8\": 9.313225746154785e-10, \"random_31x33_steps4\": 3.585591912269592e-08}}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 2e-05
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Max abs error vs the contract's FP64 per-step reference on boundary-delta and random in-domain inputs: delta at 3x3 corner steps=4 gives 0.0, delta at edge of 31x33 steps=8 gives 9.3e-10, random 31x33 steps=4 gives 3.6e-8 \u2014 all far below the 2e-5 tolerance. The odd (sign-folding) extension is algebraically equivalent to the zero exterior for the interior rectangle, so the suspected boundary defect does not materialize.",
+              "supports": "rebutted",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The contract imposes a zero exterior at every individual step, so the fused 9-tap separable pass must read zero at positions outside [0,H)x[0,W). But _extend_coordinate folds out-of-bounds taps back inside with a sign (e.g. position -2 -> -x[0] with nonzero coefficient), which yields nonzero contributions where the zero extension requires zero; hand computation on a delta at a boundary gives ~0.1 error, far above 2e-5.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The zero exterior is imposed at EVERY individual time step; every element must obey abs(actual-U_steps)<=2e-5, and alternative boundary evaluation is allowed only 'provided the complete finite-domain target is preserved within this fixed tolerance'."
+            }
+          ],
+          "scope_rationale": "The contract requires the zero-exterior per-step semantics with tolerance 2e-5 over the whole legal domain; a boundary fold that alters out-of-bounds tap values violates that required behaviour on ordinary in-domain inputs (e.g. H=W=3, steps=4).",
+          "statement": "The sign-folding boundary in _extend_coordinate does not reproduce the required per-step zero exterior, so run() deviates from U_steps by far more than 2e-5 for inputs with nonzero values near the domain boundary.",
+          "status": "rebutted",
+          "updated_at": "2026-10-03T22:15:08Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-03T22:15:08Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "456e707ff99494e265698bee4f7d15c80140fddcf7dcb2c4e770ba3f884a1ed7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "ac110d313ed442895d980572a87297265f53561f4f46bec3d0d70384c55c07bb"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "delta_3x3_steps4": 0.0,
+            "delta_edge_steps8": 9.313225746154785e-10,
+            "duration_s": 7.069544,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "random_31x33_steps4": 3.585591912269592e-08,
+            "stderr": "",
+            "stdout": "{'delta_3x3_steps4': 0.0, 'delta_edge_steps8': 9.313225746154785e-10, 'random_31x33_steps4': 3.585591912269592e-08}\nJSON:{\"metric\": \"max abs error vs FP64 per-step reference\", \"tolerance\": 2e-05, \"errors\": {\"delta_3x3_steps4\": 0.0, \"delta_edge_steps8\": 9.313225746154785e-10, \"random_31x33_steps4\": 3.585591912269592e-08}}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 2e-05
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Max abs error vs the contract's FP64 per-step reference on boundary-delta and random in-domain inputs: delta at 3x3 corner steps=4 gives 0.0, delta at edge of 31x33 steps=8 gives 9.3e-10, random 31x33 steps=4 gives 3.6e-8 \u2014 all far below the 2e-5 tolerance. The odd (sign-folding) extension is algebraically equivalent to the zero exterior for the interior rectangle, so the suspected boundary defect does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_122\")\nimport kernel as K\n\nerrs = {}\nfor (h, w, steps) in [(1,1,4),(1,129,8),(129,1,4),(129,129,8),(2,3,4),(127,128,8),(3,3,8)]:\n    g = torch.Generator(device=\"cpu\").manual_seed(h*1000+w)\n    x = (2.0*torch.rand((h,w), generator=g)-1.0).half().cuda()\n    r = K.run(x, steps)\n    ref = K.reference(x, steps)\n    errs[f\"{h}x{w}_s{steps}\"] = (r-ref).abs().max().item()\n# preservation & output properties\nx = K.make_inputs()[0]\nxc = x.clone()\nr = K.run(x, 4)\nok_pres = torch.equal(x, xc)\nok_props = (r.dtype==torch.float32 and r.is_cuda and r.shape==x.shape and torch.isfinite(r).all().item())\nprint(\"preserve_x:\", ok_pres, \"output_props:\", ok_props)\nprint(\"JSON:\" + json.dumps({\"metric\":\"max abs error vs FP64 reference, domain sweep\",\"tolerance\":2e-5,\"errors\":errs,\"preserve_x\":ok_pres,\"output_props\":bool(ok_props)}))\n"
+      },
+      "created_at": "2026-10-03T22:15:16Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "7d926ce76dcb94459e90b8d22a8926cd74d412eecb3c7e2b8c7d51f94ff1089f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "8e6523b179903324e22491a0198c8cfc04a38daceb9f46c54d56af0a44a5fa4f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "cwd": "/root/cases/case_122",
+        "duration_s": 7.402262,
+        "event_id": "t8",
+        "exit_code": 0,
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "preserve_x: True output_props: True\nJSON:{\"metric\": \"max abs error vs FP64 reference, domain sweep\", \"tolerance\": 2e-05, \"errors\": {\"1x1_s4\": 0.0, \"1x129_s8\": 3.2014213502407074e-10, \"129x1_s4\": 0.0, \"129x129_s8\": 4.3487489165272564e-08, \"2x3_s4\": 0.0, \"127x128_s8\": 3.605410725526781e-08, \"3x3_s8\": 1.1241354513913393e-09}, \"preserve_x\": true, \"output_props\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_python_probe"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel's fused 9-tap separable sign-folding implementation was suspected to violate the per-step zero-exterior contract (claim c1). Runtime probes against the contract's FP64 reference rebut this: boundary-delta and random inputs give max abs error 0.0\u20133.6e-8 (t6), and a full domain sweep over shapes 1x1, 1x129, 129x1, 129x129, 2x3, 127x128, 3x3 at steps 4 and 8 gives max abs error <= 4.4e-8 (t8), all far below the 2e-5 tolerance. Probes also verified x is preserved unchanged and the output is a fresh finite FP32 CUDA tensor of the correct shape (t8). The sign-folding odd extension is algebraically equivalent to the zero exterior for interior evaluation, so the contract's required behaviour holds over the whole legal domain.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-03T22:15:23Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-03T22:15:23Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel's fused 9-tap separable sign-folding implementation was suspected to violate the per-step zero-exterior contract (claim c1). Runtime probes against the contract's FP64 reference rebut this: boundary-delta and random inputs give max abs error 0.0\u20133.6e-8 (t6), and a full domain sweep over shapes 1x1, 1x129, 129x1, 129x129, 2x3, 127x128, 3x3 at steps 4 and 8 gives max abs error <= 4.4e-8 (t8), all far below the 2e-5 tolerance. Probes also verified x is preserved unchanged and the output is a fresh finite FP32 CUDA tensor of the correct shape (t8). The sign-folding odd extension is algebraically equivalent to the zero exterior for interior evaluation, so the contract's required behaviour holds over the whole legal domain.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-03T22:15:23Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The kernel's fused 9-tap separable sign-folding implementation was suspected to violate the per-step zero-exterior contract (claim c1). Runtime probes against the contract's FP64 reference rebut this: boundary-delta and random inputs give max abs error 0.0\u20133.6e-8 (t6), and a full domain sweep over shapes 1x1, 1x129, 129x1, 129x129, 2x3, 127x128, 3x3 at steps 4 and 8 gives max abs error <= 4.4e-8 (t8), all far below the 2e-5 tolerance. Probes also verified x is preserved unchanged and the output is a fresh finite FP32 CUDA tensor of the correct shape (t8). The sign-folding odd extension is algebraically equivalent to the zero exterior for interior evaluation, so the contract's required behaviour holds over the whole legal domain.",
+    "verdict": "trust"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "id": "chatcmpl-444c130f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll batch three probes: an exhaustive sweep over all 65536 finite FP16 values (c1), a focused small/subnormal sweep (c2), and the ±65504 extrema (c3). All independent, so I'll launch them together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a66e0b22e09c007a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_126\\\")\\nimport kernel as K\\n\\n# all finite FP16 bit patterns\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nx_all = bits.to(torch.uint16).view(torch.float16)\\nfinite = torch.isfinite(x_all)\\nx = x_all[finite].cuda()  # 65504 finite values\\nout = K.run(x)\\nref = torch.erf(x.to(torch.float64)).to(torch.float32)\\nerr = (out.double() - ref.double()).abs()\\nmaxerr = err.max().item()\\nimax = err.argmax().item()\\nviol = int((err > 1e-6).sum().item())\\nxs = x[imax].item()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max_abs_error_vs_fp64_erf_all_finite_fp16\\\",\\n  \\\"n_finite\\\": x.numel(),\\n  \\\"max_abs_error\\\": maxerr,\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"violations\\\": viol,\\n  \\\"argmax_x\\\": xs,\\n  \\\"kernel_out_at_argmax\\\": out[imax].item(),\\n  \\\"ref_at_argmax\\\": ref[imax].item(),\\n}))\", \"expected_signal\": \"max_abs_error > 1e-6 somewhere confirms c1; otherwise rebuts\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bb2a72a1ba6e55c4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_126\\\")\\nimport kernel as K\\n\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nx_all = bits.to(torch.uint16).view(torch.float16)\\nfinite = torch.isfinite(x_all)\\nxf = x_all[finite]\\n# small magnitude: subnormals, zeros, |x| < 1e-2\\nmask = (xf == 0) | (xf.abs() < 1e-2)\\nx = xf[mask].cuda()\\nout = K.run(x)\\nref = torch.erf(x.to(torch.float64)).to(torch.float32)\\nerr = (out.double() - ref.double()).abs()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"max_abs_error_small_subnormal_inputs\\\",\\n  \\\"n\\\": int(x.numel()),\\n  \\\"max_abs_error\\\": err.max().item(),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"violations\\\": int((err > 1e-6).sum().item()),\\n  \\\"max_rel_error_small\\\": (err / ref.abs().clamp_min(1e-300)).max().item() if (ref != 0).any() else None,\\n  \\\"argmax_x\\\": x[err.argmax()].item() if x.numel() else None,\\n  \\\"kernel_out_at_argmax\\\": out[err.argmax()].item() if x.numel() else None,\\n}))\", \"expected_signal\": \"small/subnormal inputs produce error > 1e-6 confirms c2\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-9cd186147d3a6a11",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_126\\\")\\nimport kernel as K\\n\\nx = torch.tensor([65504.0, -65504.0, 40000.0, -40000.0, 120.0, -120.0], dtype=torch.float16).cuda()\\nout = K.run(x)\\nref = torch.erf(x.to(torch.float64)).to(torch.float32)\\nerr = (out.double() - ref.double()).abs()\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"extrema_and_large_inputs\\\",\\n  \\\"inputs\\\": x.tolist(),\\n  \\\"kernel_out\\\": out.tolist(),\\n  \\\"ref\\\": ref.tolist(),\\n  \\\"abs_err\\\": err.tolist(),\\n  \\\"all_finite\\\": bool(torch.isfinite(out).all().item()),\\n  \\\"max_abs_error\\\": err.max().item(),\\n  \\\"tolerance\\\": 1e-6,\\n}))\", \"expected_signal\": \"non-finite or |err|>1e-6 at extrema confirms c3\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Run three probes: exhaustive sweep over all finite FP16 values (covers c1, c2, c3 essentially), but c3 specifically test extrema. Launch all three run_claim_probe in one response. Probe c1: sweep all finite FP16 bit patterns, run kernel, compare vs FP64 erf. c2: subnormals and small values. c3: extrema.\n\nActually c1 sweep covers c2 and c3, but do separate probes per claim as instructed. Batch them."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1791529600,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1064,
+    "prompt_tokens": 21396,
+    "total_tokens": 22460,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

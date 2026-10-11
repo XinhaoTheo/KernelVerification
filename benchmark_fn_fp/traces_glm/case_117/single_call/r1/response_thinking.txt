@@ -1,0 +1,21 @@
+Check _finish: bias index = index % N, out is row-major M×N, index over M*N — index%N gives column. Correct.
+
+partials: split*TILES*BK covering K; TILES = ceil(ceil(K/32)/split)? tiles = cdiv(cdiv(k,32), split_k). Coverage: split*TILES >= cdiv(k,32)? Yes since TILES = ceil(ceil(k/32)/split). inner masked < K. Correct.
+
+tl.dot with fp16 inputs, fp32 accum. BK=32 minimum for tl.dot fine. Edge: K small (e.g., K=1): TILES=1, masked loads fine. tl.dot dims 16x32x16 fine.
+
+Potential issue: inner up to (split*TILES)*32 may exceed K — masked. Fine. Could load out-of-bounds beyond K — masked, other=0.
+
+Storage offset allowed — pointer arithmetic uses base pointer, Triton handles data_ptr offset. Yes.
+
+One subtlety: dot with masked loads gives zeros, fine. Accumulation order differs from FP64 reference, but tolerance covers it (max sum 512*0.25=128).
+
+Also disjoint storage check uses intervals — fine.
+
+Edge: when split_k > cdiv(k,32), e.g., K=1, split_k=8: tiles = cdiv(1,8)=1, so TILES=1, splits 0..7 each compute the same full... wait inner = split*1*32 + lane; split 0 covers 0-31 (only <K=1), splits 1..7 cover inner >= 32, all masked out → zero partials. Correct.
+
+Bias load masked index<M*N — bias has length N; index%N < N, safe. Good.
+
+Finish reads WORK at split*M*N + index for index < M*N — work fully written? _partials stores only where row<M and col<N, offsets within split region. Yes all covered.
+
+Verdict: trust.
