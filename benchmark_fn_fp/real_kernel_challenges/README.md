@@ -4,7 +4,7 @@
 kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷机制或历史修复，
 适配、人工修改及测试选择均记录；本组结果独立统计，不与旧题库合并为总准确率。
 
-[Concise English summary of observed successes](SUCCESS_CASES.md).
+[Success cases explained in English, with code snippets and evidence](SUCCESS_CASES.md).
 
 ## 实验后的保留分组
 
