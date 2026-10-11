@@ -4,6 +4,8 @@
 kernel 随机抽取的代表性样本。公开 kernel 来自真实缺陷机制或历史修复，
 适配、人工修改及测试选择均记录；本组结果独立统计，不与旧题库合并为总准确率。
 
+[Concise English summary of observed successes](SUCCESS_CASES.md).
+
 ## 实验后的保留分组
 
 当前优先比较**带工具验证流程与无工具单次调用**。成功案例按实际观察到的判断
