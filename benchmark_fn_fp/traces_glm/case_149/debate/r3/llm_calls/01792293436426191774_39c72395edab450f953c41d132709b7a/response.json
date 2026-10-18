@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-59e0eec2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two independent probes: an exhaustive bitwise sweep of all finite FP16 encodings (c1) and a focused probe on the subnormal-output region x ∈ [-18.5, -11.1] (c2).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b97db2358df444ec",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, os, json\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nimport torch, kernel\\n\\n# all finite FP16 bit patterns (exclude NaN/Inf exponent=0x1F except zero subnormals are fine)\\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\\nx = torch.tensor(patterns, dtype=torch.int32).view(torch.float16).to(\\\"cuda\\\")\\nassert x.numel() <= 131072 and torch.isfinite(x).all()\\n\\nout = kernel.run(x)\\nref = kernel.reference(x)\\nok = out.view(torch.int16) == ref.view(torch.int16)\\nmismatches = (~ok).nonzero().flatten()\\nn_mismatch = int(mismatches.numel())\\nfail = []\\nfor idx in mismatches[:10].tolist():\\n    xv = x[idx].item()\\n    fail.append({\\\"x\\\": xv, \\\"x_bits\\\": hex(x[idx].view(torch.int16).item()),\\n                 \\\"got_bits\\\": hex(out[idx].view(torch.int16).item()),\\n                 \\\"got\\\": out[idx].item(),\\n                 \\\"want_bits\\\": hex(ref[idx].view(torch.int16).item()),\\n                 \\\"want\\\": ref[idx].item()})\\nprint(json.dumps({\\\"n_tested\\\": x.numel(), \\\"n_mismatch\\\": n_mismatch,\\n                  \\\"first_failures\\\": fail}))\\n\", \"expected_signal\": \"count of bit-exact mismatches vs reference over all finite FP16 inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a83935a01733ca1f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport sys, json\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nimport torch, kernel\\n\\n# negative FP16 inputs in the subnormal-output region -18.5 < x <= -11.0\\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\\nxall = torch.tensor(patterns, dtype=torch.int32).view(torch.float16)\\nsel = (xall < -11.0) & (xall > -18.5)\\nx = xall[sel].to(\\\"cuda\\\")\\nout = kernel.run(x)\\nref = kernel.reference(x)\\nout_bits = out.view(torch.int16); ref_bits = ref.view(torch.int16)\\nmism = (out_bits != ref_bits).nonzero().flatten()\\n# check whether outputs that should be nonzero subnormals were flushed to zero\\nshould_subnormal = (ref.view(torch.float16).abs() > 0) & (ref_bits & 0x7FFF != 0)\\nn = int(x.numel())\\nres = {\\\"n_tested\\\": n, \\\"n_mismatch\\\": int(mism.numel()),\\n       \\\"flushed_to_zero\\\": int(((out_bits & 0x7FFF) == 0).sum() - ((ref_bits & 0x7FFF) == 0).sum())}\\nfail = []\\nfor idx in mism[:10].tolist():\\n    fail.append({\\\"x\\\": x[idx].item(), \\\"got\\\": out[idx].item(),\\n                 \\\"got_bits\\\": hex(out_bits[idx].item()),\\n                 \\\"want_bits\\\": hex(ref_bits[idx].item())})\\nres[\\\"first_failures\\\"] = fail\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"bitwise mismatch count in subnormal-output region vs reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Design two probes: exhaustive sweep for c1, targeted subnormal region for c2. Both independent — run both. Build inputs of all finite FP16 encodings as a CUDA tensor (61441 values, N<=131072 OK). Compare bitwise with reference."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293438,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 831,
+    "prompt_tokens": 18645,
+    "total_tokens": 19476,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 55,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5595,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

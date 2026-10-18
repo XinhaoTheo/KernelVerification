@@ -1,0 +1,417 @@
+[
+  {
+    "created_at": "2026-10-18T03:16:53Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:17:36Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "0354d43f92950216b894a20bbe923106b0f07a2308f34ce07f55344277f401e7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "41c3b8d146c5e20be71db1d62a462e6d580f0628e8235d457d93bc91fabaee73"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "143fec261cae830629bd6cde47aaec42932f40cef3cb43444698e4e1b80ee48c"
+            }
+          ],
+          "duration_s": 7.121788,
+          "exit_code": 0,
+          "expected_signal": "run(x) != reference(x) on random rows for N=64 or N=128 at exact equality",
+          "json_parse_error": null,
+          "json_result": {
+            "n128_exact": false,
+            "n128_mismatch_count": 1023,
+            "n128_sample_got": [
+              2281,
+              1564,
+              1653,
+              3328,
+              2236,
+              3050,
+              526,
+              2982
+            ],
+            "n128_sample_ref": [
+              2979,
+              2619,
+              2664,
+              1678,
+              2097,
+              882,
+              2238,
+              864
+            ],
+            "n64_exact": false,
+            "n64_mismatch_count": 512,
+            "n64_sample_got": [
+              47,
+              187,
+              2175,
+              791,
+              2791,
+              2437,
+              2660,
+              2011
+            ],
+            "n64_sample_ref": [
+              388,
+              1610,
+              1539,
+              2953,
+              1267,
+              2713,
+              1656,
+              2767
+            ]
+          },
+          "n128_exact": false,
+          "n128_mismatch_count": 1023,
+          "n64_exact": false,
+          "n64_mismatch_count": 512,
+          "stderr": "",
+          "stdout": "{\"n64_exact\": false, \"n64_mismatch_count\": 512, \"n64_sample_ref\": [388, 1610, 1539, 2953, 1267, 2713, 1656, 2767], \"n64_sample_got\": [47, 187, 2175, 791, 2791, 2437, 2660, 2011], \"n128_exact\": false, \"n128_mismatch_count\": 1023, \"n128_sample_ref\": [2979, 2619, 2664, 1678, 2097, 882, 2238, 864], \"n128_sample_got\": [2281, 1564, 1653, 3328, 2236, 3050, 526, 2982]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "run() != reference() on random canonical int32 rows for both N=64 (512/512 mismatches, 8 rows x 64) and N=128 (1023/1024 mismatches), at exact equality tolerance 0. Samples show completely different values, consistent with twiddle-exponent misalignment.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "For the half=1 stage, 'first' uses exponent j*width//(2*half)=width/2 (giving omega^(N/2)=-1) rather than 1, while 'second'/'upper' use width/4 and width/2. The standard radix-4 butterfly expects first=1, second=omega^(N/4), so the bank exponents appear shifted by one stage relative to the bit-reversed DIT ordering; if so, run(x) != reference(x) for general inputs even though structured inputs (all-zero, constant) could still match.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "out[b,k] = sum_j x[b,j]*omega_N^(j*k) mod 3329 with omega_N = 17^(256/N); every combination of canonical field values is legal and results must match exactly (tolerance 0)."
+      },
+      {
+        "source": "kernel.py lines 25-30",
+        "summary": "First fused stage (half=1) packs first=[R*omega^(j*N/2)], second=[R*omega^(j*N/4)], upper=[R*omega^((j+1)*N/4)], which does not match the usual first=1 radix-4 twiddle set."
+      }
+    ],
+    "scope_rationale": "The contract requires exact equality to the cyclic NTT with positive exponent j*k for every canonical input row (N in {64,128}); any twiddle-exponent misalignment in the first fused stage would make run() disagree with reference() for ordinary legal inputs like a random row, which is a direct contract violation.",
+    "statement": "The first-stage twiddle exponents in _make_coefficients (lines 25-30) misalign the fused radix-4 butterfly, so run() output differs from reference() on at least one ordinary canonical int32 row (e.g. a random row with values in [0,3328]) for N=64 and/or N=128, at exact equality.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:17:36Z"
+  },
+  {
+    "created_at": "2026-10-18T03:16:53Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:17:36Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "ec47451c3f9859635021beb3c038ded51b7d3d817497924a467f5fe87e3a29e3"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "a483d3b33ac22a18785b5270e6e42293d66e6b15a69984ca5fd3604977be3486"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "d032d3798e5d71cb1f4aa169038545975f99002a4928836be0084c1a2b0d7e3d"
+            }
+          ],
+          "constant_rows_probe_included": true,
+          "duration_s": 3.967571,
+          "exit_code": 0,
+          "expected_signal": "run(x) differs from reference by a nontrivial output permutation on general inputs",
+          "impulse_row_exact": true,
+          "json_parse_error": null,
+          "json_result": {
+            "impulse_got": [
+              1,
+              296,
+              1062,
+              1426,
+              2642,
+              3046,
+              2786,
+              2393,
+              2580,
+              1339,
+              193,
+              535,
+              1897,
+              2240,
+              569,
+              1974,
+              1729,
+              2447,
+              1919,
+              2094,
+              630,
+              56,
+              3260,
+              2879,
+              3289,
+              1476,
+              797,
+              2882,
+              848,
+              1333,
+              1746,
+              821,
+              3328,
+              3033,
+              2267,
+              1903,
+              687,
+              283,
+              543,
+              936,
+              749,
+              1990,
+              3136,
+              2794,
+              1432,
+              1089,
+              2760,
+              1355,
+              1600,
+              882,
+              1410,
+              1235,
+              2699,
+              3273,
+              69,
+              450,
+              40,
+              1853,
+              2532,
+              447,
+              2481,
+              1996,
+              1583,
+              2508
+            ],
+            "impulse_ref": [
+              1,
+              296,
+              1062,
+              1426,
+              2642,
+              3046,
+              2786,
+              2393,
+              2580,
+              1339,
+              193,
+              535,
+              1897,
+              2240,
+              569,
+              1974,
+              1729,
+              2447,
+              1919,
+              2094,
+              630,
+              56,
+              3260,
+              2879,
+              3289,
+              1476,
+              797,
+              2882,
+              848,
+              1333,
+              1746,
+              821,
+              3328,
+              3033,
+              2267,
+              1903,
+              687,
+              283,
+              543,
+              936,
+              749,
+              1990,
+              3136,
+              2794,
+              1432,
+              1089,
+              2760,
+              1355,
+              1600,
+              882,
+              1410,
+              1235,
+              2699,
+              3273,
+              69,
+              450,
+              40,
+              1853,
+              2532,
+              447,
+              2481,
+              1996,
+              1583,
+              2508
+            ],
+            "random_exact": false,
+            "sorted_rows_equal": false,
+            "structured_exact": false
+          },
+          "n64_random_mismatch": true,
+          "permutation_hypothesis": false,
+          "random_exact": false,
+          "sorted_rows_equal": false,
+          "stderr": "",
+          "stdout": "{\"structured_exact\": false, \"impulse_ref\": [1, 296, 1062, 1426, 2642, 3046, 2786, 2393, 2580, 1339, 193, 535, 1897, 2240, 569, 1974, 1729, 2447, 1919, 2094, 630, 56, 3260, 2879, 3289, 1476, 797, 2882, 848, 1333, 1746, 821, 3328, 3033, 2267, 1903, 687, 283, 543, 936, 749, 1990, 3136, 2794, 1432, 1089, 2760, 1355, 1600, 882, 1410, 1235, 2699, 3273, 69, 450, 40, 1853, 2532, 447, 2481, 1996, 1583, 2508], \"impulse_got\": [1, 296, 1062, 1426, 2642, 3046, 2786, 2393, 2580, 1339, 193, 535, 1897, 2240, 569, 1974, 1729, 2447, 1919, 2094, 630, 56, 3260, 2879, 3289, 1476, 797, 2882, 848, 1333, 1746, 821, 3328, 3033, 2267, 1903, 687, 283, 543, 936, 749, 1990, 3136, 2794, 1432, 1089, 2760, 1355, 1600, 882, 1410, 1235, 2699, 3273, 69, 450, 40, 1853, 2532, 447, 2481, 1996, 1583, 2508], \"random_exact\": false, \"sorted_rows_equal\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The mismatch on random N=64 rows is NOT explained by an output permutation: sorted rows differ (sorted_rows_equal=false), so run() does not merely produce the NTT of a permuted input. The impulse row (x[j]=1 at j=1) matched reference exactly, showing natural-order single-tone output is correct, but the constant row failed. The output-permutation hypothesis in the claim statement is contradicted; the failure mechanism is a non-permutation transform error (consistent with twiddle misalignment per c1).",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "A wrong mapping (e.g. a swapped quadrant or incomplete bit reversal) still yields a valid transform of a permuted polynomial, which can pass structured probes like single-tone or all-ones inputs while failing natural-order equality on general rows; the contract explicitly forbids this by requiring frequency k in natural order.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'Output position k is frequency k in natural order, with ... the positive exponent shown above' \u2014 the output ordering is an explicit contractual requirement, not an implementation detail."
+      }
+    ],
+    "scope_rationale": "problem.txt fixes the output ordering explicitly: 'Output position k is frequency k in natural order, with ... the positive exponent shown above.' A permutation of output frequencies would violate this for in-scope canonical inputs even though it could pass single-tone probes.",
+    "statement": "The combination of bit-reversal load (lines 52-55) and quadrant selection (line 61) may produce a valid NTT of a permuted input rather than the natural-order forward transform, so run() differs from reference() by a nontrivial output permutation on general inputs.",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T03:17:36Z"
+  },
+  {
+    "created_at": "2026-10-18T03:16:53Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:17:36Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "794e31fba2a7cb3f750e18d91481631e67f2ba02d3e61f17f0d73b30216cfb43"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "cacae99e203b8eaa2a883e261e26c624977061bba8e8951a26821bbead617ae5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "48aeb27872b9b81de33354729937d6fa59fcfca67c246c56daf7a8bab845c279"
+            }
+          ],
+          "batch": 16,
+          "duration_s": 3.943663,
+          "exit_code": 0,
+          "expected_signal": "N=128 rows mismatch reference at exact equality",
+          "json_parse_error": null,
+          "json_result": {
+            "seed0_exact": false,
+            "seed0_first_got": [
+              400,
+              291,
+              1509,
+              2572
+            ],
+            "seed0_first_ref": [
+              2268,
+              2818,
+              2673,
+              168
+            ],
+            "seed0_mismatch_count": 2048
+          },
+          "n": 128,
+          "seed0_exact": false,
+          "seed0_mismatch_count": 2048,
+          "stderr": "",
+          "stdout": "{\"seed0_exact\": false, \"seed0_mismatch_count\": 2048, \"seed0_first_ref\": [2268, 2818, 2673, 168], \"seed0_first_got\": [400, 291, 1509, 2572]}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 0
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "For N=128 (LOG_N=7, odd tail path active), 16 random canonical rows x 128 columns = 2048 positions all mismatch reference() at exact equality (mismatch_count 2048 of 2048); sample first-4 values differ substantially (ref [2268,2818,2673,168] vs got [400,291,1509,2572]). The odd-tail code path computes outputs differing from the mathematical DFT for canonical N=128 rows.",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "This code path is executed only for N=128 (LOG_N=7), so N=64 tests give zero coverage of it. The tail uses a coefficient bank of R*omega^j for j in [0,N/2) built when LOG_N is odd, a start index 5*((1<<(2*(LOG_N//2)))-1)//3, and a signed difference reduced via (value + 3329) % 3329 \u2014 three places where an off-by-one or sign issue could hide. A positive-only test battery on N=64 would miss it entirely.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The domain includes N=128 (B up to 128), and omega_128 = 17^2 has order 128; 'Correctness is one verdict for the whole implementation.'"
+      },
+      {
+        "source": "kernel.py lines 86-95",
+        "summary": "The odd-tail radix-2 stage runs only when LOG_N is odd, i.e. N=128, using coefficient bank start 5*((1<<(2*(LOG_N//2)))-1)//3 and (value + 3329) % 3329 reduction."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly includes N=128 in the public domain (N is either 64 or 128) with exact-equality tolerance 0 and 'correctness is one verdict for the whole implementation', so a bug confined to the odd tail is a contract violation on in-scope inputs.",
+    "statement": "The odd radix-2 tail path (kernel.py lines 86-95), executed only when N=128 (LOG_N=7), computes out[b,k] != reference for at least one canonical N=128 row, e.g. due to an off-by-one in the tail coefficient bank start index or the +3329 offset being insufficient for the left-weighted difference.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:17:36Z"
+  }
+]

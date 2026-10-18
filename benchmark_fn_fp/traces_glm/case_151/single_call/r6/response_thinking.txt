@@ -1,0 +1,70 @@
+Need to verify the fused butterfly math. The Cooley-Turkey DIT NTT: input loaded in bit-reversed order, coefficients are twiddle factors for DIT... but wait, DIT with bit-reversed input and natural output uses twiddles w_N^(j*len/... ). Here loading source = bit-reverse of lane, then stages.
+
+Also Montgomery-style reduction: value < 3329? Coefficients pre-multiplied by R = 2^16. _multiply computes value*coeff*2^-16 mod Q via Barrett-ish: correction = (product*3327)&65535, reduced = (product + correction*3329)>>16. Check: this is Montgomery REDC? product = v*c where c ≡ w*R mod Q, v < Q. product < 3329^2*... ≈ 3329*3329*2^16? Actually c < 3329 (since (R*w)%Q < Q), v < Q, product < Q^2 ≈ 1.1e7. Hmm, product < 2^23. The reduction: correction = (product * Q') & (R-1) with Q' = 3327 = -Q^{-1} mod 2^16? Check: Q=3329, Q*3327 mod 2^16: 3329*3327 = 11,075,  compute: 3329*3327 = 3329*3327 = 11,074, ... 3329*3000=9,987,000; 3329*327=1,088,583; total 11,075,583. mod 65536: 11,075,583 / 65536 ≈ 168.9 → 168*65536=11,010,048; remainder 65,535. So Q*Q' ≡ 65535 ≡ -1 mod 2^16. Good, Q' = -Q^{-1} mod 2^16. REDC: m = product*Q' mod 2^16; t=(product+m*Q)/2^16. Need product < Q*2^16? REDC requires product < Q*R? Actually standard REDC gives t in [0, 2Q) when product < R*Q. product = v*c where v<Q, c<Q → product < Q^2 < R*Q (since Q^2 < 2^16*Q). Yes. Then t = product*R^{-1} mod Q = v*c*R^{-1} = v*w mod Q, and t < 2Q, final subtract handles. But wait standard REDC: m = product*Q' mod R; t = (product + m*Q)/R. product + m*Q ≡ 0 mod R. Correct since m ≡ -product*Q^{-1}. Yes. Result is v*w mod Q in [0,Q). But c = (R*w)%Q, so v*c*R^{-1} = v*w mod Q. ✓.
+
+Now the butterfly structure. DIT NTT: at each stage, block size grows. Fused 4-way (radix-4 DIT). Coefficients per stage with half = 1<<2*stage: first[j] for j in 0..half-1 = R*ω^(j*width/(2*half)), i.e., twiddle ω_{2*half}^{j}? width/(2*half): for N=64, stage 0 half=1: ω^(j*32) → ω_2. second: ω^(j*width/(4*half)) = ω_{4half}^j. upper: ω^((j+half)*width/(4*half)). cross_low = first*second = ω^(j*w/(2h) + j*w/(4h)) = ω^(3j w/(4h))... hmm cross_high = first*upper = ω^(j w/(2h)+(j+h)w/(4h)) = ω^(3j w/(4h) + h w/(4h)) = ω^(3j w/(4h) + w/4).
+
+Radix-4 DIT butterfly with input in bit-reversed order: within a block of 4h, positions p = base, base+h, base+2h, base+3h (DIT: elements separated by h within block of length 4h). Let a,b,c,d. Twiddles: b *= ω_{4h}^{?}... Standard DIF vs DIT. Hmm, but here they load with bit-reversal and then use gather with "base = (lane//(4h))*(4h) + local", quadrant = (lane//h)&3. So the output of this butterfly at lane: quadrant q gets position base + q*h in the... wait, gather from value: a = value[base], b = value[base+h], etc. Each output lane uses the same four inputs of its group; quadrant determines which of the four outputs this lane computes. That's a valid formulation.
+
+But the twiddle exponents: in DIT NTT with bit-reversed input, at stage where sub-transform length m, twiddle for element j is ω_m^j where m = 2*... Let's define: after this fused stage, groups of size 4h become transforms of length 4h. DIT butterfly: X[q] for q=0..3 of a size-4h DFT composed of... Actually DIT: block of 4h consists of 4 sub-blocks of h (in bit-reversed order positions 0,h,2h,3h are... hmm in bit-reversed ordering, consecutive positions in bit-reversed order—this is getting complicated.
+
+Let's think differently: think of it as DIF from natural? Alternative: could be Gentleman-Sande (DIF) with natural input, bit-reversed... but input is bit-reversed loaded, output natural. That's DIT.
+
+Let me just trust a common radix-4 DIT formulation. DIT: input in bit-reversal, output natural. Stage s processes blocks of size 2^(2(s+1)) combining four half... Actually in DIT radix-2, stage combines two sub-transforms of length m into length 2m: y[i] = a[i] + ω_{2m}^i b[i]. For radix-4 fused (two radix-2 stages fused), combining four sub-transforms of length h into 4h:
+
+Sub-transforms A (positions base..base+h-1), B (base+h..), C, D — in DIT with bit-reversed input, the four sub-blocks of size h are at offsets 0,h,2h,3h within the 4h block. Combining: first radix-2 level combines (A,B)→(E0,E1) and (C,D)→(F0,F1) with twiddles ω_{2h}^i:
+E0[i]=A[i]+ω_{2h}^i B[i], E1[i]=A[i]−ω_{2h}^i B[i]
+F0[i]=C[i]+ω_{2h}^i D[i], F1[i]=C[i]−ω_{2h}^i D[i]
+Second level with twiddles ω_{4h}^i:
+G0[i]=E0[i]+ω_{4h}^i F0[i]
+G1[i]=E1[i]+ω_{4h}^i F1[i]... wait second level combines E0 with F0? Positions: E0 at block offset 0, E1 at offset h... hmm in DIT the second level combines elements separated by 2h? No—after first level within the fused pair, in actual DIT the stages are: stage with length m combines sub-transforms of size m separated by m. Fusing stages m=2h? Let me set: radix-2 stage k combines length-m sub-transforms into 2m. First fused sub-stage: m = h → 2h, combining A,B (offset 0, h) and C,D (offsets 2h, 3h) with twiddles ω_{2h}^j. Second: m = 2h → 4h, combining results at offsets 0..2h-1 and 2h..4h-1, twiddles ω_{4h}^j.
+
+So define with twiddle t1 = ω_{2h}^j (= first: ω^(j*w/(2h)) ✓ matches first[j]), t2 = ω_{4h}^j (= second: ω^(j*w/(4h)) ✓), and for j+? position: second sub-stage element j pairs index j (0..2h-1), twiddle ω_{4h}^j. For j in [h,2h): ω_{4h}^j = ω_{4h}^{h}·ω_{4h}^{j-h}, that's upper[j-h] = ω^((j-h+h)w/(4h)) ✓.
+
+Compute:
+E0[j]=A[j]+t1·B[j], j<h
+E1[j]=A[j]−t1·B[j]
+F0[j]=C[j]+t1·D[j]
+F1[j]=C[j]−t1·D[j]
+Then G[j]=E0[j]+ω_{4h}^j F0[j], G[j+2h]=E0[j]−ω_{4h}^j F0[j] for j<2h; H similarly with E1,F1: G[j+h]... wait output positions of second stage: block positions 0..4h-1; first half from (E0,F0) with E0 at offsets 0..h-1? No: second stage combines sub-transform of size 2h at offset 0 (which is E0∪E1 interleaved? no—after stage 1, results E0 occupy offsets 0..h-1, E1 at h..2h-1, F0 at 2h..3h-1, F1 at 3h..4h-1). Stage 2 combines offsets 0..2h-1 (call U = E0 at 0..h-1 and E1 at h..2h-1, together a length-2h transform? yes U is a length-2h transform stored naturally: U[j]=E0[j], U[j+h]=E1[j]) with offsets 2h..4h-1 (V[j]=F0[j], V[j+h]=F1[j]). Output W[j]=U[j]+ω_{4h}^j V[j], W[j+2h]=U[j]−ω_{4h}^j V[j], j<2h.
+
+So for j<h:
+W[j] = E0[j] + t2·F0[j] = (A+t1B) + t2(C+t1D)
+W[j+h] = E1[j] + t2^{j+h}... ω_{4h}^{j+h} = ω_{4h}^h · ω_{4h}^j, ω_{4h}^h = ω_4... wait ω_{4h}^h = ω_{4h}^{h}. Hmm upper[j-h] = ω^{(j-h+h)w/(4h)} = ω_{4h}^j. And ω_{4h}^{j+h} = ω_{4h}^j·ω_{4h}^h. Is ω_{4h}^h stored? cross_high = first·upper = ω_{2h}^j·ω_{4h}^{j}... wait first[j]=ω_{2h}^j = ω^{jw/(2h)} = ω_{4h}^{2j}. upper[j] = ω_{4h}^{j+h}? Let me recheck: upper = ω^((j+half)*w/(4*half)) = ω_{4h}^{j+h}. Hmm! Re-read code: second[j] = ω^{j·width/(4·half)} = ω_{4h}^j. upper[j] = ω^{(j+half)·width/(4h)} = ω_{4h}^{j+h}. cross_low = first·second = ω_{2h}^j·ω_{4h}^j = ω_{4h}^{2j+j}=ω_{4h}^{3j}. cross_high = first·upper = ω_{4h}^{2j}·ω_{4h}^{j+h} = ω_{4h}^{3j+h}.
+
+Now with quadrant mapping: lane with quadrant q and local j computes:
+q=0 (position base+j): a + t1·b + second·c + ?·d. lower_sum = a + p + c_low + d_low where p = b·first (t1 b), c_low = c·second (ω_{4h}^j c), d_low = d·cross_low (ω_{4h}^{3j} d). Expected W[j] = A + t1 B + ω_{4h}^j C + ω_{4h}^j·t1 D = A + t1B + ω_{4h}^j C + ω_{4h}^{j}ω_{2h}^j D = A+t1B+ω_{4h}^jC + ω_{4h}^{3j}D ✓ matches.
+
+q=1 (position base+h+j): expected W[j+h] = E1[j] + ω_{4h}^{j+h}F1[j] = A − t1B + ω_{4h}^{j+h}(C − t1D) = A − t1B + ω_{4h}^{j+h}C − ω_{4h}^{j+h}·ω_{2h}^j D = A−t1B+ω_{4h}^{j+h}C − ω_{4h}^{3j+h}D. Kernel: upper_sum = a − p + c_high − d_high, c_high = c·upper = ω_{4h}^{j+h}c ✓, d_high = d·cross_high = ω_{4h}^{3j+h}d ✓. 
+
+q=2 (position base+2h+j): W[j+2h] = E0[j] − t2 F0[j] = A + t1B − ω_{4h}^j C − ω_{4h}^{3j}D. Kernel: lower_difference = a + p − c_low − d_low ✓.
+
+q=3 (position base+3h+j): W[j+3h] = E1[j] − ω_{4h}^{j+h}F1[j] = A − t1B − ω_{4h}^{j+h}C + ω_{4h}^{3j+h}D. Kernel: upper_difference = a − p − c_high + d_high ✓.
+
+Great, radix-4 fused DIT butterfly is correct. Modular reduction: value reduced mod 3329 each stage with (value + 2*3329)%3329 — values bounded by ~4*3329, fine; negative handled since a−p−... ≥ −2*3329, +2*3329 ≥0. Actually lower_sum up to 4*3328 = 13312, +6658 = 19970 < int32 fine.
+
+Coefficient indexing: start = 5*(half-1)/3? Banks laid out per stage: for half=1: stage0 contributes 5 lists each length half=1 → 5 entries at indices 0-4. half=4: 20 entries at 5..24. cumulative = 5*(1+4+16+...) = 5*(4^k -1)/3. Yes, start = 5*(half-1)/3 since half=4^stage. ✓ within each stage, first at start..start+half-1, second start+half.., upper start+2h, cross start+3h, cross start+4h. Code: second loaded at start+half+local ✓, upper at start+2*half ✓, cross_low at 3half ✓, cross_high 4half ✓.
+
+Loop count: LOG_N//2 stages of fused radix-4. For N=64, LOG_N=6, 3 fused stages, no leftover (6%2==0). For N=128, LOG_N=7, 3 fused stages + last radix-2 stage. Last stage: half = N/2 = 64. Hmm wait: after 3 fused stages (LOG_N//2 = 3), half in fused loop went 1,4,16 (stage 0,1,2 → half = 1<<2s: 1,4,16). After 3 stages, block size = 4*16=64... wait fused stage handles block of size 4*half where half=1<<2s; stage s=2: half=16, block 64. Total transform after 3 stages covers blocks of 64. But N=128 needs full length 128; last stage half should be 64: combine two halves of length 64 with twiddle ω_N^j = ω^{j·w/(2·64)}=ω^j for width=128: ω_128^j. Code: coefficient = COEFFICIENTS[start + local] with start = 5*((1<<(2*(LOG_N//2)))-1)//3 = 5*(64-1)/3 = 5*21=105, and the extra bank from _make_coefficients: after the loop half went 1,4,16 (loop range (7-1)//2=3 iterations: half=1,4,16 then half=64 unused in loop; condition (7-1)%2=... width.bit_length()=8, (8-1)%2 = 1 → true, extends [R*ω^j for j in range(width//2)] = ω_128^j, j<64 ✓ appended after 105 entries ✓.
+
+Also check bit-reversal via loop: source built correctly: bit reversal of lane over LOG_N bits ✓.
+
+DIT: loading value at bit-reversed source, i.e., value[lane] = x[bitrev(lane)] — yes DIT input permutation. Output natural order. But note: the DIT algorithm with these twiddles computes sum x[j] ω^{jk}? DIT with twiddle ω_m^j and bit-reversed input computes forward DFT X[k]=Σ x[j]ω^{jk} — yes standard.
+
+Wait one subtlety: in DIT the sub-blocks A,B,C,D at offsets 0,h,2h,3h within block are themselves length-h transforms whose inputs (in bit-reversed order) are at those offsets — but is the twiddle exponent based on the natural index j within the block? In stage 1 (radix-2, m=h): twiddle ω_{2h}^{lane mod h} where lane is natural position. Here local = lane % half = j, natural position within block base+j. ✓ yes standard DIT: twiddle depends on natural index.
+
+But careful: after stage 1, results are stored in natural positions; the fused formulation gathers from `value` which is natural-positioned (from previous stage's output). base = (lane//(4h))*(4h) + local — lane's block and its position j within block. Correct: for a lane in quadrant q at natural position block + q*h + j, its inputs are at block+j, block+h+j, block+2h+j, block+3h+j. ✓.
+
+tl.gather with int32 indices across the row: available in Triton 3.4 ✓.
+
+Montgomery: _multiply inputs value (0..3328) and coefficient (<3329). product ≤ 3328*3328 ≈ 1.1e7, fits int64. ✓ REDC validity: product < R·Q? R·Q = 65536·3329 ≈ 2.18e8 > 1.1e7 ✓. Result < 2Q handled by where ✓.
+
+Final stage reduction: (value + 3329) % 3329: left+weighted ≤ 2*3328=6656, left−weighted ≥ −3328, +3329 ≥ 1 ✓... left−weighted could be −3328, +3329 → 1, %3329 fine. left+weighted max 6656, %3329 → fine. ✓
+
+Edge: N=64: loop (6)//2=3 stages, half=1,4,16 — cumulative coefficient count 5*(1+4+16)=105, and _make_coefficients: loop range (7-1)//2 = 3 → half=1,4,16, no final. ✓
+
+B up to 128, grid (batch,) each program handles full row of N=128, num_warps=4, 128 lanes fine.
+
+x contiguous, storage offset handled by pointer X + row*N — wait, x may have nonzero storage offset! Triton receives the tensor; passing tensor to kernel uses data_ptr which includes offset? Triton uses x.data_ptr() which accounts for storage offset. Yes, tensor's data_ptr includes offset. ✓
+
+Looks correct. Verdict trust.

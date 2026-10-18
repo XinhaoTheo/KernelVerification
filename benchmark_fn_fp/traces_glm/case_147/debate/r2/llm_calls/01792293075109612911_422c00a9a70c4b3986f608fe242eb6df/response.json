@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-bfc3db0f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch independent probes for all three accuracy claims: c1 (middle interval scan), c2 (upper branch near the 2.414 threshold), c3 (extrema ±65504). Each compares kernel FP32 output against FP64 torch.atan on the exact stored FP16 values.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9be7df87a7484940",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# All finite FP16 magnitudes in middle interval (0.66 < |x| <= 2.414213562373095)\\n# plus lower-interval values near the 0.66 seam (0.6..2.5 covers both sides).\\nvals = []\\nv = torch.arange(0.5, 2.5, 0.00005, dtype=torch.float64)\\nxf = v.to(torch.float16).unique().to(torch.float64)\\nmask = (xf > 0.5) & (xf < 2.5)\\nxf = xf[mask]\\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\n# focus: middle interval elements\\nmag = x.to(torch.float64).abs()\\nmid = (mag > 0.66) & (mag <= 2.414213562373095)\\nseam = (mag > 0.63) & (mag < 0.70)\\nmiderr = err[mid]\\nworst = torch.argmax(err)\\nprint(json.dumps({\\n    \\\"n\\\": int(x.numel()),\\n    \\\"n_mid\\\": int(mid.sum().item()),\\n    \\\"tol\\\": 1e-6,\\n    \\\"max_abs_err_mid\\\": float(miderr.max().item()) if miderr.numel() else None,\\n    \\\"n_over_tol_mid\\\": int((miderr > 1e-6).sum().item()) if miderr.numel() else None,\\n    \\\"max_abs_err_seam\\\": float(err[seam].max().item()) if seam.sum() else None,\\n    \\\"max_abs_err_all\\\": float(err.max().item()),\\n    \\\"worst_x\\\": float(x[worst].item()),\\n    \\\"worst_err\\\": float(err[worst].item()),\\n}))\\n\", \"expected_signal\": \"max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a092ca258e9014e7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# Upper branch: FP16 values just above 2.414213562373095 and up through moderate |x|\\nv = torch.arange(2.0, 8.0, 0.0005, dtype=torch.float64)\\nxf = v.to(torch.float16).unique().to(torch.float64)\\nmag = xf.abs()\\nup = mag > 2.414213562373095\\nxf = xf[up]\\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nworst = torch.argmax(err)\\nnear_thr = x.to(torch.float64).abs() < 2.5\\nprint(json.dumps({\\n    \\\"n\\\": int(x.numel()),\\n    \\\"tol\\\": 1e-6,\\n    \\\"max_abs_err_upper\\\": float(err.max().item()),\\n    \\\"n_over_tol\\\": int((err > 1e-6).sum().item()),\\n    \\\"max_abs_err_near_thr\\\": float(err[near_thr].max().item()),\\n    \\\"n_over_tol_near_thr\\\": int((err[near_thr] > 1e-6).sum().item()),\\n    \\\"worst_x\\\": float(x[worst].item()),\\n    \\\"worst_err\\\": float(err[worst].item()),\\n}))\\n\", \"expected_signal\": \"max abs error in upper branch; >1e-6 confirms claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b047a0bf19991d8c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\nx = torch.tensor([65504.0, -65504.0, 65503.0, -65503.0, 60000.0, -60000.0],\\n                 dtype=torch.float16).to(\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nprint(json.dumps({\\n    \\\"inputs\\\": [float(v) for v in x.to(torch.float64).tolist()],\\n    \\\"outputs\\\": [float(v) for v in out.to(torch.float64).tolist()],\\n    \\\"errs\\\": [float(v) for v in err.tolist()],\\n    \\\"max_abs_err_extrema\\\": float(err.max().item()),\\n    \\\"tol\\\": 1e-6,\\n}))\\n\", \"expected_signal\": \"abs error at +/-65504; >1e-6 confirms claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch probes for c1, c2, c3. c1: middle interval dense scan of FP16 values. c2: upper branch just above threshold. c3: extrema. These are independent — launch all three together. Each probe: run kernel on chosen FP16 inputs, compare to FP64 torch.atan, report max abs error. Actually could combine, but each claim one probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293077,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1222,
+    "prompt_tokens": 21651,
+    "total_tokens": 22873,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 81,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5787,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

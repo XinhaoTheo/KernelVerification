@@ -1,0 +1,93 @@
+[
+  {
+    "created_at": "2026-10-18T03:20:09Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:20:38Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "b0715697f04274e7e74d3a41e65a5df5436b0ca258168c3a003f1bb67b452121"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "62635f96711347014e915b68a0daa54442146ad98863dd3a7d0aec90fe919d53"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "191e4cd55d7bce3363488233aa76138729214aae02817c6b2be8f09ab9302a3f"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "1c3bee1d0b120751840bd881a6b2224f758da7e40ee2b87974503f54a211e2ed"
+            }
+          ],
+          "bit_exact": false,
+          "duration_s": 5.732697,
+          "example": {
+            "correct_ref_fp16": 0.50048828125,
+            "exact_sigmoid_f64": 0.50073242135,
+            "fp16_midpoint": 0.500732421875,
+            "kernel_fp16": 0.5009765625,
+            "x": 0.0029296875,
+            "x_hex": "0x1a00"
+          },
+          "exit_code": 0,
+          "expected_signal": "bit_exact true/false plus mismatch count over all finite FP16 encodings",
+          "json_parse_error": null,
+          "json_result": {
+            "bit_exact": false,
+            "metric": "bit-exact vs FP64-rounded FP16 over all finite FP16 inputs",
+            "num_finite_inputs": 63488,
+            "num_mismatch": 7
+          },
+          "metric": "bit-exact vs FP64-correctly-rounded FP16 sigmoid over all 63488 finite FP16 inputs",
+          "num_finite_inputs": 63488,
+          "num_mismatch": 7,
+          "representative_mismatches": [
+            "x=0.0029296875",
+            "x=0.0068359375",
+            "x=0.0107421875",
+            "x=-0.00146484375",
+            "x=-0.00341796875",
+            "x=-0.00537109375",
+            "x=-0.00927734375"
+          ],
+          "stderr": "/root/trace_runs/r4/real_kernel_challenges/case_149/solo/probes/t6_probe.py:24: UserWarning: The given buffer is not writable, and PyTorch does not support non-writable tensors. This means you can write to the underlying (supposedly non-writable) buffer using the tensor. You may want to copy the buffer to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_new.cpp:1578.)\n  ref = torch.frombuffer(bytes(ref), dtype=torch.float16).clone().to(\"cuda\")\n",
+          "stdout": "finite count: 63488\nN: 63488\nbit_exact_all: False num_mismatch: 7\ncase 6656 x= 0.0029296875 hex= 0x1a00 kernel= 0.5009765625 ref= 0.50048828125\ncase 7936 x= 0.0068359375 hex= 0x1f00 kernel= 0.501953125 ref= 0.50146484375\ncase 8576 x= 0.0107421875 hex= 0x2180 kernel= 0.5029296875 ref= 0.50244140625\ncase 37376 x= -0.00146484375 hex= 0x9600 kernel= 0.49951171875 ref= 0.499755859375\ncase 38656 x= -0.00341796875 hex= 0x9b00 kernel= 0.4990234375 ref= 0.499267578125\ncase 39296 x= -0.00537109375 hex= 0x9d80 kernel= 0.49853515625 ref= 0.498779296875\ncase 40128 x= -0.00927734375 hex= 0xa0c0 kernel= 0.49755859375 ref= 0.497802734375\n{\"metric\": \"bit-exact vs FP64-rounded FP16 over all finite FP16 inputs\", \"num_finite_inputs\": 63488, \"num_mismatch\": 7, \"bit_exact\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 encodings: 7 inputs produce FP16 outputs that differ (1 ulp) from the FP64-correctly-rounded sigmoid. All mismatches are near-zero inputs where the true sigmoid sits within ~1e-9 of an FP16 rounding boundary; FP32 intermediate error (~1e-7) flips the final cvt.rn. Example: x=0.0029296875, exact sigmoid=0.50073242135 < midpoint 0.500732421875, so correct RNE output is 0.50048828125, but kernel outputs 0.5009765625.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "Internal FP32 exp and division each carry up to ~0.5-1 ulp FP32 error; on inputs where the true sigmoid sits exactly at an FP16 rounding boundary (tie or near-tie), FP32-level error can flip the final cvt.rn rounding, violating the round-once requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Each output must be the sigmoid value rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; every finite FP16 encoding is legal."
+      }
+    ],
+    "scope_rationale": "Contract requires exact bit-exact FP16 outputs equal to correctly-rounded sigmoid for every finite FP16 input; a single mismatched legal input is a violation.",
+    "statement": "The kernel's FP32 intermediate arithmetic causes at least one legal finite FP16 input to produce a bit pattern differing from the FP64-correctly-rounded sigmoid.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:20:38Z"
+  }
+]

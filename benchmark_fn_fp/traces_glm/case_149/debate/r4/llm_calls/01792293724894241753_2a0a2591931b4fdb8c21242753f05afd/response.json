@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-dc3c65fd",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The only open claim is c2 (negative tail / subnormal outputs). The previous probe failed on a uint16 arange issue; I'll relaunch with the code fix (build codes via int16).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-89a2342128571570",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import importlib.util, json, struct\\nimport torch\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\ncodes = torch.arange(65536, dtype=torch.int16)\\nvals = codes.view(torch.float16)\\nsel = torch.isfinite(vals) & (vals <= -16.0)\\nx = vals[sel]\\nprint(\\\"n_neg_tail_inputs\\\", int(x.numel()))\\nxc = x.to(\\\"cuda\\\")\\nout = kernel.run(xc)\\n\\nxd = xc.cpu().to(torch.float64)\\nref = torch.tensor([struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", v))[0] for v in torch.sigmoid(xd).tolist()], dtype=torch.float16).to(\\\"cuda\\\")\\nob = out.view(torch.int16).cpu(); rb = ref.view(torch.int16).cpu()\\nmism = (ob != rb).nonzero().flatten()\\ndef is_sub(h): return (int(h) & 0x7C00) == 0 and (int(h) & 0x03FF) != 0\\nsub_out = sum(1 for h in ob.tolist() if is_sub(h)); sub_ref = sum(1 for h in rb.tolist() if is_sub(h))\\nneg_zero_out = sum(1 for h in ob.tolist() if (int(h) & 0xFFFF) == 0x8000)\\npos_zero_out = sum(1 for h in ob.tolist() if (int(h) & 0xFFFF) == 0)\\n# mpmath verification of any mismatches\\nimport mpmath\\nmpmath.mp.dps = 60\\ndetails = []\\nfor i in mism.tolist()[:30]:\\n    xval = xc[i].item()\\n    v = mpmath.sigmoid(mpmath.mpf(float(xval)))\\n    t = struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", float(v)))[0]\\n    details.append({\\\"x\\\": repr(xval), \\\"kernel_bits\\\": hex(int(ob[i]) & 0xFFFF), \\\"ref_bits\\\": hex(int(rb[i]) & 0xFFFF),\\n                   \\\"mpmath_bits\\\": hex(struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", t))[0])})\\nprint(json.dumps({\\\"claim\\\": \\\"c2\\\", \\\"metric\\\": \\\"exact FP16 bit equality, subnormal preservation, zero sign\\\",\\n  \\\"n_inputs\\\": int(x.numel()), \\\"mismatches\\\": int(mism.numel()),\\n  \\\"subnormal_out_kernel\\\": sub_out, \\\"subnormal_out_ref\\\": sub_ref,\\n  \\\"neg_zero_out\\\": neg_zero_out, \\\"pos_zero_out\\\": pos_zero_out, \\\"details\\\": details}))\\n\", \"expected_signal\": \"subnormal outputs flushed to zero, negative zero, or bit mismatches in the negative tail\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Only c2 remains. Launch fixed probe using int16 arange view instead of uint16."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293727,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 666,
+    "prompt_tokens": 44863,
+    "total_tokens": 45529,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 19,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5590,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

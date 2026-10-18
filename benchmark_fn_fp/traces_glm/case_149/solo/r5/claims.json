@@ -1,0 +1,110 @@
+[
+  {
+    "created_at": "2026-10-18T03:19:45Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:20:02Z",
+        "data": {
+          "N": 63488,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "6e27f465dd8c41522e154104c10a933f47e52bfaaf160aff69d7e7719e4a2041"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "116d9b889c6645d96ad82bddb0bf1389702f9188e8ba31f9cff98defcb187d85"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "7cd8626fe8a6b264ab24cd7f403b4f0f615cbfbde312e09a6ee3096be0aacc08"
+            }
+          ],
+          "duration_s": 5.574299,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "N": 63488,
+            "metric": "exact fp16 bit pattern vs FP64 correctly-rounded reference",
+            "mismatch_count": 7
+          },
+          "mismatch_count": 7,
+          "mismatches": [
+            {
+              "input": 0.0029296875,
+              "kernel_bits": "0x3802",
+              "ref_bits": "0x3801"
+            },
+            {
+              "input": 0.0068359375,
+              "kernel_bits": "0x3804",
+              "ref_bits": "0x3803"
+            },
+            {
+              "input": 0.0107421875,
+              "kernel_bits": "0x3806",
+              "ref_bits": "0x3805"
+            },
+            {
+              "input": -0.00146484375,
+              "kernel_bits": "0x37fe",
+              "ref_bits": "0x37ff"
+            },
+            {
+              "input": -0.00341796875,
+              "kernel_bits": "0x37fc",
+              "ref_bits": "0x37fd"
+            },
+            {
+              "input": -0.00537109375,
+              "kernel_bits": "0x37fa",
+              "ref_bits": "0x37fb"
+            },
+            {
+              "input": -0.00927734375,
+              "kernel_bits": "0x37f6",
+              "ref_bits": "0x37f7"
+            }
+          ],
+          "stderr": "",
+          "stdout": "N finite encodings: 63488\nmismatch input: 0.0029296875 kernel: 0.5009765625 ref: 0.50048828125 fp64: 0.50048828125 kernel_bits: 0x3802 ref_bits: 0x3801\nmismatch input: 0.0068359375 kernel: 0.501953125 ref: 0.50146484375 fp64: 0.50146484375 kernel_bits: 0x3804 ref_bits: 0x3803\nmismatch input: 0.0107421875 kernel: 0.5029296875 ref: 0.50244140625 fp64: 0.50244140625 kernel_bits: 0x3806 ref_bits: 0x3805\nmismatch input: -0.00146484375 kernel: 0.49951171875 ref: 0.499755859375 fp64: 0.499755859375 kernel_bits: 0x37fe ref_bits: 0x37ff\nmismatch input: -0.00341796875 kernel: 0.4990234375 ref: 0.499267578125 fp64: 0.499267578125 kernel_bits: 0x37fc ref_bits: 0x37fd\nmismatch input: -0.00537109375 kernel: 0.49853515625 ref: 0.498779296875 fp64: 0.498779296875 kernel_bits: 0x37fa ref_bits: 0x37fb\nmismatch input: -0.00927734375 kernel: 0.49755859375 ref: 0.497802734375 fp64: 0.497802734375 kernel_bits: 0x37f6 ref_bits: 0x37f7\n{\"metric\": \"exact fp16 bit pattern vs FP64 correctly-rounded reference\", \"mismatch_count\": 7, \"N\": 63488}\n",
+          "timed_out": false,
+          "timeout_s": 300
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 encodings: 7 inputs (small magnitudes near 0.5, e.g. x=0.0029296875 -> kernel 0x3802 vs correct 0x3801) produce FP16 bit patterns differing from the single correct rounding of sigmoid, one ULP off. Double rounding FP32 intermediate -> FP16 is the cause.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes sigmoid in FP32 (exp(-|x|), then correctly rounded divide) and then rounds to FP16. If the FP32 intermediate is itself not exact, the double rounding FP32\u2192FP16 can differ from direct FP64\u2192FP16 rounding, especially near halfway points of the FP16 grid. The contract requires the exact FP16 round-to-nearest-even of the true real value for every finite FP16 input.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Each output must be the sigmoid value rounded ONCE to IEEE binary16, round-to-nearest-even, and this must hold for every finite FP16 encoding: 'Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation.'"
+      }
+    ],
+    "scope_rationale": "The contract requires exact FP16 bit patterns equal to single correct rounding of the mathematical sigmoid for every finite FP16 input, so any input whose kernel bit pattern differs from the FP64-computed correctly rounded reference is an in-scope defect.",
+    "statement": "The kernel's FP32 intermediate computation double-rounds, producing at least one finite FP16 input whose output bit pattern differs from the correctly-rounded FP64 sigmoid converted to FP16.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:20:02Z"
+  }
+]

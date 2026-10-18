@@ -1,0 +1,80 @@
+[
+  {
+    "created_at": "2026-10-18T03:16:45Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:17:09Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "889dee4ae90eddaba1f98c654bf485ddee569d3ebfedfb0e9b3dc87c1516751b"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "fa1139b53a2c6d6f5e390de46c40a5bdf7aa392c6dd411e42bd70c66c05d5fa5"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "fa8956e3614a2d6a854510f4a6fb21e9ef36f3c4315456e335dc6bf887c5e4cc"
+            }
+          ],
+          "decisive_case": {
+            "correct_fp16": "0x3801",
+            "kernel_fp16": "0x3802",
+            "true_fp64_sigmoid": 0.5007324213511315,
+            "x": 0.0029296875
+          },
+          "domain_size": 65536,
+          "duration_s": 6.821939,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "domain_size": 65536,
+            "metric": "exact FP16 bit equality vs FP64-round-once reference",
+            "mismatches": 7
+          },
+          "metric": "exact FP16 bit equality vs FP64 sigmoid rounded once to binary16",
+          "mismatches": 7,
+          "stderr": "",
+          "stdout": "total_finite: 65536\nmismatches: 7\nx=0.0029296875 bits=0x1a00 kernel=0.5009765625 bits=0x3802 ref=0.50048828125 bits=0x3801 fp64=0.5007324213511315\nx=0.0068359375 bits=0x1f00 kernel=0.501953125 bits=0x3804 ref=0.50146484375 bits=0x3803 fp64=0.5017089777199553\nx=0.0107421875 bits=0x2180 kernel=0.5029296875 bits=0x3806 ref=0.50244140625 bits=0x3805 fp64=0.5026855210504991\nx=-0.00146484375 bits=-0x6a00 kernel=0.49951171875 bits=0x37fe ref=0.499755859375 bits=0x37ff fp64=0.4996337891279836\nx=-0.00341796875 bits=-0x6500 kernel=0.4990234375 bits=0x37fc ref=0.499267578125 bits=0x37fd fp64=0.4991455086443835\nx=-0.00537109375 bits=-0x6280 kernel=0.49853515625 bits=0x37fa ref=0.498779296875 bits=0x37fb fp64=0.49865722979059063\nx=-0.00927734375 bits=-0x5f40 kernel=0.49755859375 bits=0x37f6 ref=0.497802734375 bits=0x37f7 fp64=0.4976806806976212\n{\"metric\": \"exact FP16 bit equality vs FP64-round-once reference\", \"mismatches\": 7, \"domain_size\": 65536}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all 65536 finite FP16 encodings: 7 bit-pattern mismatches vs FP64 sigmoid rounded once to binary16. Decisive case x=0.0029296875: true sigmoid 0.5007324213511315 < FP16 tie midpoint 0.500732421875, so correct output is 0x3801 (0.50048828125), but kernel outputs 0x3802 (0.5009765625). Cause: FP32 exp/div intermediate error crosses the FP16 rounding tie. All 7 failing inputs are small legal finite values (~\u00b10.01) where the contract's round-once requirement is violated.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "FP32 intermediate (libdevice exp, div_rn) then a single cvt.rn to FP16 can double-round or deviate when the true value is near an FP16 rounding tie, and libdevice.exp is not guaranteed correctly rounded. Exhaustive test over all 65536 FP16 encodings will decide.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Each output must be the real-value sigmoid rounded ONCE to IEEE binary16, round-to-nearest ties-to-even; 'Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation.' All finite FP16 encodings are legal inputs."
+      }
+    ],
+    "scope_rationale": "Contract requires exact FP16 bit patterns equal to single correctly-rounded sigmoid for every finite FP16 input; any bit mismatch on any of these inputs is a contract violation.",
+    "statement": "The kernel's FP32 intermediate arithmetic (exp and div_rn) followed by a single FP16 round produces a bit pattern that differs from the correctly-rounded FP16 sigmoid for at least one finite FP16 input.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:17:09Z"
+  }
+]

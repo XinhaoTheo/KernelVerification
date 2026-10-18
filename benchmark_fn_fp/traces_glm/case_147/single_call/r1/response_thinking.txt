@@ -1,0 +1,34 @@
+Cephes atan rational approximation: standard coefficients are -0.333331465724585, ... Actually this uses -0.8751, -16.16, -75.01, -122.9, -64.85 over square+24.86, 165.0, 432.9, 485.4, 194.6. Cephes atan.c uses denominator coefficients 24.86, 165, 432.9, 485.4, 194.6 and numerator -0.8751, -16.16, -75.01, -122.9, -64.85. Yes, those are Cephes FP coefficients. Cephes claims ~2e-8 relative error in double; in FP32 arithmetic with fp16 inputs... error likely within 1e-6? atan(x) for |x|≤~1e-4 the approximation reduced=x, square tiny, correction small; atan(x)≈x, fine. The accuracy: Cephes single-precision-like coefficients give error ~ 1e-8 abs? Cephes atan with these coefficients: relative error ~ 5e-8 in the interval. In FP32 rounding, error ~ few ulps, absolute error up to ~ atan(65504)≈π/2, ulp of ~1.57 in FP32 is ~1.2e-7, fine. Tolerance 1e-6 absolute — likely OK.
+
+Check branches: x<0 sign handled; zeros: magnitude=0, reduced=0, value=0, x<0 → -0.0, fine (signed zeros equivalent).
+
+upper branch: reciprocal = -1/max(|x|,1). For |x|>2.414, atan = π/2 + atan(-1/x). reciprocal negative, reduced=-1/x. Cephes does atan = xlo - atan(-1/x)? Actually Cephes: if |x| > tan(3π/8) (2.414), y = π/2 + atan(-1/x); reduced = -1/x correct.
+
+middle: 0.66 < |x| ≤ 2.414: atan = π/4 + atan((x-1)/(x+1)). Correct.
+
+Rational form: Cephes computes z = x², z*(P(z))/Q(z) added... Cephes: atan(x) ≈ x + x*z*(P/Q)? Let me recall atan.c: 
+```
+z = x*x;
+z = x*z*atan_poly... 
+```
+Actually Cephes atan.c single: 
+z = x*x;
+x * (poly over...) Let me recall: it computes
+z = x * x;
+x * z * (P(z)/Q(z)) + x? The code:
+```
+static double P[] = {-8.7506086000319040, ... }
+```
+Hmm, the known coefficients: P = {-8.7506086000319040E-1, -1.61575371873336507E1, -7.50085579231470349E1, -1.2288666844901367E2, -6.48502190494202537E1}
+Q = {2.485846490142306E1, 1.65027029851692089E2, 4.32978175239030616E2, 4.85400876827406041E2, 1.94631733073242536E2}
+So the truncated coefficients here (-0.8751, -16.16, -75.01, -122.9, -64.85, 24.86, 165.0, 432.9, 485.4, 194.6) are the rounded values. Cephes: z = x*x; then result = x + x*z*(z*P/Q)? Cephes code:
+```
+z = x*x;
+z = x * z * polevl... / p1evl...;
+return x + z;
+```
+So atan(x) ≈ x + x*z*(P(z)/Q(z)) where P has these values? Here kernel computes correction = z * numerator/denominator, local = reduced*correction + reduced = reduced*(1 + z*P/Q). Matches x + x*z*P/Q. Good. Cephes relative error claim ~2e-16 in double with full-precision coefficients; truncated coefficients give single-precision level accuracy ~1e-7 relative, so absolute error near π/2 about 1.5e-7 < 1e-6. FP32 arithmetic adds few ulps — fine.
+
+Boundary choice 0.66 vs Cephes 0.66 exact? Cephes uses x > 0.66 and > 2.414 (tan(3π/8)=2.414213562373095). Matches.
+
+Verdict: trust.

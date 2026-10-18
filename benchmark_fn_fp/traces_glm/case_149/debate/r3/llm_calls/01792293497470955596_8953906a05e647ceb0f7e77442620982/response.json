@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-dcca0af6",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The t12 probe revealed the actual bug in my pattern generation: sign-bit inputs shift to `i>>10 == 0x3F` (0x1F | sign), so my NaN/Inf exclusion missed negative non-finites. Fixing the mask to `(i>>10)&0x1F != 0x1F` and re-running the exhaustive sweep for c1.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ab56809564d28692",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nimport numpy as np, torch, kernel\\n\\n# all finite FP16 bit patterns (exclude NaN/Inf: exponent field 0x1F, with sign-bit-aware mask)\\nbits = np.array([i for i in range(65536) if ((i >> 10) & 0x1F) != 0x1F], dtype=np.uint16)\\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\\nx = torch.from_numpy(x_np).to(\\\"cuda\\\")\\nassert torch.isfinite(x).all(), \\\"nonfinite leaked\\\"\\nassert x.numel() <= 131072\\n\\nout = kernel.run(x)\\nref = kernel.reference(x)\\nok = out.view(torch.int16) == ref.view(torch.int16)\\nmismatches = (~ok).nonzero().flatten()\\nn_mismatch = int(mismatches.numel())\\nfail = []\\nfor idx in mismatches[:12].tolist():\\n    fail.append({\\\"x\\\": x[idx].item(),\\n                 \\\"x_bits\\\": hex(int(bits[idx])),\\n                 \\\"got_bits\\\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\\n                 \\\"got\\\": out[idx].item(),\\n                 \\\"want_bits\\\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\\n                 \\\"want\\\": ref[idx].item()})\\nprint(json.dumps({\\\"n_tested\\\": int(x.numel()), \\\"n_mismatch\\\": n_mismatch,\\n                  \\\"first_failures\\\": fail}))\\n\", \"expected_signal\": \"count of bit-exact mismatches vs reference over all 64512 finite FP16 inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The last probe (t12) still included NaNs — my exclusion `(i >> 10) != 0x1F` should have excluded 0xfc00 (exponent 0x1F). Wait 0xfc00 >> 10 = 0x1F... 0xfc00 = 1111110000000000, exponent bits 11111 → 0x1F, sign 1. i >> 10 with sign bit set: 0xfc00 >> 10 = 0x3F, not 0x1F! Because Python ints are fine, 0xfc00>>10 = 63. So need ((i >> 10) & 0x1F) != 0x1F. That's the bug. Run c1 again with fixed mask."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293500,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 621,
+    "prompt_tokens": 30007,
+    "total_tokens": 30628,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 168,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 11953,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "id": "chatcmpl-fd967190",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.85, \"reason\": \"The kernel faithfully reproduces the Cephes atan three-interval reduction (x, (x-1)/(x+1)+\u03c0/4, -1/x+\u03c0/2) with the rounded Cephes rational coefficients (numerator -0.8751,-16.16,-75.01,-122.9,-64.85; denominator 24.86,165,432.9,485.4,194.6) evaluated as x\u00b7(1+z\u00b7P/Q), using div_rn and disabled fusion for determinism; its error (single-precision Cephes accuracy plus a few FP32 ulps) is well within the 1e-6 absolute tolerance, and sign/zero handling is correct.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Cephes atan rational approximation: standard coefficients are -0.333331465724585, ... Actually this uses -0.8751, -16.16, -75.01, -122.9, -64.85 over square+24.86, 165.0, 432.9, 485.4, 194.6. Cephes atan.c uses denominator coefficients 24.86, 165, 432.9, 485.4, 194.6 and numerator -0.8751, -16.16, -75.01, -122.9, -64.85. Yes, those are Cephes FP coefficients. Cephes claims ~2e-8 relative error in double; in FP32 arithmetic with fp16 inputs... error likely within 1e-6? atan(x) for |x|\u2264~1e-4 the approximation reduced=x, square tiny, correction small; atan(x)\u2248x, fine. The accuracy: Cephes single-precision-like coefficients give error ~ 1e-8 abs? Cephes atan with these coefficients: relative error ~ 5e-8 in the interval. In FP32 rounding, error ~ few ulps, absolute error up to ~ atan(65504)\u2248\u03c0/2, ulp of ~1.57 in FP32 is ~1.2e-7, fine. Tolerance 1e-6 absolute \u2014 likely OK.\n\nCheck branches: x<0 sign handled; zeros: magnitude=0, reduced=0, value=0, x<0 \u2192 -0.0, fine (signed zeros equivalent).\n\nupper branch: reciprocal = -1/max(|x|,1). For |x|>2.414, atan = \u03c0/2 + atan(-1/x). reciprocal negative, reduced=-1/x. Cephes does atan = xlo - atan(-1/x)? Actually Cephes: if |x| > tan(3\u03c0/8) (2.414), y = \u03c0/2 + atan(-1/x); reduced = -1/x correct.\n\nmiddle: 0.66 < |x| \u2264 2.414: atan = \u03c0/4 + atan((x-1)/(x+1)). Correct.\n\nRational form: Cephes computes z = x\u00b2, z*(P(z))/Q(z) added... Cephes: atan(x) \u2248 x + x*z*(P/Q)? Let me recall atan.c: \n```\nz = x*x;\nz = x*z*atan_poly... \n```\nActually Cephes atan.c single: \nz = x*x;\nx * (poly over...) Let me recall: it computes\nz = x * x;\nx * z * (P(z)/Q(z)) + x? The code:\n```\nstatic double P[] = {-8.7506086000319040, ... }\n```\nHmm, the known coefficients: P = {-8.7506086000319040E-1, -1.61575371873336507E1, -7.50085579231470349E1, -1.2288666844901367E2, -6.48502190494202537E1}\nQ = {2.485846490142306E1, 1.65027029851692089E2, 4.32978175239030616E2, 4.85400876827406041E2, 1.94631733073242536E2}\nSo the truncated coefficients here (-0.8751, -16.16, -75.01, -122.9, -64.85, 24.86, 165.0, 432.9, 485.4, 194.6) are the rounded values. Cephes: z = x*x; then result = x + x*z*(z*P/Q)? Cephes code:\n```\nz = x*x;\nz = x * z * polevl... / p1evl...;\nreturn x + z;\n```\nSo atan(x) \u2248 x + x*z*(P(z)/Q(z)) where P has these values? Here kernel computes correction = z * numerator/denominator, local = reduced*correction + reduced = reduced*(1 + z*P/Q). Matches x + x*z*P/Q. Good. Cephes relative error claim ~2e-16 in double with full-precision coefficients; truncated coefficients give single-precision level accuracy ~1e-7 relative, so absolute error near \u03c0/2 about 1.5e-7 < 1e-6. FP32 arithmetic adds few ulps \u2014 fine.\n\nBoundary choice 0.66 vs Cephes 0.66 exact? Cephes uses x > 0.66 and > 2.414 (tan(3\u03c0/8)=2.414213562373095). Matches.\n\nVerdict: trust."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792292816,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1287,
+    "prompt_tokens": 1685,
+    "total_tokens": 2972,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1110,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

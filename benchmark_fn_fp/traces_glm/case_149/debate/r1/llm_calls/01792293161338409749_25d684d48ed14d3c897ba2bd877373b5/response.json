@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-6ca92e75",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I have the full kernel source and contract. Let me record the description model for this strict-rounding sigmoid case.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-92543037446c87a6",
+            "function": {
+              "arguments": "{\"contract_model\": [\"y[i] = sigmoid(x[i]) computed over reals, then rounded exactly once to IEEE binary16 with round-to-nearest-even; exact bit patterns required, not an allclose tolerance.\", \"Public domain: 1-D contiguous torch.float16 CUDA tensor [N], 1<=N<=131072, every finite FP16 encoding legal (signed zeros, subnormals, max finite); NaN/Inf excluded.\", \"Both input zeros must yield exactly 0.5; positive sigmoid values that underflow binary16 must round to positive zero; must return a fresh FP16 tensor on x.device without mutating the input.\", \"validate_inputs() must enforce the public domain and run() must call it; reference() is CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction.\", \"Internal precision/strategy is unconstrained; only the final correctly-rounded FP16 output matters across the entire domain.\"], \"kernel_model\": [\"Triton kernel (kernel.py lines 13-24) loads FP16 x, upcasts to FP32, computes the numerically stable form: t = exp(-|x|); sigmoid = (x<0 ? t : 1) / (1 + t), with div_rn for correctly-rounded FP32 division and a single final FP32->FP16 conversion via inline PTX cvt.rn.f16.f32 (lines 16-23).\", \"Identity check: for x>=0, 1/(1+exp(-x)); for x<0, exp(x)/(1+exp(x)) = exp(-|x|)/(1+exp(-|x|)); both are algebraically exact, so only exp accuracy and double-rounding (FP32 intermediate -> FP16 final) can deviate.\", \"Signed zero: x = -0.0 fails the x < 0.0 test (uses IEEE comparison), so numerator = 1.0, denominator = 2.0, output +0.5 as required; x = +0.0 also gives +0.5.\", \"Large |x|: exp(-|x|) underflows FP32 toward 0, giving exactly 0.0 for |x| >= ~89 (FP32 exp underflow around -103.97 but fp32 min subnormal ~1e-45, exp(-104)~0), so outputs are exactly 1.0 / 0.0 as expected for large magnitudes; near-boundary cases depend on exp accuracy.\", \"run() (lines 49-57) calls validate_inputs, launches with BLOCK=256, enable_fp_fusion=false, num_warps=4; masked loads/stores handle N not a multiple of 256; returns torch.empty_like(x) — a fresh contiguous FP16 tensor.\", \"enable_fp_fusion=False and the explicit div_rn + inline-asm final conversion are chosen to prevent compiler fusion/multiple roundings, but this does not by itself guarantee the single exp() FP32 call is accurate enough for all FP16 round-to-even boundaries.\"], \"risk_map\": [\"Double rounding: the exact sigmoid of an FP16 input is an irrational real; kernel computes it as FP32 (exp in FP32, div_rn in FP32) then rounds once to FP16. If the FP32 value lies within an FP32-epsilon of an FP16 rounding boundary (tie or near-tie), the FP32 intermediate error can flip the final FP16 bit pattern vs the correctly-rounded value. The ~2^-24 relative error of libdevice.exp is far smaller than FP16 spacing (2^-11), so exact-tie inputs (where the real value is exactly halfway between two FP16 numbers) are the highest-risk surface.\", \"Tie inputs: sigmoid(x) is exactly representable as an FP16 halfway value only for special points; e.g. x=0 -> 0.5 exactly (fine, 0.5 is representable). Where a genuine tie exists, the FP32 path may round up while true RNE would round to even (or vice versa). Note that div_rn(x/y in FP32) then FP16 rounding differs from a single correctly-rounded division to FP16 — this is a potential one-ulp error on boundary inputs.\", \"libdevice.exp accuracy: NVIDIA fast-math-free libdevice exp has max ~1-2 ulp FP32 error; combined with the FP32 sum 1.0 + t and div_rn, total relative error up to a few ulp in FP32, which normally rounds to the correct FP16 value but can fail when the exact FP16-rounded result differs between the two neighbors, i.e. near-halfway cases.\", \"Subnormal/underflow region: for large positive x, true sigmoid may be a positive value below the smallest FP16 subnormal (~6e-8) that must round to +0.0; kernel's FP32 t underflows to 0 giving exactly 0.0 -> correct. But for x where sigmoid is just above the subnormal threshold, FP32 intermediate error could push a value that should round to the smallest subnormal (5.96e-8) into 0 or vice versa — a 1-ulp boundary risk.\", \"Largest negative x (-65504): sigmoid(-65504) in FP64 is 0 (underflows double) so reference yields 0.0; kernel gives exp(-65504)->0 in FP32, numerator=0/denominator=1 -> 0.0, matches.\", \"Masked-load `other=0.0` only affects inactive lanes (masked out at store), so no correctness impact; BLOCK=256 grid with tl.program_id handles any N up to 131072 within grid limits.\", \"cvt.rn.f16.f32 performs a single RNE FP32->FP16 conversion; since inputs are finite FP16 and sigmoid in (0,1), no overflow to infinity in the conversion; output sign always positive.\", \"Inline asm correctness: constraints '=h,f' with pack=1, is_pure=True — standard usage; risk is minimal but worth runtime verification that outputs match expectations.\", \"Verify reference() itself is trustworthy as oracle: it uses struct.pack('<e') which is RNE binary16 of the FP64 sigmoid — matches the contract's definition, so reference is the correct oracle for exact bit-pattern comparison.\"], \"scope_notes\": [\"Domain is limited to finite FP16 inputs (all 65504 finite encodings feasible to enumerate exhaustively at runtime), N in [1,131072], contiguous 1-D FP16 CUDA tensors; NaN/Inf, non-contiguous, non-FP16, CPU-only inputs to run(), and tensor subclasses are out of scope.\", \"Autograd, inference mode, concurrent writes, and input mutation are out of scope; validate_inputs already rejects them.\", \"The frozen environment (T4, PyTorch 2.8.0, Triton 3.4.0) bounds libdevice behavior; any exp accuracy claims must be validated empirically on this hardware, not assumed from documentation.\", \"make_inputs() samples only a benign randn*3 distribution — adversarial near-tie and boundary inputs (values whose sigmoid lies close to an FP16 halfway point, or close to subnormal cutoff) are in-domain and required for decisive verification.\"], \"summary\": \"case_149: elementwise FP16 sigmoid with a strict single final binary16 round-to-nearest-even requirement. Kernel uses an algebraically exact stable rewrite (exp(-|x|) formulation), FP32 internals, div_rn, and an explicit cvt.rn.f16.f32 final conversion. Main correctness risk is whether the FP32 intermediate (libdevice exp + div_rn) always lands on the correct side of every FP16 rounding boundary, including exact-tie cases.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Record description update."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293162,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1676,
+    "prompt_tokens": 6447,
+    "total_tokens": 8123,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 4,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

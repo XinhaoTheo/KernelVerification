@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-2b57820d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the main correctness probe (both widths, multiple batches, exact match) and the storage-offset view probe.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-baa6c92dc6deeab4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\nresults = {}\\nfor width in (64, 128):\\n    for batch in (1, 3, 128):\\n        gen = torch.Generator().manual_seed(batch*100+width)\\n        x = torch.randint(0, 3329, (batch, width), generator=gen, dtype=torch.int32).cuda()\\n        out = kernel.run(x)\\n        ref = kernel.reference(x)\\n        mismatch = (out != ref).sum().item()\\n        results[f\\\"w{width}_b{batch}\\\"] = {\\\"mismatch_count\\\": int(mismatch),\\n                                        \\\"total\\\": batch*width,\\n                                        \\\"out_dtype\\\": str(out.dtype), \\\"out_shape\\\": tuple(out.shape),\\n                                        \\\"out_device\\\": str(out.device),\\n                                        \\\"range_ok\\\": bool(((out>=0)&(out<3329)).all().item())}\\n        # adversarial: extreme values\\n        x2 = torch.full((2, width), 3328, dtype=torch.int32).cuda()\\n        x2[1] = torch.arange(width, dtype=torch.int32).cuda() % 3329\\n        out2 = kernel.run(x2); ref2 = kernel.reference(x2)\\n        results[f\\\"w{width}_extreme_mismatch\\\"] = int((out2 != ref2).sum().item())\\n\\nprint(results)\\nok = all(v == 0 for k, v in results.items() if k.endswith(\\\"mismatch\\\") or k.endswith(\\\"mismatch_count\\\"))\\nimport json\\nprint(json.dumps({\\\"metric\\\": \\\"exact integer match count vs reference DFT\\\", \\\"all_exact\\\": ok, \\\"details\\\": results}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b3d4bc2d38628445",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\nbig = torch.randint(0, 3329, (4, 130), dtype=torch.int32).cuda()\\nview = big[1:3, 2:66]  # contiguous, nonzero storage offset\\nassert view.is_contiguous() and view.storage_offset() != 0\\nout = kernel.run(view)\\nref = kernel.reference(view)\\nmismatch = int((out != ref).sum().item())\\nprint(json.dumps({\\\"metric\\\": \\\"exact match for contiguous view with storage offset 2\\\",\\n                  \\\"storage_offset\\\": view.storage_offset(), \\\"mismatch\\\": mismatch,\\n                  \\\"shape\\\": tuple(view.shape), \\\"all_exact\\\": mismatch == 0}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Run probes for c1 and c2."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293259,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 588,
+    "prompt_tokens": 12929,
+    "total_tokens": 13517,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 9,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7486,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

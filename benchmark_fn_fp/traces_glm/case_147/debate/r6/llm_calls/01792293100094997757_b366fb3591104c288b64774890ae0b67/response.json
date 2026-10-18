@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-54060cd9",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": null,
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9a5f8cc0ac39697a",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Compute atan elementwise: FP32 output[i] must satisfy abs(actual - atan(exact stored FP16 x[i])) <= 1e-6 with zero relative tolerance, on every finite FP16 input in [-65504, 65504] including signed zeros and subnormals; NaN/inf are out of domain.\", \"Input: 1-D contiguous FP16 CUDA tensor, N in [1,131072], ordinary tensor flags; validate_inputs enforces this and is called by run().\", \"reference() computes FP64 torch.atan and returns FP64; make_inputs is example-only and does not restrict the domain; single correctness verdict over the entire legal domain.\", \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\"], \"kernel_model\": [\"Triton FP32 kernel loading FP16 inputs (exact conversion), computing magnitude=|x| and selecting one of three Cephes-style intervals: |x|>2.414213562373095 -> z=-1/|x|, angle=pi/2; |x|>0.66 -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.\", \"z is evaluated with a degree-4/5 rational correction: local = z + z*z*P(z^2)/Q(z^2) using truncated decimal coefficients (-0.8751, -16.16, -75.01, -122.9, -64.85; 24.86, 165.0, 432.9, 485.4, 194.6); result sign restored via where(x<0, -value, value).\", \"Uses tl.div_rn for divisions; enable_fp_fusion=False; BLOCK=256 grid; stores masked FP32 output; run() allocates fresh FP32 output on x.device.\", \"validate_inputs additionally rejects NaN/inf via isfinite check and enforces the documented tensor-shape/dtype/flag constraints.\"], \"risk_map\": [\"Coefficient truncation: Cephes coefficients rounded to ~2-4 decimals (e.g., -122.9, 485.4, 24.86, 0.66 threshold) while the contract demands 1e-6 absolute accuracy; a perturbation of a few 1e-3 in a coefficient of magnitude ~100 can plausibly shift the rational term by more than 1e-6 over parts of [0,1] in z. This is the primary bug surface.\", \"Interval boundaries: the 2.414213562373095 (=1+sqrt(2)) and 0.66 cutoffs are used with FP32 arithmetic; discontinuity/mismatch of the three branches near boundaries could exceed tolerance, though forms are mathematically continuous.\", \"FP32 rounding accumulation: angle + local_angle with local_angle up to pi/4 and corrections computed in FP32 (eps ~1.2e-7 relative) plus div_rn rounding; combined with truncated coefficients the 1e-6 budget is tight, especially near |x| large where result approaches pi/2 (FP32 rounding of the pi/2 constant gives ~4.5e-8, alone within tolerance).\", \"Huge-magnitude branch: for |x|=65504, reciprocal=-1/65504 computed in FP32 is fine, but max(magnitude,1.0) under tl.maximum may affect denormal/rounding path only if upper were false (never in that branch), so low risk.\", \"Signed zero: where(x<0.0, -value, value) maps atan(+0)=+0 and atan(-0)=-0; signed zeros are numerically equivalent per contract, so benign.\", \"tl.div_rn availability in Triton 3.4.0 (it exists), and .to(tl.float32) of FP16 is exact — both low risk.\"], \"scope_notes\": [\"Verdict covers the entire finite FP16 domain on [1,131072] sizes, not just make_inputs' randn*2 distribution which concentrates near small |x| and misses tails near 0.66, 2.414, and 65504.\", \"The Cephes double-precision accuracy claim is explicitly not evidence; the truncated single-precision-style coefficients are the artifact's own approximation and must be judged against 1e-6.\", \"reference() is the FP64 library atan on the exact stored values; comparison metric is pure absolute error with zero rtol.\"], \"open_questions\": [\"Does the truncated-coefficient rational approximation actually meet 1e-6 absolute accuracy across z^2 in [0,1]? Needs numeric max-error evaluation (Experimenter's job).\", \"Are the interval thresholds 0.66 and 1+sqrt(2) optimal for these truncated coefficients, or does a systematic tolerance overshoot exist in a sub-range (e.g., near |x| in (0.66, 2.414))?\"], \"summary\": \"Initial description of case_147: FP32 Triton Cephes-style three-interval rational atan on FP16 inputs, FP32 output, 1e-6 absolute tolerance over the full finite FP16 domain.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Analyze and record description. Key risks: FP32 rational approximation tolerance 1e-6 absolute; Cephes FP32-style coefficients truncated (~5 decimal digits) — accuracy likely insufficient at 1e-6? Actually Cephes single-precision atan has ~few ulps but coefficients given to 5-6 digits; FP32 atan itself has ~1e-7 error at small... atan value up to pi/2, FP32 eps ~1.2e-7 relative → ~2e-7 abs at max. Coefficients rounded to 0.01 (e.g., -122.9, 485.4) may introduce ~1e-5 errors. Also reciprocal = -1/max(mag,1) for upper branch: for magnitude>2.414, max(mag,1)=mag, ok. For x=65504, 1/65504 in FP32 fine. For signed zero: x<0 gives -0? atan(-0)=-0 fine.\n\nAlso boundary at magnitude > 2.414213562 vs Cephes threshold, and 0.66 vs Cephes ~0.66; tolerance between intervals. Also huge x: angle + local_angle where angle=pi/2 and local_angle≈-1/x small — FP32 pi/2 constant 1.5707963267948966 rounds to nearest FP32 (error ~4.5e-8) fine. But when magnitude is huge, value=pi/2 - small; fine.\n\nNote tl.div_rn unavailable? In Triton 3.4 div_rn exists. Also FP16 load converts to FP32 — exact.\n\nSubnormals fine. Risk: coefficient rounding vs 1e-6 abs tolerance — main risk. Also middle branch boundary at 0.66: Cephes double uses 0.66; FP32 adaptation may have larger error near boundaries? reduced changes form; continuity holds.\n\nAlso note: for upper, reciprocal uses maximum(magnitude,1.0) — only when upper is true, magnitude>2.414 so redundant but fine.\n\nrecord update."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293101,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1595,
+    "prompt_tokens": 6742,
+    "total_tokens": 8337,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 452,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4094,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

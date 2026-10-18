@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_151\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Forward cyclic NTT with fused butterfly stages.\\n2: \\n3: Original synthetic Triton implementation, not an upstream cryptographic kernel.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: _Q = 3329\\n10: _ROOT = 17\\n11: _R = 1 << 16\\n12: _R_INV = pow(_R, -1, _Q)\\n13: \\n14: \\n15: def _coefficient_product(left, right):\\n16:     return (left * right) % _Q\\n17: \\n18: \\n19: def _make_coefficients(width):\\n20:     \\\"\\\"\\\"Pack the coefficient banks for each fused stage and optional last stage.\\\"\\\"\\\"\\n21:     omega = pow(_ROOT, 256 // width, _Q)\\n22:     result = []\\n23:     half = 1\\n24:     for _ in range((width.bit_length() - 1) // 2):\\n25:         first = [(_R * pow(omega, j * width // (2 * half), _Q)) % _Q\\n26:                  for j in range(half)]\\n27:         second = [(_R * pow(omega, j * width // (4 * half), _Q)) % _Q\\n28:                   for j in range(half)]\\n29:         upper = [(_R * pow(omega, (j + half) * width // (4 * half), _Q)) % _Q\\n30:                  for j in range(half)]\\n31:         cross_low = [_coefficient_product(a, b) for a, b in zip(first, second)]\\n32:         cross_high = [_coefficient_product(a, b) for a, b in zip(first, upper)]\\n33:         result.extend(first + second + upper + cross_low + cross_high)\\n34:         half *= 4\\n35:     if (width.bit_length() - 1) % 2:\\n36:         result.extend([(_R * pow(omega, j, _Q)) % _Q for j in range(width // 2)])\\n37:     return result\\n38: \\n39: \\n40: @triton.jit\\n41: def _multiply(value, coefficient):\\n42:     product = value.to(tl.int64) * coefficient.to(tl.int64)\\n43:     correction = (product * 3327) & 65535\\n44:     reduced = (product + correction * 3329) >> 16\\n45:     return tl.where(reduced >= 3329, reduced - 3329, reduced).to(tl.int32)\\n46: \\n47: \\n48: @triton.jit\\n49: def _transform_kernel(X, COEFFICIENTS, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\\n50:     row = tl.program_id(0)\\n51:     lane = tl.arange(0, N)\\n52:     source = tl.full((N,), 0, tl.int32)\\n53:     for bit in tl.static_range(0, LOG_N):\\n54:         source = source | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\\n55:     value = tl.load(X + row * N + source).to(tl.int32)\\n56: \\n57:     for stage in tl.static_range(0, LOG_N // 2):\\n58:         half = 1 << (2 * stage)\\n59:         local = lane % half\\n60:         base = (lane // (4 * half)) * (4 * half) + local\\n61:         quadrant = (lane // half) & 3\\n62:         a = tl.gather(value, base, axis=0)\\n63:         b = tl.gather(value, base + half, axis=0)\\n64:         c = tl.gather(value, base + 2 * half, axis=0)\\n65:         d = tl.gather(value, base + 3 * half, axis=0)\\n66:         start = 5 * (half - 1) // 3\\n67:         first = tl.load(COEFFICIENTS + start + local)\\n68:         second = tl.load(COEFFICIENTS + start + half + local)\\n69:         upper = tl.load(COEFFICIENTS + start + 2 * half + local)\\n70:         cross_low = tl.load(COEFFICIENTS + start + 3 * half + local)\\n71:         cross_high = tl.load(COEFFICIENTS + start + 4 * half + local)\\n72:         p = _multiply(b, first)\\n73:         c_low = _multiply(c, second)\\n74:         c_high = _multiply(c, upper)\\n75:         d_low = _multiply(d, cross_low)\\n76:         d_high = _multiply(d, cross_high)\\n77:         lower_sum = a + p + c_low + d_low\\n78:         lower_difference = a + p - c_low - d_low\\n79:         upper_sum = a - p + c_high - d_high\\n80:         upper_difference = a - p - c_high + d_high\\n81:         value = tl.where(quadrant == 0, lower_sum,\\n82:                          tl.where(quadrant == 1, upper_sum,\\n83:                                   tl.where(quadrant == 2, lower_difference, upper_difference)))\\n84:         value = (value + 2 * 3329) % 3329\\n85: \\n86:     if LOG_N % 2:\\n87:         half = N // 2\\n88:         local = lane % half\\n89:         left = tl.gather(value, local, axis=0)\\n90:         right = tl.gather(value, local + half, axis=0)\\n91:         start = 5 * ((1 << (2 * (LOG_N // 2))) - 1) // 3\\n92:         coefficient = tl.load(COEFFICIENTS + start + local)\\n93:         weighted = _multiply(right, coefficient)\\n94:         value = tl.where(lane < half, left + weighted, left - weighted)\\n95:         value = (value + 3329) % 3329\\n96:     tl.store(OUT + row * N + lane, value)\\n97: \\n98: \\n99: def validate_inputs(x, require_cuda=True):\\n100:     \\\"\\\"\\\"Validate the complete public field and tensor domain.\\\"\\\"\\\"\\n101:     def require(condition, message):\\n102:         if not condition:\\n103:             raise ValueError(message)\\n104: \\n105:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n106:     require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n107:     require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n108:     require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient input required\\\")\\n109:     require(not x.is_neg() and not x.is_conj(), \\\"logical view flags are outside this domain\\\")\\n110:     require(not require_cuda or x.is_cuda, \\\"CUDA input required by run\\\")\\n111:     require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (64, 128),\\n112:             \\\"x must have shape [B,N], B in [1,128] and N in {64,128}\\\")\\n113:     require(x.dtype == torch.int32, \\\"int32 input required\\\")\\n114:     require(bool(((x >= 0) & (x < 3329)).all()), \\\"canonical field values 0..3328 required\\\")\\n115:     return {\\\"valid\\\": True, \\\"batch\\\": x.shape[0], \\\"width\\\": x.shape[1]}\\n116: \\n117: \\n118: def run(x):\\n119:     validate_inputs(x)\\n120:     batch, width = x.shape\\n121:     with torch.cuda.device(x.device):\\n122:         coefficients = torch.tensor(_make_coefficients(width), dtype=torch.int32, device=x.device)\\n123:         output = torch.empty_like(x)\\n124:         _transform_kernel[(batch,)](\\n125:             x, coefficients, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\\n126:     return output\\n127: \\n128: \\n129: def reference(x):\\n130:     \\\"\\\"\\\"Direct modular DFT, independent of the coefficient banks and butterflies.\\\"\\\"\\\"\\n131:     validate_inputs(x, require_cuda=False)\\n132:     width = x.shape[1]\\n133:     matrix = [[pow(17, (256 // width) * k * j, 3329) for j in range(width)]\\n134:               for k in range(width)]\\n135:     coefficients = torch.tensor(matrix, dtype=torch.int64, device=x.device)\\n136:     products = x.to(torch.int64)[:, None, :] * coefficients[None, :, :]\\n137:     return (products.sum(dim=2) % 3329).to(torch.int32)\\n138: \\n139: \\n140: def make_inputs(device=\\\"cuda\\\", batch=7, width=64, seed=0):\\n141:     \\\"\\\"\\\"Examples only; every canonical field-valued row is legal.\\\"\\\"\\\"\\n142:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n143:     x = torch.randint(0, 3329, (batch, width), generator=generator, dtype=torch.int32)\\n144:     return (x.to(device),)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\\n\\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\\n\\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\\n\\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\\n\\nInputs and complete public domain:\\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\\n\\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\\n\\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\\n\\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_151\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-18T03:18:34Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The fused radix-4 butterfly math, Montgomery-style reduction in _multiply (3327 = -2 mod 3329), and coefficient bank indexing have many opportunities for off-by-one errors in twiddle exponents; an exact match against the direct modular DFT over many random canonical rows is the decisive test.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Contract: 'out[b,k] = (sum ... omega_N**(j*k)) modulo 3329 ... Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0.' with N in {64,128} and all canonical values legal.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires the exact cyclic NTT over GF(3329) for every canonical input with B in [1,128] and N in {64,128}, tolerance zero.\",\n      \"statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T03:18:34Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_151\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_151\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_151\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_151\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_151\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I'll record a claim that the fused-radix NTT deviates from the exact modular DFT on legal inputs, then test both supported widths against the reference.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The fused radix-4 butterfly math, Montgomery-style reduction in _multiply (3327 = -2 mod 3329), and coefficient bank indexing have many opportunities for off-by-one errors in twiddle exponents; an exact match against the direct modular DFT over many random canonical rows is the decisive test.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Contract: 'out[b,k] = (sum ... omega_N**(j*k)) modulo 3329 ... Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0.' with N in {64,128} and all canonical values legal.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires the exact cyclic NTT over GF(3329) for every canonical input with B in [1,128] and N in {64,128}, tolerance zero.\",\n            \"statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll run the decisive probe: compare the Triton kernel against the direct modular DFT reference for both widths, multiple batches and seeds, exact match.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_151/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nresults = {}\\nmismatch_total = 0\\nfor width in (64, 128):\\n    for batch in (1, 7, 128):\\n        for seed in (0, 1, 2, 123):\\n            x = torch.randint(0, 3329, (batch, width), dtype=torch.int32, device=\\\"cuda\\\")\\n            out = k.run(x)\\n            ref = k.reference(x)\\n            eq = torch.equal(out, ref)\\n            mismatch_total += int((~eq).sum().item()) if not eq else 0\\n            results[f\\\"N{width}_B{batch}_s{seed}\\\"] = bool(eq)\\n# edge cases: all-zero and all-max rows\\nfor width in (64, 128):\\n    for fill in (0, 3328):\\n        x = torch.full((3, width), fill, dtype=torch.int32, device=\\\"cuda\\\")\\n        eq = torch.equal(k.run(x), k.reference(x))\\n        results[f\\\"N{width}_const{fill}\\\"] = bool(eq)\\n        if not eq: mismatch_total += 1\\nprint(json.dumps({\\\"exact_all\\\": mismatch_total == 0, \\\"mismatch_elements\\\": mismatch_total, \\\"details\\\": results}))\\n\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The probe crashed due to a bug in my own code (`torch.equal` returns a bool). I'll rerun with a corrected comparison.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_151/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nresults = {}\\nmismatch_total = 0\\nfor width in (64, 128):\\n    for batch in (1, 7, 128):\\n        for seed in (0, 1, 2, 123):\\n            g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n            x = torch.randint(0, 3329, (batch, width), generator=g, dtype=torch.int32).cuda()\\n            out = k.run(x)\\n            ref = k.reference(x)\\n            mism = int((out != ref).sum().item())\\n            mismatch_total += mism\\n            results[f\\\"N{width}_B{batch}_s{seed}\\\"] = {\\\"equal\\\": mism == 0, \\\"mismatches\\\": mism}\\nfor width in (64, 128):\\n    for fill in (0, 3328):\\n        x = torch.full((3, width), fill, dtype=torch.int32, device=\\\"cuda\\\")\\n        mism = int((k.run(x) != k.reference(x)).sum().item())\\n        mismatch_total += mism\\n        results[f\\\"N{width}_const{fill}\\\"] = {\\\"equal\\\": mism == 0, \\\"mismatches\\\": mism}\\nprint(json.dumps({\\\"exact_all\\\": mismatch_total == 0, \\\"mismatch_elements\\\": mismatch_total, \\\"details\\\": results}))\\n\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_151\"\n      },\n      \"created_at\": \"2026-10-18T03:18:28Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_151\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Forward cyclic NTT with fused butterfly stages.\\n\\nOriginal synthetic Triton implementation, not an upstream cryptographic kernel.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n_Q = 3329\\n_ROOT = 17\\n_R = 1 << 16\\n_R_INV = pow(_R, -1, _Q)\\n\\n\\ndef _coefficient_product(left, right):\\n    return (left * right) % _Q\\n\\n\\ndef _make_coefficients(width):\\n    \\\"\\\"\\\"Pack the coefficient banks for each fused stage and optional last stage.\\\"\\\"\\\"\\n    omega = pow(_ROOT, 256 // width, _Q)\\n    result = []\\n    half = 1\\n    for _ in range((width.bit_length() - 1) // 2):\\n        first = [(_R * pow(omega, j * width // (2 * half), _Q)) % _Q\\n                 for j in range(half)]\\n        second = [(_R * pow(omega, j * width // (4 * half), _Q)) % _Q\\n                  for j in range(half)]\\n        upper = [(_R * pow(omega, (j + half) * width // (4 * half), _Q)) % _Q\\n                 for j in range(half)]\\n        cross_low = [_coefficient_product(a, b) for a, b in zip(first, second)]\\n        cross_high = [_coefficient_product(a, b) for a, b in zip(first, upper)]\\n        result.extend(first + second + upper + cross_low + cross_high)\\n        half *= 4\\n    if (width.bit_length() - 1) % 2:\\n        result.extend([(_R * pow(omega, j, _Q)) % _Q for j in range(width // 2)])\\n    return result\\n\\n\\n@triton.jit\\ndef _multiply(value, coefficient):\\n    product = value.to(tl.int64) * coefficient.to(tl.int64)\\n    correction = (product * 3327) & 65535\\n    reduced = (product + correction * 3329) >> 16\\n    return tl.where(reduced >= 3329, reduced - 3329, reduced).to(tl.int32)\\n\\n\\n@triton.jit\\ndef _transform_kernel(X, COEFFICIENTS, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\\n    row = tl.program_id(0)\\n    lane = tl.arange(0, N)\\n    source = tl.full((N,), 0, tl.int32)\\n    for bit in tl.static_range(0, LOG_N):\\n        source = source | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\\n    value = tl.load(X + row * N + source).to(tl.int32)\\n\\n    for stage in tl.static_range(0, LOG_N // 2):\\n        half = 1 << (2 * stage)\\n        local = lane % half\\n        base = (lane // (4 * half)) * (4 * half) + local\\n        quadrant = (lane // half) & 3\\n        a = tl.gather(value, base, axis=0)\\n        b = tl.gather(value, base + half, axis=0)\\n        c = tl.gather(value, base + 2 * half, axis=0)\\n        d = tl.gather(value, base + 3 * half, axis=0)\\n        start = 5 * (half - 1) // 3\\n        first = tl.load(COEFFICIENTS + start + local)\\n        second = tl.load(COEFFICIENTS + start + half + local)\\n        upper = tl.load(COEFFICIENTS + start + 2 * half + local)\\n        cross_low = tl.load(COEFFICIENTS + start + 3 * half + local)\\n        cross_high = tl.load(COEFFICIENTS + start + 4 * half + local)\\n        p = _multiply(b, first)\\n        c_low = _multiply(c, second)\\n        c_high = _multiply(c, upper)\\n        d_low = _multiply(d, cross_low)\\n        d_high = _multiply(d, cross_high)\\n        lower_sum = a + p + c_low + d_low\\n        lower_difference = a + p - c_low - d_low\\n        upper_sum = a - p + c_high - d_high\\n        upper_difference = a - p - c_high + d_high\\n        value = tl.where(quadrant == 0, lower_sum,\\n                         tl.where(quadrant == 1, upper_sum,\\n                                  tl.where(quadrant == 2, lower_difference, upper_difference)))\\n        value = (value + 2 * 3329) % 3329\\n\\n    if LOG_N % 2:\\n        half = N // 2\\n        local = lane % half\\n        left = tl.gather(value, local, axis=0)\\n        right = tl.gather(value, local + half, axis=0)\\n        start = 5 * ((1 << (2 * (LOG_N // 2))) - 1) // 3\\n        coefficient = tl.load(COEFFICIENTS + start + local)\\n        weighted = _multiply(right, coefficient)\\n        value = tl.where(lane < half, left + weighted, left - weighted)\\n        value = (value + 3329) % 3329\\n    tl.store(OUT + row * N + lane, value)\\n\\n\\ndef validate_inputs(x, require_cuda=True):\\n    \\\"\\\"\\\"Validate the complete public field and tensor domain.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n\\n...[truncated, 2070 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\\n\\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\\n\\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\\n\\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\\n\\nInputs and complete public domain:\\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\\n\\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\\n\\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\\n\\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_151\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_151\"\n      },\n      \"created_at\": \"2026-10-18T03:18:28Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\\n\\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\\n\\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\\n\\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\\n\\nInputs and complete public domain:\\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\\n\\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\\n\\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\\n\\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_151\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_151\"\n      },\n      \"created_at\": \"2026-10-18T03:18:28Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_151\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 6069\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2324\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_151\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T03:18:28Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_151\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The fused radix-4 butterfly math, Montgomery-style reduction in _multiply (3327 = -2 mod 3329), and coefficient bank indexing have many opportunities for off-by-one errors in twiddle exponents; an exact match against the direct modular DFT over many random canonical rows is the decisive test.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract: 'out[b,k] = (sum ... omega_N**(j*k)) modulo 3329 ... Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0.' with N in {64,128} and all canonical values legal.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact cyclic NTT over GF(3329) for every canonical input with B in [1,128] and N in {64,128}, tolerance zero.\",\n        \"statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\"\n      },\n      \"created_at\": \"2026-10-18T03:18:34Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T03:18:34Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The fused radix-4 butterfly math, Montgomery-style reduction in _multiply (3327 = -2 mod 3329), and coefficient bank indexing have many opportunities for off-by-one errors in twiddle exponents; an exact match against the direct modular DFT over many random canonical rows is the decisive test.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract: 'out[b,k] = (sum ... omega_N**(j*k)) modulo 3329 ... Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0.' with N in {64,128} and all canonical values legal.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact cyclic NTT over GF(3329) for every canonical input with B in [1,128] and N in {64,128}, tolerance zero.\",\n        \"statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T03:18:34Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_151/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nresults = {}\\nmismatch_total = 0\\nfor width in (64, 128):\\n    for batch in (1, 7, 128):\\n        for seed in (0, 1, 2, 123):\\n            x = torch.randint(0, 3329, (batch, width), dtype=torch.int32, device=\\\"cuda\\\")\\n            out = k.run(x)\\n            ref = k.reference(x)\\n            eq = torch.equal(out, ref)\\n            mismatch_total += int((~eq).sum().item()) if not eq else 0\\n            results[f\\\"N{width}_B{batch}_s{seed}\\\"] = bool(eq)\\n# edge cases: all-zero and all-max rows\\nfor width in (64, 128):\\n    for fill in (0, 3328):\\n        x = torch.full((3, width), fill, dtype=torch.int32, device=\\\"cuda\\\")\\n        eq = torch.equal(k.run(x), k.reference(x))\\n        results[f\\\"N{width}_const{fill}\\\"] = bool(eq)\\n        if not eq: mismatch_total += 1\\nprint(json.dumps({\\\"exact_all\\\": mismatch_total == 0, \\\"mismatch_elements\\\": mismatch_total, \\\"details\\\": results}))\\n\"\n      },\n      \"created_at\": \"2026-10-18T03:18:45Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"bc334bbbcf160ec27b9898ee40a2669fe3d5eaa11722b7e75ea6325736f8e969\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"8433bf403cd9586ffafcecf04975d36eb58ad75cc9d4dbd6353f6d359153c0df\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\",\n        \"cwd\": \"/root/cases/case_151\",\n        \"duration_s\": 5.954418,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"bc334bbbcf160ec27b9898ee40a2669fe3d5eaa11722b7e75ea6325736f8e969\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"8433bf403cd9586ffafcecf04975d36eb58ad75cc9d4dbd6353f6d359153c0df\"\n              }\n            ],\n            \"duration_s\": 5.954418,\n            \"exit_code\": 1,\n            \"expected_signal\": null,\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r5/real_kernel_challenges/case_151/solo/probes/t6_probe.py\\\", line 15, in <module>\\n    mismatch_total += int((~eq).sum().item()) if not eq else 0\\n                          ^^^^^^^^^\\nAttributeError: 'int' object has no attribute 'sum'\\n\",\n            \"stdout\": \"\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe failed or produced nonzero exit and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 1,\n        \"expected_signal\": null,\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r5/real_kernel_challenges/case_151/solo/probes/t6_probe.py\\\", line 15, in <module>\\n    mismatch_total += int((~eq).sum().item()) if not eq else 0\\n                          ^^^^^^^^^\\nAttributeError: 'int' object has no attribute 'sum'\\n\",\n        \"stdout\": \"\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_151/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nresults = {}\\nmismatch_total = 0\\nfor width in (64, 128):\\n    for batch in (1, 7, 128):\\n        for seed in (0, 1, 2, 123):\\n            g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n            x = torch.randint(0, 3329, (batch, width), generator=g, dtype=torch.int32).cuda()\\n            out = k.run(x)\\n            ref = k.reference(x)\\n            mism = int((out != ref).sum().item())\\n            mismatch_total += mism\\n            results[f\\\"N{width}_B{batch}_s{seed}\\\"] = {\\\"equal\\\": mism == 0, \\\"mismatches\\\": mism}\\nfor width in (64, 128):\\n    for fill in (0, 3328):\\n        x = torch.full((3, width), fill, dtype=torch.int32, device=\\\"cuda\\\")\\n        mism = int((k.run(x) != k.reference(x)).sum().item())\\n        mismatch_total += mism\\n        results[f\\\"N{width}_const{fill}\\\"] = {\\\"equal\\\": mism == 0, \\\"mismatches\\\": mism}\\nprint(json.dumps({\\\"exact_all\\\": mismatch_total == 0, \\\"mismatch_elements\\\": mismatch_total, \\\"details\\\": results}))\\n\"\n      },\n      \"created_at\": \"2026-10-18T03:18:54Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"74df5b97cd17eb8cc43c3304ca5b9d8e8f364a289ab40c8b0131941c13b2fce8\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"4eb4047b702ab52bf1d57065605461230cd09a2588f253ac897e44d355ec1e14\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t7_json_result.json\",\n            \"sha256\": \"1753f2d0a09062216ecfb51f0cf2120f983f129058843e91db6b5adb51f6fddd\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The Triton kernel's output fails to match the exact modular cyclic NTT reference for some legal canonical-field input rows (N=64 or N=128).\",\n        \"cwd\": \"/root/cases/case_151\",\n        \"duration_s\": 4.745775,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"74df5b97cd17eb8cc43c3304ca5b9d8e8f364a289ab40c8b0131941c13b2fce8\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"4eb4047b702ab52bf1d57065605461230cd09a2588f253ac897e44d355ec1e14\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"1753f2d0a09062216ecfb51f0cf2120f983f129058843e91db6b5adb51f6fddd\"\n              }\n            ],\n            \"duration_s\": 4.745775,\n            \"exit_code\": 0,\n            \"expected_signal\": null,\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"details\": {\n                \"N128_B128_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 16378\n                },\n                \"N128_B128_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 16382\n                },\n                \"N128_B128_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 16380\n                },\n                \"N128_B128_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 16377\n                },\n                \"N128_B1_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 128\n                },\n                \"N128_B1_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 128\n                },\n                \"N128_B1_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 128\n                },\n                \"N128_B1_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 128\n                },\n                \"N128_B7_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 896\n                },\n                \"N128_B7_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 896\n                },\n                \"N128_B7_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 895\n                },\n                \"N128_B7_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 896\n                },\n                \"N128_const0\": {\n                  \"equal\": true,\n                  \"mismatches\": 0\n                },\n                \"N128_const3328\": {\n                  \"equal\": false,\n                  \"mismatches\": 381\n                },\n                \"N64_B128_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 8190\n                },\n                \"N64_B128_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 8189\n                },\n                \"N64_B128_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 8189\n                },\n                \"N64_B128_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 8191\n                },\n                \"N64_B1_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 64\n                },\n                \"N64_B1_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 64\n                },\n                \"N64_B1_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 64\n                },\n                \"N64_B1_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 64\n                },\n                \"N64_B7_s0\": {\n                  \"equal\": false,\n                  \"mismatches\": 447\n                },\n                \"N64_B7_s1\": {\n                  \"equal\": false,\n                  \"mismatches\": 448\n                },\n                \"N64_B7_s123\": {\n                  \"equal\": false,\n                  \"mismatches\": 448\n                },\n                \"N64_B7_s2\": {\n                  \"equal\": false,\n                  \"mismatches\": 448\n                },\n                \"N64_const0\": {\n                  \"equal\": true,\n                  \"mismatches\": 0\n                },\n                \"N64_const3328\": {\n                  \"equal\": false,\n                  \"mismatches\": 192\n                }\n              },\n              \"exact_all\": false,\n              \"mismatch_elements\": 104991\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"exact_all\\\": false, \\\"mismatch_elements\\\": 104991, \\\"details\\\": {\\\"N64_B1_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B7_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 447}, \\\"N64_B7_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B7_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B7_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B128_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8190}, \\\"N64_B128_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8189}, \\\"N64_B128_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8191}, \\\"N64_B128_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8189}, \\\"N128_B1_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B7_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 895}, \\\"N128_B128_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16378}, \\\"N128_B128_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16382}, \\\"N128_B128_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16377}, \\\"N128_B128_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16380}, \\\"N64_const0\\\": {\\\"equal\\\": true, \\\"mismatches\\\": 0}, \\\"N64_const3328\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 192}, \\\"N128_const0\\\": {\\\"equal\\\": true, \\\"mismatches\\\": 0}, \\\"N128_const3328\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 381}}}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": null,\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"details\": {\n            \"N128_B128_s0\": {\n              \"equal\": false,\n              \"mismatches\": 16378\n            },\n            \"N128_B128_s1\": {\n              \"equal\": false,\n              \"mismatches\": 16382\n            },\n            \"N128_B128_s123\": {\n              \"equal\": false,\n              \"mismatches\": 16380\n            },\n            \"N128_B128_s2\": {\n              \"equal\": false,\n              \"mismatches\": 16377\n            },\n            \"N128_B1_s0\": {\n              \"equal\": false,\n              \"mismatches\": 128\n            },\n            \"N128_B1_s1\": {\n              \"equal\": false,\n              \"mismatches\": 128\n            },\n            \"N128_B1_s123\": {\n              \"equal\": false,\n              \"mismatches\": 128\n            },\n            \"N128_B1_s2\": {\n              \"equal\": false,\n              \"mismatches\": 128\n            },\n            \"N128_B7_s0\": {\n              \"equal\": false,\n              \"mismatches\": 896\n            },\n            \"N128_B7_s1\": {\n              \"equal\": false,\n              \"mismatches\": 896\n            },\n            \"N128_B7_s123\": {\n              \"equal\": false,\n              \"mismatches\": 895\n            },\n            \"N128_B7_s2\": {\n              \"equal\": false,\n              \"mismatches\": 896\n            },\n            \"N128_const0\": {\n              \"equal\": true,\n              \"mismatches\": 0\n            },\n            \"N128_const3328\": {\n              \"equal\": false,\n              \"mismatches\": 381\n            },\n            \"N64_B128_s0\": {\n              \"equal\": false,\n              \"mismatches\": 8190\n            },\n            \"N64_B128_s1\": {\n              \"equal\": false,\n              \"mismatches\": 8189\n            },\n            \"N64_B128_s123\": {\n              \"equal\": false,\n              \"mismatches\": 8189\n            },\n            \"N64_B128_s2\": {\n              \"equal\": false,\n              \"mismatches\": 8191\n            },\n            \"N64_B1_s0\": {\n              \"equal\": false,\n              \"mismatches\": 64\n            },\n            \"N64_B1_s1\": {\n              \"equal\": false,\n              \"mismatches\": 64\n            },\n            \"N64_B1_s123\": {\n              \"equal\": false,\n              \"mismatches\": 64\n            },\n            \"N64_B1_s2\": {\n              \"equal\": false,\n              \"mismatches\": 64\n            },\n            \"N64_B7_s0\": {\n              \"equal\": false,\n              \"mismatches\": 447\n            },\n            \"N64_B7_s1\": {\n              \"equal\": false,\n              \"mismatches\": 448\n            },\n            \"N64_B7_s123\": {\n              \"equal\": false,\n              \"mismatches\": 448\n            },\n            \"N64_B7_s2\": {\n              \"equal\": false,\n              \"mismatches\": 448\n            },\n            \"N64_const0\": {\n              \"equal\": true,\n              \"mismatches\": 0\n            },\n            \"N64_const3328\": {\n              \"equal\": false,\n              \"mismatches\": 192\n            }\n          },\n          \"exact_all\": false,\n          \"mismatch_elements\": 104991\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"exact_all\\\": false, \\\"mismatch_elements\\\": 104991, \\\"details\\\": {\\\"N64_B1_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B1_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 64}, \\\"N64_B7_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 447}, \\\"N64_B7_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B7_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B7_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 448}, \\\"N64_B128_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8190}, \\\"N64_B128_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8189}, \\\"N64_B128_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8191}, \\\"N64_B128_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 8189}, \\\"N128_B1_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B1_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 128}, \\\"N128_B7_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 896}, \\\"N128_B7_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 895}, \\\"N128_B128_s0\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16378}, \\\"N128_B128_s1\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16382}, \\\"N128_B128_s2\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16377}, \\\"N128_B128_s123\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 16380}, \\\"N64_const0\\\": {\\\"equal\\\": true, \\\"mismatches\\\": 0}, \\\"N64_const3328\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 192}, \\\"N128_const0\\\": {\\\"equal\\\": true, \\\"mismatches\\\": 0}, \\\"N128_const3328\\\": {\\\"equal\\\": false, \\\"mismatches\\\": 381}}}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

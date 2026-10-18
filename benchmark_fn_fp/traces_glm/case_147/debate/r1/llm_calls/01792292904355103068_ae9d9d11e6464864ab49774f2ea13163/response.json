@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-0ac46404",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: exhaustive mid-interval FP16 values (c1), boundary-adjacent FP16 values near both thresholds (c3), and large-magnitude FP16 values near the extrema (c2).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ff6c6e871733aec",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# All FP16 representable values in (0.66, 1]: start from 0.666 (first step above 0.66)\\nxs = []\\nv = 0.666015625\\nwhile v <= 1.0:\\n    xs.append(v)\\n    t = torch.tensor(v, dtype=torch.float16)\\n    nxt = t + torch.tensor(float(2**-10), dtype=torch.float16) if v < 1 else None\\n    # iterate via representable successor\\n    if v == 1.0: break\\n    # use tensor nextafter through float16 casting\\n    base = torch.tensor(v, dtype=torch.float32)\\n    # find next representable fp16 above\\n    nxt = torch.tensor(v, dtype=torch.float16)\\n    found = False\\n    for d in [2**-11, 2**-10, 2**-9]:\\n        cand = (nxt.to(torch.float32) + d).to(torch.float16)\\n        if cand.to(torch.float32).item() > v:\\n            v = cand.item(); found = True; break\\n    if not found:\\n        v = 1.0\\n\\nx = torch.tensor(xs, dtype=torch.float16, device=\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64)).cpu()\\nerr = (out.cpu().to(torch.float64) - ref).abs()\\nres = {\\n    \\\"n_mid_values\\\": len(xs),\\n    \\\"max_abs_err\\\": err.max().item(),\\n    \\\"argmax_x\\\": x.cpu().float()[err.argmax()].item(),\\n    \\\"n_violations_1e-6\\\": int((err > 1e-6).sum()),\\n    \\\"tolerance\\\": 1e-6,\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"max abs error over all FP16 mid-interval values (0.66, 1] vs FP64 atan\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-90ccc39fbe8af90b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# Large-magnitude FP16 values: dense down from 65504 plus a wide sparse sweep\\nvals = [65504.0]\\nt = torch.tensor(65504.0, dtype=torch.float16)\\nfor _ in range(500):\\n    t = torch.nextafter(t.to(torch.float32), torch.tensor(0.0, dtype=torch.float32)).to(torch.float16)\\n    vals.append(t.item())\\n# sparse sweep of log-spaced large magnitudes\\nimport math\\nvals += [65504.0/(2**k) for k in range(0, 20)]\\nvals += [x*65504.0/64 for x in [1.0,0.99,0.5,0.1,0.01]]\\nx = torch.tensor(sorted(set(vals)), dtype=torch.float16, device=\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64)).cpu()\\nerr = (out.cpu().to(torch.float64) - ref).abs()\\nres = {\\n    \\\"n_large_values\\\": x.numel(),\\n    \\\"max_abs_err\\\": err.max().item(),\\n    \\\"argmax_x\\\": x.cpu().float()[err.argmax()].item(),\\n    \\\"err_at_65504\\\": err[x.cpu().float() == 65504.0].item() if (x.cpu().float()==65504.0).any() else None,\\n    \\\"n_violations_1e-6\\\": int((err > 1e-6).sum()),\\n    \\\"tolerance\\\": 1e-6,\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"max abs error over large-magnitude FP16 values including +/-65504 vs FP64 atan\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-abb4f7ccf1f15dad",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# FP16 values adjacent to thresholds 0.66 and 2.414213562373095\\ndef neighbors(center, count=8):\\n    fs = torch.tensor(center, dtype=torch.float32)\\n    below = [fs.item()]\\n    for _ in range(count):\\n        fs = torch.nextafter(fs, torch.tensor(0.0, dtype=torch.float32))\\n        below.append(fs.item())\\n    above = []\\n    gs = torch.tensor(center, dtype=torch.float32)\\n    for _ in range(count):\\n        gs = torch.nextafter(gs, torch.tensor(10.0, dtype=torch.float32))\\n        above.append(gs.item())\\n    return below + above\\n\\nvals = neighbors(0.66) + neighbors(2.414213562373095)\\nx = torch.tensor(sorted(set(vals)), dtype=torch.float16, device=\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64)).cpu()\\nerr = (out.cpu().to(torch.float64) - ref).abs()\\nworst = err.argmax()\\nres = {\\n    \\\"n_boundary_values\\\": x.numel(),\\n    \\\"max_abs_err\\\": err.max().item(),\\n    \\\"argmax_x\\\": x.cpu().float()[worst].item(),\\n    \\\"per_value_err\\\": {float(x.cpu().float()[i]): float(err[i]) for i in range(x.numel())},\\n    \\\"n_violations_1e-6\\\": int((err > 1e-6).sum()),\\n    \\\"tolerance\\\": 1e-6,\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"max abs error for FP16 values adjacent to 0.66 and 2.414213562373095 thresholds vs FP64 atan\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Design probes: test all FP16 representable mid-interval values (0.66,|x|<=1), boundary values, large magnitudes. Launch three probes in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792292906,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1351,
+    "prompt_tokens": 21953,
+    "total_tokens": 23304,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 38,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

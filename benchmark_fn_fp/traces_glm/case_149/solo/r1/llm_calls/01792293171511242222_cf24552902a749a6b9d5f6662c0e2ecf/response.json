@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-12199510",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the decisive probe: feed the kernel every finite FP16 encoding (63,488 values, within the N≤131072 limit) and compare bit patterns against an FP64-sigmoid single-rounded reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b7810959bcc91a9c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nimport kernel\\n\\n# all finite fp16 bit patterns\\nbits = np.arange(65536, dtype=np.uint16)\\nallf = np.frombuffer(bits.tobytes(), dtype=\\\"<f2\\\")\\nfinite_mask = np.isfinite(allf)\\nvals = allf[finite_mask]\\nprint(\\\"num finite fp16:\\\", vals.size)\\n\\nx = torch.from_numpy(vals.copy()).cuda()\\nout = kernel.run(x).cpu().numpy()\\n\\n# correct single-rounding reference: fp64 sigmoid -> fp16 RNE\\nref = np.empty(vals.shape, dtype=\\\"<f2\\\")\\nv64 = vals.astype(np.float64)\\n# sigmoid in fp64\\nsig = 1.0/(1.0+np.exp(-v64))\\nref = sig.astype(\\\"<f2\\\")\\n\\nmism = np.count_nonzero(out.view(np.uint16) != ref.view(np.uint16))\\nidx = np.nonzero(out.view(np.uint16) != ref.view(np.uint16))[0]\\nextra = {}\\nif mism:\\n    i = idx[:10]\\n    extra = {\\\"bad_inputs\\\": vals[i].tolist(), \\\"kernel_out\\\": out[i].tolist(),\\n             \\\"ref_out\\\": ref[i].tolist(),\\n             \\\"absdiff\\\": (out[i].astype(np.float64)-ref[i].astype(np.float64)).tolist(),\\n             \\\"fp64_value\\\": sig[i].tolist()}\\nprint(json.dumps({\\\"metric\\\":\\\"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\\\",\\n \\\"n_tested\\\": int(vals.size), \\\"mismatches\\\": int(mism), **extra}))\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run exhaustive probe: all 63,488 finite FP16 values (needs N≤131072, fits). Compare kernel output vs FP64-comorrect single-rounded reference (compute FP64 sigmoid then round; reference() uses struct pack \"<e\" which is RNE — but it does torch.sigmoid fp64 then pack). Run kernel on all finite values in chunks of 131072... it fits. But run() requires N≥1 contiguous; 61440 values. Reference: use fp64 sigmoid then cast via numpy float16 or struct."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293172,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 524,
+    "prompt_tokens": 10274,
+    "total_tokens": 10798,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 113,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4644,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

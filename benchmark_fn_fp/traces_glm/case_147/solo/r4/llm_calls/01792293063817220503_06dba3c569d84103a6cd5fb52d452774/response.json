@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-9369d6ad",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed only because I converted to FP64 before calling `reference()`, which validates FP16 input. I'll fix by calling reference on the FP16 tensor and rerunning the exhaustive test.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-84e2f05767045947",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\nbits = np.arange(0, 65536, dtype=np.uint16)\\nvals = torch.from_numpy(bits.view(np.float16)).to(torch.float16)\\nfinite = torch.isfinite(vals)\\nx = vals[finite].to(\\\"cuda\\\")  # all finite fp16 values incl. signed zeros, subnormals, +/-65504\\nprint(\\\"N =\\\", x.numel())\\n\\nout = kernel.run(x)\\nref = kernel.reference(x.cpu()).to(\\\"cuda\\\")  # FP64 atan of exact stored values\\nerr = (out.double() - ref.double()).abs()\\nmaxerr = err.max().item()\\nidx = int(err.argmax())\\nn_fail = int((err > 1e-6).sum())\\nprint(\\\"max abs err:\\\", maxerr)\\nprint(\\\"argmax input:\\\", x[idx].item(), \\\"out:\\\", out[idx].item(), \\\"ref:\\\", ref[idx].item())\\nprint(\\\"num elements exceeding 1e-6:\\\", n_fail)\\nif n_fail:\\n    bad = (err > 1e-6).nonzero().squeeze(1)[:10]\\n    for i in bad.tolist():\\n        print(\\\"bad:\\\", x[i].item(), out[i].item(), ref[i].item(), err[i].item())\\nprint(json.dumps({\\\"metric\\\":\\\"max_abs_error_exhaustive_fp16\\\",\\\"max_abs_err\\\":maxerr,\\\"n_fail\\\":n_fail,\\\"N\\\":int(x.numel())}))\", \"expected_signal\": \"max abs err and failure count over entire finite FP16 domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe errored because reference validates FP16; I converted to float64 before calling. Fix: pass x.cpu() (fp16) to reference, or compute atan directly. Rerun."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293065,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 437,
+    "prompt_tokens": 12785,
+    "total_tokens": 13222,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 40,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7341,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

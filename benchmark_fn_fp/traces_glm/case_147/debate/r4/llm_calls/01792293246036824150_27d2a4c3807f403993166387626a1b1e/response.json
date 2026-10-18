@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-0cfb563c",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two runtime probes: c1 with a full sweep of every finite FP16 value (all bit patterns) through the actual kernel, and c2 with a focused probe of FP16 neighbors around the branch boundaries 0.66 and 2.414213562373095. These are independent, so I'll batch them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b50eb70150c51186",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch, struct\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# every finite FP16 bit pattern (0x0000..0x7BFF positive, mirrored for negative)\\ncodes = list(range(0x0000, 0x7C00))  # 0..31743 finite/positive incl +0\\nvals = []\\nfor c in codes:\\n    vals.append(struct.unpack(\\\"<e\\\", struct.pack(\\\"<H\\\", c))[0])\\n    neg = c | 0x8000\\n    vals.append(struct.unpack(\\\"<e\\\", struct.pack(\\\"<H\\\", neg))[0])\\nx = torch.tensor(vals, dtype=torch.float16, device=\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmx, idx = err.max(dim=0)\\nprint(json.dumps({\\n  \\\"n_tested\\\": x.numel(),\\n  \\\"max_abs_err\\\": float(mx),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"worst_input\\\": float(x[idx]),\\n  \\\"n_violations\\\": int((err > 1e-6).sum()),\\n  \\\"passes_contract_every_value\\\": bool((err <= 1e-6).all()),\\n}))\", \"expected_signal\": \"max abs error across all finite FP16 values vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b510eb626aa4bf6b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch, struct\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# FP16 neighbors around boundaries 0.66 and sqrt(2)+1\\ndef fp16_neighbors(v, k=8):\\n    f = torch.tensor([v], dtype=torch.float16)\\n    # gather a grid of fp16 values around v by bit-stepping\\n    code = struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", float(f[0])))[0]\\n    codes = [max(0,min(0x7BFF, code + d)) for d in range(-k, k+1)]\\n    return torch.tensor([struct.unpack(\\\"<e\\\", struct.pack(\\\"<H\\\", c))[0] for c in codes], dtype=torch.float16)\\n\\ncand = torch.cat([fp16_neighbors(0.66), fp16_neighbors(2.414213562373095)])\\ncand = torch.cat([cand, -cand])\\ncand = cand.unique()\\nx = cand.to(\\\"cuda\\\")\\nout = kernel.run(x)\\nref = torch.atan(x.to(torch.float64))\\nerr = (out.to(torch.float64) - ref).abs()\\nmx, idx = err.max(dim=0)\\n# also check discontinuity: compare errors just below/above boundaries\\nprint(json.dumps({\\n  \\\"values\\\": x.cpu().tolist(),\\n  \\\"errors\\\": err.cpu().tolist(),\\n  \\\"max_abs_err\\\": float(mx),\\n  \\\"worst_input\\\": float(x[idx]),\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"n_violations\\\": int((err > 1e-6).sum()),\\n}))\", \"expected_signal\": \"error near branch boundaries 0.66 and 2.414213562373095 vs 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Design probes: c1 full FP16 sweep of all finite values (65536-bit patterns) run through kernel, compare to FP64 atan, report max abs error. c2 boundary values near 0.66 and 2.41421 — but boundary probe is subsumed by full sweep; still do separate focused probe with FP16 neighbors. Launch both together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293248,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 863,
+    "prompt_tokens": 20097,
+    "total_tokens": 20960,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 77,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5755,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

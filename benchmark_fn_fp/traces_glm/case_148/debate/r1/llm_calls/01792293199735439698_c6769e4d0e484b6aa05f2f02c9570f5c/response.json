@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-38924ccf",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes in one batch: c1 (exhaustive 65536-encoding sweep against a mpmath correctly-rounded reference), c2 (focused tail/extreme-encoding check), and c3 (boundary N sizes and storage-offset views). None depends on another's outcome, so all can run in parallel.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b7e30942074c4d99",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, importlib.util, mpmath as mp\\nmp.mp.dps = 60\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_148/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef ref_bits(x_f64):\\n    # correctly-rounded fp16 (RNE) of exact sigmoid(x) computed in high precision\\n    v = mp.mpf(x_f64)\\n    s = 1/(1+mp.exp(-v))\\n    if s <= 0: return 0x0000 if s == 0 else None\\n    # decompose\\n    e = 0\\n    t = s\\n    while t < mp.mpf(2)**-14 and t > 0:  # subnormal\\n        break\\n    # determine exponent\\n    if s >= mp.mpf(2)**-14:\\n        e = -1\\n        while not (mp.mpf(2)**e <= s < mp.mpf(2)**(e+1)): e += 1\\n        frac = s / mp.mpf(2)**e - 1  # in [0,1)\\n        step = mp.mpf(2)**-10\\n    else:\\n        e = -14\\n        frac = s / mp.mpf(2)**-14  # in [0,1)\\n        step = mp.mpf(2)**-24\\n    q = frac / step  # exact-ish quotient in high precision\\n    qi = mp.floor(q)\\n    r = q - qi\\n    if r > mp.mpf('0.5'): qi += 1\\n    elif r == mp.mpf('0.5'):\\n        qi += qi % 2  # ties to even\\n    if e == -14:\\n        val = qi * step\\n        if qi >= mp.mpf(2)**11: return 0x3C00  # shouldn't happen for sigmoid<1\\n        bits = (qi.int_() if hasattr(qi,'int_') else int(qi)) & 0x3FF\\n        return 0x400 | bits if val >= mp.mpf(2)**-14 else bits\\n    m = int(qi)\\n    if m >= 2048: m = 1024; e += 1\\n    return ((e + 15) << 10) | (m & 0x3FF)\\n\\ndef ref_tensor(x_cpu_f16):\\n    xs = x_cpu_f16.to(torch.float64).tolist()\\n    out = [ref_bits(v) for v in xs]\\n    return torch.tensor(out, dtype=torch.int32)\\n\\nxs = torch.arange(0, 65536, dtype=torch.int32)\\nxf = xs.to(torch.uint16).numpy().view  # placeholder\\nimport numpy as np\\nbits = xs.numpy().astype(np.uint16)\\nxf16 = torch.from_numpy(bits.view(np.float16).copy())\\n# exclude NaN/Inf: exponent all ones\\nexp_all = (bits.astype(np.int64) & 0x7C00) == 0x7C00\\nlegal = ~exp_all\\nxf16 = xf16[torch.from_numpy(legal)]\\nN = xf16.numel()\\nprint(\\\"legal count:\\\", N, file=__import__(\\\"sys\\\").stderr)\\n\\ndev = \\\"cuda\\\"\\nres = {\\\"n_legal\\\": int(N), \\\"mismatches\\\": 0, \\\"examples\\\": []}\\nB = 131072\\nmism = 0\\nex = []\\n# split into chunks <=131072; N ~ 61696 < 131072 so one shot\\nxc = xf16.to(dev)\\nout = k.run(xc)\\nob = out.view(torch.int16).to(torch.int64).to(\\\"cpu\\\").numpy() & 0xFFFF\\nrb = ref_tensor(xf16.to(\\\"cpu\\\")).numpy().astype(np.int64)\\nbad = ob != rb\\nmism = int(bad.sum())\\nidx = np.nonzero(bad)[0][:10]\\nfor i in idx:\\n    ex.append({\\\"in_hex\\\": int(bits[torch.from_numpy(legal).numpy().nonzero()[0][i]] if False else int(xf16[i].view(torch.int16)) & 0xFFFF),\\n               \\\"kernel_bits\\\": int(ob[i]), \\\"ref_bits\\\": int(rb[i]),\\n               \\\"kernel_val\\\": float(out[i].cpu()), \\\"x\\\": float(xc[i].cpu())})\\nres[\\\"mismatches\\\"] = mism\\nres[\\\"examples\\\"] = ex\\nimport json\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"exhaustive bit-pattern comparison of all legal finite FP16 encodings vs mpmath correctly-rounded reference; mismatch count 0 -> claim rebutted, >0 -> confirmed\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a4d43a76e4238cbe",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, importlib.util, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_148/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef bits(t): return (t.view(torch.int16).to(torch.int64).to(\\\"cpu\\\").numpy() & 0xFFFF).tolist()\\n\\nvals = [0.0, -0.0, 65504.0, -65504.0, 17.5, 18.0, 11.09, -11.09, -11.1, 12.0, -12.0,\\n        5.96e-8, -5.96e-8, 2.98e-8, -2.98e-8, 1e-4, -1e-4, 20.0, -20.0, 100.0, -100.0]\\nx = torch.tensor(vals, dtype=torch.float16, device=\\\"cuda\\\")\\n# reference per contract\\nimport struct\\ndef ref_one(v):\\n    import math\\n    r = 1.0/(1.0+math.exp(-v))  # fp64 sigmoid\\n    # correctly rounded once to fp16 via struct (RNE)\\n    return struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", r))[0]\\nout = k.run(x)\\nkb = bits(out)\\nrb = [int(struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", 1.0/(1.0+__import__(\\\"math\\\").exp(-float(xi)))))[0]) for xi in x.cpu()]\\n# careful: rb computed above\\nrb2 = []\\nfor xi in x.cpu().tolist():\\n    r = 1.0/(1.0+__import__(\\\"math\\\").exp(-xi))\\n    rb2.append(int(struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", r))[0]))\\nres = {\\\"inputs\\\": x.cpu().tolist(), \\\"kernel_bits\\\": kb, \\\"ref_bits\\\": rb2,\\n       \\\"mismatch\\\": [i for i in range(len(vals)) if kb[i]!=rb2[i]]}\\n# extra checks: zero inputs must give 0x3800; x>17.5 must give 0x0000\\nres[\\\"zero_gives_half\\\"] = kb[0]==0x3800 and kb[1]==0x3800\\nres[\\\"large_pos_zero_bits\\\"] = all(kb[i]==0x0000 for i in [2,6,17,20])\\nres[\\\"large_neg\\\"] = {int(x.cpu().tolist()[i]): kb[i] for i in [3,18,21]}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"tail/extreme encodings: zeros -> 0x3800, large positive -> 0x0000, large negative -> 0x3B80 or correct values; any mismatch confirms claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b5a2473d379df00e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, importlib.util, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_148/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nres = {}\\ngen = torch.Generator().manual_seed(1)\\ndef ref_cpu(x):\\n    return k.reference(x).to(\\\"cpu\\\")\\nfor n in [1, 131072, 4093, 256, 257]:\\n    x = (3*torch.randn(n, generator=gen)).to(torch.float16).cuda()\\n    xb = x.clone()\\n    out = k.run(x)\\n    r = ref_cpu(x)\\n    ok_bits = bool(torch.equal(out.view(torch.int16).cpu(), r.view(torch.int16).cpu()))\\n    fresh = out.data_ptr() != x.data_ptr()\\n    preserved = bool(torch.equal(x, xb))\\n    res[f\\\"N={n}\\\"] = {\\\"bits_match\\\": ok_bits, \\\"fresh_output\\\": fresh, \\\"input_preserved\\\": preserved,\\n                     \\\"shape\\\": list(out.shape), \\\"dtype\\\": str(out.dtype), \\\"device\\\": str(out.device)}\\n# storage-offset contiguous view\\nbig = (3*torch.randn(300, generator=gen)).to(torch.float16).cuda()\\nview = big[5:5+100]  # contiguous, nonzero storage offset\\nassert view.is_contiguous() and view.storage_offset() > 0\\ntry:\\n    out = k.run(view)\\n    r = ref_cpu(view)\\n    res[\\\"offset_view\\\"] = {\\\"accepted\\\": True, \\\"bits_match\\\": bool(torch.equal(out.view(torch.int16).cpu(), r.view(torch.int16).cpu())),\\n                          \\\"storage_offset\\\": view.storage_offset()}\\nexcept Exception as e:\\n    res[\\\"offset_view\\\"] = {\\\"accepted\\\": False, \\\"error\\\": str(e)}\\nprint(json.dumps(res))\\n\", \"expected_signal\": \"all boundary sizes N=1,131072,4093,256,257 produce bit-exact full outputs and input preserved; offset view accepted with matching bits -> claim rebutted\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Design probes. c1: full sweep of all 65536 FP16 encodings, compare kernel output vs high-precision correctly rounded reference (mpmath, sigmoid via exact? Use mpmath with high precision, compute 1/(1+exp(-x)), round to fp16 via struct pack after comparing halves manually — better compute correctly rounded fp16 by using Python float plus Fraction for ties). Simpler: compute reference using mpmath 60 bits, then round-half-even manually to fp16 bit pattern. Do that. c2 covered by subset of the sweep (tail encodings). c3: N=1, N=131072, 4093, storage-offset view, compare vs reference.\n\nAll independent — launch all three in one response. c2 can be separate probe focusing on tails with detailed counts.\n\nReference correctly-rounded fp16: implement function round_fp16(mp value): handle sigmoid in (0,1); for negative x, sigmoid close to 1 — careful with values ≥1-2^-11 etc. Write generic mp rounding to fp16: find exponent, mantissa bits, halfway comparisons. Use mp.mpf.\n\nLoad kernel via importlib from /root/cases/case_148/kernel.py."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293201,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2419,
+    "prompt_tokens": 20288,
+    "total_tokens": 22707,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 254,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,2083 @@
+{
+  "family": "rounding_pair",
+  "cases_reserved": [
+    "case_148",
+    "case_149"
+  ],
+  "state": "completed",
+  "preregistered_contract": {
+    "target": "softsign(x)=x/(1+abs(x))",
+    "input_scalar_domain": "all 63488 finite FP16 encodings including both signed zeros and subnormals",
+    "tensor_domain": "CUDA contiguous one-dimensional ordinary torch.float16, 1<=N<=131072, storage offsets admitted",
+    "output": "fresh torch.float16[N], mathematical target rounded once to IEEE binary16 round-to-nearest ties-to-even; preserve signed zero",
+    "label_rule": "one fixed label for every complete implementation over the entire domain; any mismatching input is only a witness",
+    "tolerance": "exact bitwise FP16 equality, no adaptive tolerance"
+  },
+  "candidate_history": [
+    {
+      "candidate": "fp32_rn_div_then_fp16",
+      "planned_before_screening": true
+    },
+    {
+      "candidate": "fp64_rn_div_then_fp16",
+      "planned_before_screening": true
+    },
+    {
+      "candidate": "sigmoid_fp32_stable_then_fp16",
+      "planned_before_screening": true,
+      "contract": "sigmoid mathematical value correctly rounded once to IEEE FP16 RNE for all finite FP16 inputs; both input zeros produce 0.5; N1..131072; no tolerance"
+    },
+    {
+      "candidate": "sigmoid_fp64_stable_then_fp16",
+      "planned_before_screening": true,
+      "contract": "same sigmoid contract"
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://docs.pytorch.org/docs/2.8/generated/torch.nn.Softsign.html",
+      "role": "real operator mathematical definition; does not claim PyTorch guarantees correctly rounded FP16 outputs"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/triton-lang/triton/v3.4.0/python/triton/language/math.py",
+      "role": "frozen Triton 3.4.0 division API"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/triton-lang/triton/v3.4.0/third_party/nvidia/language/cuda/libdevice.py",
+      "role": "frozen libdevice exp and IEEE division bindings; original implementation, not source copy"
+    },
+    {
+      "url": "https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-cvt",
+      "role": "explicit FP64/FP32 to FP16 conversion and RNE mode semantics"
+    }
+  ],
+  "preliminary_cpu_comparison": {
+    "status": "not_oracle_qualification",
+    "method": "NumPy explicit float32 and float64 separate operations then binary16 conversion",
+    "fp32_vs_fp64_bit_mismatches": 0,
+    "first_examples": []
+  },
+  "preliminary_sigmoid_cpu_comparison": {
+    "status": "not_oracle_qualification",
+    "method": "NumPy FP32/FP64 exp(-abs(x)) stable sigmoid, then FP16",
+    "fp32_vs_fp64_bit_mismatches": 6,
+    "examples": [
+      {
+        "input_bits": "0x1a00",
+        "input": 0.0029296875,
+        "fp32_intermediate": 0.500732421875,
+        "fp64_intermediate": 0.5007324213511315,
+        "fp32_cast_bits": "0x3802",
+        "fp64_cast_bits": "0x3801"
+      },
+      {
+        "input_bits": "0x1f00",
+        "input": 0.0068359375,
+        "fp32_intermediate": 0.501708984375,
+        "fp64_intermediate": 0.5017089777199553,
+        "fp32_cast_bits": "0x3804",
+        "fp64_cast_bits": "0x3803"
+      },
+      {
+        "input_bits": "0x2180",
+        "input": 0.0107421875,
+        "fp32_intermediate": 0.502685546875,
+        "fp64_intermediate": 0.5026855210504991,
+        "fp32_cast_bits": "0x3806",
+        "fp64_cast_bits": "0x3805"
+      },
+      {
+        "input_bits": "0x9600",
+        "input": -0.00146484375,
+        "fp32_intermediate": 0.4996337890625,
+        "fp64_intermediate": 0.49963378912798356,
+        "fp32_cast_bits": "0x37fe",
+        "fp64_cast_bits": "0x37ff"
+      },
+      {
+        "input_bits": "0x9b00",
+        "input": -0.00341796875,
+        "fp32_intermediate": 0.4991455078125,
+        "fp64_intermediate": 0.4991455086443835,
+        "fp32_cast_bits": "0x37fc",
+        "fp64_cast_bits": "0x37fd"
+      },
+      {
+        "input_bits": "0x9d80",
+        "input": -0.00537109375,
+        "fp32_intermediate": 0.4986572265625,
+        "fp64_intermediate": 0.4986572297905906,
+        "fp32_cast_bits": "0x37fa",
+        "fp64_cast_bits": "0x37fb"
+      }
+    ]
+  },
+  "selected_operation": "sigmoid",
+  "selected_contract": {
+    "mathematical_target": "1/(1+exp(-x))",
+    "input": "all 63488 finite FP16 encodings; CUDA contiguous [N],1<=N<=131072; offsets legal",
+    "output": "fresh FP16[N] with exact mathematical value rounded once binary16 RNE",
+    "reference": "CPU FP64 torch.sigmoid followed by direct CPython struct.pack(<e) half packing and raw-byte tensor construction; independently checked for every finite input encoding against MPFR intervals."
+  },
+  "cpu_audit": {
+    "passed": true,
+    "oracle": {
+      "passed": true,
+      "operation": "correctly_rounded_fp16_sigmoid",
+      "finite_encodings": 63488,
+      "subnormal_encodings": 2046,
+      "signed_zero_encodings": 2,
+      "excluded_nan_inf_encodings": 2048,
+      "mpfr_precision_bits": 320,
+      "mpmath_decimal_digits": 110,
+      "mpmath_independent_crosschecks": 63488,
+      "directed_binary64_endpoint_checks": 126976,
+      "gmpy2_version": "2.2.1",
+      "mpfr_version": "MPFR 4.2.1",
+      "mpmath_version": "1.3.0",
+      "max_binary64_interval_width": 1.27675647831893e-14,
+      "max_center_reference_error_bound": 1.27675647831893e-14,
+      "finite_bits_sha256": "2da4a859a17780f673138e72e4e2e6959131ff59f8f5c34d4f68598e722885fe",
+      "lower_table_sha256": "7061839c75d653805512d80b7c0c5d055f6b13564e528dda99775c4dc3431587",
+      "upper_table_sha256": "a911c5d159cd47e2f7ec89275aca4b39af4fdcf2f03510bd12211d649f7e967b",
+      "oracle_dependency_hashes": {
+        "adaptive_unary_oracle.py": "8a01077a0edfa1c366ea6f7d36d01ce91f9898385d19904f39af71157f9c7891",
+        "rounding_pair.py": "817b8ae1aaa1dc0082f5775d284ab5a77518d4a52ad1a5f23340647ad4f6c7d4"
+      },
+      "scope": "Directed mathematical intervals supply the oracle; mpmath agreement is an independent numerical cross-check. Exhaustive scalar encodings are separate from tensor indexing and GPU specialization checks.",
+      "method": "MPFR 320-bit directed exp(-x), addition and reciprocal. Lower sigmoid bound uses an upward denominator; upper bound uses a downward denominator. Exact integer-ratio RNE rounding of both endpoints must select the identical binary16 encoding.",
+      "independent_crosscheck": "110-digit mpmath uses (1+tanh(x/2))/2, algebraically different from the oracle and candidate stable exp/division paths.",
+      "tail_cutoff": 32,
+      "tail_bound_encodings": 22528,
+      "tail_argument": "For x<=-32, 0<sigmoid(x)<exp(-32); for x>=32, 1-exp(-32)<sigmoid(x)<1. The directed bounds both round to +0 or 1 respectively; no input is removed from the domain.",
+      "tail_upper_bound": "1.2664165549094175723120904155965096382135833795309659172537575874144618875814573366199634167411683e-14",
+      "rounding_mode": "binary16 round-to-nearest, ties-to-even",
+      "rounding_interval_certified_encodings": 63488,
+      "integer_rounder_audit": {
+        "passed": true,
+        "exact_representable_round_trips": 15361,
+        "adjacent_midpoint_ties_checked": 15360,
+        "quarter_interval_checks": 30720,
+        "method": "Python Fraction exact dyadics, parity-based tie expectation, and quarter-interval points independently validate integer rounding."
+      },
+      "expected_fp16_table_sha256": "57d9ec464dd46326e09f34903ab3da6f7bfa1f38c4f78f0f385641bfa3817783"
+    },
+    "indexing": {
+      "passed": true,
+      "legal_lengths_checked": 131072,
+      "block_size": 256,
+      "maximum_generated_index": 131071,
+      "argument": "For index=program_id*BLOCK+lane, adjacent blocks cover disjoint adjacent intervals. mask index<N retains [0,N) exactly once. The full legal N range has 1..BLOCK active lanes in its last block, with int32-safe address indices.",
+      "scope": "Arithmetic model of the audited source indexing, not exhaustive GPU testing of every N, address, or compiler specialization."
+    },
+    "public_reference_conversion": {
+      "primitive": "CPython struct.pack('<e', Python float64)",
+      "passed": true,
+      "exact_output_values_checked": 15361,
+      "adjacent_midpoint_ties_checked": 15360,
+      "reason": "Explicit half packing avoids a platform-specific Torch float64-to-half path that may pass through FP32. Whole sigmoid references are also checked against the independent oracle above."
+    },
+    "public_references": [
+      {
+        "case": "case_148",
+        "numeric_passed": true,
+        "finite": true,
+        "elements": 63488,
+        "definite_failures": 0,
+        "interval_ambiguous_elements": 0,
+        "maximum_fp16_encoding_distance": 0,
+        "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+        "witness": null,
+        "first_mismatches": [],
+        "public_reference_dtype": "float16"
+      },
+      {
+        "case": "case_149",
+        "numeric_passed": true,
+        "finite": true,
+        "elements": 63488,
+        "definite_failures": 0,
+        "interval_ambiguous_elements": 0,
+        "maximum_fp16_encoding_distance": 0,
+        "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+        "witness": null,
+        "first_mismatches": [],
+        "public_reference_dtype": "float16"
+      }
+    ],
+    "oracle_dependency_hashes": {
+      "adaptive_unary_oracle.py": "8a01077a0edfa1c366ea6f7d36d01ce91f9898385d19904f39af71157f9c7891",
+      "rounding_pair.py": "817b8ae1aaa1dc0082f5775d284ab5a77518d4a52ad1a5f23340647ad4f6c7d4"
+    },
+    "scope": "Every finite scalar input and both public CPU reference functions checked; GPU libdevice arithmetic/conversions require separate T4 validation."
+  },
+  "cpu_screen": [
+    {
+      "case": "case_148",
+      "candidate": "stable_sigmoid_float64_then_fp16",
+      "method": "CPU NumPy exp/division, distinct from libdevice; only screening, not GPU qualification",
+      "numeric_passed": true,
+      "finite": true,
+      "elements": 63488,
+      "definite_failures": 0,
+      "interval_ambiguous_elements": 0,
+      "maximum_fp16_encoding_distance": 0,
+      "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+      "witness": null,
+      "first_mismatches": []
+    },
+    {
+      "case": "case_149",
+      "candidate": "stable_sigmoid_float32_then_fp16",
+      "method": "CPU NumPy exp/division, distinct from libdevice; only screening, not GPU qualification",
+      "numeric_passed": false,
+      "finite": true,
+      "elements": 63488,
+      "definite_failures": 6,
+      "interval_ambiguous_elements": 0,
+      "maximum_fp16_encoding_distance": 1,
+      "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+      "witness": {
+        "index": 6656,
+        "input_bits_hex": "0x1a00",
+        "input": 0.0029296875,
+        "actual_bits_hex": "0x3802",
+        "actual": 0.5009765625,
+        "expected_bits_hex": "0x3801",
+        "expected": 0.50048828125,
+        "mathematical_reference_lower": 0.5007324213511315,
+        "mathematical_reference_upper": 0.5007324213511316
+      },
+      "first_mismatches": [
+        {
+          "index": 6656,
+          "input_bits_hex": "0x1a00",
+          "input": 0.0029296875,
+          "actual_bits_hex": "0x3802",
+          "actual": 0.5009765625,
+          "expected_bits_hex": "0x3801",
+          "expected": 0.50048828125,
+          "mathematical_reference_lower": 0.5007324213511315,
+          "mathematical_reference_upper": 0.5007324213511316
+        },
+        {
+          "index": 7936,
+          "input_bits_hex": "0x1f00",
+          "input": 0.0068359375,
+          "actual_bits_hex": "0x3804",
+          "actual": 0.501953125,
+          "expected_bits_hex": "0x3803",
+          "expected": 0.50146484375,
+          "mathematical_reference_lower": 0.5017089777199552,
+          "mathematical_reference_upper": 0.5017089777199553
+        },
+        {
+          "index": 8576,
+          "input_bits_hex": "0x2180",
+          "input": 0.0107421875,
+          "actual_bits_hex": "0x3806",
+          "actual": 0.5029296875,
+          "expected_bits_hex": "0x3805",
+          "expected": 0.50244140625,
+          "mathematical_reference_lower": 0.502685521050499,
+          "mathematical_reference_upper": 0.5026855210504991
+        },
+        {
+          "index": 37376,
+          "input_bits_hex": "0x9600",
+          "input": -0.00146484375,
+          "actual_bits_hex": "0x37fe",
+          "actual": 0.49951171875,
+          "expected_bits_hex": "0x37ff",
+          "expected": 0.499755859375,
+          "mathematical_reference_lower": 0.49963378912798356,
+          "mathematical_reference_upper": 0.4996337891279836
+        },
+        {
+          "index": 38656,
+          "input_bits_hex": "0x9b00",
+          "input": -0.00341796875,
+          "actual_bits_hex": "0x37fc",
+          "actual": 0.4990234375,
+          "expected_bits_hex": "0x37fd",
+          "expected": 0.499267578125,
+          "mathematical_reference_lower": 0.4991455086443835,
+          "mathematical_reference_upper": 0.49914550864438356
+        },
+        {
+          "index": 39296,
+          "input_bits_hex": "0x9d80",
+          "input": -0.00537109375,
+          "actual_bits_hex": "0x37fa",
+          "actual": 0.49853515625,
+          "expected_bits_hex": "0x37fb",
+          "expected": 0.498779296875,
+          "mathematical_reference_lower": 0.4986572297905905,
+          "mathematical_reference_upper": 0.4986572297905906
+        }
+      ]
+    }
+  ],
+  "public_file_sha256": {
+    "case_148/kernel.py": "dc41be012522d33a436c315f2bd81cf9e9db7c0b44082e637a9db97580a77ac8",
+    "case_148/problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a",
+    "case_148/meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "case_149/kernel.py": "7ed13d99588750df591d06621c01c9336302d44a26b32909db3697192ed7a38e",
+    "case_149/problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a",
+    "case_149/meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  },
+  "model_evaluation_plan": {
+    "registered_at_utc": "2026-10-18T03:07:14.331264+00:00",
+    "cohort": "rounding",
+    "first_pass_trial": "r1",
+    "first_pass_cases": [
+      "case_148",
+      "case_149"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "model": "accounts/fireworks/models/glm-5p3",
+    "provider": "fireworks",
+    "reasoning_effort": "low",
+    "total_output_tokens_per_arm": 32768,
+    "single_call_max_tokens": 32768,
+    "tool_turn_max_tokens": 8192,
+    "solo_rounds": 10,
+    "debate_rounds": 4,
+    "debate_closeout_reserve": 8192,
+    "require_claim_scope_fields": true,
+    "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+    "pre_evaluation_hashes": {
+      "case_148": {
+        "kernel.py": "dc41be012522d33a436c315f2bd81cf9e9db7c0b44082e637a9db97580a77ac8",
+        "problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a"
+      },
+      "case_149": {
+        "kernel.py": "7ed13d99588750df591d06621c01c9336302d44a26b32909db3697192ed7a38e",
+        "problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a"
+      }
+    },
+    "qualification_gate": "Run models only after independent T4 qualification freezes each implementation and label.",
+    "repeat_rule": "If an initial no-tool verdict is wrong while BOTH tool arms are correct with semantically valid evidence, run exactly five fresh complete all-three-arm trials r2 through r6 for that case. Finish all five regardless of intervening outcomes. Pass this wave repeat check only if every fresh trial has no-tool wrong and both tool arms correct with valid evidence; otherwise retain as variable/ordinary. Report selection and all outcomes. This is an observed five-repeat criterion, not a population reliability guarantee.",
+    "retry_rule": "No reruns to improve model answers. Preserve all failures. Only infrastructure failures before any model call may receive a documented retry.",
+    "selection_rule": "Retain all6 first-pass case-arm evaluations for this family; do not change sources, labels, tolerance or prompts after model results.",
+    "reference_revision_registered_at_utc": "2026-10-18T03:10:21.110216+00:00"
+  },
+  "reference_revision_history": [
+    {
+      "revision": "direct_half_packing_before_model_evaluation",
+      "timestamp_utc": "2026-10-18T03:09:48.386786+00:00",
+      "reason": "Frozen Linux/T4 environment CPU reference failed independent oracle on 7 finite FP16 inputs before any model call or kernel qualification. Torch CPU float64-to-FP16 cast appears to pass through FP32 on this platform; local macOS behavior differed.",
+      "failed_qualification": "real_kernel_challenges/private_data/qualification/r22.json",
+      "failed_stage": "cpu_audit of public reference before candidate GPU execution",
+      "error": "Traceback (most recent call last):\n  File \"/root/validate_modal.py\", line 70, in qualify\n    result = module.validate(Path(\"/root/cases\"))\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/root/oracles/rounding_pair.py\", line 203, in validate\n    cpu = cpu_audit(case_root)\n          ^^^^^^^^^^^^^^^^^^^^\n  File \"/root/oracles/rounding_pair.py\", line 195, in cpu_audit\n    assert result['numeric_passed'], result\n           ~~~~~~^^^^^^^^^^^^^^^^^^\nAssertionError: {'numeric_passed': False, 'finite': True, 'elements': 63488, 'definite_failures': 7, 'interval_ambiguous_elements': 0, 'maximum_fp16_encoding_distance': 1, 'comparison': 'exact FP16 bits versus directed-interval-certified RNE result', 'witness': {'index': 6656, 'input_bits_hex': '0x1a00', 'input': 0.0029296875, 'actual_bits_hex': '0x3802', 'actual': 0.5009765625, 'expected_bits_hex': '0x3801', 'expected': 0.50048828125, 'mathematical_reference_lower': 0.5007324213511315, 'mathematical_reference_upper': 0.5007324213511316}, 'first_mismatches': [{'index': 6656, 'input_bits_hex': '0x1a00', 'input': 0.0029296875, 'actual_bits_hex': '0x3802', 'actual': 0.5009765625, 'expected_bits_hex': '0x3801', 'expected': 0.50048828125, 'mathematical_reference_lower': 0.5007324213511315, 'mathematical_reference_upper': 0.5007324213511316}, {'index': 7936, 'input_bits_hex': '0x1f00', 'input': 0.0068359375, 'actual_bits_hex': '0x3804', 'actual': 0.501953125, 'expected_bits_hex': '0x3803', 'expected': 0.50146484375, 'mathematical_reference_lower': 0.5017089777199552, 'mathematical_reference_upper': 0.5017089777199553}, {'index': 8576, 'input_bits_hex': '0x2180', 'input': 0.0107421875, 'actual_bits_hex': '0x3806', 'actual': 0.5029296875, 'expected_bits_hex': '0x3805', 'expected': 0.50244140625, 'mathematical_reference_lower': 0.502685521050499, 'mathematical_reference_upper': 0.5026855210504991}, {'index': 37376, 'input_bits_hex': '0x9600', 'input': -0.00146484375, 'actual_bits_hex': '0x37fe', 'actual': 0.49951171875, 'expected_bits_hex': '0x37ff', 'expected': 0.499755859375, 'mathematical_reference_lower': 0.49963378912798356, 'mathematical_reference_upper': 0.4996337891279836}, {'index': 38656, 'input_bits_hex': '0x9b00', 'input': -0.00341796875, 'actual_bits_hex': '0x37fc', 'actual': 0.4990234375, 'expected_bits_hex': '0x37fd', 'expected': 0.499267578125, 'mathematical_reference_lower': 0.4991455086443835, 'mathematical_reference_upper': 0.49914550864438356}, {'index': 39296, 'input_bits_hex': '0x9d80', 'input': -0.00537109375, 'actual_bits_hex': '0x37fa', 'actual': 0.49853515625, 'expected_bits_hex': '0x37fb', 'expected': 0.498779296875, 'mathematical_reference_lower': 0.4986572297905905, 'mathematical_reference_upper': 0.4986572297905906}, {'index': 39808, 'input_bits_hex': '0x9f80', 'input': -0.00732421875, 'actual_bits_hex': '0x37f8', 'actual': 0.498046875, 'expected_bits_hex': '0x37f9', 'expected': 0.498291015625, 'mathematical_reference_lower': 0.49816895349790835, 'mathematical_reference_upper': 0.4981689534979084}]}\n",
+      "old_kernel_file_hashes": {
+        "case_148": "5fd308c2102ff5f3609d067df6310481836bc4c986e24da3b1a7ff9e4a5e44a3",
+        "case_149": "b0ce297053b0b1f9bd6f54d57971e65d3b0812b88193d9edf997a5d668ebe714"
+      },
+      "old_public_reference_body": "def reference(x):\n    \"\"\"CPU FP64 evaluation followed by FP16 conversion, returned on x.device.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    values = x.detach().to(device=\"cpu\", dtype=torch.float64)\n    result = torch.sigmoid(values).to(torch.float16)\n    return result.to(x.device)\n",
+      "old_cpu_audit_passed_on_local_platform": {
+        "passed": true,
+        "oracle": {
+          "passed": true,
+          "operation": "correctly_rounded_fp16_sigmoid",
+          "finite_encodings": 63488,
+          "subnormal_encodings": 2046,
+          "signed_zero_encodings": 2,
+          "excluded_nan_inf_encodings": 2048,
+          "mpfr_precision_bits": 320,
+          "mpmath_decimal_digits": 110,
+          "mpmath_independent_crosschecks": 63488,
+          "directed_binary64_endpoint_checks": 126976,
+          "gmpy2_version": "2.2.1",
+          "mpfr_version": "MPFR 4.2.1",
+          "mpmath_version": "1.3.0",
+          "max_binary64_interval_width": 1.27675647831893e-14,
+          "max_center_reference_error_bound": 1.27675647831893e-14,
+          "finite_bits_sha256": "2da4a859a17780f673138e72e4e2e6959131ff59f8f5c34d4f68598e722885fe",
+          "lower_table_sha256": "7061839c75d653805512d80b7c0c5d055f6b13564e528dda99775c4dc3431587",
+          "upper_table_sha256": "a911c5d159cd47e2f7ec89275aca4b39af4fdcf2f03510bd12211d649f7e967b",
+          "oracle_dependency_hashes": {
+            "adaptive_unary_oracle.py": "8a01077a0edfa1c366ea6f7d36d01ce91f9898385d19904f39af71157f9c7891",
+            "rounding_pair.py": "efb7d06bd9986875cac6f78c1ad6a60180b35867a9ac9f27f921ec39967eddc2"
+          },
+          "scope": "Directed mathematical intervals supply the oracle; mpmath agreement is an independent numerical cross-check. Exhaustive scalar encodings are separate from tensor indexing and GPU specialization checks.",
+          "method": "MPFR 320-bit directed exp(-x), addition and reciprocal. Lower sigmoid bound uses an upward denominator; upper bound uses a downward denominator. Exact integer-ratio RNE rounding of both endpoints must select the identical binary16 encoding.",
+          "independent_crosscheck": "110-digit mpmath uses (1+tanh(x/2))/2, algebraically different from the oracle and candidate stable exp/division paths.",
+          "tail_cutoff": 32,
+          "tail_bound_encodings": 22528,
+          "tail_argument": "For x<=-32, 0<sigmoid(x)<exp(-32); for x>=32, 1-exp(-32)<sigmoid(x)<1. The directed bounds both round to +0 or 1 respectively; no input is removed from the domain.",
+          "tail_upper_bound": "1.2664165549094175723120904155965096382135833795309659172537575874144618875814573366199634167411683e-14",
+          "rounding_mode": "binary16 round-to-nearest, ties-to-even",
+          "rounding_interval_certified_encodings": 63488,
+          "integer_rounder_audit": {
+            "passed": true,
+            "exact_representable_round_trips": 15361,
+            "adjacent_midpoint_ties_checked": 15360,
+            "quarter_interval_checks": 30720,
+            "method": "Python Fraction exact dyadics, parity-based tie expectation, and quarter-interval points independently validate integer rounding."
+          },
+          "expected_fp16_table_sha256": "57d9ec464dd46326e09f34903ab3da6f7bfa1f38c4f78f0f385641bfa3817783"
+        },
+        "indexing": {
+          "passed": true,
+          "legal_lengths_checked": 131072,
+          "block_size": 256,
+          "maximum_generated_index": 131071,
+          "argument": "For index=program_id*BLOCK+lane, adjacent blocks cover disjoint adjacent intervals. mask index<N retains [0,N) exactly once. The full legal N range has 1..BLOCK active lanes in its last block, with int32-safe address indices.",
+          "scope": "Arithmetic model of the audited source indexing, not exhaustive GPU testing of every N, address, or compiler specialization."
+        },
+        "public_references": [
+          {
+            "case": "case_148",
+            "numeric_passed": true,
+            "finite": true,
+            "elements": 63488,
+            "definite_failures": 0,
+            "interval_ambiguous_elements": 0,
+            "maximum_fp16_encoding_distance": 0,
+            "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+            "witness": null,
+            "first_mismatches": [],
+            "public_reference_dtype": "float16"
+          },
+          {
+            "case": "case_149",
+            "numeric_passed": true,
+            "finite": true,
+            "elements": 63488,
+            "definite_failures": 0,
+            "interval_ambiguous_elements": 0,
+            "maximum_fp16_encoding_distance": 0,
+            "comparison": "exact FP16 bits versus directed-interval-certified RNE result",
+            "witness": null,
+            "first_mismatches": [],
+            "public_reference_dtype": "float16"
+          }
+        ],
+        "oracle_dependency_hashes": {
+          "adaptive_unary_oracle.py": "8a01077a0edfa1c366ea6f7d36d01ce91f9898385d19904f39af71157f9c7891",
+          "rounding_pair.py": "efb7d06bd9986875cac6f78c1ad6a60180b35867a9ac9f27f921ec39967eddc2"
+        },
+        "scope": "Every finite scalar input and both public CPU reference functions checked; GPU libdevice arithmetic/conversions require separate T4 validation."
+      },
+      "old_helper_sha256": "efb7d06bd9986875cac6f78c1ad6a60180b35867a9ac9f27f921ec39967eddc2",
+      "repair": "Keep CPU FP64 sigmoid, serialize each Python float64 directly with standard-library struct.pack(<e), then construct torch.float16 from the resulting raw bytes. Candidate GPU kernels, public domain, exact-rounding criterion and provisional labels are unchanged.",
+      "model_calls_before_repair": 0,
+      "new_public_file_sha256": {
+        "case_148/kernel.py": "dc41be012522d33a436c315f2bd81cf9e9db7c0b44082e637a9db97580a77ac8",
+        "case_148/problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a",
+        "case_148/meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+        "case_149/kernel.py": "7ed13d99588750df591d06621c01c9336302d44a26b32909db3697192ed7a38e",
+        "case_149/problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a",
+        "case_149/meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      },
+      "local_cpu_reaudit_passed": true,
+      "new_oracle_dependency_hashes": {
+        "adaptive_unary_oracle.py": "8a01077a0edfa1c366ea6f7d36d01ce91f9898385d19904f39af71157f9c7891",
+        "rounding_pair.py": "817b8ae1aaa1dc0082f5775d284ab5a77518d4a52ad1a5f23340647ad4f6c7d4"
+      }
+    }
+  ],
+  "gpu_qualification": {
+    "evidence_file": "qualification/r24.json",
+    "environment": {
+      "gpu": "Tesla T4",
+      "compute_capability": [
+        7,
+        5
+      ],
+      "torch": "2.8.0+cu128",
+      "triton": "3.4.0",
+      "numpy": "1.26.4",
+      "python": "3.11.12"
+    },
+    "cases": {
+      "case_148": {
+        "ground_truth": "trust",
+        "qualification_passed": true,
+        "tests_total": 36,
+        "tests_passed": 36,
+        "kernel_sha256": "dc41be012522d33a436c315f2bd81cf9e9db7c0b44082e637a9db97580a77ac8",
+        "problem_sha256": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a"
+      },
+      "case_149": {
+        "ground_truth": "reject",
+        "qualification_passed": true,
+        "tests_total": 36,
+        "tests_passed": 24,
+        "kernel_sha256": "7ed13d99588750df591d06621c01c9336302d44a26b32909db3697192ed7a38e",
+        "problem_sha256": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a"
+      }
+    }
+  },
+  "status": "completed",
+  "conditional_replication_plan": {
+    "registered_at_utc": "2026-10-18T03:15:43.113427+00:00",
+    "case": "case_149",
+    "trials": [
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "trigger": "r1 single_call incorrectly trusts, solo t6 and debate t9 correctly reject after actual full63488 finite FP16 GPU sweeps, each observing7 bit mismatches corroborated by the independent MPFR qualification. Example x=.0029296875 actual.5009765625, expected.50048828125. Debate has additional flawed nondecisive probes retained in the audit.",
+    "rule": "If an initial no-tool verdict is wrong while BOTH tool arms are correct with semantically valid evidence, run exactly five fresh complete all-three-arm trials r2 through r6 for that case. Finish all five regardless of intervening outcomes. Pass this wave repeat check only if every fresh trial has no-tool wrong and both tool arms correct with valid evidence; otherwise retain as variable/ordinary. Report selection and all outcomes. This is an observed five-repeat criterion, not a population reliability guarantee.",
+    "pre_evaluation_hashes": {
+      "kernel.py": "7ed13d99588750df591d06621c01c9336302d44a26b32909db3697192ed7a38e",
+      "problem.txt": "29575689fbaf5902af9311227ca5b42c3eca1761afb0155a4971d6e7909da20a"
+    },
+    "sources_and_protocol_unchanged": true
+  },
+  "model_calls_performed": 109,
+  "model_evaluation": {
+    "totals": {
+      "attempts": 6,
+      "outcomes": {
+        "correct": 5,
+        "wrong_verdict": 1
+      },
+      "audited_correct": 5,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 0.994365,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 11
+    },
+    "arms": {
+      "single_call": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 1,
+          "wrong_verdict": 1
+        },
+        "audited_correct": 1,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.009352,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "solo": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.165977,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 2
+      },
+      "debate": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.819036,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 9
+      }
+    },
+    "runs": [
+      {
+        "case": "case_148",
+        "arm": "single_call",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.004548,
+        "probes": 0,
+        "link": "traces_glm/case_148/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 1514,
+        "output_tokens": 552,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_148",
+        "arm": "solo",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.079989,
+        "probes": 1,
+        "link": "traces_glm/case_148/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 48536,
+        "output_tokens": 2736,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_148",
+        "arm": "debate",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.430406,
+        "probes": 6,
+        "link": "traces_glm/case_148/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 260900,
+        "output_tokens": 14806,
+        "llm_api_calls": 8
+      },
+      {
+        "case": "case_149",
+        "arm": "single_call",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "wrong_verdict",
+        "usd": 0.004804,
+        "probes": 0,
+        "link": "traces_glm/case_149/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 1514,
+        "output_tokens": 610,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_149",
+        "arm": "solo",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.085988,
+        "probes": 1,
+        "link": "traces_glm/case_149/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 54528,
+        "output_tokens": 2193,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_149",
+        "arm": "debate",
+        "trial": "r1",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.38863,
+        "probes": 3,
+        "link": "traces_glm/case_149/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 250599,
+        "output_tokens": 8589,
+        "llm_api_calls": 6
+      }
+    ]
+  },
+  "semantic_evidence_audit": [
+    {
+      "case": "case_148",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "summary": "Correct Accept, but the rationale does not certify correct rounding. It calls FP64 exp error negligible and invokes what graders typically trust, without proving distance from FP16 midpoints. No executed probes or domain coverage.",
+      "evidence": [
+        "traces_glm/case_148/single_call/r1/transcript.md",
+        "traces_glm/case_148/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_148",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct Accept with an actual T4 sweep of all63488 finite FP16 encodings, zero mismatches against60-digit mpmath sigmoid and manually selected FP16 neighbor. This is scalar coverage, not every length/offset. The manual rounder has an incorrect branch for an exactly represented odd-significand value, but the sigmoid outputs triggering exact equality in this tested domain are 0.5/1 (even encodings); independent directed qualification corroborates the resulting table. mpmath60 is not a formal interval proof. Source reasoning covers fresh output/input writes; no full tensor-execution exhaustion.",
+      "evidence": [
+        "traces_glm/case_148/solo/r1/run.json",
+        "traces_glm/case_148/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_148/solo/r1/probes/t6_stdout.txt",
+        "traces_glm/case_148/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_148",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "trust",
+      "confidence": 0.97,
+      "valid_decisive_evidence": true,
+      "summary": "Correct Accept with valid empirical support, but defective supplemental reasoning. t13 executes the real CUDA kernel on all 63,488 finite FP16 bit patterns and finds zero exact-bit mismatches against an overflow-safe NumPy FP64 sigmoid followed by NumPy FP16 conversion. t11 checks N=1,256,257,4093,131072 plus a contiguous offset-5 view, all matching the repaired public reference; sampled outputs are fresh and inputs numerically preserved. Independent qualification r24 certifies the scalar result with a directed MPFR oracle. The model did not successfully complete its own high-precision oracle: its mpmath helpers are incorrect.",
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 0,
+      "reasoning_change": "The skeptic raised a real potential FP64-to-FP16 rounding concern, but also inverted sigmoid tail behavior in its claim. The experimenter repaired crashed/slow probes, obtained valid NumPy comparisons, and recognized its mpmath helper was buggy; it never accurately diagnosed all helper errors and repeated inverted-tail explanations in its final report.",
+      "failed_or_limited_probes": [
+        "t9 times out at 60 seconds after printing the correct legal count. Its exponent search starts at -1 and only increments, so an ordinary sigmoid value below 0.5 can never meet the interval test; this is a nonterminating helper, not merely a slow complete mpmath sweep. It also contains malformed subnormal and carry rounding logic.",
+        "t10 calls math.exp(-x) directly, overflows at the legal input -65504 and produces no comparison. Dead code also contains incorrect positive/negative expectations and an out-of-range list index; these are not GPU defects.",
+        "t13 supplementary exact_ref_bits computes sigmoid(-x) rather than sigmoid(x), and its hand-written binary16 encoding has subnormal/carry errors. Seven of eight near-tie adjudications are therefore bogus; kernel_exact_failures=0 only loops over the empty NumPy mismatch list and is not a successful high-precision crosscheck.",
+        "t14 main comparison genuinely covers 25,154 tail/zero encodings with no mismatches. Its large_pos_gives_zero and large_neg_gives_0x3B80 expectations are mathematically false. Later explanations still invert sigmoid signs and confuse 0x3B80 with 1-2^-11; these are not just slightly inaccurate threshold estimates.",
+        "Final near-tie explanation uses approximately 2e-10; at x=0.0009765625 the real sigmoid is 0.500244140605597448..., below the midpoint 0.500244140625 by approximately 1.94025518e-11, and correctly rounds to 0x3800. The conclusion is right but the hand reasoning is unreliable.",
+        "Exhaustive scalar encodings plus sampled lengths/offsets do not prove every tensor execution. The final claim that this is the whole input domain without any remaining distribution gap is too broad. Input-preservation comparisons use torch.equal, which does not check signed-zero bit preservation."
+      ],
+      "independent_auditor_cpu_check": {
+        "numpy_reference_vs_directed_mpfr_oracle_mismatches": 0,
+        "finite_encodings": 63488,
+        "note": "Read-only local CPU reproduction of the t13 NumPy formula agrees with the private independently certified RNE table. This is an auditor check, not a model-performed high-precision proof; r24 separately corroborates GPU output in the frozen environment."
+      },
+      "evidence": [
+        "traces_glm/case_148/debate/r1/verdict.json",
+        "traces_glm/case_148/debate/r1/transcript.md",
+        "traces_glm/case_148/debate/r1/tool_events.jsonl",
+        "traces_glm/case_148/debate/r1/trace_meta.json",
+        "traces_glm/case_148/debate/r1/runtime.json",
+        "traces_glm/case_148/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_148/debate/r1/probes/t9_stderr.txt",
+        "traces_glm/case_148/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_148/debate/r1/probes/t10_stderr.txt",
+        "traces_glm/case_148/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_148/debate/r1/probes/t11_stdout.txt",
+        "traces_glm/case_148/debate/r1/probes/t13_probe.py",
+        "traces_glm/case_148/debate/r1/probes/t13_stdout.txt",
+        "traces_glm/case_148/debate/r1/probes/t14_probe.py",
+        "traces_glm/case_148/debate/r1/probes/t14_stdout.txt",
+        "real_kernel_challenges/private_data/qualification/r24.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "summary": "Wrong Accept. The reasoning explicitly notices midpoint crossings, then dismisses them as astronomically unlikely and incorrectly infers exact FP16 rounding from an FP32 error smaller than half an FP16 ulp. Exact ties are unnecessary: a nearby exact value can round differently after FP32 rounding. Frozen GPU qualification has seven legal failing scalar encodings. No tools or domain coverage.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r1/transcript.md",
+        "traces_glm/case_149/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "summary": "Correct Reject, but only a general risk/probability argument about FP32 errors crossing FP16 midpoints, with no actual legal failing input. Insufficient accuracy guarantee is not itself a concrete defect; the binary label happens to be correct.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r2/transcript.md",
+        "traces_glm/case_149/single_call/r2/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r3",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "summary": "Wrong Accept; claims no concrete failing FP16 input exists and says near-midpoint cases remain on the same side after rounding. Actual independent enumeration gives7 failures. No executable test or valid all-domain midpoint-margin proof.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r3/transcript.md",
+        "traces_glm/case_149/single_call/r3/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "summary": "Wrong Accept despite explicitly recognizing a plausible number of midpoint crossings. It prefers what it thinks a well-crafted benchmark implementation should do rather than checking the strict contract; FP32 precision alone does not establish correct FP16 rounding.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r4/transcript.md",
+        "traces_glm/case_149/single_call/r4/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "summary": "Correct Reject via double-rounding and statistical expectation of near-midpoint inputs, without an actual witness. This does not certify a particular failing input, but the frozen binary label agrees.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r5/transcript.md",
+        "traces_glm/case_149/single_call/r5/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "single_call",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "summary": "Wrong Accept: acknowledges midpoint risk then dismisses it as unlikely and calls the symmetric formulation designed to be correct. Far-smaller-than-FP16 arithmetic error does not rule out midpoint crossings.",
+      "evidence": [
+        "traces_glm/case_149/single_call/r6/transcript.md",
+        "traces_glm/case_149/single_call/r6/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Correct Reject with actual full63488-value GPU sweep and7 mismatches. Independent NumPy FP64 logistic then direct FP16 conversion gives correct expected witness bits, corroborated by frozen MPFR qualification. At x=.0029296875 actual.5009765625 vs expected.50048828125. The NumPy exp overflow warning occurs at large negative legal inputs and yields0, which is the correctly rounded FP16 tail; it does not invalidate near-zero witnesses. No seed/domain restriction or tolerance relabeling.",
+      "evidence": [
+        "traces_glm/case_149/solo/r1/run.json",
+        "traces_glm/case_149/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_149/solo/r1/probes/t6_stdout.txt",
+        "traces_glm/case_149/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Correct Reject. t7 actually sweeps63488 finite FP16 encodings against the certified public reference and finds7 exact-bit failures. t8 independently recomputes all7 near-zero sigmoid values with60-digit Decimal exp series and confirms the side of each midpoint; the numerical margins are ample. The CPU follow-up verifies existing GPU witnesses and does not invent them.",
+      "evidence": [
+        "traces_glm/case_149/solo/r2/run.json",
+        "traces_glm/case_149/solo/r2/verdict.json",
+        "traces_glm/case_149/solo/r2/probes/t7_probe.py",
+        "traces_glm/case_149/solo/r2/probes/t7_stdout.txt",
+        "traces_glm/case_149/solo/r2/probes/t8_probe.py",
+        "traces_glm/case_149/solo/r2/probes/t8_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Correct Reject. t6 bitcasts65536 raw codes, filters nonfinite, and actually runs63488 legal values on GPU; reference uses FP64 torch.sigmoid followed by struct.pack direct FP16 rounding, giving7 real mismatches. It incorrectly prints finite.numel()=65536 as the finite-domain size and repeats that number in the final verdict. Its out!=ref compares values rather than raw bits, but the printed positive finite witness outputs differ by one FP16 step, so the rejection is valid.",
+      "evidence": [
+        "traces_glm/case_149/solo/r3/run.json",
+        "traces_glm/case_149/solo/r3/verdict.json",
+        "traces_glm/case_149/solo/r3/probes/t6_probe.py",
+        "traces_glm/case_149/solo/r3/probes/t6_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r4",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Valid Reject. Probe t6 enumerates all uint16 bit patterns through NumPy reinterpretation as FP16, filters only nonfinite values, and executes one legal 63,488-element GPU input. The comparison reference is written explicitly in the probe: CPU torch.sigmoid on float64 values followed by struct.pack(\"<e\") for each value; there is no FP64 -> torch.half reference conversion. Seven bitwise mismatches are printed, including x=0.0029296875, output0.5009765625 versus reference0.50048828125. The later manual midpoint check for that witness is valid: true sigmoid approximately0.500732421351 lies below0.500732421875. The probe emits a warning for a non-writable bytes buffer, but clones it immediately and does not mutate the original, so this is not a failed run or an invalid reference. Opening text incorrectly calls all65,536 encodings finite; the actual filtered enumeration and result count are correct. Scalar enumeration does not exhaust tensor lengths/offsets. Claimed ~1e-7 intermediate error is not measured, so retain the observed bit failure separately from its proposed cause.",
+      "evidence": [
+        "traces_glm/case_149/solo/r4/verdict.json",
+        "traces_glm/case_149/solo/r4/transcript.md",
+        "traces_glm/case_149/solo/r4/probes/t6_probe.py",
+        "traces_glm/case_149/solo/r4/probes/t6_stdout.txt",
+        "traces_glm/case_149/solo/r4/probes/t6_stderr.txt",
+        "traces_glm/case_149/solo/r4/trace_meta.json"
+      ],
+      "confidence": 0.97,
+      "valid_gpu_comparison": true,
+      "complete_finite_fp16_scalar_enumeration": true,
+      "enumerated_encodings": 63488,
+      "mismatches": 7,
+      "reference_rounding": "Probe CPU FP64 sigmoid -> struct.pack binary16 RNE",
+      "counterexample": {
+        "input": 0.0029296875,
+        "actual": 0.5009765625,
+        "expected": 0.50048828125,
+        "actual_bits": "0x3802",
+        "expected_bits": "0x3801"
+      },
+      "frozen_public_hashes_match": true
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Valid Reject. Probe t6 constructs all 65,536 binary16 codes as uint16, reinterprets rather than numerically converts them, filters nonfinite encodings, and executes the candidate once on all 63,488 finite values, a legal length. Exact bit comparisons find seven mismatches. The actual public reference uses CPU FP64 sigmoid followed by direct struct.pack(\"<e\"), not a torch.half FP64 cast. All seven mismatches are also checked with independent Python math.exp followed by the same direct struct packing; small-magnitude inputs avoid its potential large-negative overflow. Example x=0.0029296875 returns 0.5009765625/0x3802 versus correct 0.50048828125/0x3801. The misleading source comment saying 65,504 finite encodings does not affect the real 63,488-value enumeration. This exhausts scalar values in one execution, not lengths/layout/storage obligations; a legal witness suffices for Reject. The proposed FP32 intermediate-rounding mechanism is plausible from the code/results, but the probe does not isolate exp error versus division/addition rounding or prove a per-operation root cause.",
+      "evidence": [
+        "traces_glm/case_149/solo/r5/verdict.json",
+        "traces_glm/case_149/solo/r5/transcript.md",
+        "traces_glm/case_149/solo/r5/probes/t6_probe.py",
+        "traces_glm/case_149/solo/r5/probes/t6_stdout.txt",
+        "traces_glm/case_149/solo/r5/trace_meta.json"
+      ],
+      "confidence": 0.99,
+      "valid_gpu_comparison": true,
+      "complete_finite_fp16_scalar_enumeration": true,
+      "enumerated_encodings": 63488,
+      "mismatches": 7,
+      "reference_rounding": "CPU FP64 sigmoid -> struct.pack binary16 RNE",
+      "counterexample": {
+        "input": 0.0029296875,
+        "actual": 0.5009765625,
+        "expected": 0.50048828125,
+        "actual_bits": "0x3802",
+        "expected_bits": "0x3801"
+      },
+      "frozen_public_hashes_match": true
+    },
+    {
+      "case": "case_149",
+      "arm": "solo",
+      "trial": "r6",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Valid Reject with independent high-precision confirmation of all seven witness inputs. Initial t6 fails before kernel execution because positive integer codes above 32767 cannot be constructed directly as int16. Corrected t7 constructs int32 codes, casts to int16 to preserve their low bits, reinterprets as half and excludes exactly the two exponent-all-ones intervals: all 63,488 finite encodings, including both zeros and subnormals, are tested on GPU at a legal length. Seven exact output-bit differences are measured against the public CPU FP64 sigmoid -> struct.pack reference. t8 follow-up is blocked until pending evidence is finalized; t10 then actually runs a 60-digit Decimal, 200-term alternating Taylor calculation of exp(-abs(x)) for each of the seven small inputs, followed by float -> struct.pack binary16. Decimal arithmetic is approximate, not literally the exact real sigmoid, but these witnesses lie at least about6.55e-11 from their FP16 midpoints, far beyond binary64 conversion and Taylor/Decimal rounding errors, so the final RNE decisions are decisive. All7 support the reference bits and none the candidate. The full tensor domain is not exhaustively executed, and no intermediate-error attribution is isolated, but this does not affect rejection.",
+      "evidence": [
+        "traces_glm/case_149/solo/r6/verdict.json",
+        "traces_glm/case_149/solo/r6/transcript.md",
+        "traces_glm/case_149/solo/r6/tool_events.jsonl",
+        "traces_glm/case_149/solo/r6/probes/t6_probe.py",
+        "traces_glm/case_149/solo/r6/probes/t6_stderr.txt",
+        "traces_glm/case_149/solo/r6/probes/t7_probe.py",
+        "traces_glm/case_149/solo/r6/probes/t7_stdout.txt",
+        "traces_glm/case_149/solo/r6/probes/t10_probe.py",
+        "traces_glm/case_149/solo/r6/probes/t10_stdout.txt",
+        "traces_glm/case_149/solo/r6/trace_meta.json"
+      ],
+      "confidence": 0.98,
+      "valid_gpu_comparison": true,
+      "complete_finite_fp16_scalar_enumeration": true,
+      "enumerated_encodings": 63488,
+      "mismatches": 7,
+      "reference_rounding": "CPU FP64 sigmoid -> struct.pack binary16 RNE",
+      "independent_witness_check": "Decimal60 stable sigmoid, Taylor through n=199, then float -> struct.pack; midpoint separation makes intermediate binary64 rounding harmless",
+      "invalid_probe_setup_recovered": true,
+      "counterexample": {
+        "input": 0.0029296875,
+        "actual": 0.5009765625,
+        "expected": 0.50048828125,
+        "actual_bits": "0x3802",
+        "expected_bits": "0x3801"
+      },
+      "frozen_public_hashes_match": true
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "reject",
+      "confidence": 0.95,
+      "valid_decisive_evidence": true,
+      "summary": "Valid Reject. Probe t9 enumerates every finite FP16 bit pattern with struct.unpack, constructs the exact legal FP16 CUDA tensor, runs the actual kernel, and compares exact output bits against the repaired public CPU FP64 sigmoid followed by direct struct.pack binary16 conversion. It finds seven one-ULP mismatches among 63,488 encodings. For x=0.0029296875, actual bits 14338 (0.5009765625) differ from correct bits 14337 (0.50048828125). The public reference was independently certified against the directed MPFR rounding oracle in qualification r24.",
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 7,
+      "reasoning_change": "The skeptic already hypothesized FP32 double-rounding near FP16 midpoints before probes. Tools confirmed the risk with exact-bit counterexamples; there was no formal prior Accept. The judge correctly disregarded the t10 classification bug and t11 scalar-conversion helper failure.",
+      "failed_or_limited_probes": [
+        "t10 executes 642 legal values with abs(x) in [15.5,20], but its 400 reported mismatches are invalid: outputs other than zero/minimum subnormal become the string other while references outside that restricted range become above-subnormal-range, so equivalent values are mechanically reported different. Do not count these 400 as numerical failures. The decimal-60 minimum distance to the zero/minimum-subnormal tie is a separate finite calculation, approximately 1.65295e-11.",
+        "t11 legal_offset_view executes the kernel but then its reporting helper calls .item() on 256 elements and labels the call failed. A separate second call on the same legal offset view succeeds and matches the reference bitwise. It is a probe error, not a kernel validation defect.",
+        "t11 compares a view with the same underlying view instead of an independent pre-call clone for one input-preservation check. The t9 independent clone comparison does check the full-grid input numerically; it is not a bitwise signed-zero preservation test.",
+        "The initial experimenter prose says 65,504 finite inputs. The actual executable enumeration and output count are the correct 63,488.",
+        "The sweep exhausts scalar encodings, not all legal tensor lengths or storage offsets. Only one valid failing legal execution is required for Reject."
+      ],
+      "evidence": [
+        "traces_glm/case_149/debate/r1/verdict.json",
+        "traces_glm/case_149/debate/r1/transcript.md",
+        "traces_glm/case_149/debate/r1/trace_meta.json",
+        "traces_glm/case_149/debate/r1/runtime.json",
+        "traces_glm/case_149/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_149/debate/r1/probes/t10_json_result.json",
+        "traces_glm/case_149/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_149/debate/r1/probes/t11_stdout.txt",
+        "real_kernel_challenges/private_data/qualification/r24.json"
+      ]
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r2",
+      "verdict": "reject",
+      "confidence": 0.95,
+      "valid_decisive_evidence": true,
+      "summary": "Valid Reject. t25 bit-reinterprets all 63,488 finite FP16 encodings, executes the real CUDA kernel, and finds seven one-ULP mismatches versus the independently qualified public FP64/direct-binary16 reference. For all seven failures it additionally checks a NumPy longdouble sigmoid narrowed to FP64 and then NumPy FP16; all alternate bits agree with the public reference. The printed witnesses include x=0.0029296875, actual bits 14338 versus correct 14337.",
+      "failed_or_limited_probes": [
+        "t9/t10/t11 attempt torch.tensor(codes,dtype=int16) with unsigned codes above 32767 and fail with conversion overflow. t11 runs the two zero inputs before failing to construct the negative-domain tensor, but prints no result.",
+        "t15 fixes the uint16 reinterpretation but asserts the full domain contains 15,361 values, so it fails before the GPU kernel. This is the count of nonnegative FP16 encodings between zero and one, not the finite input domain.",
+        "t16 correctly tests all 31,743 strictly negative finite values: four total mismatches, but zero among 891 subnormal-reference outputs. t17 includes negative zero (31,744 values), again finds four mismatches while zero-output counts agree and negative zero output is absent. These four are genuine numerical failures even though the original c2/c3 mechanism hypotheses were rebutted; t25 correctly establishes c1.",
+        "An exact public-reference match is backed by qualification r24; the model does not independently prove a global error bound for its FP64/longdouble oracle. Scalar exhaustion does not exhaust tensor shapes/storage."
+      ],
+      "reasoning_change": "Initially recognizes FP32 errors may cross FP16 rounding boundaries. Several probe-construction/count bugs delay execution. It eventually treats the four mismatches discovered under other claims as evidence for the main claim, reopens the sweep, and obtains all seven witnesses.",
+      "evidence": [
+        "traces_glm/case_149/debate/r2/verdict.json",
+        "traces_glm/case_149/debate/r2/transcript.md",
+        "traces_glm/case_149/debate/r2/trace_meta.json",
+        "traces_glm/case_149/debate/r2/tool_events.jsonl",
+        "traces_glm/case_149/debate/r2/runtime.json",
+        "traces_glm/case_149/debate/r2/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t9_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t10_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t10_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t10_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t11_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t11_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t11_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t15_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t15_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t15_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t16_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t16_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t16_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t17_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t17_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t17_stderr.txt",
+        "traces_glm/case_149/debate/r2/probes/t25_probe.py",
+        "traces_glm/case_149/debate/r2/probes/t25_stdout.txt",
+        "traces_glm/case_149/debate/r2/probes/t25_stderr.txt",
+        "real_kernel_challenges/private_data/qualification/r24.json",
+        "traces_glm/case_149/debate/r2/llm_calls/01792293396870088850_8a7a2ee48dd74c308c36aa32d645dddc/request.json"
+      ],
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 7,
+      "protocol_comparison": {
+        "configuration_and_frozen_source_identical_to_r1": true,
+        "initial_request_identical_after_bootstrap_created_at_timestamps_removed": true,
+        "checked_fields": [
+          "model",
+          "provider",
+          "max_tokens",
+          "reasoning_effort",
+          "max_rounds",
+          "total_output_token_budget",
+          "kernel_sha256",
+          "problem_sha256",
+          "verifier_sha256",
+          "runner_sha256",
+          "case_visibility",
+          "debate_budget_closeout",
+          "require_claim_scope_fields",
+          "normal_turn_output_cap",
+          "closeout_reserve",
+          "closeout_stage_caps",
+          "public_input_files"
+        ]
+      }
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r3",
+      "verdict": "needs_more_evidence",
+      "confidence": 0.7,
+      "valid_decisive_evidence": false,
+      "summary": "Unsuccessful verification: the final answer is needs_more_evidence, not Reject. No full-domain sweep reaches kernel.run. The only successful numerical probe t9 executes 799 legal negative FP16 values in (-18.5,-11), compares correctly with the qualified public reference and finds no mismatch. That region excludes all seven actual near-zero counterexamples.",
+      "failed_or_limited_probes": [
+        "t8 filters nonfinites with (i>>10)!=0x1F, missing negative nonfinite encodings, and views int32 storage as FP16, inserting a zero halfword for each code. Its 129,024-element tensor contains nonfinites and fails its pre-kernel assertion.",
+        "t11 switches to uint16 storage but retains the wrong mask, leaving 1,024 negative NaN/Inf encodings; assertion fails before kernel.run. t12 uses a different reinterpretation, diagnoses 64,512 values including 1,024 nonfinites, then intentionally takes the diagnostic branch without calling the kernel.",
+        "t13 proposes the corrected mask but is blocked because the successful diagnostic t12 has not been finalized. It performs no experiment.",
+        "t19 finally generates the correct 63,488 finite encodings, but asserts there must be 63,504. It raises before kernel.run, so it supplies no comparison.",
+        "The successful t9 selection removes the inserted zero halfwords and nonfinites, leaving 799 unique legal negative values. The final description incorrectly says all 799 yield nonzero subnormals: independent CPU calculation gives 725 nonzero subnormals and 74 positive-zero outputs. The observed zero mismatch count itself is valid.",
+        "This is not output-budget exhaustion or GPU/API failure: 10,090 output tokens of 32,768, stop_reason verdict_recorded, no forced-final/budget-closeout field. After t12 and t19 the experimenter says it will immediately rerun, but emits only finalize_probe_evidence, closes c1 as inconclusive, and the workflow advances to review/judge. The judge requests one extra round, then voluntarily records needs_more_evidence after the second failed attempt."
+      ],
+      "reasoning_change": "Correctly identifies the potential rounding defect but repeatedly fails to encode/filter/count the test inputs. The role workflow does not convert its stated intention to retry into an executed probe. It honestly declines Accept/Reject at the end; retain this as unsuccessful, not as a correct rejection.",
+      "evidence": [
+        "traces_glm/case_149/debate/r3/verdict.json",
+        "traces_glm/case_149/debate/r3/transcript.md",
+        "traces_glm/case_149/debate/r3/trace_meta.json",
+        "traces_glm/case_149/debate/r3/tool_events.jsonl",
+        "traces_glm/case_149/debate/r3/runtime.json",
+        "traces_glm/case_149/debate/r3/probes/t8_probe.py",
+        "traces_glm/case_149/debate/r3/probes/t8_stdout.txt",
+        "traces_glm/case_149/debate/r3/probes/t8_stderr.txt",
+        "traces_glm/case_149/debate/r3/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r3/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r3/probes/t9_stderr.txt",
+        "traces_glm/case_149/debate/r3/probes/t11_probe.py",
+        "traces_glm/case_149/debate/r3/probes/t11_stdout.txt",
+        "traces_glm/case_149/debate/r3/probes/t11_stderr.txt",
+        "traces_glm/case_149/debate/r3/probes/t12_probe.py",
+        "traces_glm/case_149/debate/r3/probes/t12_stdout.txt",
+        "traces_glm/case_149/debate/r3/probes/t12_stderr.txt",
+        "traces_glm/case_149/debate/r3/probes/t19_probe.py",
+        "traces_glm/case_149/debate/r3/probes/t19_stdout.txt",
+        "traces_glm/case_149/debate/r3/probes/t19_stderr.txt",
+        "real_kernel_challenges/private_data/qualification/r24.json",
+        "traces_glm/case_149/debate/r3/llm_calls/01792293401712591968_0379ca9ad0734b648b089b31e22a3f29/request.json"
+      ],
+      "actual_finite_fp16_coverage": 799,
+      "failing_scalar_encodings": 0,
+      "protocol_comparison": {
+        "configuration_and_frozen_source_identical_to_r1": true,
+        "initial_request_identical_after_bootstrap_created_at_timestamps_removed": true,
+        "checked_fields": [
+          "model",
+          "provider",
+          "max_tokens",
+          "reasoning_effort",
+          "max_rounds",
+          "total_output_token_budget",
+          "kernel_sha256",
+          "problem_sha256",
+          "verifier_sha256",
+          "runner_sha256",
+          "case_visibility",
+          "debate_budget_closeout",
+          "require_claim_scope_fields",
+          "normal_turn_output_cap",
+          "closeout_reserve",
+          "closeout_stage_caps",
+          "public_input_files"
+        ]
+      }
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r4",
+      "verdict": "reject",
+      "confidence": 0.95,
+      "valid_decisive_evidence": true,
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 7,
+      "summary": "Valid Reject. t9 constructs all uint16 encodings, reinterprets them as FP16 and filters nonfinites, executes the actual CUDA kernel over all 63,488 legal scalar encodings, and finds seven exact-bit mismatches against CPU FP64 sigmoid with direct struct.pack half rounding. All seven are independently rechecked using 60-decimal-digit mpmath sigmoid and direct struct packing, which agrees with the correct reference. Actual x=0.0029296875 gives bits 14338 instead of 14337.",
+      "reasoning_change": "Initial risk analysis targets FP32 rounding near half midpoints. The first full-domain probe succeeds and confirms the concern; later work fixes a separate negative-tail probe. There is no prior formal Accept-to-Reject reversal.",
+      "failed_or_limited_probes": [
+        "t10 uses torch.arange(dtype=uint16), unsupported by the frozen PyTorch CPU implementation, and fails before any GPU execution. t14 fixes construction with wrapping int16 arange plus FP16 bit reinterpretation and finite/negative-tail filtering.",
+        "t14 tests all 12,288 finite inputs x<=-16 and finds no mismatch: 86 produce nonzero subnormals and 12,202 positive zero. t11 tests 20 edge values, a length-4093 sample in [-30,30] and a length-4093 last-lane signal, all passing. The random sample is bounded to [-30,30], despite its comment saying full-domain.",
+        "The final mechanism text says 1+exp(-abs(x)) is approximately 1 near zero; it is approximately 2 there. The actual numerical witness is sound, but this explanation is inaccurate.",
+        "The 60-digit alternate reference converts through binary64 before half conversion and is not itself a directed-interval proof. Independent qualification r24 certifies the output bits. Exhaustive scalar values do not exhaust all tensor executions; a legal failing execution suffices for Reject."
+      ],
+      "evidence": [
+        "traces_glm/case_149/debate/r4/verdict.json",
+        "traces_glm/case_149/debate/r4/transcript.md",
+        "traces_glm/case_149/debate/r4/trace_meta.json",
+        "traces_glm/case_149/debate/r4/tool_events.jsonl",
+        "traces_glm/case_149/debate/r4/runtime.json",
+        "traces_glm/case_149/debate/r4/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r4/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r4/probes/t9_stderr.txt",
+        "traces_glm/case_149/debate/r4/probes/t10_probe.py",
+        "traces_glm/case_149/debate/r4/probes/t10_stdout.txt",
+        "traces_glm/case_149/debate/r4/probes/t10_stderr.txt",
+        "traces_glm/case_149/debate/r4/probes/t11_probe.py",
+        "traces_glm/case_149/debate/r4/probes/t11_stdout.txt",
+        "traces_glm/case_149/debate/r4/probes/t11_stderr.txt",
+        "traces_glm/case_149/debate/r4/probes/t14_probe.py",
+        "traces_glm/case_149/debate/r4/probes/t14_stdout.txt",
+        "traces_glm/case_149/debate/r4/probes/t14_stderr.txt",
+        "traces_glm/case_149/debate/r4/llm_calls/01792293633527449220_ef98a8a1ef8a498292abc25a43fc152f/request.json"
+      ],
+      "protocol_comparison": {
+        "configuration_and_frozen_source_identical_to_r1": true,
+        "initial_request_identical_after_bootstrap_created_at_timestamps_removed": true,
+        "checked_fields": [
+          "model",
+          "provider",
+          "max_tokens",
+          "reasoning_effort",
+          "max_rounds",
+          "total_output_token_budget",
+          "kernel_sha256",
+          "problem_sha256",
+          "verifier_sha256",
+          "runner_sha256",
+          "case_visibility",
+          "debate_budget_closeout",
+          "require_claim_scope_fields",
+          "normal_turn_output_cap",
+          "closeout_reserve",
+          "closeout_stage_caps",
+          "public_input_files"
+        ]
+      }
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r5",
+      "verdict": "reject",
+      "confidence": 0.95,
+      "valid_decisive_evidence": true,
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 7,
+      "summary": "Valid Reject. Corrected t16 enumerates every finite FP16 bit pattern through struct.unpack, sends the exact 63,488-value tensor to the actual CUDA kernel and compares with 120-bit mpmath sigmoid followed by direct struct.pack binary16 conversion. The artifact public reference agrees with this alternate oracle over all inputs. Seven printed one-ULP failures include x=0.0029296875, expected 0x3801 versus actual 0x3802. t17 independently tests 1,153 values in [-20,-9], sees no failure and matches the underflow boundary.",
+      "reasoning_change": "Initially suspects double-rounding. After a broken oracle reports thousands of failures, it correctly spots the oracle carry bug but incorrectly dismisses a real x=0.0029296875 failure by hand, using the wrong FP16 midpoint. The judge reopens investigation. The corrected t16 dual-reference probe forces an explicit correction: the real midpoint is 0.500732421875, the mathematical sigmoid is below it, and the kernel is wrong. This is a concrete reasoning error repaired by executable evidence, after the tools first introduced their own bugs.",
+      "failed_or_limited_probes": [
+        "t8 legal full-domain GPU execution reports 6,862 mismatches using a faulty hand-written half encoder. On mantissa carry k>=2048 it sets k=2047, exponent=30, turning ordinary values that round to 1 into 0x7bff (65504). These thousands of errors are reference artifacts; the corrected t16 replaces this oracle.",
+        "t9 legally tests 13,056 positive inputs x>=10, all matching, but this is not the alleged subnormal/underflow region: positive sigmoid approaches 1. The corrected t17 targets negative inputs and observes the first nonzero output at -17.328125 and last zero at -17.34375.",
+        "t16 prints a stale sanity label expecting 0x3802 for x=0.0029296875; the computed value is correctly 0x3801, and the final numerical explanation acknowledges the earlier manual mistake.",
+        "The final judge and skeptic repeatedly say 65,504 finite inputs; actual execution and t16 n_tested correctly show 63,488. Do not propagate the final prose count.",
+        "t16 reports the length of a mismatch list capped at 15 rather than a separate total count. The returned length is seven, below the cap, so seven is the genuine total here.",
+        "The alternate mpmath oracle converts through binary64 before half conversion and is not a directed-interval proof on its own. Independent qualification r24 establishes the correct half bits and supports its use on this domain. Scalar exhaustion does not prove every tensor execution."
+      ],
+      "evidence": [
+        "traces_glm/case_149/debate/r5/verdict.json",
+        "traces_glm/case_149/debate/r5/transcript.md",
+        "traces_glm/case_149/debate/r5/trace_meta.json",
+        "traces_glm/case_149/debate/r5/tool_events.jsonl",
+        "traces_glm/case_149/debate/r5/runtime.json",
+        "traces_glm/case_149/debate/r5/probes/t8_probe.py",
+        "traces_glm/case_149/debate/r5/probes/t8_stdout.txt",
+        "traces_glm/case_149/debate/r5/probes/t8_stderr.txt",
+        "traces_glm/case_149/debate/r5/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r5/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r5/probes/t9_stderr.txt",
+        "traces_glm/case_149/debate/r5/probes/t16_probe.py",
+        "traces_glm/case_149/debate/r5/probes/t16_stdout.txt",
+        "traces_glm/case_149/debate/r5/probes/t16_stderr.txt",
+        "traces_glm/case_149/debate/r5/probes/t17_probe.py",
+        "traces_glm/case_149/debate/r5/probes/t17_stdout.txt",
+        "traces_glm/case_149/debate/r5/probes/t17_stderr.txt",
+        "traces_glm/case_149/debate/r5/llm_calls/01792293369644328532_ff0d64d29b104ab5bddc0ecfc01f1e00/request.json"
+      ],
+      "protocol_comparison": {
+        "configuration_and_frozen_source_identical_to_r1": true,
+        "initial_request_identical_after_bootstrap_created_at_timestamps_removed": true,
+        "checked_fields": [
+          "model",
+          "provider",
+          "max_tokens",
+          "reasoning_effort",
+          "max_rounds",
+          "total_output_token_budget",
+          "kernel_sha256",
+          "problem_sha256",
+          "verifier_sha256",
+          "runner_sha256",
+          "case_visibility",
+          "debate_budget_closeout",
+          "require_claim_scope_fields",
+          "normal_turn_output_cap",
+          "closeout_reserve",
+          "closeout_stage_caps",
+          "public_input_files"
+        ]
+      }
+    },
+    {
+      "case": "case_149",
+      "arm": "debate",
+      "trial": "r6",
+      "verdict": "reject",
+      "confidence": 0.97,
+      "valid_decisive_evidence": true,
+      "actual_finite_fp16_coverage": 63488,
+      "failing_scalar_encodings": 7,
+      "summary": "Valid Reject on t9 alone: all 63,488 finite FP16 patterns execute on CUDA, with seven one-ULP failures against the qualified public reference. Its independent NumPy longdouble sigmoid followed by correct struct.pack-to-half and unpack-to-uint16 conversion agrees with the public reference for every input. All seven actual/reference/alternate bit patterns are printed.",
+      "reasoning_change": "Initial concerns correctly focus on FP32 rounding. Tools establish real failures, but the experimenter, skeptic and judge do not consistently discard corrupted supplemental metrics after recognizing the supplemental reference is broken.",
+      "failed_or_limited_probes": [
+        "t10 and t11 incorrectly build r16 by unpacking a half as a floating value and numerically casting that value to uint16. Most sigmoid values lie strictly between zero and one and become integer zero. This is not bit reinterpretation. Their 51,286 oracle-vs-truth mismatches, all-seven-both-wrong attribution and near-tie statistics are invalid.",
+        "Their FP16 ULP formula also uses exponent_bits-1-10 rather than exponent_bits-15-10 and does not handle the smaller downward spacing at powers of two. Even a corrected bit representation would not rescue their reported minimum midpoint distance.",
+        "The final claim that no true sigmoid is near any half midpoint (minimum relative distance 5.5e-4) is unsupported and false; the real defect is exactly near-midpoint rounding. The model recognizes bogus true_bits=0 but still propagates statistics computed from the bogus array.",
+        "The t10 comparison of actual kernel against a host FP32 pipeline has two differences, at x=-0.00927734375 and -0.1639404296875. At the first, host pipeline matches the correct reference while GPU is wrong; at the second, GPU is correct and the host pipeline wrong. The model sometimes swaps these attributions and cannot claim the libdevice exp error explains all seven errors. No actual intermediate GPU exp output was measured.",
+        "No subprocess failed; the failures are semantic reference/metric bugs in successful scripts. Scalar-domain exhaustion is genuine in t9 and sufficient for Reject; it is not all-shape/storage verification."
+      ],
+      "evidence": [
+        "traces_glm/case_149/debate/r6/verdict.json",
+        "traces_glm/case_149/debate/r6/transcript.md",
+        "traces_glm/case_149/debate/r6/trace_meta.json",
+        "traces_glm/case_149/debate/r6/tool_events.jsonl",
+        "traces_glm/case_149/debate/r6/runtime.json",
+        "traces_glm/case_149/debate/r6/probes/t9_probe.py",
+        "traces_glm/case_149/debate/r6/probes/t9_stdout.txt",
+        "traces_glm/case_149/debate/r6/probes/t9_stderr.txt",
+        "traces_glm/case_149/debate/r6/probes/t10_probe.py",
+        "traces_glm/case_149/debate/r6/probes/t10_stdout.txt",
+        "traces_glm/case_149/debate/r6/probes/t10_stderr.txt",
+        "traces_glm/case_149/debate/r6/probes/t11_probe.py",
+        "traces_glm/case_149/debate/r6/probes/t11_stdout.txt",
+        "traces_glm/case_149/debate/r6/probes/t11_stderr.txt",
+        "traces_glm/case_149/debate/r6/llm_calls/01792293458993479163_a550959c65634ce59111ecc7d34f6fd8/request.json"
+      ],
+      "protocol_comparison": {
+        "configuration_and_frozen_source_identical_to_r1": true,
+        "initial_request_identical_after_bootstrap_created_at_timestamps_removed": true,
+        "checked_fields": [
+          "model",
+          "provider",
+          "max_tokens",
+          "reasoning_effort",
+          "max_rounds",
+          "total_output_token_budget",
+          "kernel_sha256",
+          "problem_sha256",
+          "verifier_sha256",
+          "runner_sha256",
+          "case_visibility",
+          "debate_budget_closeout",
+          "require_claim_scope_fields",
+          "normal_turn_output_cap",
+          "closeout_reserve",
+          "closeout_stage_caps",
+          "public_input_files"
+        ]
+      }
+    }
+  ],
+  "conditional_replication": {
+    "status": "completed",
+    "completed_at_utc": "2026-10-18T03:23:23.682856+00:00",
+    "results": {
+      "totals": {
+        "attempts": 15,
+        "outcomes": {
+          "correct": 11,
+          "wrong_verdict": 3,
+          "abstention": 1
+        },
+        "audited_correct": 11,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 3.46998,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 33
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 2,
+            "wrong_verdict": 3
+          },
+          "audited_correct": 2,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.048143,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.595938,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 9
+        },
+        "debate": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 4,
+            "abstention": 1
+          },
+          "audited_correct": 4,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 2.825899,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 24
+        }
+      },
+      "runs": [
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.00582,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 841,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.018668,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 3761,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.008772,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1512,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.00824,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1391,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.006643,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1028,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.125227,
+          "probes": 2,
+          "link": "traces_glm/case_149/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 79818,
+          "output_tokens": 3064,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.081722,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 51440,
+          "output_tokens": 2206,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.085402,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 52783,
+          "output_tokens": 2615,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.082043,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 52788,
+          "output_tokens": 1850,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.221544,
+          "probes": 4,
+          "link": "traces_glm/case_149/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 145869,
+          "output_tokens": 3938,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.682418,
+          "probes": 7,
+          "link": "traces_glm/case_149/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 446864,
+          "output_tokens": 12911,
+          "llm_api_calls": 13
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "needs_more_evidence",
+          "outcome": "abstention",
+          "usd": 0.625563,
+          "probes": 6,
+          "link": "traces_glm/case_149/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 415119,
+          "output_tokens": 10090,
+          "llm_api_calls": 15
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.414556,
+          "probes": 4,
+          "link": "traces_glm/case_149/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 272568,
+          "output_tokens": 7491,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.803742,
+          "probes": 4,
+          "link": "traces_glm/case_149/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 507363,
+          "output_tokens": 21235,
+          "llm_api_calls": 13
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.29962,
+          "probes": 3,
+          "link": "traces_glm/case_149/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 175574,
+          "output_tokens": 12231,
+          "llm_api_calls": 6
+        }
+      ]
+    },
+    "including_initial_selected_case": {
+      "totals": {
+        "attempts": 18,
+        "outcomes": {
+          "wrong_verdict": 4,
+          "correct": 13,
+          "abstention": 1
+        },
+        "audited_correct": 13,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 3.949402,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 37
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 6,
+          "outcomes": {
+            "wrong_verdict": 4,
+            "correct": 2
+          },
+          "audited_correct": 2,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.052947,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 6,
+          "outcomes": {
+            "correct": 6
+          },
+          "audited_correct": 6,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.681926,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 10
+        },
+        "debate": {
+          "attempts": 6,
+          "outcomes": {
+            "correct": 5,
+            "abstention": 1
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 3.214529,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 27
+        }
+      },
+      "runs": [
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r1",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.004804,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 610,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.00582,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 841,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.018668,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 3761,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.008772,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1512,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.00824,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1391,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "single_call",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.006643,
+          "probes": 0,
+          "link": "traces_glm/case_149/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1514,
+          "output_tokens": 1028,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r1",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.085988,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 54528,
+          "output_tokens": 2193,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.125227,
+          "probes": 2,
+          "link": "traces_glm/case_149/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 79818,
+          "output_tokens": 3064,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.081722,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 51440,
+          "output_tokens": 2206,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.085402,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 52783,
+          "output_tokens": 2615,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.082043,
+          "probes": 1,
+          "link": "traces_glm/case_149/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 52788,
+          "output_tokens": 1850,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_149",
+          "arm": "solo",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.221544,
+          "probes": 4,
+          "link": "traces_glm/case_149/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 145869,
+          "output_tokens": 3938,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r1",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.38863,
+          "probes": 3,
+          "link": "traces_glm/case_149/debate/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 250599,
+          "output_tokens": 8589,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r2",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.682418,
+          "probes": 7,
+          "link": "traces_glm/case_149/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 446864,
+          "output_tokens": 12911,
+          "llm_api_calls": 13
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r3",
+          "status": "completed",
+          "verdict": "needs_more_evidence",
+          "outcome": "abstention",
+          "usd": 0.625563,
+          "probes": 6,
+          "link": "traces_glm/case_149/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 415119,
+          "output_tokens": 10090,
+          "llm_api_calls": 15
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r4",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.414556,
+          "probes": 4,
+          "link": "traces_glm/case_149/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 272568,
+          "output_tokens": 7491,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r5",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.803742,
+          "probes": 4,
+          "link": "traces_glm/case_149/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 507363,
+          "output_tokens": 21235,
+          "llm_api_calls": 13
+        },
+        {
+          "case": "case_149",
+          "arm": "debate",
+          "trial": "r6",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.29962,
+          "probes": 3,
+          "link": "traces_glm/case_149/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 175574,
+          "output_tokens": 12231,
+          "llm_api_calls": 6
+        }
+      ]
+    },
+    "strict_five_repeat_passed": false,
+    "protocol_audit": [
+      {
+        "arm": "single_call",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      }
+    ],
+    "cost_scope": "Conservative model API estimate from captured usage and dated pricing; not invoice, excludes Modal GPU charges.",
+    "interpretation": "Selected follow-up: repeat cases were chosen after their first-pass gap. Five observed repetitions do not establish a population-wide guarantee or a causal tools-only effect."
+  }
+}

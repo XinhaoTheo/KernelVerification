@@ -1,0 +1,128 @@
+[
+  {
+    "created_at": "2026-10-18T03:12:51Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:13:12Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t6_json_result.json",
+              "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+            }
+          ],
+          "bad_inputs": [
+            0.0029296875,
+            0.0068359375,
+            0.0107421875,
+            -0.00146484375,
+            -0.00341796875,
+            -0.00537109375,
+            -0.00927734375
+          ],
+          "duration_s": 5.584287,
+          "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "absdiff": [
+              0.00048828125,
+              0.00048828125,
+              0.00048828125,
+              -0.000244140625,
+              -0.000244140625,
+              -0.000244140625,
+              -0.000244140625
+            ],
+            "bad_inputs": [
+              0.0029296875,
+              0.0068359375,
+              0.0107421875,
+              -0.00146484375,
+              -0.00341796875,
+              -0.00537109375,
+              -0.00927734375
+            ],
+            "fp64_value": [
+              0.5007324213511315,
+              0.5017089777199553,
+              0.5026855210504991,
+              0.4996337891279836,
+              0.4991455086443835,
+              0.49865722979059063,
+              0.4976806806976212
+            ],
+            "kernel_out": [
+              0.5009765625,
+              0.501953125,
+              0.5029296875,
+              0.49951171875,
+              0.4990234375,
+              0.49853515625,
+              0.49755859375
+            ],
+            "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+            "mismatches": 7,
+            "n_tested": 63488,
+            "ref_out": [
+              0.50048828125,
+              0.50146484375,
+              0.50244140625,
+              0.499755859375,
+              0.499267578125,
+              0.498779296875,
+              0.497802734375
+            ]
+          },
+          "mismatches": 7,
+          "n_tested": 63488,
+          "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+          "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+      }
+    ],
+    "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+    "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement).",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:13:12Z"
+  }
+]

@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-2f8122d0",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "All three open claims can be tested independently with bit-exact sweeps against an FP64/multiple-precision oracle, so I'll launch three probes together: c1 (full finite-FP16-domain sweep with mpmath tie verification), c2 (negative-tail subnormal/underflow region), and c3 (edge inputs and non-multiple-of-256 tail masking).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a56585971334f098",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import importlib.util, json, struct\\nimport torch\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\n# All finite FP16 encodings\\ncodes = [i for i in range(65536)]\\nvals = torch.tensor(codes, dtype=torch.uint16).view(torch.float16)\\nfinite = torch.isfinite(vals)\\nxf = vals[finite]\\nprint(\\\"num_finite_fp16_inputs\\\", xf.numel())\\n\\n# run in one call (65504 <= 131072)\\nxc = xf.to(\\\"cuda\\\")\\nout = kernel.run(xc)\\n\\n# reference: FP64 sigmoid -> RNE binary16 via struct '<e'\\nxd = xc.cpu().to(torch.float64)\\nref = torch.tensor([struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", v))[0] for v in torch.sigmoid(xd).tolist()], dtype=torch.float16).to(\\\"cuda\\\")\\n\\nob = out.view(torch.int16).cpu()\\nrb = ref.view(torch.int16).cpu()\\nmism = (ob != rb).nonzero().flatten()\\nprint(\\\"mismatch_count\\\", mism.numel())\\n\\n# mpmath verification of true single-rounding for mismatches\\nimport mpmath\\nmpmath.mp.dps = 60\\ndef true_fp16(x):\\n    v = mpmath.sigmoid(mpmath.mpf(float(x)))\\n    packed = struct.pack(\\\"<e\\\", float(v))\\n    return struct.unpack(\\\"<e\\\", packed)[0]\\ndetails = []\\nfor idx in mism.tolist()[:50]:\\n    xval = xc[idx].item()\\n    t = true_fp16(xval)\\n    details.append({\\\"x\\\": repr(xval), \\\"kernel_bits\\\": int(ob[idx].item()) & 0xFFFF,\\n                    \\\"ref_bits\\\": int(rb[idx].item()) & 0xFFFF,\\n                    \\\"mpmath_bits\\\": struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", t))[0]})\\nreal_fail = sum(1 for d in details if d[\\\"kernel_bits\\\"] != d[\\\"mpmath_bits\\\"])\\nprint(json.dumps({\\\"claim\\\": \\\"c1\\\", \\\"metric\\\": \\\"exact FP16 bit equality vs mpmath single-rounding\\\",\\n  \\\"n_inputs\\\": xf.numel(), \\\"mismatch_vs_fp64ref\\\": int(mism.numel()),\\n  \\\"mpmath_verified_kernel_wrong\\\": real_fail, \\\"details\\\": details}))\\n\", \"expected_signal\": \"any bit mismatch where kernel FP32 path rounds differently than true single-rounding (mpmath-verified)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9acdc6a9114dfc22",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import importlib.util, json, struct\\nimport torch\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\n# all finite negative FP16 inputs with x <= -16 (covers subnormal/zero output region and beyond)\\ncodes = torch.arange(65536, dtype=torch.uint16)\\nvals = codes.view(torch.float16)\\nsel = torch.isfinite(vals) & (vals <= -16.0) & (vals < 0)\\nx = vals[sel]\\nprint(\\\"n_neg_tail_inputs\\\", x.numel())\\nxc = x.to(\\\"cuda\\\")\\nout = kernel.run(xc)\\n\\nxd = xc.cpu().to(torch.float64)\\nref = torch.tensor([struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", v))[0] for v in torch.sigmoid(xd).tolist()], dtype=torch.float16).to(\\\"cuda\\\")\\nob = out.view(torch.int16).cpu(); rb = ref.view(torch.int16).cpu()\\nmism = (ob != rb).nonzero().flatten()\\n# classify outputs: subnormals, zeros, negative zeros\\ndef is_sub(h): return (int(h) & 0x7C00) == 0 and (int(h) & 0x03FF) != 0\\nsub_out = sum(1 for h in ob.tolist() if is_sub(h)); sub_ref = sum(1 for h in rb.tolist() if is_sub(h))\\nneg_zero_out = sum(1 for h in ob.tolist() if (int(h) & 0xFFFF) == 0x8000)\\npos_zero_out = sum(1 for h in ob.tolist() if int(h) == 0)\\nmism_details = [{\\\"x\\\": repr(xc[i].item()), \\\"kernel_bits\\\": hex(int(ob[i]) & 0xFFFF), \\\"ref_bits\\\": hex(int(rb[i]) & 0xFFFF)} for i in mism.tolist()[:30]]\\nprint(json.dumps({\\\"claim\\\": \\\"c2\\\", \\\"metric\\\": \\\"exact FP16 bit equality, subnormal preservation, zero sign\\\",\\n  \\\"n_inputs\\\": int(x.numel()), \\\"mismatches\\\": int(mism.numel()),\\n  \\\"subnormal_out_kernel\\\": sub_out, \\\"subnormal_out_ref\\\": sub_ref,\\n  \\\"neg_zero_out\\\": neg_zero_out, \\\"pos_zero_out\\\": pos_zero_out,\\n  \\\"details\\\": mism_details}))\\n\", \"expected_signal\": \"subnormal outputs flushed to zero, negative zero, or bit mismatches in the negative tail\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-914bbf753bf4b988",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import importlib.util, json, struct\\nimport torch\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\n\\nedge = [0.0, -0.0, 65504.0, -65504.0, 16.0, 17.0, 17.5, 18.0, 18.5, 19.0, 20.0, 24.0,\\n        6.1e-5, -6.1e-5, 5.96e-8, -5.96e-8, 1.0, -1.0, 11.09, -11.09]\\nxe = torch.tensor(edge, dtype=torch.float16).to(\\\"cuda\\\")\\noute = kernel.run(xe)\\nrefe = kernel.reference(xe)\\nok_edge = bool((oute.view(torch.int16) == refe.view(torch.int16)).all())\\nedge_bits = [{\\\"x\\\": repr(v), \\\"k\\\": hex(int(b) & 0xFFFF), \\\"r\\\": hex(int(rb) & 0xFFFF)}\\n             for v, b, rb in zip(edge, oute.view(torch.int16).cpu().tolist(), refe.view(torch.int16).cpu().tolist())]\\n\\n# masked-tail: N=4093 random full-domain\\ng = torch.Generator().manual_seed(7)\\nxr = (30.0 * (torch.rand(4093, generator=g) * 2 - 1)).to(torch.float16).to(\\\"cuda\\\")\\noutr = kernel.run(xr); refr = kernel.reference(xr)\\ntail_ok = bool((outr.view(torch.int16) == refr.view(torch.int16)).all())\\ntail_mism = int((outr.view(torch.int16) != refr.view(torch.int16)).sum())\\n\\n# also last-lane check: a tensor where only the final element is nonzero signal\\nxq = torch.zeros(4093, dtype=torch.float16); xq[-1] = 65504.0\\nxq = xq.to(\\\"cuda\\\")\\noq = kernel.run(xq); fq = kernel.reference(xq)\\nlast_ok = bool((oq.view(torch.int16) == fq.view(torch.int16)).all())\\nprint(json.dumps({\\\"claim\\\": \\\"c3\\\", \\\"metric\\\": \\\"exact FP16 bit equality on edge inputs and non-multiple-of-256 N\\\",\\n  \\\"edge_inputs_ok\\\": ok_edge, \\\"tail_n4093_ok\\\": tail_ok, \\\"tail_mismatch_count\\\": tail_mism,\\n  \\\"last_lane_ok\\\": last_ok, \\\"edge_bits\\\": edge_bits}))\\n\", \"expected_signal\": \"edge or tail-mask mismatches vs bit-exact reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Design probes: c1 — sweep all finite FP16 inputs? 65536 values, run kernel vs reference (mpmath or FP64 plus check near ties). But N ≤ 131072, so we can run full sweep of all 65536 finite codes in chunks. Reference = kernel's own reference() function, but that's FP64 sigmoid — the contract's true value. For c1 we also want high-precision check: use mpmath for near-tie cases. Simpler: run full sweep of all finite FP16 inputs through run() (in chunks of 131072 — 65536 fits), compare bit-exact against reference(). That covers c1, c2, c3 largely. But claims are separate; I can run one probe per claim with targeted subsets.\n\nc1 probe: full sweep, compare with FP64-rounded reference AND for mismatches compute mpmath 50-digit sigmoid to confirm true rounding. \nc2 probe: x in negative range producing subnormals/zeros.\nc3 probe: zeros, ±65504, near-1 cliff values, N=4093 tail check.\n\nActually a single full sweep covers everything; but run_claim_probe targets one claim each. I'll do three probes: c1 full sweep with mpmat verification; c2 negative-tail subset; c3 edges + N=4093. All independent — launch all three together.\n\nNote kernel run must use CUDA; available (T4). Write code: import kernel module from artifact path. Path: /root/cases/case_149/kernel.py. Use importlib.\n\nc1 code: build all finite fp16 bit patterns (65536), filter non-NaN/inf; run in chunks (validate requires N≤131072, 65536 fine). Compare bits to reference computed via FP64 sigmoid + struct '<e' — reference function requires tensor ≤131072; ok. For mismatches, mpmath check. Print JSON.\n\nc2: generate all negative finite fp16 inputs whose sigmoid is subnormal/zero (x roughly ≤ -17.5?). Compute set, run, compare with reference, check sign of zero bits, subnormal bit patterns preserved.\n\nc3: build edge array [0.0, -0.0, 65504, -65504, and values around 16.5-19 positive, smallest subnormal inputs etc.], N=4093 with values including last lane arbitrary; compare all.\n\nLaunch all three probes in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293672,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2314,
+    "prompt_tokens": 22358,
+    "total_tokens": 24672,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 527,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5600,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

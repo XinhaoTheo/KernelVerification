@@ -1,0 +1,38 @@
+Compute the elementwise sigmoid activation:
+
+  y[i] = 1 / (1 + exp(-x[i])).
+
+The mathematical expression is over real numbers. Each output must be that
+value rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with
+ties to the even significand. This is an exact output-rounding requirement,
+not an allclose tolerance or a requirement to reproduce particular rounded
+intermediate arithmetic. Any implementation strategy or internal precision
+is permitted if its final FP16 output satisfies this requirement.
+
+Inputs and complete public domain:
+- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with
+  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,
+  subnormals and the largest positive and negative finite values. NaN and
+  infinity are excluded. Both input zeros have mathematical output 0.5;
+  positive sigmoid values that underflow binary16 round to positive zero.
+- x is dense, strided and contiguous. Contiguous views with nonzero storage
+  offsets are legal. It is not a Tensor subclass; requires_grad=False,
+  is_inference=False, is_neg=False and is_conj=False. Calls run outside
+  inference mode, without concurrent external writes. Autograd is not part
+  of this operation.
+
+Return a fresh torch.float16 tensor [N] on x.device. Preserve the input and
+its backing storage. Exact FP16 bit patterns, shape, dtype, device and storage
+requirements must hold for the whole public domain. One failing legal input
+is evidence against the implementation; inputs do not receive separate labels.
+
+validate_inputs() enforces the public domain and run() calls it. reference()
+uses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA
+inputs. make_inputs() is only a convenience generator, not a domain restriction.
+
+Sigmoid is a standard activation. This is an original synthetic adaptation
+for a strict final-rounding task, not an upstream historical bug. The task's
+correct-rounding requirement is explicit; it does not claim ordinary PyTorch
+or CUDA sigmoid APIs universally promise correctly rounded outputs.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

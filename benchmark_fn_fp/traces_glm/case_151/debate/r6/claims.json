@@ -1,0 +1,210 @@
+[
+  {
+    "created_at": "2026-10-18T03:15:05Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:16:15Z",
+        "data": {
+          "N128_all_rows_exact": false,
+          "N128_impulse_rows_exact": false,
+          "N64_all_rows_exact": false,
+          "N64_impulse_rows_exact": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "b1887844e0e73878f7a6d9b5ed6e26659722d898394cc5cfa8c69f9d39e97cea"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "45ade4caf54bbf180f6bbabb796e18849a13c21cbc93b15fff8306ac0d0303cb"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 6.80099,
+          "exit_code": 0,
+          "expected_signal": "kernel output equals reference DFT exactly on impulse and random rows for N=64 and N=128",
+          "first_mismatch_idx": [
+            3,
+            0
+          ],
+          "first_mismatch_width": 64,
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "kernel_val": 2293,
+          "ref_val": 1,
+          "stderr": "",
+          "stdout": "{'results': {'N64': {'all_rows_exact': False, 'impulse_rows_exact': False}, 'N128': {'all_rows_exact': False, 'impulse_rows_exact': False}}, 'first_mismatch': {'width': 64, 'first_bad_idx': [3, 0], 'kernel_val': 2293, 'ref_val': 1}}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Kernel output differs from the reference DFT on asymmetric inputs for both N=64 and N=128, including impulse rows (e.g. N=64 impulse at position 32: kernel 2293 vs ref 1). The claim's observable consequence (output differs from reference on asymmetric inputs) is confirmed; root-cause attribution between twiddle convention and other defects is being isolated in a follow-up probe.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The butterflies use Montgomery-scaled coefficients (_R*omega^e), and the pairing of bit-reversed input order with these specific exponent schedules (omega^(j*width/(4*half)) etc.) may realize the conjugate/inverse convention or a permuted output order; such an error is still deterministic and would only be exposed by asymmetric inputs like an impulse, while random probes may coincidentally look plausible. The formula in problem.txt pins the exact required convention, so this is in-scope even without a test file.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "out[b,k] = sum_j x[b,j] * omega_N**(j*k) mod 3329, output position k is frequency k in natural order, positive exponent, forward cyclic (not inverse/negacyclic)."
+      }
+    ],
+    "scope_rationale": "The contract explicitly fixes the target out[b,k] = sum_j x[b,j]*omega_N^(j*k) with omega_N = 17^(256/N), natural order, positive exponent; a kernel producing the inverse convention or a shifted ordering violates this stated formula.",
+    "statement": "The twiddle exponent schedule in _make_coefficients / _transform_kernel implements the inverse (omega^(-jk)) or otherwise shifted transform convention rather than the required forward omega^(jk) transform, so the kernel output differs from the reference on asymmetric inputs (e.g. an impulse row x = [1,0,...,0], where the reference row is omega_N^k).",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T03:16:15Z"
+  },
+  {
+    "created_at": "2026-10-18T03:15:05Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:16:15Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "a118f8eb007bb4e1a76fb2fa51d5897f172443f7b84afd5a2ca49ef89b262977"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "1e538508282305e02c8f554f81bd39cb8bdfe3ffae64a76e5c326c6e2ee5e6f2"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "bank_bad_pair_vs_plain_mod": [
+            1,
+            516
+          ],
+          "claimed_exhaustive_bad_pair": [
+            1,
+            1,
+            169
+          ],
+          "duration_s": 2.189784,
+          "exit_code": 0,
+          "expected_signal": "the _multiply reduction equals product % 3329 for every pair, or a counterexample is found",
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "{'exhaustive_bad_pair': (1, 1, 169), 'num_bank_coeffs': 96, 'bank_bad_pair': (1, 516), 'max_reduced_before_sub': 'n/a'}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "The probe compared _multiply against plain product % 3329, but _multiply is a Montgomery/REDC-style reduction: with coefficients pre-scaled by R=2^16, it is designed to return product*R^{-1} mod Q, i.e. value*true_twiddle when given an R-scaled bank coefficient. E.g. _multiply(1,1)=169 is consistent with REDC(1)=R^{-1} mod Q, not a bug per se. The probe used the wrong reference predicate and cannot decide the claim; a follow-up probe tests _multiply against the correct REDC reference (value*coeff*R^{-1} mod Q globally, and value*true_twiddle for all bank coefficients).",
+        "supports": "inconclusive",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The correction factor 3327 and the single conditional subtract suggest a hand-tuned reduction; if the estimate q = (product*3327)>>16 is off for some residue pairs, the result after one conditional subtract can still be >= 3329 (or the mapping can be wrong), breaking tolerance-0 equality. This is exhaustively testable against product % 3329 for all value,coefficient pairs in range.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0; implementations may use any modular-reduction algorithm satisfying this same requirement."
+      }
+    ],
+    "scope_rationale": "The contract requires exact equality (abs=0, rel=0) and permits any modular-reduction algorithm only if it satisfies the same requirement; the custom reduction is the core correctness risk.",
+    "statement": "The Barrett/Montgomery hybrid in _multiply does not return exactly product mod 3329 for all (value, coefficient) pairs with 0<=value,coefficient<3329 (e.g. reduced can land in a residue-collision or remain >= 3329 after the single conditional subtract), corrupting twiddle multiplications and hence the exact-equality output.",
+    "status": "inconclusive",
+    "updated_at": "2026-10-18T03:16:15Z"
+  },
+  {
+    "created_at": "2026-10-18T03:15:05Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:16:15Z",
+        "data": {
+          "N128_bank_len": 169,
+          "N128_final_expected": 105,
+          "N128_final_stage_start": 105,
+          "N128_layout_consistent": true,
+          "N64_bank_len": 105,
+          "N64_layout_consistent": true,
+          "N64_stage_starts": [
+            0,
+            5,
+            25
+          ],
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "e01490170e8252c504b5025fb8a2cecac2179478f8ef6d7cc5a90111776ec8f0"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "e672ece4f8be50219b7ad3e6172fb1a60c32abb7845bee87ce34a2d7971fafab"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "duration_s": 2.203398,
+          "exit_code": 0,
+          "expected_signal": "kernel index arithmetic (stage starts and final radix-2 offset) stays within bank bounds and matches host packing for both widths",
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "{'width': 64, 'bank_len': 105, 'stage_starts': [0, 5, 25], 'final_stage_start': None, 'final_expected': None, 'layout_consistent': True}\n{'width': 128, 'bank_len': 169, 'stage_starts': [0, 5, 25], 'final_stage_start': 105, 'final_expected': 105, 'layout_consistent': True}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Host packing exactly matches the kernel's index arithmetic for both widths: N=64 bank length 105 with stage starts [0,5,25]; N=128 bank length 169 with final radix-2 start 105 = 169 - 64, matching 5*((1<<(2*3))-1)//3. No off-by-one or out-of-bounds access in either layout.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "Host packing appends stage banks for half in {1,4,16} then optionally the final bank; the kernel computes start = 5*(half-1)/3 and a final offset 5*((1<<(2*(LOG_N//2)))-1)//3. Integer-division quirks or a missing final bank entry at width=128 would silently read wrong twiddles for specific lanes, e.g. a wrong final-stage coefficient for N=128 lanes. Directly testable by comparing _make_coefficients indices against the reference DFT via row-wise comparison for both widths.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "N is either 64 or 128; every result must equal the mathematical target exactly; correctness is one verdict for the whole implementation."
+      }
+    ],
+    "scope_rationale": "Both N=64 and N=128 are in the contract's domain, and exact equality is required for every element; an indexing mismatch at any stage violates the stated formula for some lanes.",
+    "statement": "The host-side coefficient bank layout in _make_coefficients mismatches the kernel's index arithmetic (start = 5*(half-1)/3 per stage and the final radix-2 offset) for at least one of N=64 or N=128, so some butterfly stage loads a wrong twiddle constant and specific output positions deviate from the reference.",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T03:16:15Z"
+  }
+]

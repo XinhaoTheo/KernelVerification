@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-ebcc727a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive bit-exact sweep over all 65536 finite FP16 encodings, comparing the kernel's output against FP64-correctly-rounded sigmoid.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b5fd60e03022d014",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import importlib.util, sys, numpy as np, torch, struct\\n\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nallbits = np.arange(0, 65536, dtype=np.uint16)\\nxf16 = torch.from_numpy(allbits.view(np.float16)).to(\\\"cuda\\\")\\n\\n# exclude NaN/Inf: NaN exponent all-ones and nonzero mantissa; Inf exponent all-ones mantissa 0\\nf32 = xf16.cpu().numpy().astype(np.float32)\\nf64 = xf16.cpu().numpy().astype(np.float64)\\nfinite = np.isfinite(f64)\\nprint(\\\"finite count:\\\", finite.sum())\\n\\nxf = xf16.cpu()[torch.from_numpy(finite).to(torch.bool)].to(\\\"cuda\\\")\\nprint(\\\"N:\\\", xf.numel())\\n\\nout = k.run(xf)\\n# reference: FP64 sigmoid then round-to-nearest-even to FP16 via struct pack \\\"<e\\\"\\nref = bytearray()\\nvals = torch.sigmoid(xf.cpu().to(torch.float64)).tolist()\\nfor v in vals:\\n    ref += struct.pack(\\\"<e\\\", v)\\nref = torch.frombuffer(bytes(ref), dtype=torch.float16).clone().to(\\\"cuda\\\")\\n\\nsame = torch.equal(out, ref)\\nmism = (out.view(torch.int16) != ref.view(torch.int16)).nonzero().flatten()\\nprint(\\\"bit_exact_all:\\\", same, \\\"num_mismatch:\\\", mism.numel())\\nif mism.numel() > 0:\\n    idx = mism[:20].cpu().tolist()\\n    for i in idx:\\n        x_in = xf[i].item(); print(\\\"case\\\", i, \\\"x=\\\", x_in, \\\"hex=\\\", hex(xf[i].view(torch.int16).item() & 0xFFFF),\\n              \\\"kernel=\\\", out[i].item(), \\\"ref=\\\", ref[i].item())\\nimport json\\nprint(json.dumps({\\\"metric\\\":\\\"bit-exact vs FP64-rounded FP16 over all finite FP16 inputs\\\",\\n \\\"num_finite_inputs\\\": int(finite.sum()), \\\"num_mismatch\\\": int(mism.numel()),\\n \\\"bit_exact\\\": bool(same)}))\\n\", \"expected_signal\": \"bit_exact true/false plus mismatch count over all finite FP16 encodings\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293610,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 530,
+    "prompt_tokens": 10193,
+    "total_tokens": 10723,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6286,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

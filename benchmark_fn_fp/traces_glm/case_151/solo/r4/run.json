@@ -1,0 +1,854 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_151",
+    "has_error": null,
+    "kernel_code": "\"\"\"Forward cyclic NTT with fused butterfly stages.\n\nOriginal synthetic Triton implementation, not an upstream cryptographic kernel.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_Q = 3329\n_ROOT = 17\n_R = 1 << 16\n_R_INV = pow(_R, -1, _Q)\n\n\ndef _coefficient_product(left, right):\n    return (left * right) % _Q\n\n\ndef _make_coefficients(width):\n    \"\"\"Pack the coefficient banks for each fused stage and optional last stage.\"\"\"\n    omega = pow(_ROOT, 256 // width, _Q)\n    result = []\n    half = 1\n    for _ in range((width.bit_length() - 1) // 2):\n        first = [(_R * pow(omega, j * width // (2 * half), _Q)) % _Q\n                 for j in range(half)]\n        second = [(_R * pow(omega, j * width // (4 * half), _Q)) % _Q\n                  for j in range(half)]\n        upper = [(_R * pow(omega, (j + half) * width // (4 * half), _Q)) % _Q\n                 for j in range(half)]\n        cross_low = [_coefficient_product(a, b) for a, b in zip(first, second)]\n        cross_high = [_coefficient_product(a, b) for a, b in zip(first, upper)]\n        result.extend(first + second + upper + cross_low + cross_high)\n        half *= 4\n    if (width.bit_length() - 1) % 2:\n        result.extend([(_R * pow(omega, j, _Q)) % _Q for j in range(width // 2)])\n    return result\n\n\n@triton.jit\ndef _multiply(value, coefficient):\n    product = value.to(tl.int64) * coefficient.to(tl.int64)\n    correction = (product * 3327) & 65535\n    reduced = (product + correction * 3329) >> 16\n    return tl.where(reduced >= 3329, reduced - 3329, reduced).to(tl.int32)\n\n\n@triton.jit\ndef _transform_kernel(X, COEFFICIENTS, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    source = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        source = source | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\n    value = tl.load(X + row * N + source).to(tl.int32)\n\n    for stage in tl.static_range(0, LOG_N // 2):\n        half = 1 << (2 * stage)\n        local = lane % half\n        base = (lane // (4 * half)) * (4 * half) + local\n        quadrant = (lane // half) & 3\n        a = tl.gather(value, base, axis=0)\n        b = tl.gather(value, base + half, axis=0)\n        c = tl.gather(value, base + 2 * half, axis=0)\n        d = tl.gather(value, base + 3 * half, axis=0)\n        start = 5 * (half - 1) // 3\n        first = tl.load(COEFFICIENTS + start + local)\n        second = tl.load(COEFFICIENTS + start + half + local)\n        upper = tl.load(COEFFICIENTS + start + 2 * half + local)\n        cross_low = tl.load(COEFFICIENTS + start + 3 * half + local)\n        cross_high = tl.load(COEFFICIENTS + start + 4 * half + local)\n        p = _multiply(b, first)\n        c_low = _multiply(c, second)\n        c_high = _multiply(c, upper)\n        d_low = _multiply(d, cross_low)\n        d_high = _multiply(d, cross_high)\n        lower_sum = a + p + c_low + d_low\n        lower_difference = a + p - c_low - d_low\n        upper_sum = a - p + c_high - d_high\n        upper_difference = a - p - c_high + d_high\n        value = tl.where(quadrant == 0, lower_sum,\n                         tl.where(quadrant == 1, upper_sum,\n                                  tl.where(quadrant == 2, lower_difference, upper_difference)))\n        value = (value + 2 * 3329) % 3329\n\n    if LOG_N % 2:\n        half = N // 2\n        local = lane % half\n        left = tl.gather(value, local, axis=0)\n        right = tl.gather(value, local + half, axis=0)\n        start = 5 * ((1 << (2 * (LOG_N // 2))) - 1) // 3\n        coefficient = tl.load(COEFFICIENTS + start + local)\n        weighted = _multiply(right, coefficient)\n        value = tl.where(lane < half, left + weighted, left - weighted)\n        value = (value + 3329) % 3329\n    tl.store(OUT + row * N + lane, value)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public field and tensor domain.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {64,128}\")\n    require(x.dtype == torch.int32, \"int32 input required\")\n    require(bool(((x >= 0) & (x < 3329)).all()), \"canonical field values 0..3328 required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        coefficients = torch.tensor(_make_coefficients(width), dtype=torch.int32, device=x.device)\n        output = torch.empty_like(x)\n        _transform_kernel[(batch,)](\n            x, coefficients, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Direct modular DFT, independent of the coefficient banks and butterflies.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    matrix = [[pow(17, (256 // width) * k * j, 3329) for j in range(width)]\n              for k in range(width)]\n    coefficients = torch.tensor(matrix, dtype=torch.int64, device=x.device)\n    products = x.to(torch.int64)[:, None, :] * coefficients[None, :, :]\n    return (products.sum(dim=2) % 3329).to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; every canonical field-valued row is legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(0, 3329, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\n\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\n\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\n\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\n\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\n\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\n\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_151",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T03:15:19Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:15:36Z",
+          "data": {
+            "all_equal": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "05b16cf34189f256014acbeae802109f3f3d1606c9212af4f316ef55380443d0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "aa48004913342acf19fec28e4932f97e44ca5fd6b13cf66a16edbbc70bc58fea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4f9ef58d4e6302da1d9c45dd1dbf8c670a153445178a2b29f03661dcbbd07a38"
+              }
+            ],
+            "duration_s": 7.385319,
+            "exit_code": 0,
+            "expected_signal": "all_equal True -> claim rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": false,
+              "mismatch": {
+                "batch": 1,
+                "first": [
+                  [
+                    0,
+                    0
+                  ],
+                  72,
+                  410
+                ],
+                "n_diff": 64,
+                "width": 64
+              },
+              "results": {
+                "N128_B1": false,
+                "N128_B128": false,
+                "N128_B3": false,
+                "N64_B1": false,
+                "N64_B128": false,
+                "N64_B3": false
+              }
+            },
+            "mismatch_first": {
+              "batch": 0,
+              "index": [
+                0,
+                0
+              ],
+              "kernel": 72,
+              "n_diff": 64,
+              "reference": 410,
+              "width": 64
+            },
+            "results": {
+              "N128_B1": false,
+              "N128_B128": false,
+              "N128_B3": false,
+              "N64_B1": false,
+              "N64_B128": false,
+              "N64_B3": false
+            },
+            "seed": "1234+batch",
+            "stderr": "",
+            "stdout": "{\"all_equal\": false, \"results\": {\"N64_B1\": false, \"N64_B3\": false, \"N64_B128\": false, \"N128_B1\": false, \"N128_B3\": false, \"N128_B128\": false}, \"mismatch\": {\"width\": 64, \"batch\": 1, \"n_diff\": 64, \"first\": [[0, 0], 72, 410]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact-equality comparison (torch.equal, atol=0) against the direct modular DFT reference shows the kernel output differs from the target for every tested configuration: N=64 and N=128 at batches 1, 3, and 128, all failing. First mismatch: N=64, batch=1, position [0,0] kernel=72 vs reference=410, with all 64 positions of that row differing.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel uses a fused 4-way butterfly with precomputed Montgomery coefficients and bit-reversal gather; any error in coefficient banks, twiddle indexing, or the final odd-radix stage would break exact equality with the direct modular DFT. The contract requires atol=0, rtol=0 on canonical representatives.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "out[b,k] = sum_j x[b,j]*omega_N**(j*k) mod 3329, canonical representative in [0,3328], 'Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0', for all B in [1,128] and N in {64,128}, all canonical field values."
+        }
+      ],
+      "scope_rationale": "The contract requires exact equality with the defined modular DFT over the entire declared input domain (B in [1,128], N in {64,128}, every canonical field value).",
+      "statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328).",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T03:15:36Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_151",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_151"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_151"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_151"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_151",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 3.933538642,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll record the main correctness claim and then run a direct probe comparing the kernel output against the mathematical reference over the full domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses a fused 4-way butterfly with precomputed Montgomery coefficients and bit-reversal gather; any error in coefficient banks, twiddle indexing, or the final odd-radix stage would break exact equality with the direct modular DFT. The contract requires atol=0, rtol=0 on canonical representatives.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "out[b,k] = sum_j x[b,j]*omega_N**(j*k) mod 3329, canonical representative in [0,3328], 'Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0', for all B in [1,128] and N in {64,128}, all canonical field values."
+              }
+            ],
+            "scope_rationale": "The contract requires exact equality with the defined modular DFT over the entire declared input domain (B in [1,128], N in {64,128}, every canonical field value).",
+            "statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.934,
+        "input_tokens": 10757,
+        "output_tokens": 298
+      }
+    },
+    {
+      "duration_s": 4.085608086,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the decisive probe: compare kernel output against the mathematical reference exactly across both supported widths and several batches.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_151\")\nimport kernel\n\nresults = {}\nmismatch = None\nfor width in (64, 128):\n    for batch in (1, 3, 128):\n        g = torch.Generator(device=\"cpu\").manual_seed(1234 + batch)\n        x = torch.randint(0, 3329, (batch, width), generator=g, dtype=torch.int32).cuda()\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        results[f\"N{width}_B{batch}\"] = bool(eq)\n        if not eq and mismatch is None:\n            diff = (out != ref).nonzero()\n            mismatch = {\"width\": width, \"batch\": batch, \"n_diff\": int(diff.shape[0]),\n                        \"first\": [diff[0].tolist(), out[tuple(diff[0])].item(), ref[tuple(diff[0])].item()]}\nprint(json.dumps({\"all_equal\": all(results.values()), \"results\": results, \"mismatch\": mismatch}))",
+            "expected_signal": "all_equal True -> claim rebutted"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.086,
+        "input_tokens": 12148,
+        "output_tokens": 309
+      }
+    },
+    {
+      "duration_s": 4.976850157000001,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe shows the kernel's output disagrees with the mathematical reference on every tested configuration (all 64/128 widths, batches 1, 3, 128). I'll finalize this evidence, confirm the claim, and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "all_equal": false,
+              "mismatch_first": {
+                "batch": 0,
+                "index": [
+                  0,
+                  0
+                ],
+                "kernel": 72,
+                "n_diff": 64,
+                "reference": 410,
+                "width": 64
+              },
+              "results": {
+                "N128_B1": false,
+                "N128_B128": false,
+                "N128_B3": false,
+                "N64_B1": false,
+                "N64_B128": false,
+                "N64_B3": false
+              },
+              "seed": "1234+batch"
+            },
+            "event_id": "t6",
+            "summary": "Exact-equality comparison (torch.equal, atol=0) against the direct modular DFT reference shows the kernel output differs from the target for every tested configuration: N=64 and N=128 at batches 1, 3, and 128, all failing. First mismatch: N=64, batch=1, position [0,0] kernel=72 vs reference=410, with all 64 positions of that row differing.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.977,
+        "input_tokens": 14374,
+        "output_tokens": 344
+      }
+    },
+    {
+      "duration_s": 4.396737242,
+      "role": "solo",
+      "round": 5,
+      "text": "The decisive probe (t6) showed the kernel fails exact equality with the contractual modular DFT on every tested in-scope configuration. The confirmed in-scope claim c1 justifies a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 compared kernel.run() against the direct modular DFT reference with torch.equal (atol=0, rtol=0) across the declared domain: N=64 and N=128 at batches 1, 3, and 128, with canonical field-valued random inputs (seed 1234+batch). Every configuration failed; e.g. N=64 batch=1 mismatch at [0,0]: kernel=72 vs reference=410, with all 64 positions of that row differing. This violates the contract's explicit requirement that every result equal the mathematical target exactly over the full declared domain (B in [1,128], N in {64,128}, all canonical field values).",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.397,
+        "input_tokens": 18207,
+        "output_tokens": 239
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_151"
+      },
+      "created_at": "2026-10-18T03:15:14Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_151",
+        "has_error": null,
+        "kernel_code": "\"\"\"Forward cyclic NTT with fused butterfly stages.\n\nOriginal synthetic Triton implementation, not an upstream cryptographic kernel.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_Q = 3329\n_ROOT = 17\n_R = 1 << 16\n_R_INV = pow(_R, -1, _Q)\n\n\ndef _coefficient_product(left, right):\n    return (left * right) % _Q\n\n\ndef _make_coefficients(width):\n    \"\"\"Pack the coefficient banks for each fused stage and optional last stage.\"\"\"\n    omega = pow(_ROOT, 256 // width, _Q)\n    result = []\n    half = 1\n    for _ in range((width.bit_length() - 1) // 2):\n        first = [(_R * pow(omega, j * width // (2 * half), _Q)) % _Q\n                 for j in range(half)]\n        second = [(_R * pow(omega, j * width // (4 * half), _Q)) % _Q\n                  for j in range(half)]\n        upper = [(_R * pow(omega, (j + half) * width // (4 * half), _Q)) % _Q\n                 for j in range(half)]\n        cross_low = [_coefficient_product(a, b) for a, b in zip(first, second)]\n        cross_high = [_coefficient_product(a, b) for a, b in zip(first, upper)]\n        result.extend(first + second + upper + cross_low + cross_high)\n        half *= 4\n    if (width.bit_length() - 1) % 2:\n        result.extend([(_R * pow(omega, j, _Q)) % _Q for j in range(width // 2)])\n    return result\n\n\n@triton.jit\ndef _multiply(value, coefficient):\n    product = value.to(tl.int64) * coefficient.to(tl.int64)\n    correction = (product * 3327) & 65535\n    reduced = (product + correction * 3329) >> 16\n    return tl.where(reduced >= 3329, reduced - 3329, reduced).to(tl.int32)\n\n\n@triton.jit\ndef _transform_kernel(X, COEFFICIENTS, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    source = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        source = source | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\n    value = tl.load(X + row * N + source).to(tl.int32)\n\n    for stage in tl.static_range(0, LOG_N // 2):\n        half = 1 << (2 * stage)\n        local = lane % half\n        base = (lane // (4 * half)) * (4 * half) + local\n        quadrant = (lane // half) & 3\n        a = tl.gather(value, base, axis=0)\n        b = tl.gather(value, base + half, axis=0)\n        c = tl.gather(value, base + 2 * half, axis=0)\n        d = tl.gather(value, base + 3 * half, axis=0)\n        start = 5 * (half - 1) // 3\n        first = tl.load(COEFFICIENTS + start + local)\n        second = tl.load(COEFFICIENTS + start + half + local)\n        upper = tl.load(COEFFICIENTS + start + 2 * half + local)\n        cross_low = tl.load(COEFFICIENTS + start + 3 * half + local)\n        cross_high = tl.load(COEFFICIENTS + start + 4 * half + local)\n        p = _multiply(b, first)\n        c_low = _multiply(c, second)\n        c_high = _multiply(c, upper)\n        d_low = _multiply(d, cross_low)\n        d_high = _multiply(d, cross_high)\n        lower_sum = a + p + c_low + d_low\n        lower_difference = a + p - c_low - d_low\n        upper_sum = a - p + c_high - d_high\n        upper_difference = a - p - c_high + d_high\n        value = tl.where(quadrant == 0, lower_sum,\n                         tl.where(quadrant == 1, upper_sum,\n                                  tl.where(quadrant == 2, lower_difference, upper_difference)))\n        value = (value + 2 * 3329) % 3329\n\n    if LOG_N % 2:\n        half = N // 2\n        local = lane % half\n        left = tl.gather(value, local, axis=0)\n        right = tl.gather(value, local + half, axis=0)\n        start = 5 * ((1 << (2 * (LOG_N // 2))) - 1) // 3\n        coefficient = tl.load(COEFFICIENTS + start + local)\n        weighted = _multiply(right, coefficient)\n        value = tl.where(lane < half, left + weighted, left - weighted)\n        value = (value + 3329) % 3329\n    tl.store(OUT + row * N + lane, value)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public field and tensor domain.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {64,128}\")\n    require(x.dtype == torch.int32, \"int32 input required\")\n    require(bool(((x >= 0) & (x < 3329)).all()), \"canonical field values 0..3328 required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        coefficients = torch.tensor(_make_coefficients(width), dtype=torch.int32, device=x.device)\n        output = torch.empty_like(x)\n        _transform_kernel[(batch,)](\n            x, coefficients, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Direct modular DFT, independent of the coefficient banks and butterflies.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    matrix = [[pow(17, (256 // width) * k * j, 3329) for j in range(width)]\n              for k in range(width)]\n    coefficients = torch.tensor(matrix, dtype=torch.int64, device=x.device)\n    products = x.to(torch.int64)[:, None, :] * coefficients[None, :, :]\n    return (products.sum(dim=2) % 3329).to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; every canonical field-valued row is legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(0, 3329, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\n\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\n\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\n\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\n\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\n\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\n\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_151",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_151"
+      },
+      "created_at": "2026-10-18T03:15:14Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.\n\nFor a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is\n\n    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.\n\nReturn the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.\n- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.\n\nReturn a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.\n\nvalidate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.\n\nNTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_151",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_151"
+      },
+      "created_at": "2026-10-18T03:15:14Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_151",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 6069
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2324
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_151",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T03:15:14Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_151",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses a fused 4-way butterfly with precomputed Montgomery coefficients and bit-reversal gather; any error in coefficient banks, twiddle indexing, or the final odd-radix stage would break exact equality with the direct modular DFT. The contract requires atol=0, rtol=0 on canonical representatives.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "out[b,k] = sum_j x[b,j]*omega_N**(j*k) mod 3329, canonical representative in [0,3328], 'Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0', for all B in [1,128] and N in {64,128}, all canonical field values."
+          }
+        ],
+        "scope_rationale": "The contract requires exact equality with the defined modular DFT over the entire declared input domain (B in [1,128], N in {64,128}, every canonical field value).",
+        "statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328)."
+      },
+      "created_at": "2026-10-18T03:15:19Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T03:15:19Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel uses a fused 4-way butterfly with precomputed Montgomery coefficients and bit-reversal gather; any error in coefficient banks, twiddle indexing, or the final odd-radix stage would break exact equality with the direct modular DFT. The contract requires atol=0, rtol=0 on canonical representatives.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "out[b,k] = sum_j x[b,j]*omega_N**(j*k) mod 3329, canonical representative in [0,3328], 'Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0', for all B in [1,128] and N in {64,128}, all canonical field values."
+          }
+        ],
+        "scope_rationale": "The contract requires exact equality with the defined modular DFT over the entire declared input domain (B in [1,128], N in {64,128}, every canonical field value).",
+        "statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328).",
+        "status": "open",
+        "updated_at": "2026-10-18T03:15:19Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_151\")\nimport kernel\n\nresults = {}\nmismatch = None\nfor width in (64, 128):\n    for batch in (1, 3, 128):\n        g = torch.Generator(device=\"cpu\").manual_seed(1234 + batch)\n        x = torch.randint(0, 3329, (batch, width), generator=g, dtype=torch.int32).cuda()\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        results[f\"N{width}_B{batch}\"] = bool(eq)\n        if not eq and mismatch is None:\n            diff = (out != ref).nonzero()\n            mismatch = {\"width\": width, \"batch\": batch, \"n_diff\": int(diff.shape[0]),\n                        \"first\": [diff[0].tolist(), out[tuple(diff[0])].item(), ref[tuple(diff[0])].item()]}\nprint(json.dumps({\"all_equal\": all(results.values()), \"results\": results, \"mismatch\": mismatch}))",
+        "expected_signal": "all_equal True -> claim rebutted"
+      },
+      "created_at": "2026-10-18T03:15:31Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "05b16cf34189f256014acbeae802109f3f3d1606c9212af4f316ef55380443d0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "aa48004913342acf19fec28e4932f97e44ca5fd6b13cf66a16edbbc70bc58fea"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "4f9ef58d4e6302da1d9c45dd1dbf8c670a153445178a2b29f03661dcbbd07a38"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328).",
+        "cwd": "/root/cases/case_151",
+        "duration_s": 7.385319,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "05b16cf34189f256014acbeae802109f3f3d1606c9212af4f316ef55380443d0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "aa48004913342acf19fec28e4932f97e44ca5fd6b13cf66a16edbbc70bc58fea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4f9ef58d4e6302da1d9c45dd1dbf8c670a153445178a2b29f03661dcbbd07a38"
+              }
+            ],
+            "duration_s": 7.385319,
+            "exit_code": 0,
+            "expected_signal": "all_equal True -> claim rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": false,
+              "mismatch": {
+                "batch": 1,
+                "first": [
+                  [
+                    0,
+                    0
+                  ],
+                  72,
+                  410
+                ],
+                "n_diff": 64,
+                "width": 64
+              },
+              "results": {
+                "N128_B1": false,
+                "N128_B128": false,
+                "N128_B3": false,
+                "N64_B1": false,
+                "N64_B128": false,
+                "N64_B3": false
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"all_equal\": false, \"results\": {\"N64_B1\": false, \"N64_B3\": false, \"N64_B128\": false, \"N128_B1\": false, \"N128_B3\": false, \"N128_B128\": false}, \"mismatch\": {\"width\": 64, \"batch\": 1, \"n_diff\": 64, \"first\": [[0, 0], 72, 410]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "all_equal True -> claim rebutted",
+        "json_parse_error": null,
+        "json_result": {
+          "all_equal": false,
+          "mismatch": {
+            "batch": 1,
+            "first": [
+              [
+                0,
+                0
+              ],
+              72,
+              410
+            ],
+            "n_diff": 64,
+            "width": 64
+          },
+          "results": {
+            "N128_B1": false,
+            "N128_B128": false,
+            "N128_B3": false,
+            "N64_B1": false,
+            "N64_B128": false,
+            "N64_B3": false
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"all_equal\": false, \"results\": {\"N64_B1\": false, \"N64_B3\": false, \"N64_B128\": false, \"N128_B1\": false, \"N128_B3\": false, \"N128_B128\": false}, \"mismatch\": {\"width\": 64, \"batch\": 1, \"n_diff\": 64, \"first\": [[0, 0], 72, 410]}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "all_equal": false,
+          "mismatch_first": {
+            "batch": 0,
+            "index": [
+              0,
+              0
+            ],
+            "kernel": 72,
+            "n_diff": 64,
+            "reference": 410,
+            "width": 64
+          },
+          "results": {
+            "N128_B1": false,
+            "N128_B128": false,
+            "N128_B3": false,
+            "N64_B1": false,
+            "N64_B128": false,
+            "N64_B3": false
+          },
+          "seed": "1234+batch"
+        },
+        "event_id": "t6",
+        "summary": "Exact-equality comparison (torch.equal, atol=0) against the direct modular DFT reference shows the kernel output differs from the target for every tested configuration: N=64 and N=128 at batches 1, 3, and 128, all failing. First mismatch: N=64, batch=1, position [0,0] kernel=72 vs reference=410, with all 64 positions of that row differing.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T03:15:36Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:15:19Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:15:36Z",
+              "data": {
+                "all_equal": false,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "05b16cf34189f256014acbeae802109f3f3d1606c9212af4f316ef55380443d0"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "aa48004913342acf19fec28e4932f97e44ca5fd6b13cf66a16edbbc70bc58fea"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "4f9ef58d4e6302da1d9c45dd1dbf8c670a153445178a2b29f03661dcbbd07a38"
+                  }
+                ],
+                "duration_s": 7.385319,
+                "exit_code": 0,
+                "expected_signal": "all_equal True -> claim rebutted",
+                "json_parse_error": null,
+                "json_result": {
+                  "all_equal": false,
+                  "mismatch": {
+                    "batch": 1,
+                    "first": [
+                      [
+                        0,
+                        0
+                      ],
+                      72,
+                      410
+                    ],
+                    "n_diff": 64,
+                    "width": 64
+                  },
+                  "results": {
+                    "N128_B1": false,
+                    "N128_B128": false,
+                    "N128_B3": false,
+                    "N64_B1": false,
+                    "N64_B128": false,
+                    "N64_B3": false
+                  }
+                },
+                "mismatch_first": {
+                  "batch": 0,
+                  "index": [
+                    0,
+                    0
+                  ],
+                  "kernel": 72,
+                  "n_diff": 64,
+                  "reference": 410,
+                  "width": 64
+                },
+                "results": {
+                  "N128_B1": false,
+                  "N128_B128": false,
+                  "N128_B3": false,
+                  "N64_B1": false,
+                  "N64_B128": false,
+                  "N64_B3": false
+                },
+                "seed": "1234+batch",
+                "stderr": "",
+                "stdout": "{\"all_equal\": false, \"results\": {\"N64_B1\": false, \"N64_B3\": false, \"N64_B128\": false, \"N128_B1\": false, \"N128_B3\": false, \"N128_B128\": false}, \"mismatch\": {\"width\": 64, \"batch\": 1, \"n_diff\": 64, \"first\": [[0, 0], 72, 410]}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exact-equality comparison (torch.equal, atol=0) against the direct modular DFT reference shows the kernel output differs from the target for every tested configuration: N=64 and N=128 at batches 1, 3, and 128, all failing. First mismatch: N=64, batch=1, position [0,0] kernel=72 vs reference=410, with all 64 positions of that row differing.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel uses a fused 4-way butterfly with precomputed Montgomery coefficients and bit-reversal gather; any error in coefficient banks, twiddle indexing, or the final odd-radix stage would break exact equality with the direct modular DFT. The contract requires atol=0, rtol=0 on canonical representatives.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "out[b,k] = sum_j x[b,j]*omega_N**(j*k) mod 3329, canonical representative in [0,3328], 'Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0', for all B in [1,128] and N in {64,128}, all canonical field values."
+            }
+          ],
+          "scope_rationale": "The contract requires exact equality with the defined modular DFT over the entire declared input domain (B in [1,128], N in {64,128}, every canonical field value).",
+          "statement": "The kernel's run() output fails to exactly match the reference modular DFT for some legal input in the domain (B in [1,128], N in {64,128}, values 0..3328).",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T03:15:36Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:15:36Z",
+          "data": {
+            "all_equal": false,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "05b16cf34189f256014acbeae802109f3f3d1606c9212af4f316ef55380443d0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "aa48004913342acf19fec28e4932f97e44ca5fd6b13cf66a16edbbc70bc58fea"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "4f9ef58d4e6302da1d9c45dd1dbf8c670a153445178a2b29f03661dcbbd07a38"
+              }
+            ],
+            "duration_s": 7.385319,
+            "exit_code": 0,
+            "expected_signal": "all_equal True -> claim rebutted",
+            "json_parse_error": null,
+            "json_result": {
+              "all_equal": false,
+              "mismatch": {
+                "batch": 1,
+                "first": [
+                  [
+                    0,
+                    0
+                  ],
+                  72,
+                  410
+                ],
+                "n_diff": 64,
+                "width": 64
+              },
+              "results": {
+                "N128_B1": false,
+                "N128_B128": false,
+                "N128_B3": false,
+                "N64_B1": false,
+                "N64_B128": false,
+                "N64_B3": false
+              }
+            },
+            "mismatch_first": {
+              "batch": 0,
+              "index": [
+                0,
+                0
+              ],
+              "kernel": 72,
+              "n_diff": 64,
+              "reference": 410,
+              "width": 64
+            },
+            "results": {
+              "N128_B1": false,
+              "N128_B128": false,
+              "N128_B3": false,
+              "N64_B1": false,
+              "N64_B128": false,
+              "N64_B3": false
+            },
+            "seed": "1234+batch",
+            "stderr": "",
+            "stdout": "{\"all_equal\": false, \"results\": {\"N64_B1\": false, \"N64_B3\": false, \"N64_B128\": false, \"N128_B1\": false, \"N128_B3\": false, \"N128_B128\": false}, \"mismatch\": {\"width\": 64, \"batch\": 1, \"n_diff\": 64, \"first\": [[0, 0], 72, 410]}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exact-equality comparison (torch.equal, atol=0) against the direct modular DFT reference shows the kernel output differs from the target for every tested configuration: N=64 and N=128 at batches 1, 3, and 128, all failing. First mismatch: N=64, batch=1, position [0,0] kernel=72 vs reference=410, with all 64 positions of that row differing.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run() against the direct modular DFT reference with torch.equal (atol=0, rtol=0) across the declared domain: N=64 and N=128 at batches 1, 3, and 128, with canonical field-valued random inputs (seed 1234+batch). Every configuration failed; e.g. N=64 batch=1 mismatch at [0,0]: kernel=72 vs reference=410, with all 64 positions of that row differing. This violates the contract's explicit requirement that every result equal the mathematical target exactly over the full declared domain (B in [1,128], N in {64,128}, all canonical field values).",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T03:15:40Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-18T03:15:40Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run() against the direct modular DFT reference with torch.equal (atol=0, rtol=0) across the declared domain: N=64 and N=128 at batches 1, 3, and 128, with canonical field-valued random inputs (seed 1234+batch). Every configuration failed; e.g. N=64 batch=1 mismatch at [0,0]: kernel=72 vs reference=410, with all 64 positions of that row differing. This violates the contract's explicit requirement that every result equal the mathematical target exactly over the full declared domain (B in [1,128], N in {64,128}, all canonical field values).",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-18T03:15:40Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 compared kernel.run() against the direct modular DFT reference with torch.equal (atol=0, rtol=0) across the declared domain: N=64 and N=128 at batches 1, 3, and 128, with canonical field-valued random inputs (seed 1234+batch). Every configuration failed; e.g. N=64 batch=1 mismatch at [0,0]: kernel=72 vs reference=410, with all 64 positions of that row differing. This violates the contract's explicit requirement that every result equal the mathematical target exactly over the full declared domain (B in [1,128], N in {64,128}, all canonical field values).",
+    "verdict": "reject"
+  }
+}

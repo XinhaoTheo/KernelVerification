@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-dc9347ae",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing the kernel's output to the direct modular DFT reference across multiple random inputs, both widths.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bea00588be0950c8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport sys, torch, json\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfail = False\\nfor width in (64, 128):\\n    mismatches = 0\\n    checked = 0\\n    for seed in range(8):\\n        g = torch.Generator(\\\"cpu\\\").manual_seed(seed)\\n        x = torch.randint(0, 3329, (16, width), generator=g, dtype=torch.int32).to(dev)\\n        out = kernel.run(x)\\n        ref = kernel.reference(x)\\n        eq = torch.equal(out, ref)\\n        checked += x.numel()\\n        if not eq:\\n            mismatches += (out != ref).sum().item()\\n            diff = (out != ref).nonzero()[:5]\\n            print(width, seed, diff.tolist())\\n        # verify output properties\\n        assert out.dtype == torch.int32 and out.shape == x.shape and out.device == x.device\\n    # edge cases: all zeros, all 3328, batch extremes\\n    for x in [torch.zeros(1, width, dtype=torch.int32, device=dev),\\n              torch.full((128, width), 3328, dtype=torch.int32, device=dev),\\n              torch.randint(0, 3329, (128, width), dtype=torch.int32, device=dev)]:\\n        out = kernel.run(x)\\n        ref = kernel.reference(x)\\n        checked += x.numel()\\n        if not torch.equal(out, ref):\\n            mismatches += (out != ref).sum().item()\\n            fail = True\\n    results[f\\\"N{width}\\\"] = {\\\"mismatched_elements\\\": mismatches, \\\"elements_checked\\\": checked,\\n                            \\\"exact_match\\\": mismatches == 0}\\n\\nprint(json.dumps({\\\"metric\\\": \\\"exact integer equality vs direct modular DFT (tol 0)\\\",\\n                  \\\"reason\\\": \\\"contract requires exact outputs for every canonical input\\\",\\n                  **results}))\\n\", \"expected_signal\": \"exact match on all tested inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run probe comparing kernel run vs reference on both N=64 and 128 with several random batches, exact equality."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293256,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 495,
+    "prompt_tokens": 11893,
+    "total_tokens": 12388,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 23,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7473,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

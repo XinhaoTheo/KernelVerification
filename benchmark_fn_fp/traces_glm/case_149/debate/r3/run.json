@@ -1,0 +1,2466 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_149",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise FP16 sigmoid with explicit internal arithmetic precision.\n\nOriginal synthetic Triton adaptation of the standard logistic activation.\nThis file is not presented as an upstream historical bug or patch.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\nimport triton.language.extra.cuda.libdevice as libdevice\n\n\n@triton.jit\ndef _sigmoid(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = libdevice.exp(-tl.abs(x))\n    denominator = 1.0 + exponential\n    numerator = tl.where(x < 0.0, exponential, 1.0)\n    value = libdevice.div_rn(numerator, denominator)\n    rounded = tl.inline_asm_elementwise(\n        \"cvt.rn.f16.f32 $0, $1;\", constraints=\"=h,f\",\n        args=[value], dtype=tl.float16, is_pure=True, pack=1)\n    tl.store(OUT + index, rounded, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; CPU inputs are allowed for reference.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return sigmoid values in a fresh FP16 tensor.\"\"\"\n    validate_inputs(x)\n    with torch.cuda.device(x.device):\n        output = torch.empty_like(x)\n        _sigmoid[(triton.cdiv(x.numel(), 256),)](\n            x, output, N=x.numel(), BLOCK=256, num_warps=4,\n            enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"CPU FP64 sigmoid, then direct binary16 round-to-nearest-even packing.\"\"\"\n    import struct\n    validate_inputs(x, require_cuda=False)\n    values = x.detach().to(device=\"cpu\", dtype=torch.float64)\n    payload = bytearray().join(struct.pack(\"<e\", value)\n                               for value in torch.sigmoid(values).tolist())\n    result = torch.frombuffer(payload, dtype=torch.float16).clone()\n    return result.to(x.device)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience inputs; all finite FP16 values belong to the legal domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (3.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_149",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T03:17:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:18:33Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+              }
+            ],
+            "duration_s": 3.599647,
+            "exit_code": 0,
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+            "json_parse_error": null,
+            "json_result": {
+              "first_nonfinite_bits": [
+                "0xfc00",
+                "0xfc01",
+                "0xfc02",
+                "0xfc03",
+                "0xfc04"
+              ],
+              "isfinite": false,
+              "n_nonfinite": 1024,
+              "numel": 64512
+            },
+            "n_nonfinite": 1024,
+            "numel": 64512,
+            "stderr": "",
+            "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+          "supports": "inconclusive",
+          "tool_event_id": "t12"
+        },
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:19:30Z",
+          "data": {
+            "actual_finite_count": 63488,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t19_probe.py",
+                "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t19_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t19_stderr.txt",
+                "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+              }
+            ],
+            "assert_failed_expected": 63504,
+            "duration_s": 3.638384,
+            "exit_code": 1,
+            "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+          "supports": "inconclusive",
+          "tool_event_id": "t19"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+        }
+      ],
+      "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+      "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+      "status": "inconclusive",
+      "updated_at": "2026-10-18T03:19:30Z"
+    },
+    {
+      "created_at": "2026-10-18T03:17:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:17:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+              }
+            ],
+            "duration_s": 5.562027,
+            "exit_code": 0,
+            "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+            "flushed_to_zero": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "first_failures": [],
+              "flushed_to_zero": 0,
+              "n_mismatch": 0,
+              "n_tested": 799
+            },
+            "n_mismatch": 0,
+            "n_tested": 799,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+        }
+      ],
+      "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+      "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T03:17:55Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+      "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+      "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+      "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+      "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.",
+      "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+      "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+      "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it."
+    ],
+    "kernel_model": [
+      "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+      "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+      "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+      "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+      "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side.",
+      "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+      "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+      "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+      "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+      "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+    ],
+    "open_questions": [
+      "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+      "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+      "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?",
+      "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+      "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+      "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+    ],
+    "risk_map": [
+      "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+      "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+      "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+      "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+      "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+      "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4.",
+      "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+      "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+      "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+      "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+      "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+    ],
+    "scope_notes": [
+      "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+      "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+      "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+      "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases.",
+      "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+      "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+      "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+      "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+      "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+        "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+        "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+        "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+        "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T03:17:06Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+        "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+        "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+        "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+        "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side."
+      ],
+      "open_questions": [
+        "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+        "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+        "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?"
+      ],
+      "risk_map": [
+        "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+        "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+        "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+        "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+        "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+        "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4."
+      ],
+      "scope_notes": [
+        "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+        "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+        "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+        "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases."
+      ],
+      "summary": "Described case_149: FP16 sigmoid kernel with strict once-rounded binary16 output contract; kernel uses sign-stable exp(-|x|) form in FP32 plus inline PTX cvt.rn.f16.f32 for final rounding. Main risks are intermediate-precision boundary crossings and subnormal-output handling.",
+      "task_ids": [],
+      "turn": 2
+    },
+    {
+      "contract_model": [
+        "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+        "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+        "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+        "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it.",
+        "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T03:19:07Z",
+      "created_by": "describer",
+      "id": "du2",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+        "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+        "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+        "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+        "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+      ],
+      "open_questions": [
+        "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+        "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+        "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+      ],
+      "risk_map": [
+        "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+        "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+        "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+        "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+        "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+      ],
+      "scope_notes": [
+        "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+        "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+        "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+        "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+        "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+      ],
+      "summary": "Updated description for reopened round on c1: c2 (subnormal/FTZ flush) is decisively rebutted by an exhaustive bit-exact 799-input probe of the subnormal region; the only open surface is c1 \u2014 whether FP32 libdevice.exp/div_rn intermediate error flips the final cvt.rn.f16.f32 rounding at a binary16 halfway point for some finite FP16 input. The decisive evidence, an exhaustive bitwise sweep over all finite FP16 encodings vs reference(), has not yet run due to probe-side pattern-mask bugs; the corrected sign-bit-aware mask is drafted. Note the corrected finite count should be verified (prior probes reported 64512 for a mask that still included 1024 negative non-finite encodings; the fully corrected finite set is 65536 - 2048 non-finite = 63504 encodings).",
+      "task_ids": [],
+      "turn": 11
+    }
+  ],
+  "entry": "case_149",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_149",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 25.049459344,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full context: contract, kernel source, and metadata. I'll now record the description model for this strict FP16 final-rounding sigmoid task.\n\nKey analysis: the kernel computes sigmoid via the numerically-stable branch form: for x \u2265 0, value = 1/(1+exp(-x)); for x < 0, value = exp(x)/(1+exp(x)) \u2014 implemented as exp(-|x|) with numerator selected by sign. Mathematically this equals 1/(1+exp(-x)) exactly over reals, but the computed FP32 intermediate is an approximation (libdevice.exp, div_rn), so the correctly-rounded-at-the-end requirement is only satisfied if the FP32 intermediate error is small enough to not straddle FP16 rounding boundaries. Risk surfaces: FP16 values whose exact sigmoid sits near a halfway point between adjacent FP16 values \u2014 a small ULP error in the FP32 path can flip the final cvt.rn result. Also: negative-zero handling (x = -0.0 passes x < 0.0? No \u2014 -0.0 < 0.0 is false in IEEE, so numerator = 1.0, output 0.5, correct). Saturating large |x|: exp(-|x|) underflows to 0 \u2192 exact 1.0 or smallest subnormal ratio \u2014 fine. The signedness of output zero: positive underflow rounds to +0 as required. Potential risk: libdevice.exp accuracy on T4; also whether cvt.rn.f16.f32 handles subnormal results (FTZ?). Also x<0 large: numerator=exp(-|x|) subnormal or zero, denominator ~1 \u2192 tiny subnormal; cvt may flush subnormals to zero depending on compilation FTZ mode, but the correct result is exactly 0 there anyway... actually for moderately large |x|, sigmoid is a subnormal FP16 value, e.g. sigmoid(-11) \u2248 1.67e-5 which is normal FP16 (min normal ~6.1e-5... actually 1.67e-5 is subnormal range? FP16 min subnormal ~5.96e-8, min normal 6.1e-5 \u2014 1.67e-5 is subnormal). So subnormal output correctness under cvt.rn.f16.f32 is a real surface.</think>",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+              "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+              "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+              "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+              "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+              "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+              "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+              "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+              "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side."
+            ],
+            "open_questions": [
+              "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+              "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+              "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?"
+            ],
+            "risk_map": [
+              "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+              "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+              "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+              "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+              "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+              "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4."
+            ],
+            "scope_notes": [
+              "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+              "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+              "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+              "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases."
+            ],
+            "summary": "Described case_149: FP16 sigmoid kernel with strict once-rounded binary16 output contract; kernel uses sign-stable exp(-|x|) form in FP32 plus inline PTX cvt.rn.f16.f32 for final rounding. Main risks are intermediate-precision boundary crossings and subnormal-output handling."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 25.049,
+        "input_tokens": 6447,
+        "output_tokens": 1622
+      }
+    },
+    {
+      "duration_s": 9.633421907999999,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the highest-risk, directly testable claims tied to the strict once-rounded FP16 contract.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+              }
+            ],
+            "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+            "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+              }
+            ],
+            "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+            "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.633,
+        "input_tokens": 15647,
+        "output_tokens": 634
+      }
+    },
+    {
+      "duration_s": 11.490948445999997,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run two independent probes: an exhaustive bitwise sweep of all finite FP16 encodings (c1) and a focused probe on the subnormal-output region x \u2208 [-18.5, -11.1] (c2).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport sys, os, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# all finite FP16 bit patterns (exclude NaN/Inf exponent=0x1F except zero subnormals are fine)\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\nx = torch.tensor(patterns, dtype=torch.int32).view(torch.float16).to(\"cuda\")\nassert x.numel() <= 131072 and torch.isfinite(x).all()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:10].tolist():\n    xv = x[idx].item()\n    fail.append({\"x\": xv, \"x_bits\": hex(x[idx].view(torch.int16).item()),\n                 \"got_bits\": hex(out[idx].view(torch.int16).item()),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(ref[idx].view(torch.int16).item()),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": x.numel(), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+            "expected_signal": "count of bit-exact mismatches vs reference over all finite FP16 inputs"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# negative FP16 inputs in the subnormal-output region -18.5 < x <= -11.0\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\nxall = torch.tensor(patterns, dtype=torch.int32).view(torch.float16)\nsel = (xall < -11.0) & (xall > -18.5)\nx = xall[sel].to(\"cuda\")\nout = kernel.run(x)\nref = kernel.reference(x)\nout_bits = out.view(torch.int16); ref_bits = ref.view(torch.int16)\nmism = (out_bits != ref_bits).nonzero().flatten()\n# check whether outputs that should be nonzero subnormals were flushed to zero\nshould_subnormal = (ref.view(torch.float16).abs() > 0) & (ref_bits & 0x7FFF != 0)\nn = int(x.numel())\nres = {\"n_tested\": n, \"n_mismatch\": int(mism.numel()),\n       \"flushed_to_zero\": int(((out_bits & 0x7FFF) == 0).sum() - ((ref_bits & 0x7FFF) == 0).sum())}\nfail = []\nfor idx in mism[:10].tolist():\n    fail.append({\"x\": x[idx].item(), \"got\": out[idx].item(),\n                 \"got_bits\": hex(out_bits[idx].item()),\n                 \"want_bits\": hex(ref_bits[idx].item())})\nres[\"first_failures\"] = fail\nprint(json.dumps(res))\n",
+            "expected_signal": "bitwise mismatch count in subnormal-output region vs reference"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.491,
+        "input_tokens": 18645,
+        "output_tokens": 831
+      }
+    },
+    {
+      "duration_s": 17.221474015,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The c2 probe succeeded (0 mismatches across 799 subnormal-region inputs \u2014 no flushing). The c1 exhaustive probe had a probe bug: `torch.int32.view(torch.float16)` reinterprets bytes and doubles the length to 131072, producing garbage/NaN values, so the assertion failed. I'll finalize c2 as rebutted and re-run c1 with a correct uint16 pattern encoding.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "flushed_to_zero": 0,
+              "n_mismatch": 0,
+              "n_tested": 799
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# all finite FP16 bit patterns via uint16 -> float16 reinterpretation (NaN/Inf excluded)\nimport numpy as np\nbits = np.array([i for i in range(65536) if (i >> 10) != 0x1F], dtype=np.uint16)\nx = torch.from_numpy(bits).view(torch.float16).to(\"cuda\")\nassert x.numel() <= 131072 and torch.isfinite(x).all()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:10].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(x[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.221,
+        "input_tokens": 22834,
+        "output_tokens": 1135
+      }
+    },
+    {
+      "duration_s": 14.475693668000005,
+      "role": "experimenter",
+      "round": 6,
+      "text": "The c1 probe failed again at the finiteness assertion despite excluding exponent 0x1F \u2014 likely an issue with `torch.from_numpy(uint16).view(float16)`. I'll re-run using a numpy `frombuffer` reinterpretation (byte-identical, little-endian) and add diagnostics.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\nbits = np.array([i for i in range(65536) if (i >> 10) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\ndiag = {\"numel\": int(x.numel()), \"isfinite\": bool(torch.isfinite(x).all().item())}\nif not diag[\"isfinite\"]:\n    bad = (~torch.isfinite(x)).nonzero().flatten()\n    diag[\"n_nonfinite\"] = int(bad.numel())\n    diag[\"first_nonfinite_bits\"] = [hex(int(bits[i])) for i in bad[:5].tolist()]\n    print(json.dumps(diag))\nelse:\n    out = kernel.run(x)\n    ref = kernel.reference(x)\n    ok = out.view(torch.int16) == ref.view(torch.int16)\n    mismatches = (~ok).nonzero().flatten()\n    n_mismatch = int(mismatches.numel())\n    fail = []\n    for idx in mismatches[:10].tolist():\n        fail.append({\"x\": x[idx].item(),\n                     \"x_bits\": hex(int(bits[idx])),\n                     \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                     \"got\": out[idx].item(),\n                     \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                     \"want\": ref[idx].item()})\n    print(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                      \"first_failures\": fail}))\n",
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 14.476,
+        "input_tokens": 27539,
+        "output_tokens": 975
+      }
+    },
+    {
+      "duration_s": 9.606679326000005,
+      "role": "experimenter",
+      "round": 7,
+      "text": "The t12 probe revealed the actual bug in my pattern generation: sign-bit inputs shift to `i>>10 == 0x3F` (0x1F | sign), so my NaN/Inf exclusion missed negative non-finites. Fixing the mask to `(i>>10)&0x1F != 0x1F` and re-running the exhaustive sweep for c1.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\n# all finite FP16 bit patterns (exclude NaN/Inf: exponent field 0x1F, with sign-bit-aware mask)\nbits = np.array([i for i in range(65536) if ((i >> 10) & 0x1F) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\nassert torch.isfinite(x).all(), \"nonfinite leaked\"\nassert x.numel() <= 131072\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:12].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(bits[idx])),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+            "expected_signal": "count of bit-exact mismatches vs reference over all 64512 finite FP16 inputs"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.607,
+        "input_tokens": 30007,
+        "output_tokens": 621
+      }
+    },
+    {
+      "duration_s": 6.1496122679999985,
+      "role": "experimenter",
+      "round": 8,
+      "text": "Finalizing t12 as inconclusive (it was a diagnostic run exposing my mask bug), then re-launching the corrected exhaustive sweep for c1.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "n_nonfinite": 1024,
+              "numel": 64512
+            },
+            "event_id": "t12",
+            "status": "inconclusive",
+            "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.15,
+        "input_tokens": 29517,
+        "output_tokens": 260
+      }
+    },
+    {
+      "duration_s": 6.090052096999997,
+      "role": "skeptic",
+      "round": 9,
+      "text": "This is the final review turn. The subnormal-output claim (c2) is decisively rebutted by an exhaustive 799-input bit-exact sweep of the subnormal region. The intermediate-precision claim (c1) remains inconclusive solely because the experimenter's exhaustive probe had a probe-side mask bug \u2014 the kernel itself has not shown any failure, and the targeted subnormal probe (the region most sensitive to rounding/flush issues) passed bit-exactly. The corrected exhaustive sweep exists but could not run this round; that is a needs-more-evidence situation, not a new material claim. No new in-scope claims are warranted.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c2 is rebutted by an exhaustive bit-exact probe over the subnormal-output region (799 inputs, 0 mismatches, 0 flushes). c1 remains inconclusive only because the experimenter's exhaustive sweep probes had probe-side mask bugs (missing negative non-finite encodings in the pattern generator), not because any kernel failure was observed; the corrected sweep was not run within this round. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.09,
+        "input_tokens": 30331,
+        "output_tokens": 390
+      }
+    },
+    {
+      "duration_s": 7.365124984000005,
+      "role": "judge",
+      "round": 10,
+      "text": "The subnormal/FTZ claim (c2) is decisively rebutted by a bit-exact probe, but c1 \u2014 the intermediate-precision halfway-point claim \u2014 is still inconclusive purely due to probe-side bugs; the corrected exhaustive sweep was never run. That claim is in-scope, material to the strict once-rounded contract, and clearly resolvable with one more probe. Debate budget appears to remain, so I'll request another round focused on c1 rather than record a premature verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "focus_claims": [
+              "c1"
+            ],
+            "reason": "c1 (FP32 intermediate error flipping final binary16 rounding at a halfway point) is in-scope, material under the strict once-rounded contract, and resolvable: the Experimenter's corrected exhaustive sweep (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, already drafted) was never executed. Prior failures were probe-side pattern-generation bugs, not kernel behavior. One decisive exhaustive bitwise comparison over all finite FP16 encodings would settle trust vs reject."
+          },
+          "tool": "request_more_debate"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.365,
+        "input_tokens": 30411,
+        "output_tokens": 310
+      }
+    },
+    {
+      "duration_s": 20.998684757000007,
+      "role": "describer",
+      "round": 11,
+      "text": "The judge reopened debate on c1 (FP32 intermediate error flipping final binary16 rounding). I'll update the shared description model to reflect the current evidence state so the next round's Skeptic/Experimenter can target c1 efficiently: c2 (subnormal/FTZ) is decisively rebutted, so the subnormal risk in my model can be downgraded, and the open question narrows to the exhaustive finite-FP16 sweep with the corrected pattern mask.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+              "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+              "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+              "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it.",
+              "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+              "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+              "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+              "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+              "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+            ],
+            "open_questions": [
+              "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+              "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+              "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+            ],
+            "risk_map": [
+              "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+              "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+              "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+              "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+              "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+            ],
+            "scope_notes": [
+              "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+              "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+              "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+              "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+              "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+            ],
+            "summary": "Updated description for reopened round on c1: c2 (subnormal/FTZ flush) is decisively rebutted by an exhaustive bit-exact 799-input probe of the subnormal region; the only open surface is c1 \u2014 whether FP32 libdevice.exp/div_rn intermediate error flips the final cvt.rn.f16.f32 rounding at a binary16 halfway point for some finite FP16 input. The decisive evidence, an exhaustive bitwise sweep over all finite FP16 encodings vs reference(), has not yet run due to probe-side pattern-mask bugs; the corrected sign-bit-aware mask is drafted. Note the corrected finite count should be verified (prior probes reported 64512 for a mask that still included 1024 negative non-finite encodings; the fully corrected finite set is 65536 - 2048 non-finite = 63504 encodings)."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 20.999,
+        "input_tokens": 28164,
+        "output_tokens": 1433
+      }
+    },
+    {
+      "duration_s": 5.714407368999986,
+      "role": "skeptic",
+      "round": 12,
+      "text": "The judge reopened the round solely to get the corrected exhaustive sweep executed for c1. That sweep is exactly the decisive probe my c1 claim already specifies; the mechanism (FP32 exp/div_rn error flipping the cvt.rn rounding at a binary16 halfway point) is the only remaining open surface, c2 is decisively rebutted, and no new source or runtime evidence has appeared since. Raising an additional claim would only fragment the already well-defined c1 test, so I'll register no new claims and let the Experimenter run the corrected sweep.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Reopened round targets only c1: the decisive evidence is the corrected exhaustive bitwise sweep over all finite FP16 encodings (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, finiteness asserted), which is precisely the test c1 already specifies. c2 is decisively rebutted (t9). No new evidence exposes any material, testable, in-scope problem not already covered by c1; adding claims would fragment rather than sharpen the decisive experiment.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.714,
+        "input_tokens": 34492,
+        "output_tokens": 397
+      }
+    },
+    {
+      "duration_s": 6.4271156299999745,
+      "role": "experimenter",
+      "round": 13,
+      "text": "Launching the corrected exhaustive sweep for c1 \u2014 all finite FP16 encodings via the sign-bit-aware mask, finiteness and count asserted (should be 63504 = 65536 \u2212 2048 non-finite), bitwise comparison vs reference().",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\nbits = np.array([i for i in range(65536) if ((i >> 10) & 0x1F) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\nassert torch.isfinite(x).all(), \"nonfinite leaked\"\nassert x.numel() == 63504, x.numel()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:12].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(bits[idx])),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))",
+            "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.427,
+        "input_tokens": 34322,
+        "output_tokens": 408
+      }
+    },
+    {
+      "duration_s": 7.003565545000015,
+      "role": "experimenter",
+      "round": 14,
+      "text": "t19 failed only on my own count assertion: the finite FP16 set is 63488 (65536 \u2212 2048 non-finite encodings), not 63504. The mask itself is correct. I'll mark t19 inconclusive and immediately re-run the sweep with the right count.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "actual_finite_count": 63488,
+              "assert_failed_expected": 63504
+            },
+            "event_id": "t19",
+            "status": "inconclusive",
+            "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+            "supports": "inconclusive"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.004,
+        "input_tokens": 35105,
+        "output_tokens": 352
+      }
+    },
+    {
+      "duration_s": 7.247892494000013,
+      "role": "skeptic",
+      "round": 15,
+      "text": "This is the final review turn. The only open surface remains c1; the latest evidence (t19) was again a probe-side count-assertion bug, not a kernel failure \u2014 the correct finite FP16 count is 63488, and the corrected sweep re-run is already queued. No kernel defect has been observed anywhere; c2 is decisively rebutted. No new material, testable, in-scope problem exists beyond what c1 already covers.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c2 is decisively rebutted (t9: exhaustive bit-exact subnormal-region probe, 0 mismatches, 0 flushes). c1 remains inconclusive solely due to probe-side count-assertion bugs (t19 failed only on the expected-count assert; actual finite FP16 encodings = 63488), with no kernel output ever mismatching or even being produced by the sweep. The corrected sweep (finiteness asserted, count 63488) is exactly the decisive test c1 already specifies; raising another claim would fragment it. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.248,
+        "input_tokens": 36451,
+        "output_tokens": 292
+      }
+    },
+    {
+      "duration_s": 8.763809666000014,
+      "role": "judge",
+      "round": 16,
+      "text": "The decisive exhaustive sweep for c1 was never successfully executed \u2014 every failure was a probe-side bug (pattern-mask error, then wrong count assertion), never a kernel output. c2 is decisively rebutted. With c1 material and in-scope but unresolved, needs_more_evidence is the honest verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.7,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "c2 (subnormal FTZ flush) is decisively rebutted: t9 tested all 799 negative inputs in (-18.5,-11.0) whose correctly rounded sigmoid is a nonzero FP16 subnormal, and the kernel produced bit-exact outputs with zero flushes, so the cvt.rn.f16.f32 path preserves subnormals. However c1 \u2014 the central, in-scope claim that FP32 libdevice.exp/div_rn intermediate error flips the final binary16 rounding at a halfway point for some legal input \u2014 remains inconclusive. The decisive exhaustive bitwise sweep over all 63488 finite FP16 encodings vs reference() was never successfully executed: t12 aborted on a probe-side NaN/Inf mask bug, and t19 aborted on a wrong expected-count assertion (63504 vs actual 63488); no sweep run ever produced kernel output. No kernel output mismatch has been observed anywhere, but absence of evidence is not confirmation under a contract that requires exact once-rounded bit patterns for every finite input and declares \"one failing legal input is evidence against the implementation.\" Setting aside c1 as unresolved purely because the Experimenter's sweep kept failing on its own assertions; it is clearly resolvable with one corrected run. Verdict: needs_more_evidence, not trust (the strict-rounding risk is untested) and not reject (no mismatch was ever observed).",
+            "verdict": "needs_more_evidence"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.764,
+        "input_tokens": 35207,
+        "output_tokens": 430
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T03:19:37Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c2 is decisively rebutted (t9: exhaustive bit-exact subnormal-region probe, 0 mismatches, 0 flushes). c1 remains inconclusive solely due to probe-side count-assertion bugs (t19 failed only on the expected-count assert; actual finite FP16 encodings = 63488), with no kernel output ever mismatching or even being produced by the sweep. The corrected sweep (finiteness asserted, count 63488) is exactly the decisive test c1 already specifies; raising another claim would fragment it. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 20,
+    "tool_event_id": "t21",
+    "turn": 15
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:16:40Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_149",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise FP16 sigmoid with explicit internal arithmetic precision.\n\nOriginal synthetic Triton adaptation of the standard logistic activation.\nThis file is not presented as an upstream historical bug or patch.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\nimport triton.language.extra.cuda.libdevice as libdevice\n\n\n@triton.jit\ndef _sigmoid(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = libdevice.exp(-tl.abs(x))\n    denominator = 1.0 + exponential\n    numerator = tl.where(x < 0.0, exponential, 1.0)\n    value = libdevice.div_rn(numerator, denominator)\n    rounded = tl.inline_asm_elementwise(\n        \"cvt.rn.f16.f32 $0, $1;\", constraints=\"=h,f\",\n        args=[value], dtype=tl.float16, is_pure=True, pack=1)\n    tl.store(OUT + index, rounded, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; CPU inputs are allowed for reference.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return sigmoid values in a fresh FP16 tensor.\"\"\"\n    validate_inputs(x)\n    with torch.cuda.device(x.device):\n        output = torch.empty_like(x)\n        _sigmoid[(triton.cdiv(x.numel(), 256),)](\n            x, output, N=x.numel(), BLOCK=256, num_warps=4,\n            enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"CPU FP64 sigmoid, then direct binary16 round-to-nearest-even packing.\"\"\"\n    import struct\n    validate_inputs(x, require_cuda=False)\n    values = x.detach().to(device=\"cpu\", dtype=torch.float64)\n    payload = bytearray().join(struct.pack(\"<e\", value)\n                               for value in torch.sigmoid(values).tolist())\n    result = torch.frombuffer(payload, dtype=torch.float16).clone()\n    return result.to(x.device)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience inputs; all finite FP16 values belong to the legal domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (3.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_149",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:16:40Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_149",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:16:40Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_149",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3124
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2140
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_149",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T03:16:40Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_149",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+          "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+          "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+          "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+          "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+          "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+          "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+          "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+          "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side."
+        ],
+        "open_questions": [
+          "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+          "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+          "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?"
+        ],
+        "risk_map": [
+          "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+          "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+          "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+          "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+          "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+          "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4."
+        ],
+        "scope_notes": [
+          "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+          "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+          "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+          "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases."
+        ],
+        "summary": "Described case_149: FP16 sigmoid kernel with strict once-rounded binary16 output contract; kernel uses sign-stable exp(-|x|) form in FP32 plus inline PTX cvt.rn.f16.f32 for final rounding. Main risks are intermediate-precision boundary crossings and subnormal-output handling."
+      },
+      "created_at": "2026-10-18T03:17:06Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+            "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+            "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+            "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+            "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+            "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+            "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+            "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side."
+          ],
+          "open_questions": [
+            "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+            "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+            "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?"
+          ],
+          "risk_map": [
+            "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+            "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+            "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+            "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+            "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+            "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4."
+          ],
+          "scope_notes": [
+            "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+            "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+            "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+            "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+            "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+            "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+            "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T03:17:06Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+            "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+            "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+            "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+            "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side."
+          ],
+          "open_questions": [
+            "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+            "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+            "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?"
+          ],
+          "risk_map": [
+            "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+            "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+            "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+            "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+            "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+            "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4."
+          ],
+          "scope_notes": [
+            "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+            "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+            "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+            "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases."
+          ],
+          "summary": "Described case_149: FP16 sigmoid kernel with strict once-rounded binary16 output contract; kernel uses sign-stable exp(-|x|) form in FP32 plus inline PTX cvt.rn.f16.f32 for final rounding. Main risks are intermediate-precision boundary crossings and subnormal-output handling.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+          }
+        ],
+        "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+        "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid."
+      },
+      "created_at": "2026-10-18T03:17:16Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T03:17:16Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+          }
+        ],
+        "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+        "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:17:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+          }
+        ],
+        "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+        "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern."
+      },
+      "created_at": "2026-10-18T03:17:16Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-18T03:17:16Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+          }
+        ],
+        "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+        "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:17:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport sys, os, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# all finite FP16 bit patterns (exclude NaN/Inf exponent=0x1F except zero subnormals are fine)\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\nx = torch.tensor(patterns, dtype=torch.int32).view(torch.float16).to(\"cuda\")\nassert x.numel() <= 131072 and torch.isfinite(x).all()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:10].tolist():\n    xv = x[idx].item()\n    fail.append({\"x\": xv, \"x_bits\": hex(x[idx].view(torch.int16).item()),\n                 \"got_bits\": hex(out[idx].view(torch.int16).item()),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(ref[idx].view(torch.int16).item()),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": x.numel(), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+        "expected_signal": "count of bit-exact mismatches vs reference over all finite FP16 inputs"
+      },
+      "created_at": "2026-10-18T03:17:32Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "ec61c0baa5124552f73e18e804853bed9fded6701fcd0a98fce3932ee8cb717a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "119eea1c596ff24622c4809a9c4685793c8a2d993f91f9d9bfc7f8af88e27b51"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 4.99368,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "ec61c0baa5124552f73e18e804853bed9fded6701fcd0a98fce3932ee8cb717a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "119eea1c596ff24622c4809a9c4685793c8a2d993f91f9d9bfc7f8af88e27b51"
+              }
+            ],
+            "duration_s": 4.99368,
+            "exit_code": 1,
+            "expected_signal": "count of bit-exact mismatches vs reference over all finite FP16 inputs",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t8_probe.py\", line 9, in <module>\n    assert x.numel() <= 131072 and torch.isfinite(x).all()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 1,
+        "expected_signal": "count of bit-exact mismatches vs reference over all finite FP16 inputs",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t8_probe.py\", line 9, in <module>\n    assert x.numel() <= 131072 and torch.isfinite(x).all()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# negative FP16 inputs in the subnormal-output region -18.5 < x <= -11.0\npatterns = [i for i in range(65536) if not (i >> 10) == 0x1F]\nxall = torch.tensor(patterns, dtype=torch.int32).view(torch.float16)\nsel = (xall < -11.0) & (xall > -18.5)\nx = xall[sel].to(\"cuda\")\nout = kernel.run(x)\nref = kernel.reference(x)\nout_bits = out.view(torch.int16); ref_bits = ref.view(torch.int16)\nmism = (out_bits != ref_bits).nonzero().flatten()\n# check whether outputs that should be nonzero subnormals were flushed to zero\nshould_subnormal = (ref.view(torch.float16).abs() > 0) & (ref_bits & 0x7FFF != 0)\nn = int(x.numel())\nres = {\"n_tested\": n, \"n_mismatch\": int(mism.numel()),\n       \"flushed_to_zero\": int(((out_bits & 0x7FFF) == 0).sum() - ((ref_bits & 0x7FFF) == 0).sum())}\nfail = []\nfor idx in mism[:10].tolist():\n    fail.append({\"x\": x[idx].item(), \"got\": out[idx].item(),\n                 \"got_bits\": hex(out_bits[idx].item()),\n                 \"want_bits\": hex(ref_bits[idx].item())})\nres[\"first_failures\"] = fail\nprint(json.dumps(res))\n",
+        "expected_signal": "bitwise mismatch count in subnormal-output region vs reference"
+      },
+      "created_at": "2026-10-18T03:17:38Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern.",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 5.562027,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+              }
+            ],
+            "duration_s": 5.562027,
+            "exit_code": 0,
+            "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+            "json_parse_error": null,
+            "json_result": {
+              "first_failures": [],
+              "flushed_to_zero": 0,
+              "n_mismatch": 0,
+              "n_tested": 799
+            },
+            "stderr": "",
+            "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+        "json_parse_error": null,
+        "json_result": {
+          "first_failures": [],
+          "flushed_to_zero": 0,
+          "n_mismatch": 0,
+          "n_tested": 799
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "flushed_to_zero": 0,
+          "n_mismatch": 0,
+          "n_tested": 799
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T03:17:55Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:17:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:17:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+                  }
+                ],
+                "duration_s": 5.562027,
+                "exit_code": 0,
+                "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+                "flushed_to_zero": 0,
+                "json_parse_error": null,
+                "json_result": {
+                  "first_failures": [],
+                  "flushed_to_zero": 0,
+                  "n_mismatch": 0,
+                  "n_tested": 799
+                },
+                "n_mismatch": 0,
+                "n_tested": 799,
+                "stderr": "",
+                "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+            }
+          ],
+          "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+          "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T03:17:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:17:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+              }
+            ],
+            "duration_s": 5.562027,
+            "exit_code": 0,
+            "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+            "flushed_to_zero": 0,
+            "json_parse_error": null,
+            "json_result": {
+              "first_failures": [],
+              "flushed_to_zero": 0,
+              "n_mismatch": 0,
+              "n_tested": 799
+            },
+            "n_mismatch": 0,
+            "n_tested": 799,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport torch, kernel\n\n# all finite FP16 bit patterns via uint16 -> float16 reinterpretation (NaN/Inf excluded)\nimport numpy as np\nbits = np.array([i for i in range(65536) if (i >> 10) != 0x1F], dtype=np.uint16)\nx = torch.from_numpy(bits).view(torch.float16).to(\"cuda\")\nassert x.numel() <= 131072 and torch.isfinite(x).all()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:10].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(x[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+        "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs"
+      },
+      "created_at": "2026-10-18T03:17:59Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "8a21bfbc89061183ee0d7e427327daa0a0489310d666d00ef7e50b23eb1256a4"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "6dea888f8b61c7488213728cd045a2815cd11f9e593c2c64534e94bb9fe1a5e2"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 3.6665,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "8a21bfbc89061183ee0d7e427327daa0a0489310d666d00ef7e50b23eb1256a4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "6dea888f8b61c7488213728cd045a2815cd11f9e593c2c64534e94bb9fe1a5e2"
+              }
+            ],
+            "duration_s": 3.6665,
+            "exit_code": 1,
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t11_probe.py\", line 9, in <module>\n    assert x.numel() <= 131072 and torch.isfinite(x).all()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 1,
+        "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t11_probe.py\", line 9, in <module>\n    assert x.numel() <= 131072 and torch.isfinite(x).all()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\nbits = np.array([i for i in range(65536) if (i >> 10) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\ndiag = {\"numel\": int(x.numel()), \"isfinite\": bool(torch.isfinite(x).all().item())}\nif not diag[\"isfinite\"]:\n    bad = (~torch.isfinite(x)).nonzero().flatten()\n    diag[\"n_nonfinite\"] = int(bad.numel())\n    diag[\"first_nonfinite_bits\"] = [hex(int(bits[i])) for i in bad[:5].tolist()]\n    print(json.dumps(diag))\nelse:\n    out = kernel.run(x)\n    ref = kernel.reference(x)\n    ok = out.view(torch.int16) == ref.view(torch.int16)\n    mismatches = (~ok).nonzero().flatten()\n    n_mismatch = int(mismatches.numel())\n    fail = []\n    for idx in mismatches[:10].tolist():\n        fail.append({\"x\": x[idx].item(),\n                     \"x_bits\": hex(int(bits[idx])),\n                     \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                     \"got\": out[idx].item(),\n                     \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                     \"want\": ref[idx].item()})\n    print(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                      \"first_failures\": fail}))\n",
+        "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs"
+      },
+      "created_at": "2026-10-18T03:18:17Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 3.599647,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+              }
+            ],
+            "duration_s": 3.599647,
+            "exit_code": 0,
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+            "json_parse_error": null,
+            "json_result": {
+              "first_nonfinite_bits": [
+                "0xfc00",
+                "0xfc01",
+                "0xfc02",
+                "0xfc03",
+                "0xfc04"
+              ],
+              "isfinite": false,
+              "n_nonfinite": 1024,
+              "numel": 64512
+            },
+            "stderr": "",
+            "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+        "json_parse_error": null,
+        "json_result": {
+          "first_nonfinite_bits": [
+            "0xfc00",
+            "0xfc01",
+            "0xfc02",
+            "0xfc03",
+            "0xfc04"
+          ],
+          "isfinite": false,
+          "n_nonfinite": 1024,
+          "numel": 64512
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\n# all finite FP16 bit patterns (exclude NaN/Inf: exponent field 0x1F, with sign-bit-aware mask)\nbits = np.array([i for i in range(65536) if ((i >> 10) & 0x1F) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\nassert torch.isfinite(x).all(), \"nonfinite leaked\"\nassert x.numel() <= 131072\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:12].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(bits[idx])),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))\n",
+        "expected_signal": "count of bit-exact mismatches vs reference over all 64512 finite FP16 inputs"
+      },
+      "created_at": "2026-10-18T03:18:27Z",
+      "id": "t13",
+      "output": {
+        "error": {
+          "message": "claim c1 already has a successful probe you have not interpreted: event t12. Call finalize_probe_evidence(event_id='t12', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t12 first and then probe again.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t13",
+        "message": "claim c1 already has a successful probe you have not interpreted: event t12. Call finalize_probe_evidence(event_id='t12', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t12 first and then probe again.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "n_nonfinite": 1024,
+          "numel": 64512
+        },
+        "event_id": "t12",
+        "status": "inconclusive",
+        "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-10-18T03:18:33Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:17:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:18:33Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+                  }
+                ],
+                "duration_s": 3.599647,
+                "exit_code": 0,
+                "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+                "json_parse_error": null,
+                "json_result": {
+                  "first_nonfinite_bits": [
+                    "0xfc00",
+                    "0xfc01",
+                    "0xfc02",
+                    "0xfc03",
+                    "0xfc04"
+                  ],
+                  "isfinite": false,
+                  "n_nonfinite": 1024,
+                  "numel": 64512
+                },
+                "n_nonfinite": 1024,
+                "numel": 64512,
+                "stderr": "",
+                "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+              "supports": "inconclusive",
+              "tool_event_id": "t12"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+            }
+          ],
+          "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+          "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+          "status": "inconclusive",
+          "updated_at": "2026-10-18T03:18:33Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:18:33Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+              }
+            ],
+            "duration_s": 3.599647,
+            "exit_code": 0,
+            "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+            "json_parse_error": null,
+            "json_result": {
+              "first_nonfinite_bits": [
+                "0xfc00",
+                "0xfc01",
+                "0xfc02",
+                "0xfc03",
+                "0xfc04"
+              ],
+              "isfinite": false,
+              "n_nonfinite": 1024,
+              "numel": 64512
+            },
+            "n_nonfinite": 1024,
+            "numel": 64512,
+            "stderr": "",
+            "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+          "supports": "inconclusive",
+          "tool_event_id": "t12"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c2 is rebutted by an exhaustive bit-exact probe over the subnormal-output region (799 inputs, 0 mismatches, 0 flushes). c1 remains inconclusive only because the experimenter's exhaustive sweep probes had probe-side mask bugs (missing negative non-finite encodings in the pattern generator), not because any kernel failure was observed; the corrected sweep was not run within this round. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T03:18:39Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-10-18T03:18:39Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c2 is rebutted by an exhaustive bit-exact probe over the subnormal-output region (799 inputs, 0 mismatches, 0 flushes). c1 remains inconclusive only because the experimenter's exhaustive sweep probes had probe-side mask bugs (missing negative non-finite encodings in the pattern generator), not because any kernel failure was observed; the corrected sweep was not run within this round. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 9
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "focus_claims": [
+          "c1"
+        ],
+        "reason": "c1 (FP32 intermediate error flipping final binary16 rounding at a halfway point) is in-scope, material under the strict once-rounded contract, and resolvable: the Experimenter's corrected exhaustive sweep (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, already drafted) was never executed. Prior failures were probe-side pattern-generation bugs, not kernel behavior. One decisive exhaustive bitwise comparison over all finite FP16 encodings would settle trust vs reject."
+      },
+      "created_at": "2026-10-18T03:18:46Z",
+      "id": "t16",
+      "output": {
+        "created_at": "2026-10-18T03:18:46Z",
+        "focus_claims": [
+          "c1"
+        ],
+        "reason": "c1 (FP32 intermediate error flipping final binary16 rounding at a halfway point) is in-scope, material under the strict once-rounded contract, and resolvable: the Experimenter's corrected exhaustive sweep (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, already drafted) was never executed. Prior failures were probe-side pattern-generation bugs, not kernel behavior. One decisive exhaustive bitwise comparison over all finite FP16 encodings would settle trust vs reject.",
+        "reopened_claims": [
+          "c1"
+        ],
+        "request": "more_debate"
+      },
+      "status": "ok",
+      "tool": "request_more_debate"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+          "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+          "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+          "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it.",
+          "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+          "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+          "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+          "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+          "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+        ],
+        "open_questions": [
+          "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+          "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+          "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+        ],
+        "risk_map": [
+          "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+          "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+          "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+          "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+          "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+        ],
+        "scope_notes": [
+          "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+          "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+          "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+          "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+          "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+        ],
+        "summary": "Updated description for reopened round on c1: c2 (subnormal/FTZ flush) is decisively rebutted by an exhaustive bit-exact 799-input probe of the subnormal region; the only open surface is c1 \u2014 whether FP32 libdevice.exp/div_rn intermediate error flips the final cvt.rn.f16.f32 rounding at a binary16 halfway point for some finite FP16 input. The decisive evidence, an exhaustive bitwise sweep over all finite FP16 encodings vs reference(), has not yet run due to probe-side pattern-mask bugs; the corrected sign-bit-aware mask is drafted. Note the corrected finite count should be verified (prior probes reported 64512 for a mask that still included 1024 negative non-finite encodings; the fully corrected finite set is 65536 - 2048 non-finite = 63504 encodings)."
+      },
+      "created_at": "2026-10-18T03:19:07Z",
+      "id": "t17",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Output must be sigmoid(x) computed over the reals, rounded ONCE to IEEE binary16 with round-to-nearest ties-to-even; exact bit patterns, no tolerance-based comparison.",
+            "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all finite FP16 encodings legal including signed zeros, subnormals, and largest finite magnitudes; NaN/Inf excluded.",
+            "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+            "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only, not a domain restriction; validate_inputs() enforces the domain and run() calls it.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.",
+            "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+            "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+            "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it."
+          ],
+          "kernel_model": [
+            "Triton kernel loads FP16 x, converts to FP32, computes stable-branch sigmoid: e = exp(-|x|); num = e if x<0 else 1.0; value = div_rn(num, 1+e) \u2014 mathematically identical to 1/(1+exp(-x)) but evaluated in FP32 with libdevice.approximating primitives.",
+            "Final rounding done via inline PTX cvt.rn.f16.f32 (round-to-nearest-even FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail handling via index < N.",
+            "-0.0 input: x < 0.0 is false for -0.0, so numerator=1.0, output 0.5 \u2014 matches contract.",
+            "run() validates then launches with grid cdiv(N,256); output via torch.empty_like(x), preserving input storage.",
+            "The kernel relies on FP32 intermediate accuracy: since exact-rounding is required, correctness holds only insofar as exp/div_rn errors never push a value across an FP16 halfway boundary that differs from the correctly-rounded side.",
+            "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+            "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+            "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+            "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+            "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+          ],
+          "open_questions": [
+            "What is the measured ULP error of libdevice.exp and div_rn on T4/Triton 3.4.0 for the exact expressions used (exp(-|x|), x/(1+e))?",
+            "Does cvt.rn.f16.f32 as compiled here preserve subnormal FP16 results, or is FTZ active in this Triton build?",
+            "Are there concrete FP16 inputs whose exact sigmoid lies within one FP32-intermediate-error of an FP16 halfway point (a demonstrable boundary-straddling case)?",
+            "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+            "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+            "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+          ],
+          "risk_map": [
+            "Final-rounding correctness depends on FP32 intermediate accuracy: if the FP32 value (libdevice.exp + div_rn error) falls on the wrong side of an FP16 halfway point for any legal input, the cvt.rn result is off by one ULP from the exact-rounded requirement \u2014 worst near halfway values; needs exhaustive or boundary-targeted evidence.",
+            "Subnormal outputs: for |x| roughly in (11, ~18), sigmoid is a subnormal FP16 value; cvt.rn.f16.f32 behavior with subnormal destinations (possible FTZ in compilation) could flush to zero where a subnormal bit pattern is required.",
+            "exp underflow region: for large |x| (>~103 for FP32 exp arg ~ -103; here arg is -|x| with |x|<=65504) exp(-|x|)=0, num/den becomes 0 or 1/1 \u2014 expected exact, but confirm no signed-zero anomalies.",
+            "Half-precision boundary cases near sigmoid output 0.5 (x=\u00b10), 1.0 (x>=+17 approx), and small subnormals (x<=-18 approx) \u2014 verify bit-exact including sign of zero.",
+            "tl.load mask other=0.0 only affects inactive lanes; confirm no side effects via store mask.",
+            "The inline_asm cvt constraint pack=1 with FP32 input assumed is_pure \u2014 benign but verify codegen correctness on Triton 3.4.0/T4.",
+            "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+            "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+            "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+            "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+            "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+          ],
+          "scope_notes": [
+            "Public domain is the full finite FP16 set (65536 values) times N in [1,131072]; exhaustive per-element testing is feasible for one representative pass and is the strongest evidence for the rounding claim.",
+            "Only final FP16 bit pattern matters; intermediate precision/strategy is explicitly permitted, so 'wrong intermediate but correct output' is not a defect.",
+            "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16 dtype, CPU inputs to run().",
+            "make_inputs' 3*randn distribution does not stress tail or boundary regions; adversarial probing must construct explicit boundary/tail cases.",
+            "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+            "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+            "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+            "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+            "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Output must be sigmoid(x) over the reals, rounded ONCE to IEEE binary16 RNE; exact bit patterns required, no tolerance comparison.",
+            "Domain: 1-D contiguous FP16 CUDA tensor, N in [1,131072], all 64512 finite FP16 encodings legal (signed zeros, subnormals, max finite magnitudes); NaN/Inf excluded.",
+            "Both input zeros map to 0.5; positive sigmoid values that underflow binary16 round to +0; output is a fresh FP16 tensor on x.device.",
+            "reference() = CPU FP64 sigmoid then binary16 RNE packing; make_inputs() is convenience only; validate_inputs() enforces the domain and run() calls it.",
+            "Environment frozen: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T03:19:07Z",
+          "created_by": "describer",
+          "id": "du2",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel: FP16 load, FP32 conversion, stable-branch sigmoid e=exp(-|x|), num=e if x<0 else 1.0, value=div_rn(num,1+e); mathematically identical to 1/(1+exp(-x)) but computed in FP32 with libdevice primitives.",
+            "Final rounding via inline PTX cvt.rn.f16.f32 (RNE FP16 conversion of the FP32 intermediate); enable_fp_fusion=False, BLOCK=256, num_warps=4, masked tail via index<N.",
+            "-0.0 input: x<0.0 is false, numerator=1.0, output 0.5 \u2014 matches contract.",
+            "run() validates then launches grid cdiv(N,256); output torch.empty_like(x), input storage preserved.",
+            "Correctness hinges solely on whether FP32 exp/div_rn error ever crosses a binary16 halfway point (claim c1); the conversion instruction itself is RNE and subnormal-preserving per probe t9."
+          ],
+          "open_questions": [
+            "Does the exhaustive bitwise sweep over all 64512 finite FP16 encodings (mask ((i>>10)&0x1F)!=0x1F, drafted but never executed as t13/t17) show zero mismatches vs reference(), or one-or-more one-ULP mismatches at halfway-adjacent values?",
+            "If mismatches appear, are they genuine kernel rounding flips or reference()/probe artifacts, and what are their x values and got/want bit patterns?",
+            "Independent of kernel output: are there finite FP16 inputs whose exact sigmoid lies within ~1-2 FP32 ULP of a binary16 halfway point (analytically computable in FP64 to guide targeted probes if the sweep is inconclusive)?"
+          ],
+          "risk_map": [
+            "Remaining primary risk (claim c1): FP32 intermediate error from libdevice.exp and div_rn flipping the final cvt.rn rounding at a binary16 halfway point for some finite input, producing a one-ULP-off bit pattern; decisive evidence is the exhaustive 64512-value bitwise sweep, not region probes.",
+            "Subnormal-output FTZ risk is now rebutted (t9: 799 subnormal-region inputs, 0 mismatches, 0 flushes); do not re-raise without new source evidence.",
+            "Sweep probe correctness is itself a risk surface: the two prior failures (t8/t11/t12) were probe-side pattern-mask bugs \u2014 the sign-bit-aware mask ((i>>10)&0x1F)!=0x1F must be used and the finiteness assertion verified before trusting sweep results; also verify the expected count is 64512, not 65504 (1024 non-finite encodings are excluded on each sign side: 65536-1024-1024=63504 finite? no \u2014 non-finite = 2*1024=2048, finite = 63504; note prior probes reported 64512 for the faulty mask, so the corrected sweep should assert its own finite count).",
+            "Reference-vs-kernel agreement must be judged bitwise (int16 view), including signed zeros, since contract requires exact bit patterns.",
+            "Boundary regions 0.5 (x=\u00b10), 1.0 (large +x), +0 (x large enough that sigmoid underflows), and subnormal outputs (x in ~(-18.5,-11.1)) \u2014 the exhaustive sweep covers all simultaneously."
+          ],
+          "scope_notes": [
+            "Public domain = all 64512 finite FP16 encodings; one exhaustive bitwise sweep vs reference() is feasible in a single tensor (N<=131072) and is decisive for c1.",
+            "Only final FP16 bit pattern matters; intermediate precision/strategy explicitly permitted.",
+            "Out of scope: NaN/Inf inputs, non-contiguous/subclass/autograd/inference-mode inputs, N=0 or N>131072, non-FP16, CPU inputs to run().",
+            "c2 (subnormal FTZ) is closed as rebutted by exhaustive-region probe t9; next-round effort should focus exclusively on the c1 exhaustive sweep.",
+            "make_inputs' 3*randn distribution does not stress halfway-point boundaries; only exhaustive or boundary-targeted probes are probative for c1."
+          ],
+          "summary": "Updated description for reopened round on c1: c2 (subnormal/FTZ flush) is decisively rebutted by an exhaustive bit-exact 799-input probe of the subnormal region; the only open surface is c1 \u2014 whether FP32 libdevice.exp/div_rn intermediate error flips the final cvt.rn.f16.f32 rounding at a binary16 halfway point for some finite FP16 input. The decisive evidence, an exhaustive bitwise sweep over all finite FP16 encodings vs reference(), has not yet run due to probe-side pattern-mask bugs; the corrected sign-bit-aware mask is drafted. Note the corrected finite count should be verified (prior probes reported 64512 for a mask that still included 1024 negative non-finite encodings; the fully corrected finite set is 65536 - 2048 non-finite = 63504 encodings).",
+          "task_ids": [],
+          "turn": 11
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "reason": "Reopened round targets only c1: the decisive evidence is the corrected exhaustive bitwise sweep over all finite FP16 encodings (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, finiteness asserted), which is precisely the test c1 already specifies. c2 is decisively rebutted (t9). No new evidence exposes any material, testable, in-scope problem not already covered by c1; adding claims would fragment rather than sharpen the decisive experiment.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T03:19:13Z",
+      "id": "t18",
+      "output": {
+        "created_at": "2026-10-18T03:19:13Z",
+        "decision": "no_new_claims",
+        "reason": "Reopened round targets only c1: the decisive evidence is the corrected exhaustive bitwise sweep over all finite FP16 encodings (sign-bit-aware mask ((i>>10)&0x1F)!=0x1F, finiteness asserted), which is precisely the test c1 already specifies. c2 is decisively rebutted (t9). No new evidence exposes any material, testable, in-scope problem not already covered by c1; adding claims would fragment rather than sharpen the decisive experiment.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 17,
+        "tool_event_id": "t18",
+        "turn": 12
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_149\")\nimport numpy as np, torch, kernel\n\nbits = np.array([i for i in range(65536) if ((i >> 10) & 0x1F) != 0x1F], dtype=np.uint16)\nx_np = np.frombuffer(bits.tobytes(), dtype=np.float16).copy()\nx = torch.from_numpy(x_np).to(\"cuda\")\nassert torch.isfinite(x).all(), \"nonfinite leaked\"\nassert x.numel() == 63504, x.numel()\n\nout = kernel.run(x)\nref = kernel.reference(x)\nok = out.view(torch.int16) == ref.view(torch.int16)\nmismatches = (~ok).nonzero().flatten()\nn_mismatch = int(mismatches.numel())\nfail = []\nfor idx in mismatches[:12].tolist():\n    fail.append({\"x\": x[idx].item(),\n                 \"x_bits\": hex(int(bits[idx])),\n                 \"got_bits\": hex(int(out[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"got\": out[idx].item(),\n                 \"want_bits\": hex(int(ref[idx].view(torch.int16).item()) & 0xFFFF),\n                 \"want\": ref[idx].item()})\nprint(json.dumps({\"n_tested\": int(x.numel()), \"n_mismatch\": n_mismatch,\n                  \"first_failures\": fail}))",
+        "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs"
+      },
+      "created_at": "2026-10-18T03:19:23Z",
+      "id": "t19",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t19_probe.py",
+            "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t19_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t19_stderr.txt",
+            "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 3.638384,
+        "event_id": "t19",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t19_probe.py",
+                "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t19_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t19_stderr.txt",
+                "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+              }
+            ],
+            "duration_s": 3.638384,
+            "exit_code": 1,
+            "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t19"
+        },
+        "exit_code": 1,
+        "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "actual_finite_count": 63488,
+          "assert_failed_expected": 63504
+        },
+        "event_id": "t19",
+        "status": "inconclusive",
+        "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+        "supports": "inconclusive"
+      },
+      "created_at": "2026-10-18T03:19:30Z",
+      "id": "t20",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:17:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:18:33Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t12_probe.py",
+                    "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t12_stdout.txt",
+                    "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t12_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t12_json_result.json",
+                    "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+                  }
+                ],
+                "duration_s": 3.599647,
+                "exit_code": 0,
+                "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+                "json_parse_error": null,
+                "json_result": {
+                  "first_nonfinite_bits": [
+                    "0xfc00",
+                    "0xfc01",
+                    "0xfc02",
+                    "0xfc03",
+                    "0xfc04"
+                  ],
+                  "isfinite": false,
+                  "n_nonfinite": 1024,
+                  "numel": 64512
+                },
+                "n_nonfinite": 1024,
+                "numel": 64512,
+                "stderr": "",
+                "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+              "supports": "inconclusive",
+              "tool_event_id": "t12"
+            },
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:19:30Z",
+              "data": {
+                "actual_finite_count": 63488,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t19_probe.py",
+                    "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t19_stdout.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t19_stderr.txt",
+                    "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+                  }
+                ],
+                "assert_failed_expected": 63504,
+                "duration_s": 3.638384,
+                "exit_code": 1,
+                "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+                "json_parse_error": "stdout has no non-empty lines",
+                "json_result": null,
+                "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+                "stdout": "",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e2",
+              "kind": "runtime_probe",
+              "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+              "supports": "inconclusive",
+              "tool_event_id": "t19"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+            }
+          ],
+          "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+          "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+          "status": "inconclusive",
+          "updated_at": "2026-10-18T03:19:30Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:19:30Z",
+          "data": {
+            "actual_finite_count": 63488,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t19_probe.py",
+                "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t19_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t19_stderr.txt",
+                "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+              }
+            ],
+            "assert_failed_expected": 63504,
+            "duration_s": 3.638384,
+            "exit_code": 1,
+            "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e2",
+          "kind": "runtime_probe",
+          "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+          "supports": "inconclusive",
+          "tool_event_id": "t19"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c2 is decisively rebutted (t9: exhaustive bit-exact subnormal-region probe, 0 mismatches, 0 flushes). c1 remains inconclusive solely due to probe-side count-assertion bugs (t19 failed only on the expected-count assert; actual finite FP16 encodings = 63488), with no kernel output ever mismatching or even being produced by the sweep. The corrected sweep (finiteness asserted, count 63488) is exactly the decisive test c1 already specifies; raising another claim would fragment it. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T03:19:37Z",
+      "id": "t21",
+      "output": {
+        "created_at": "2026-10-18T03:19:37Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c2 is decisively rebutted (t9: exhaustive bit-exact subnormal-region probe, 0 mismatches, 0 flushes). c1 remains inconclusive solely due to probe-side count-assertion bugs (t19 failed only on the expected-count assert; actual finite FP16 encodings = 63488), with no kernel output ever mismatching or even being produced by the sweep. The corrected sweep (finiteness asserted, count 63488) is exactly the decisive test c1 already specifies; raising another claim would fragment it. No new evidence exposes a material, testable, in-scope problem not already covered by c1.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 20,
+        "tool_event_id": "t21",
+        "turn": 15
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.7,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "c2 (subnormal FTZ flush) is decisively rebutted: t9 tested all 799 negative inputs in (-18.5,-11.0) whose correctly rounded sigmoid is a nonzero FP16 subnormal, and the kernel produced bit-exact outputs with zero flushes, so the cvt.rn.f16.f32 path preserves subnormals. However c1 \u2014 the central, in-scope claim that FP32 libdevice.exp/div_rn intermediate error flips the final binary16 rounding at a halfway point for some legal input \u2014 remains inconclusive. The decisive exhaustive bitwise sweep over all 63488 finite FP16 encodings vs reference() was never successfully executed: t12 aborted on a probe-side NaN/Inf mask bug, and t19 aborted on a wrong expected-count assertion (63504 vs actual 63488); no sweep run ever produced kernel output. No kernel output mismatch has been observed anywhere, but absence of evidence is not confirmation under a contract that requires exact once-rounded bit patterns for every finite input and declares \"one failing legal input is evidence against the implementation.\" Setting aside c1 as unresolved purely because the Experimenter's sweep kept failing on its own assertions; it is clearly resolvable with one corrected run. Verdict: needs_more_evidence, not trust (the strict-rounding risk is untested) and not reject (no mismatch was ever observed).",
+        "verdict": "needs_more_evidence"
+      },
+      "created_at": "2026-10-18T03:19:46Z",
+      "id": "t22",
+      "output": {
+        "confidence": 0.7,
+        "created_at": "2026-10-18T03:19:46Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "c2 (subnormal FTZ flush) is decisively rebutted: t9 tested all 799 negative inputs in (-18.5,-11.0) whose correctly rounded sigmoid is a nonzero FP16 subnormal, and the kernel produced bit-exact outputs with zero flushes, so the cvt.rn.f16.f32 path preserves subnormals. However c1 \u2014 the central, in-scope claim that FP32 libdevice.exp/div_rn intermediate error flips the final binary16 rounding at a halfway point for some legal input \u2014 remains inconclusive. The decisive exhaustive bitwise sweep over all 63488 finite FP16 encodings vs reference() was never successfully executed: t12 aborted on a probe-side NaN/Inf mask bug, and t19 aborted on a wrong expected-count assertion (63504 vs actual 63488); no sweep run ever produced kernel output. No kernel output mismatch has been observed anywhere, but absence of evidence is not confirmation under a contract that requires exact once-rounded bit patterns for every finite input and declares \"one failing legal input is evidence against the implementation.\" Setting aside c1 as unresolved purely because the Experimenter's sweep kept failing on its own assertions; it is clearly resolvable with one corrected run. Verdict: needs_more_evidence, not trust (the strict-rounding risk is untested) and not reject (no mismatch was ever observed).",
+        "verdict": "needs_more_evidence"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.7,
+    "created_at": "2026-10-18T03:19:46Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "c2 (subnormal FTZ flush) is decisively rebutted: t9 tested all 799 negative inputs in (-18.5,-11.0) whose correctly rounded sigmoid is a nonzero FP16 subnormal, and the kernel produced bit-exact outputs with zero flushes, so the cvt.rn.f16.f32 path preserves subnormals. However c1 \u2014 the central, in-scope claim that FP32 libdevice.exp/div_rn intermediate error flips the final binary16 rounding at a halfway point for some legal input \u2014 remains inconclusive. The decisive exhaustive bitwise sweep over all 63488 finite FP16 encodings vs reference() was never successfully executed: t12 aborted on a probe-side NaN/Inf mask bug, and t19 aborted on a wrong expected-count assertion (63504 vs actual 63488); no sweep run ever produced kernel output. No kernel output mismatch has been observed anywhere, but absence of evidence is not confirmation under a contract that requires exact once-rounded bit patterns for every finite input and declares \"one failing legal input is evidence against the implementation.\" Setting aside c1 as unresolved purely because the Experimenter's sweep kept failing on its own assertions; it is clearly resolvable with one corrected run. Verdict: needs_more_evidence, not trust (the strict-rounding risk is untested) and not reject (no mismatch was ever observed).",
+    "verdict": "needs_more_evidence"
+  }
+}

@@ -1,0 +1,939 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_149",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise FP16 sigmoid with explicit internal arithmetic precision.\n\nOriginal synthetic Triton adaptation of the standard logistic activation.\nThis file is not presented as an upstream historical bug or patch.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\nimport triton.language.extra.cuda.libdevice as libdevice\n\n\n@triton.jit\ndef _sigmoid(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = libdevice.exp(-tl.abs(x))\n    denominator = 1.0 + exponential\n    numerator = tl.where(x < 0.0, exponential, 1.0)\n    value = libdevice.div_rn(numerator, denominator)\n    rounded = tl.inline_asm_elementwise(\n        \"cvt.rn.f16.f32 $0, $1;\", constraints=\"=h,f\",\n        args=[value], dtype=tl.float16, is_pure=True, pack=1)\n    tl.store(OUT + index, rounded, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; CPU inputs are allowed for reference.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return sigmoid values in a fresh FP16 tensor.\"\"\"\n    validate_inputs(x)\n    with torch.cuda.device(x.device):\n        output = torch.empty_like(x)\n        _sigmoid[(triton.cdiv(x.numel(), 256),)](\n            x, output, N=x.numel(), BLOCK=256, num_warps=4,\n            enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"CPU FP64 sigmoid, then direct binary16 round-to-nearest-even packing.\"\"\"\n    import struct\n    validate_inputs(x, require_cuda=False)\n    values = x.detach().to(device=\"cpu\", dtype=torch.float64)\n    payload = bytearray().join(struct.pack(\"<e\", value)\n                               for value in torch.sigmoid(values).tolist())\n    result = torch.frombuffer(payload, dtype=torch.float16).clone()\n    return result.to(x.device)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience inputs; all finite FP16 values belong to the legal domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (3.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_149",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T03:12:51Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:13:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+              }
+            ],
+            "bad_inputs": [
+              0.0029296875,
+              0.0068359375,
+              0.0107421875,
+              -0.00146484375,
+              -0.00341796875,
+              -0.00537109375,
+              -0.00927734375
+            ],
+            "duration_s": 5.584287,
+            "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "absdiff": [
+                0.00048828125,
+                0.00048828125,
+                0.00048828125,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625
+              ],
+              "bad_inputs": [
+                0.0029296875,
+                0.0068359375,
+                0.0107421875,
+                -0.00146484375,
+                -0.00341796875,
+                -0.00537109375,
+                -0.00927734375
+              ],
+              "fp64_value": [
+                0.5007324213511315,
+                0.5017089777199553,
+                0.5026855210504991,
+                0.4996337891279836,
+                0.4991455086443835,
+                0.49865722979059063,
+                0.4976806806976212
+              ],
+              "kernel_out": [
+                0.5009765625,
+                0.501953125,
+                0.5029296875,
+                0.49951171875,
+                0.4990234375,
+                0.49853515625,
+                0.49755859375
+              ],
+              "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+              "mismatches": 7,
+              "n_tested": 63488,
+              "ref_out": [
+                0.50048828125,
+                0.50146484375,
+                0.50244140625,
+                0.499755859375,
+                0.499267578125,
+                0.498779296875,
+                0.497802734375
+              ]
+            },
+            "mismatches": 7,
+            "n_tested": 63488,
+            "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+            "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+        }
+      ],
+      "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+      "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement).",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T03:13:12Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_149",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_149"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_149",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 10.699002542999999,
+      "role": "solo",
+      "round": 2,
+      "text": "The contract demands exact single-rounding of sigmoid to FP16 for all finite FP16 inputs. Since the domain is the full set of finite FP16 values (~63,488 encodings, within the 131,072 size limit), I can test it exhaustively. My hypothesis: the fp32 internal arithmetic (libdevice.exp, div_rn) may double-round and produce a wrong final FP16 bit pattern for some inputs.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+              }
+            ],
+            "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+            "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.699,
+        "input_tokens": 9004,
+        "output_tokens": 630
+      }
+    },
+    {
+      "duration_s": 7.898645543000001,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the decisive probe: feed the kernel every finite FP16 encoding (63,488 values, within the N\u2264131072 limit) and compare bit patterns against an FP64-sigmoid single-rounded reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/cases/case_149\")\nimport kernel\n\n# all finite fp16 bit patterns\nbits = np.arange(65536, dtype=np.uint16)\nallf = np.frombuffer(bits.tobytes(), dtype=\"<f2\")\nfinite_mask = np.isfinite(allf)\nvals = allf[finite_mask]\nprint(\"num finite fp16:\", vals.size)\n\nx = torch.from_numpy(vals.copy()).cuda()\nout = kernel.run(x).cpu().numpy()\n\n# correct single-rounding reference: fp64 sigmoid -> fp16 RNE\nref = np.empty(vals.shape, dtype=\"<f2\")\nv64 = vals.astype(np.float64)\n# sigmoid in fp64\nsig = 1.0/(1.0+np.exp(-v64))\nref = sig.astype(\"<f2\")\n\nmism = np.count_nonzero(out.view(np.uint16) != ref.view(np.uint16))\nidx = np.nonzero(out.view(np.uint16) != ref.view(np.uint16))[0]\nextra = {}\nif mism:\n    i = idx[:10]\n    extra = {\"bad_inputs\": vals[i].tolist(), \"kernel_out\": out[i].tolist(),\n             \"ref_out\": ref[i].tolist(),\n             \"absdiff\": (out[i].astype(np.float64)-ref[i].astype(np.float64)).tolist(),\n             \"fp64_value\": sig[i].tolist()}\nprint(json.dumps({\"metric\":\"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\",\n \"n_tested\": int(vals.size), \"mismatches\": int(mism), **extra}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.899,
+        "input_tokens": 10274,
+        "output_tokens": 524
+      }
+    },
+    {
+      "duration_s": 7.413934271000002,
+      "role": "solo",
+      "round": 4,
+      "text": "The exhaustive probe over all 63,488 finite FP16 inputs found 7 exact bit-pattern mismatches, all near 0.5 (double-rounding across ties, e.g. input 0.0029296875 \u2192 fp64 sigmoid 0.50073242135113 which lies just below the fp16 midpoint 0.500732421875, correct fp16 output 0.50048828125, kernel returned 0.5009765625). This is exactly the single-rounding failure hypothesized. I'll finalize the evidence, confirm the claim, and reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "bad_inputs": [
+                0.0029296875,
+                0.0068359375,
+                0.0107421875,
+                -0.00146484375,
+                -0.00341796875,
+                -0.00537109375,
+                -0.00927734375
+              ],
+              "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+              "mismatches": 7,
+              "n_tested": 63488
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.414,
+        "input_tokens": 14357,
+        "output_tokens": 726
+      }
+    },
+    {
+      "duration_s": 5.953636112000005,
+      "role": "solo",
+      "round": 5,
+      "text": "The single decisive claim is already confirmed with exhaustive evidence: the exhaustive sweep of all 63,488 finite FP16 inputs found 7 wrong FP16 bit patterns (e.g. input 0.0029296875 \u2192 kernel 0.5009765625 vs correct 0.50048828125), violating the contract's exact one-rounding requirement. Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 exhaustively ran the kernel on all 63,488 finite FP16 encodings (within the N<=131072 domain limit) and compared exact FP16 bit patterns against an FP64-sigmoid single-rounded reference. 7 legal inputs near 0.5 produced wrong bit patterns (one full ULP off), e.g. x=0.0029296875 yields kernel output 0.5009765625 while the correctly single-rounded value is 0.50048828125 \u2014 the fp32 intermediate double-rounds across the FP16 tie boundary. The contract explicitly requires each output be the sigmoid value rounded once to binary16 with exact bit patterns holding \"for the whole public domain\" and \"one failing legal input is evidence against the implementation.\" This confirmed, in-scope claim supports reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.954,
+        "input_tokens": 20893,
+        "output_tokens": 313
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:12:39Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_149",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise FP16 sigmoid with explicit internal arithmetic precision.\n\nOriginal synthetic Triton adaptation of the standard logistic activation.\nThis file is not presented as an upstream historical bug or patch.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\nimport triton.language.extra.cuda.libdevice as libdevice\n\n\n@triton.jit\ndef _sigmoid(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = libdevice.exp(-tl.abs(x))\n    denominator = 1.0 + exponential\n    numerator = tl.where(x < 0.0, exponential, 1.0)\n    value = libdevice.div_rn(numerator, denominator)\n    rounded = tl.inline_asm_elementwise(\n        \"cvt.rn.f16.f32 $0, $1;\", constraints=\"=h,f\",\n        args=[value], dtype=tl.float16, is_pure=True, pack=1)\n    tl.store(OUT + index, rounded, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; CPU inputs are allowed for reference.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return sigmoid values in a fresh FP16 tensor.\"\"\"\n    validate_inputs(x)\n    with torch.cuda.device(x.device):\n        output = torch.empty_like(x)\n        _sigmoid[(triton.cdiv(x.numel(), 256),)](\n            x, output, N=x.numel(), BLOCK=256, num_warps=4,\n            enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"CPU FP64 sigmoid, then direct binary16 round-to-nearest-even packing.\"\"\"\n    import struct\n    validate_inputs(x, require_cuda=False)\n    values = x.detach().to(device=\"cpu\", dtype=torch.float64)\n    payload = bytearray().join(struct.pack(\"<e\", value)\n                               for value in torch.sigmoid(values).tolist())\n    result = torch.frombuffer(payload, dtype=torch.float16).clone()\n    return result.to(x.device)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience inputs; all finite FP16 values belong to the legal domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (3.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_149",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:12:39Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the elementwise sigmoid activation:\n\n  y[i] = 1 / (1 + exp(-x[i])).\n\nThe mathematical expression is over real numbers. Each output must be that\nvalue rounded ONCE to IEEE binary16 (torch.float16), round-to-nearest with\nties to the even significand. This is an exact output-rounding requirement,\nnot an allclose tolerance or a requirement to reproduce particular rounded\nintermediate arithmetic. Any implementation strategy or internal precision\nis permitted if its final FP16 output satisfies this requirement.\n\nInputs and complete public domain:\n- x is an ordinary one-dimensional torch.float16 CUDA tensor [N], with\n  1<=N<=131072. Every finite FP16 encoding is legal, including signed zeros,\n  subnormals and the largest positive and negative finite values. NaN and\n  infinity are excluded. Both input zeros have mathematical output 0.5;\n  positive sigmoid values that underflow binary16 round to positive zero.\n- x is dense, strided and contiguous. Contiguous views with nonzero storage\n  offsets are legal. It is not a Tensor subclass; requires_grad=False,\n  is_inference=False, is_neg=False and is_conj=False. Calls run outside\n  inference mode, without concurrent external writes. Autograd is not part\n  of this operation.\n\nReturn a fresh torch.float16 tensor [N] on x.device. Preserve the input and\nits backing storage. Exact FP16 bit patterns, shape, dtype, device and storage\nrequirements must hold for the whole public domain. One failing legal input\nis evidence against the implementation; inputs do not receive separate labels.\n\nvalidate_inputs() enforces the public domain and run() calls it. reference()\nuses CPU FP64 sigmoid followed by FP16 conversion, and accepts CPU or CUDA\ninputs. make_inputs() is only a convenience generator, not a domain restriction.\n\nSigmoid is a standard activation. This is an original synthetic adaptation\nfor a strict final-rounding task, not an upstream historical bug. The task's\ncorrect-rounding requirement is explicit; it does not claim ordinary PyTorch\nor CUDA sigmoid APIs universally promise correctly rounded outputs.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_149",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_149"
+      },
+      "created_at": "2026-10-18T03:12:39Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_149",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3124
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2140
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_149",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T03:12:39Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_149",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+          }
+        ],
+        "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+        "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement)."
+      },
+      "created_at": "2026-10-18T03:12:51Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T03:12:51Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+          }
+        ],
+        "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+        "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement).",
+        "status": "open",
+        "updated_at": "2026-10-18T03:12:51Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/cases/case_149\")\nimport kernel\n\n# all finite fp16 bit patterns\nbits = np.arange(65536, dtype=np.uint16)\nallf = np.frombuffer(bits.tobytes(), dtype=\"<f2\")\nfinite_mask = np.isfinite(allf)\nvals = allf[finite_mask]\nprint(\"num finite fp16:\", vals.size)\n\nx = torch.from_numpy(vals.copy()).cuda()\nout = kernel.run(x).cpu().numpy()\n\n# correct single-rounding reference: fp64 sigmoid -> fp16 RNE\nref = np.empty(vals.shape, dtype=\"<f2\")\nv64 = vals.astype(np.float64)\n# sigmoid in fp64\nsig = 1.0/(1.0+np.exp(-v64))\nref = sig.astype(\"<f2\")\n\nmism = np.count_nonzero(out.view(np.uint16) != ref.view(np.uint16))\nidx = np.nonzero(out.view(np.uint16) != ref.view(np.uint16))[0]\nextra = {}\nif mism:\n    i = idx[:10]\n    extra = {\"bad_inputs\": vals[i].tolist(), \"kernel_out\": out[i].tolist(),\n             \"ref_out\": ref[i].tolist(),\n             \"absdiff\": (out[i].astype(np.float64)-ref[i].astype(np.float64)).tolist(),\n             \"fp64_value\": sig[i].tolist()}\nprint(json.dumps({\"metric\":\"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\",\n \"n_tested\": int(vals.size), \"mismatches\": int(mism), **extra}))"
+      },
+      "created_at": "2026-10-18T03:13:04Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement).",
+        "cwd": "/root/cases/case_149",
+        "duration_s": 5.584287,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+              }
+            ],
+            "duration_s": 5.584287,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "absdiff": [
+                0.00048828125,
+                0.00048828125,
+                0.00048828125,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625
+              ],
+              "bad_inputs": [
+                0.0029296875,
+                0.0068359375,
+                0.0107421875,
+                -0.00146484375,
+                -0.00341796875,
+                -0.00537109375,
+                -0.00927734375
+              ],
+              "fp64_value": [
+                0.5007324213511315,
+                0.5017089777199553,
+                0.5026855210504991,
+                0.4996337891279836,
+                0.4991455086443835,
+                0.49865722979059063,
+                0.4976806806976212
+              ],
+              "kernel_out": [
+                0.5009765625,
+                0.501953125,
+                0.5029296875,
+                0.49951171875,
+                0.4990234375,
+                0.49853515625,
+                0.49755859375
+              ],
+              "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+              "mismatches": 7,
+              "n_tested": 63488,
+              "ref_out": [
+                0.50048828125,
+                0.50146484375,
+                0.50244140625,
+                0.499755859375,
+                0.499267578125,
+                0.498779296875,
+                0.497802734375
+              ]
+            },
+            "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+            "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "absdiff": [
+            0.00048828125,
+            0.00048828125,
+            0.00048828125,
+            -0.000244140625,
+            -0.000244140625,
+            -0.000244140625,
+            -0.000244140625
+          ],
+          "bad_inputs": [
+            0.0029296875,
+            0.0068359375,
+            0.0107421875,
+            -0.00146484375,
+            -0.00341796875,
+            -0.00537109375,
+            -0.00927734375
+          ],
+          "fp64_value": [
+            0.5007324213511315,
+            0.5017089777199553,
+            0.5026855210504991,
+            0.4996337891279836,
+            0.4991455086443835,
+            0.49865722979059063,
+            0.4976806806976212
+          ],
+          "kernel_out": [
+            0.5009765625,
+            0.501953125,
+            0.5029296875,
+            0.49951171875,
+            0.4990234375,
+            0.49853515625,
+            0.49755859375
+          ],
+          "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+          "mismatches": 7,
+          "n_tested": 63488,
+          "ref_out": [
+            0.50048828125,
+            0.50146484375,
+            0.50244140625,
+            0.499755859375,
+            0.499267578125,
+            0.498779296875,
+            0.497802734375
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+        "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "bad_inputs": [
+            0.0029296875,
+            0.0068359375,
+            0.0107421875,
+            -0.00146484375,
+            -0.00341796875,
+            -0.00537109375,
+            -0.00927734375
+          ],
+          "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+          "mismatches": 7,
+          "n_tested": 63488
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T03:13:12Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:12:51Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:13:12Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+                  }
+                ],
+                "bad_inputs": [
+                  0.0029296875,
+                  0.0068359375,
+                  0.0107421875,
+                  -0.00146484375,
+                  -0.00341796875,
+                  -0.00537109375,
+                  -0.00927734375
+                ],
+                "duration_s": 5.584287,
+                "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "absdiff": [
+                    0.00048828125,
+                    0.00048828125,
+                    0.00048828125,
+                    -0.000244140625,
+                    -0.000244140625,
+                    -0.000244140625,
+                    -0.000244140625
+                  ],
+                  "bad_inputs": [
+                    0.0029296875,
+                    0.0068359375,
+                    0.0107421875,
+                    -0.00146484375,
+                    -0.00341796875,
+                    -0.00537109375,
+                    -0.00927734375
+                  ],
+                  "fp64_value": [
+                    0.5007324213511315,
+                    0.5017089777199553,
+                    0.5026855210504991,
+                    0.4996337891279836,
+                    0.4991455086443835,
+                    0.49865722979059063,
+                    0.4976806806976212
+                  ],
+                  "kernel_out": [
+                    0.5009765625,
+                    0.501953125,
+                    0.5029296875,
+                    0.49951171875,
+                    0.4990234375,
+                    0.49853515625,
+                    0.49755859375
+                  ],
+                  "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+                  "mismatches": 7,
+                  "n_tested": 63488,
+                  "ref_out": [
+                    0.50048828125,
+                    0.50146484375,
+                    0.50244140625,
+                    0.499755859375,
+                    0.499267578125,
+                    0.498779296875,
+                    0.497802734375
+                  ]
+                },
+                "mismatches": 7,
+                "n_tested": 63488,
+                "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+                "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel computes sigmoid in fp32 (libdevice.exp of -|x|, then div_rn) and rounds to fp16 once at the end. Internal fp32 has ~2^-24 relative precision, while correct single rounding of sigmoid to fp16 near rounding boundaries can require more precision, so some finite fp16 inputs may land on the wrong fp16 value.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Each output must be that value rounded ONCE to IEEE binary16 ... Exact FP16 bit patterns ... must hold for the whole public domain. One failing legal input is evidence against the implementation."
+            }
+          ],
+          "scope_rationale": "The contract requires exact single-rounding to FP16 bit patterns for every finite FP16 input; a single misrounded legal input violates it.",
+          "statement": "The kernel's fp32 internal computation causes at least one legal finite FP16 input to round to the wrong FP16 bit pattern (violating the exact one-rounding requirement).",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T03:13:12Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:13:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "a896229a78a24b980ebc9d1ec4f93fcfc9eff5363603b17225cc937966cbe082"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "8dfad5410cde67532a6b0a0177c76e1bec55cdad979daf178f14933c89232206"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "f374c95eef8d33d1bce3a15dd4cbda5cca4ae29baf92f75218ed7fe699ddcf61"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "80ecf975590c3afd6cbcef668abeabfbf770c80767456c405423d9d4b31c0ede"
+              }
+            ],
+            "bad_inputs": [
+              0.0029296875,
+              0.0068359375,
+              0.0107421875,
+              -0.00146484375,
+              -0.00341796875,
+              -0.00537109375,
+              -0.00927734375
+            ],
+            "duration_s": 5.584287,
+            "example": "input 0.0029296875: fp64 sigmoid 0.50073242135113 (just below fp16 midpoint 0.500732421875) -> correct fp16 0.50048828125, kernel output 0.5009765625",
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "absdiff": [
+                0.00048828125,
+                0.00048828125,
+                0.00048828125,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625,
+                -0.000244140625
+              ],
+              "bad_inputs": [
+                0.0029296875,
+                0.0068359375,
+                0.0107421875,
+                -0.00146484375,
+                -0.00341796875,
+                -0.00537109375,
+                -0.00927734375
+              ],
+              "fp64_value": [
+                0.5007324213511315,
+                0.5017089777199553,
+                0.5026855210504991,
+                0.4996337891279836,
+                0.4991455086443835,
+                0.49865722979059063,
+                0.4976806806976212
+              ],
+              "kernel_out": [
+                0.5009765625,
+                0.501953125,
+                0.5029296875,
+                0.49951171875,
+                0.4990234375,
+                0.49853515625,
+                0.49755859375
+              ],
+              "metric": "exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs",
+              "mismatches": 7,
+              "n_tested": 63488,
+              "ref_out": [
+                0.50048828125,
+                0.50146484375,
+                0.50244140625,
+                0.499755859375,
+                0.499267578125,
+                0.498779296875,
+                0.497802734375
+              ]
+            },
+            "mismatches": 7,
+            "n_tested": 63488,
+            "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_149/solo/probes/t6_probe.py:19: RuntimeWarning: overflow encountered in exp\n  sig = 1.0/(1.0+np.exp(-v64))\n",
+            "stdout": "num finite fp16: 63488\n{\"metric\": \"exact fp16 bit pattern vs fp64-single-rounded reference over ALL finite fp16 inputs\", \"n_tested\": 63488, \"mismatches\": 7, \"bad_inputs\": [0.0029296875, 0.0068359375, 0.0107421875, -0.00146484375, -0.00341796875, -0.00537109375, -0.00927734375], \"kernel_out\": [0.5009765625, 0.501953125, 0.5029296875, 0.49951171875, 0.4990234375, 0.49853515625, 0.49755859375], \"ref_out\": [0.50048828125, 0.50146484375, 0.50244140625, 0.499755859375, 0.499267578125, 0.498779296875, 0.497802734375], \"absdiff\": [0.00048828125, 0.00048828125, 0.00048828125, -0.000244140625, -0.000244140625, -0.000244140625, -0.000244140625], \"fp64_value\": [0.5007324213511315, 0.5017089777199553, 0.5026855210504991, 0.4996337891279836, 0.4991455086443835, 0.49865722979059063, 0.4976806806976212]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive test of all 63,488 finite FP16 inputs: 7 bit-pattern mismatches vs the FP64-single-rounded reference, all near 0.5 where the fp32 intermediate double-rounds across the fp16 tie boundary (e.g. input 0.0029296875 yields kernel 0.5009765625 instead of correct 0.50048828125, a full one-ulp error).",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 exhaustively ran the kernel on all 63,488 finite FP16 encodings (within the N<=131072 domain limit) and compared exact FP16 bit patterns against an FP64-sigmoid single-rounded reference. 7 legal inputs near 0.5 produced wrong bit patterns (one full ULP off), e.g. x=0.0029296875 yields kernel output 0.5009765625 while the correctly single-rounded value is 0.50048828125 \u2014 the fp32 intermediate double-rounds across the FP16 tie boundary. The contract explicitly requires each output be the sigmoid value rounded once to binary16 with exact bit patterns holding \"for the whole public domain\" and \"one failing legal input is evidence against the implementation.\" This confirmed, in-scope claim supports reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T03:13:18Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-18T03:13:18Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 exhaustively ran the kernel on all 63,488 finite FP16 encodings (within the N<=131072 domain limit) and compared exact FP16 bit patterns against an FP64-sigmoid single-rounded reference. 7 legal inputs near 0.5 produced wrong bit patterns (one full ULP off), e.g. x=0.0029296875 yields kernel output 0.5009765625 while the correctly single-rounded value is 0.50048828125 \u2014 the fp32 intermediate double-rounds across the FP16 tie boundary. The contract explicitly requires each output be the sigmoid value rounded once to binary16 with exact bit patterns holding \"for the whole public domain\" and \"one failing legal input is evidence against the implementation.\" This confirmed, in-scope claim supports reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-18T03:13:18Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 exhaustively ran the kernel on all 63,488 finite FP16 encodings (within the N<=131072 domain limit) and compared exact FP16 bit patterns against an FP64-sigmoid single-rounded reference. 7 legal inputs near 0.5 produced wrong bit patterns (one full ULP off), e.g. x=0.0029296875 yields kernel output 0.5009765625 while the correctly single-rounded value is 0.50048828125 \u2014 the fp32 intermediate double-rounds across the FP16 tie boundary. The contract explicitly requires each output be the sigmoid value rounded once to binary16 with exact bit patterns holding \"for the whole public domain\" and \"one failing legal input is evidence against the implementation.\" This confirmed, in-scope claim supports reject.",
+    "verdict": "reject"
+  }
+}

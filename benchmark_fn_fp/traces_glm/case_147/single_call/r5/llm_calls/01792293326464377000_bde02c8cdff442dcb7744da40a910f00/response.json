@@ -1,0 +1,47 @@
+{
+  "id": "chatcmpl-bc03146f",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"trust\", \"confidence\": 0.8, \"reason\": \"The kernel is the standard Cephes atanf three-interval rational approximation (thresholds tan(3π/8)≈2.414 and 0.66, with the atanf coefficient set), correctly handling the upper branch via π/2 - atan(1/|x|) and the middle branch via π/4 + atan((m-1)/(m+1)); rounding-error analysis and Cephes's known ~2-ulp FP32 accuracy keep absolute error well under 1e-6 across the legal FP16 domain, and masking/absolute-value/sign handling cover subnormals, zeros, and ±65504.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Cephes atan rational approximation in FP32 — accuracy 1e-6 absolute? Cephes coefficients adapted to FP32: the original double version has ~1e-16 accuracy; FP32 version with these coefficients (4-term numerator, 5-term denominator) — the actual Cephes single-precision atan uses fewer coefficients. This uses double-precision coefficients in FP32 arithmetic; intermediate rounding in FP32 introduces errors. Typical FP32 rational approx error ~1e-7-ish plus rounding, likely within 1e-6... but 1e-6 absolute tolerance with FP32 is tight. The reduced value range up to tan(π/12)=0.268 for middle range? Actually Cephes: for |x|>tan(3π/8), use π/2 - 1/x; for |x|>tan(π/8)=0.4142? Cephes uses 0.66? Original Cephes double uses MOREBIT... Actually Cephes atan double: if |x|>1, use... The thresholds 2.414 (tan 3π/8) and 0.66 (tan π/... ≈ tan(0.58)?). Cephes single precision uses 0.66. Coefficients: Cephes float version uses numerator -16.16, -75.01, -122.9, -64.85, -49.6? Hmm. The single-precision Cephes: polynomial coefficients p = -8.7503949E-1? Actually float version coefficients: -8.7503949E-1? Here -0.8751 roughly matches. Denominator: 24.86, 165, 432.9, 485.4, 194.6 — these match Cephes atanf. So this is the atanf algorithm. atanf accuracy ~1 ulp-ish? Cephes claims atanf relative error 4e-8? Actually Cephes docs: atanf error ≤ 2 ulp? For |result|<π/2, 2 ulp of FP32 ~ 2e-7 near 1.5. That satisfies 1e-6? 1 ulp at 1.57 is 1.2e-7, 2 ulp = 2.4e-7 < 1e-6. Likely fine.\n\nCheck branches: upper: reciprocal = -1/max(|x|,1.0) → since upper implies |x|>2.414, max is |x|, so -1/|x|, angle π/2. atan(|x|) = π/2 - atan(1/|x|) ≈ π/2 - (1/x + correction with reduced = -1/x). reduced*correction + reduced = -atan(1/x) approx. angle + that = π/2 - atan(1/x). Good.\n\nmiddle: (m-1)/(m+1), angle π/4. Good.\n\nBut wait: for x=65504, reciprocal computed correctly in FP32; 1/65504 exact-ish. Fine.\n\nSubnormals: magnitude tiny, reduced = magnitude, correction negligible, value ≈ x. atan small ≈ x. Good.\n\nCatastrophic cancellation? angle + local_angle where local_angle negative in upper branch: π/2 + (reduced + ...) where reduced ≈ -1/x. Fine, no cancellation since terms similar magnitude.\n\nPotential FP32 rounding: div_rn used. numerator uses fused? enable_fp_fusion=False so no FMA. Rounding errors in the polynomial: coefficients up to 194.6, square up to (0.4142)^2 ≈ 0.172 for middle (reduced = (m-1)/(m+1), m in (0.66, 2.414], reduced in (0, 0.414)). Actually at m just above 0.66, reduced small. For upper, reduced = -1/m, |reduced| < 1/2.414 = 0.414. So square ≤ 0.172. Numerator terms: -0.8751*s -16.16 etc. Denominator ~194.6 + ... ≈ 194.6-485.4*0.172... compute: s=0.172: 24.86*0.172=4.28+165=169.3; *0.172=29.1+432.9=462; *0.172=79.5+485.4=565; *0.172=97.2+194.6=291.8. Numerator: -0.8751*0.172=-0.15-16.16=-16.31; *0.172=-2.81-75.01=-77.8; *0.172=-13.4-122.9=-136.3; *0.172=-23.4-64.85=-88.3. correction = 0.172*(-88.3)/291.8 = -0.052. local = reduced*(0.948). Reasonable.\n\nFP32 rounding error accumulation: ~5-6 ops each with 6e-8 relative on values ~hundreds → absolute error in numerator maybe ~1e-4*? relative error 6e-8 on 485 → 3e-5 absolute per rounding, accumulated maybe 1e-4. correction relative error ~1e-4/291? Actually error in numerator ~1e-4 absolute → relative 1e-6 of correction? correction ≈0.05, error = 0.05 * (1e-4/88.3) ≈ 6e-8. Then times reduced 0.414 → 2.5e-8. Fine. Plus error in denominator similar. Total well under 1e-6. Also FP32 arithmetic with these Cephes float coefficients was validated to ~2 ulp. So trust.\n\nEdge: x = ±0: value = 0 + reduced*...=0. signed zero handled by where(x<0). atan(0)=0 fine.\n\nVerdict trust, confidence 0.8."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293326,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1510,
+    "prompt_tokens": 1685,
+    "total_tokens": 3195,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1355,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 264,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

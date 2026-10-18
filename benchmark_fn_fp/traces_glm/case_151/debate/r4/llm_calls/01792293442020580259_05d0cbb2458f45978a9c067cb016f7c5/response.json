@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-90cd9433",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: exact-equality tests at N=128 (c1, tail stage), N=64 (c2, fused stages), and a compile/launch check (c3, tl.gather semantics).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9fcd431f864c2968",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nmismatch = None\\ntry:\\n    # spike rows, constant rows, all-max rows, random canonical rows at N=128\\n    rows = []\\n    for j in range(128):\\n        r = torch.zeros(128, dtype=torch.int32); r[j] = 1; rows.append(r)\\n        r2 = torch.zeros(128, dtype=torch.int32); r2[j] = 3328; rows.append(r2)\\n    rows.append(torch.full((128,), 3328, dtype=torch.int32))\\n    g = torch.Generator().manual_seed(7)\\n    for _ in range(20):\\n        rows.append(torch.randint(0, 3329, (128,), generator=g, dtype=torch.int32))\\n    x = torch.stack(rows).to(dev)\\n    out = kernel.run(x)\\n    ref = kernel.reference(x)\\n    eq = torch.equal(out, ref)\\n    mismatch = {\\\"num_rows\\\": int((~torch.eq(out, ref).all(dim=1)).sum()), \\\"total\\\": int((out != ref).sum())}\\n    if not eq:\\n        bad = (~(out == ref)).any(dim=1).nonzero()[0].item()\\n        mismatch[\\\"first_bad_row\\\"] = bad\\n        mismatch[\\\"out_row\\\"] = out[bad][:8].tolist()\\n        mismatch[\\\"ref_row\\\"] = ref[bad][:8].tolist()\\n    results = {\\\"n\\\": 128, \\\"rows_tested\\\": x.shape[0], \\\"exact_equal\\\": bool(eq), \\\"mismatch\\\": mismatch}\\nexcept Exception as e:\\n    results = {\\\"error\\\": f\\\"{type(e).__name__}: {e}\\\"}\\nprint(json.dumps(results))\", \"expected_signal\": \"run vs reference exact equality (torch.equal) on N=128 canonical rows\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a53a03b2edae8940",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\ntry:\\n    rows = []\\n    for j in range(64):\\n        r = torch.zeros(64, dtype=torch.int32); r[j] = 1; rows.append(r)\\n        r2 = torch.zeros(64, dtype=torch.int32); r2[j] = 3328; rows.append(r2)\\n    rows.append(torch.full((64,), 3328, dtype=torch.int32))\\n    g = torch.Generator().manual_seed(11)\\n    for _ in range(20):\\n        rows.append(torch.randint(0, 3329, (64,), generator=g, dtype=torch.int32))\\n    x = torch.stack(rows).to(dev)\\n    out = kernel.run(x)\\n    ref = kernel.reference(x)\\n    eq = torch.equal(out, ref)\\n    mismatch = {\\\"num_rows\\\": int((~torch.eq(out, ref).all(dim=1)).sum()), \\\"total\\\": int((out != ref).sum())}\\n    if not eq:\\n        bad = (~(out == ref)).any(dim=1).nonzero()[0].item()\\n        mismatch[\\\"first_bad_row\\\"] = bad\\n        mismatch[\\\"out_row\\\"] = out[bad][:8].tolist()\\n        mismatch[\\\"ref_row\\\"] = ref[bad][:8].tolist()\\n    results = {\\\"n\\\": 64, \\\"rows_tested\\\": x.shape[0], \\\"exact_equal\\\": bool(eq), \\\"mismatch\\\": mismatch}\\nexcept Exception as e:\\n    results = {\\\"error\\\": f\\\"{type(e).__name__}: {e}\\\"}\\nprint(json.dumps(results))\", \"expected_signal\": \"run vs reference exact equality (torch.equal) on N=64 canonical rows\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-9ef07a540a10a0ec",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_151\\\")\\nimport kernel\\n\\nresults = {}\\ntry:\\n    x = kernel.make_inputs()[0]\\n    out = kernel.run(x)\\n    ok = out.shape == x.shape and out.dtype == torch.int32 and out.is_cuda\\n    values_canonical = bool(((out >= 0) & (out < 3329)).all())\\n    results = {\\\"compile_launch\\\": True, \\\"shape_dtype_device_ok\\\": bool(ok),\\n               \\\"values_canonical_0_3328\\\": values_canonical,\\n               \\\"min\\\": int(out.min()), \\\"max\\\": int(out.max()),\\n               \\\"exact_equal_make_inputs\\\": bool(torch.equal(out, kernel.reference(x)))}\\nexcept Exception as e:\\n    results = {\\\"compile_launch\\\": False, \\\"error\\\": f\\\"{type(e).__name__}: {e}\\\"}\\nprint(json.dumps(results))\", \"expected_signal\": \"kernel compiles, launches, and produces canonical int32 outputs on CUDA\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (N=128 exactness), c2 (N=64 exactness), c3 (compile/launch success). c1 and c2 also cover c3, but run separate probes. All independent — batch."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293444,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1139,
+    "prompt_tokens": 25352,
+    "total_tokens": 26491,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 50,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6827,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,2042 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_147",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise atan using three range intervals and a rational approximation.\n\nSynthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\nThe original Cephes source credits Stephen L. Moshier, copyright 1984,\n1995 and 2000. This is not a claim of an upstream historical defect.\nSource: https://netlib.org/cephes/cmath.tgz (atan.c).\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    upper = magnitude > 2.414213562373095\n    middle = magnitude > 0.66\n    reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\n    centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\n    reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\n    angle = tl.where(upper, 1.5707963267948966,\n                     tl.where(middle, 0.7853981633974483, 0.0))\n    square = reduced * reduced\n    numerator = -0.8751\n    numerator = numerator * square + -16.16\n    numerator = numerator * square + -75.01\n    numerator = numerator * square + -122.9\n    numerator = numerator * square + -64.85\n    denominator = square + 24.86\n    denominator = denominator * square + 165.0\n    denominator = denominator * square + 432.9\n    denominator = denominator * square + 485.4\n    denominator = denominator * square + 194.6\n    correction = tl.div_rn(square * numerator, denominator)\n    local_angle = reduced * correction + reduced\n    value = angle + local_angle\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating atan of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _atan_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical atan independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.atan(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_147",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T03:11:15Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ee4bf8a3031dc18d122f5a52fe6565b8888c17cc544d644b73a06dad56becb14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3c741a02d9cc2687e41ce61aab1b8bfdc89fb63afc077e4ec12c2ed7329e11ef"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "26743bbf69fc0a743ecf2f0be8a0e28593f0c2fb42cdf8f19cbafa8286f21587"
+              }
+            ],
+            "duration_s": 6.157593,
+            "exit_code": 0,
+            "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_all": 5.03277156949089e-06,
+              "max_abs_err_mid": 3.309762251824111e-06,
+              "max_abs_err_seam": 5.019307532827533e-06,
+              "n": 4606,
+              "n_mid": 3866,
+              "n_over_tol_mid": 1174,
+              "tol": 1e-06,
+              "worst_err": 5.03277156949089e-06,
+              "worst_x": -0.6220703125
+            },
+            "max_abs_err_all": 5.03277156949089e-06,
+            "max_abs_err_mid": 3.309762251824111e-06,
+            "max_abs_err_seam": 5.019307532827533e-06,
+            "n": 4606,
+            "n_mid": 3866,
+            "n_over_tol_mid": 1174,
+            "stderr": "",
+            "stdout": "{\"n\": 4606, \"n_mid\": 3866, \"tol\": 1e-06, \"max_abs_err_mid\": 3.309762251824111e-06, \"n_over_tol_mid\": 1174, \"max_abs_err_seam\": 5.019307532827533e-06, \"max_abs_err_all\": 5.03277156949089e-06, \"worst_x\": -0.6220703125, \"worst_err\": 5.03277156949089e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "worst_err": 5.03277156949089e-06,
+            "worst_x": -0.6220703125
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive FP16-lattice scan around [0.5,2.5] (both signs, n=4606) shows kernel output vs FP64 atan exceeds 1e-6: 1174/3866 middle-interval elements over tolerance, max middle-interval error 3.31e-6, and worst overall error 5.03e-6 at x=-0.6220703125 (near the 0.66 branch seam, max seam error 5.02e-6). Claim confirmed: FP32 rational evaluation violates the 1e-6 absolute contract in the middle interval and near the 0.66 seam.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Cephes's double-precision coefficients give ~1e-16 error in FP64; carried into FP32 Horner evaluation, each rounded multiply/add contributes ~1e-7 relative error and the rational result is near 0.66 near the seam, so absolute error approaching or exceeding 1e-6 is plausible in the middle interval, especially just below/above 0.66.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6 for the entire legal domain (every finite FP16 value), and the verdict is a single global verdict."
+        }
+      ],
+      "scope_rationale": "The contract requires abs(actual[i]-atan(x[i]))<=1e-6 for every finite FP16 value, i.e., a global verdict over the whole domain, so any in-domain input where FP32 evaluation of the rational exceeds 1e-6 is a direct contract violation.",
+      "statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T03:11:54Z"
+    },
+    {
+      "created_at": "2026-10-18T03:11:15Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "7149a30761cd149372f2d8b24befd1621b1be8606317d212862344ccbcd2cb22"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "40b1b763a1406db3d4ccefcb188ea39064bc1d9ddab506f3117eb5dadee744ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "4dfb7a1c313aa7719703dcb8b168c8feafcb36fd51d240a8d4b0cc0ea4d1231d"
+              }
+            ],
+            "duration_s": 4.166693,
+            "exit_code": 0,
+            "expected_signal": "max abs error in upper branch; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_near_thr": 3.2626425252590963e-06,
+              "max_abs_err_upper": 3.2626425252590963e-06,
+              "n": 3672,
+              "n_over_tol": 1630,
+              "n_over_tol_near_thr": 86,
+              "tol": 1e-06,
+              "worst_err": 3.2626425252590963e-06,
+              "worst_x": -2.416015625
+            },
+            "max_abs_err_near_thr": 3.2626425252590963e-06,
+            "max_abs_err_upper": 3.2626425252590963e-06,
+            "n": 3672,
+            "n_over_tol": 1630,
+            "n_over_tol_near_thr": 86,
+            "stderr": "",
+            "stdout": "{\"n\": 3672, \"tol\": 1e-06, \"max_abs_err_upper\": 3.2626425252590963e-06, \"n_over_tol\": 1630, \"max_abs_err_near_thr\": 3.2626425252590963e-06, \"n_over_tol_near_thr\": 86, \"worst_x\": -2.416015625, \"worst_err\": 3.2626425252590963e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "worst_err": 3.2626425252590963e-06,
+            "worst_x": -2.416015625
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Upper-branch FP16 lattice scan (|x|>2.414213562373095, up to 8.0, both signs, n=3672): 1630 elements exceed the 1e-6 absolute tolerance, max error 3.26e-6 at x=-2.416015625 (just above the branch threshold; 86 near-threshold values over tolerance). Claim confirmed: pi/2 + z*(1+correction) path violates the 1e-6 contract in the upper branch.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "At z just above -0.4142, the local term z*(1+correction) is largest and polynomial evaluation error is amplified; combined with pi/2 rounding in FP32, the sum pi/2 + local can plausibly miss 1e-6, while cancellation is worse for large |x| only in relative terms.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The 1e-6 absolute tolerance applies to every finite FP16 value including both extrema +/-65504; no range-reduction or intermediate rounding is part of the target."
+        }
+      ],
+      "scope_rationale": "FP16 values just above 2.414... (e.g., 2.4375, 2.44921875) are legal inputs, and the contract demands 1e-6 absolute accuracy there.",
+      "statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504).",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T03:11:54Z"
+    },
+    {
+      "created_at": "2026-10-18T03:11:15Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "509754accf2697531cb5ca7f0b45c851ccbf22b1fb77a27bbecff0d7f47024a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "8866ea985a9442d9b75b4639babd120a2e3e27d652770850c11496ad62587b71"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "9a6d1717c5473fccaa8681db62c82588f1f5fb05127e7b18fdd6f7c8d4cdda28"
+              }
+            ],
+            "duration_s": 3.949224,
+            "err_60000": 2.1077518175260934e-08,
+            "err_65503": 5.11656093049595e-08,
+            "err_65504": 5.11656093049595e-08,
+            "exit_code": 0,
+            "expected_signal": "abs error at +/-65504; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "errs": [
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                2.1077518175260934e-08,
+                2.1077518175260934e-08
+              ],
+              "inputs": [
+                65504.0,
+                -65504.0,
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "max_abs_err_extrema": 5.11656093049595e-08,
+              "outputs": [
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707796812057495,
+                -1.5707796812057495
+              ],
+              "tol": 1e-06
+            },
+            "max_abs_err_extrema": 5.11656093049595e-08,
+            "stderr": "",
+            "stdout": "{\"inputs\": [65504.0, -65504.0, 65504.0, -65504.0, 60000.0, -60000.0], \"outputs\": [1.5707811117172241, -1.5707811117172241, 1.5707811117172241, -1.5707811117172241, 1.5707796812057495, -1.5707796812057495], \"errs\": [5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 2.1077518175260934e-08, 2.1077518175260934e-08], \"max_abs_err_extrema\": 5.11656093049595e-08, \"tol\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "At the FP16 extrema \u00b165504 (and \u00b165503, \u00b160000), kernel error vs FP64 atan is only 5.12e-8 (\u00b165504) and 2.11e-8 (\u00b160000), far below the 1e-6 tolerance. Cancellation is mild at the extrema and the output is within contract there. Claim rebutted: extrema do not exceed 1e-6.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      ],
+      "id": "c3",
+      "raised_by": "skeptic",
+      "rationale": "tl.div_rn(1.0, 65504.0) in FP32 has ~6e-8 relative error, multiplied by z gives local term ~1.5e-5 with error ~1e-12 \u2014 benign; but the primary risk is that coefficient rounding in the numerator polynomial (values ~1e5 magnitude cancelling to ~small correction) amplifies FP32 rounding in the correction term at large square values.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Both extrema +/-65504 are explicitly legal inputs and the fixed 1e-6 absolute tolerance applies to them."
+        }
+      ],
+      "scope_rationale": "The contract explicitly lists both extrema +/-65504 as legal inputs bound by the 1e-6 absolute tolerance.",
+      "statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T03:11:54Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+      "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+      "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+      "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+      "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+      "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+      "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+      "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+      "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+    ],
+    "open_questions": [
+      "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+      "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+      "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+    ],
+    "risk_map": [
+      "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+      "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+      "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+      "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+      "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+      "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+      "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+      "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+    ],
+    "scope_notes": [
+      "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+      "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+      "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+      "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+        "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+        "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+        "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+        "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T03:11:02Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+        "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+        "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+        "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+        "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+      ],
+      "open_questions": [
+        "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+        "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+        "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+      ],
+      "risk_map": [
+        "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+        "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+        "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+        "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+        "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+        "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+        "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+        "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+      ],
+      "scope_notes": [
+        "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+        "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+        "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+        "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+      ],
+      "summary": "Described case_147: FP32 Triton atan (Cephes-style 3-interval rational approximation) on FP16 inputs with a global 1e-6 absolute tolerance over all finite FP16 values; mapped the branch structure, approximation constants, and primary accuracy/rounding risk surfaces.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_147",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_147",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 27.282966736,
+      "role": "describer",
+      "round": 2,
+      "text": "I have the full kernel source and problem contract, so I'll record the structured description model now without re-reading files.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+              "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+              "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+              "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+              "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+              "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+              "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+              "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+              "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+            ],
+            "open_questions": [
+              "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+              "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+              "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+            ],
+            "risk_map": [
+              "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+              "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+              "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+              "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+              "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+              "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+              "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+              "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+            ],
+            "scope_notes": [
+              "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+              "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+              "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+              "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+            ],
+            "summary": "Described case_147: FP32 Triton atan (Cephes-style 3-interval rational approximation) on FP16 inputs with a global 1e-6 absolute tolerance over all finite FP16 values; mapped the branch structure, approximation constants, and primary accuracy/rounding risk surfaces."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 27.283,
+        "input_tokens": 6742,
+        "output_tokens": 1908
+      }
+    },
+    {
+      "duration_s": 12.845166358000004,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the highest-risk, directly testable accuracy claims tied to the contract's global 1e-6 absolute tolerance over the full finite FP16 domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Cephes's double-precision coefficients give ~1e-16 error in FP64; carried into FP32 Horner evaluation, each rounded multiply/add contributes ~1e-7 relative error and the rational result is near 0.66 near the seam, so absolute error approaching or exceeding 1e-6 is plausible in the middle interval, especially just below/above 0.66.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6 for the entire legal domain (every finite FP16 value), and the verdict is a single global verdict."
+              }
+            ],
+            "scope_rationale": "The contract requires abs(actual[i]-atan(x[i]))<=1e-6 for every finite FP16 value, i.e., a global verdict over the whole domain, so any in-domain input where FP32 evaluation of the rational exceeds 1e-6 is a direct contract violation.",
+            "statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "At z just above -0.4142, the local term z*(1+correction) is largest and polynomial evaluation error is amplified; combined with pi/2 rounding in FP32, the sum pi/2 + local can plausibly miss 1e-6, while cancellation is worse for large |x| only in relative terms.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The 1e-6 absolute tolerance applies to every finite FP16 value including both extrema +/-65504; no range-reduction or intermediate rounding is part of the target."
+              }
+            ],
+            "scope_rationale": "FP16 values just above 2.414... (e.g., 2.4375, 2.44921875) are legal inputs, and the contract demands 1e-6 absolute accuracy there.",
+            "statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "tl.div_rn(1.0, 65504.0) in FP32 has ~6e-8 relative error, multiplied by z gives local term ~1.5e-5 with error ~1e-12 \u2014 benign; but the primary risk is that coefficient rounding in the numerator polynomial (values ~1e5 magnitude cancelling to ~small correction) amplifies FP32 rounding in the correction term at large square values.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Both extrema +/-65504 are explicitly legal inputs and the fixed 1e-6 absolute tolerance applies to them."
+              }
+            ],
+            "scope_rationale": "The contract explicitly lists both extrema +/-65504 as legal inputs bound by the 1e-6 absolute tolerance.",
+            "statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.845,
+        "input_tokens": 17301,
+        "output_tokens": 874
+      }
+    },
+    {
+      "duration_s": 13.709827310000001,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll launch independent probes for all three accuracy claims: c1 (middle interval scan), c2 (upper branch near the 2.414 threshold), c3 (extrema \u00b165504). Each compares kernel FP32 output against FP64 torch.atan on the exact stored FP16 values.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\n# All finite FP16 magnitudes in middle interval (0.66 < |x| <= 2.414213562373095)\n# plus lower-interval values near the 0.66 seam (0.6..2.5 covers both sides).\nvals = []\nv = torch.arange(0.5, 2.5, 0.00005, dtype=torch.float64)\nxf = v.to(torch.float16).unique().to(torch.float64)\nmask = (xf > 0.5) & (xf < 2.5)\nxf = xf[mask]\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\n# focus: middle interval elements\nmag = x.to(torch.float64).abs()\nmid = (mag > 0.66) & (mag <= 2.414213562373095)\nseam = (mag > 0.63) & (mag < 0.70)\nmiderr = err[mid]\nworst = torch.argmax(err)\nprint(json.dumps({\n    \"n\": int(x.numel()),\n    \"n_mid\": int(mid.sum().item()),\n    \"tol\": 1e-6,\n    \"max_abs_err_mid\": float(miderr.max().item()) if miderr.numel() else None,\n    \"n_over_tol_mid\": int((miderr > 1e-6).sum().item()) if miderr.numel() else None,\n    \"max_abs_err_seam\": float(err[seam].max().item()) if seam.sum() else None,\n    \"max_abs_err_all\": float(err.max().item()),\n    \"worst_x\": float(x[worst].item()),\n    \"worst_err\": float(err[worst].item()),\n}))\n",
+            "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\n# Upper branch: FP16 values just above 2.414213562373095 and up through moderate |x|\nv = torch.arange(2.0, 8.0, 0.0005, dtype=torch.float64)\nxf = v.to(torch.float16).unique().to(torch.float64)\nmag = xf.abs()\nup = mag > 2.414213562373095\nxf = xf[up]\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nworst = torch.argmax(err)\nnear_thr = x.to(torch.float64).abs() < 2.5\nprint(json.dumps({\n    \"n\": int(x.numel()),\n    \"tol\": 1e-6,\n    \"max_abs_err_upper\": float(err.max().item()),\n    \"n_over_tol\": int((err > 1e-6).sum().item()),\n    \"max_abs_err_near_thr\": float(err[near_thr].max().item()),\n    \"n_over_tol_near_thr\": int((err[near_thr] > 1e-6).sum().item()),\n    \"worst_x\": float(x[worst].item()),\n    \"worst_err\": float(err[worst].item()),\n}))\n",
+            "expected_signal": "max abs error in upper branch; >1e-6 confirms claim"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c3",
+            "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\nx = torch.tensor([65504.0, -65504.0, 65503.0, -65503.0, 60000.0, -60000.0],\n                 dtype=torch.float16).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nprint(json.dumps({\n    \"inputs\": [float(v) for v in x.to(torch.float64).tolist()],\n    \"outputs\": [float(v) for v in out.to(torch.float64).tolist()],\n    \"errs\": [float(v) for v in err.tolist()],\n    \"max_abs_err_extrema\": float(err.max().item()),\n    \"tol\": 1e-6,\n}))\n",
+            "expected_signal": "abs error at +/-65504; >1e-6 confirms claim"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.71,
+        "input_tokens": 21651,
+        "output_tokens": 1222
+      }
+    },
+    {
+      "duration_s": 11.422537184000007,
+      "role": "experimenter",
+      "round": 5,
+      "text": "All three probe results are in: c1 and c2 show errors well above 1e-6 (confirmed), while c3 shows the extrema are far inside tolerance (rebutted). Finalizing all three now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err_all": 5.03277156949089e-06,
+              "max_abs_err_mid": 3.309762251824111e-06,
+              "max_abs_err_seam": 5.019307532827533e-06,
+              "n": 4606,
+              "n_mid": 3866,
+              "n_over_tol_mid": 1174,
+              "tol": 1e-06,
+              "worst_err": 5.03277156949089e-06,
+              "worst_x": -0.6220703125
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Exhaustive FP16-lattice scan around [0.5,2.5] (both signs, n=4606) shows kernel output vs FP64 atan exceeds 1e-6: 1174/3866 middle-interval elements over tolerance, max middle-interval error 3.31e-6, and worst overall error 5.03e-6 at x=-0.6220703125 (near the 0.66 branch seam, max seam error 5.02e-6). Claim confirmed: FP32 rational evaluation violates the 1e-6 absolute contract in the middle interval and near the 0.66 seam.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "max_abs_err_near_thr": 3.2626425252590963e-06,
+              "max_abs_err_upper": 3.2626425252590963e-06,
+              "n": 3672,
+              "n_over_tol": 1630,
+              "n_over_tol_near_thr": 86,
+              "tol": 1e-06,
+              "worst_err": 3.2626425252590963e-06,
+              "worst_x": -2.416015625
+            },
+            "event_id": "t10",
+            "status": "confirmed",
+            "summary": "Upper-branch FP16 lattice scan (|x|>2.414213562373095, up to 8.0, both signs, n=3672): 1630 elements exceed the 1e-6 absolute tolerance, max error 3.26e-6 at x=-2.416015625 (just above the branch threshold; 86 near-threshold values over tolerance). Claim confirmed: pi/2 + z*(1+correction) path violates the 1e-6 contract in the upper branch.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "err_60000": 2.1077518175260934e-08,
+              "err_65503": 5.11656093049595e-08,
+              "err_65504": 5.11656093049595e-08,
+              "max_abs_err_extrema": 5.11656093049595e-08,
+              "tol": 1e-06
+            },
+            "event_id": "t11",
+            "status": "rebutted",
+            "summary": "At the FP16 extrema \u00b165504 (and \u00b165503, \u00b160000), kernel error vs FP64 atan is only 5.12e-8 (\u00b165504) and 2.11e-8 (\u00b160000), far below the 1e-6 tolerance. Cancellation is mild at the extrema and the output is within contract there. Claim rebutted: extrema do not exceed 1e-6.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.423,
+        "input_tokens": 29867,
+        "output_tokens": 938
+      }
+    },
+    {
+      "duration_s": 5.235744987000004,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The evidence is decisive: c1 (middle interval / 0.66 seam) and c2 (upper branch) are confirmed in-scope violations of the 1e-6 absolute contract, while c3 was rebutted. No existing gap requires further attack.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: exhaustive FP16-lattice probes confirm two in-scope tolerance violations (c1 middle interval/0.66 seam max err 5.03e-6; c2 upper branch max err 3.26e-6), and c3 (extrema) was rebutted. Together they cover the three approximation intervals across the legal domain; no material, testable in-scope problem remains uncovered by existing claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2",
+              "c3"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.236,
+        "input_tokens": 40508,
+        "output_tokens": 197
+      }
+    },
+    {
+      "duration_s": 9.769992209999998,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: two confirmed in-scope claims (c1, c2) show the kernel violates the contract's fixed 1e-6 absolute tolerance on many ordinary in-domain FP16 inputs in both the middle interval and the upper branch, with worst errors up to 5e-6 (5x the tolerance). The problem.txt explicitly makes this a single global verdict over every finite FP16 value, so no distribution caveat can rescue it. Skeptic has signed off with no new claims and all claims have evidence. Recording a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt) requires abs(actual[i] - atan(x[i])) <= 1e-6 for every finite FP16 value, as a single global verdict. Confirmed in-scope runtime evidence shows this is violated broadly: probe t9 (c1) scanned the full FP16 lattice in [0.5,2.5] both signs and found 1174/3866 middle-interval elements over tolerance, max error 5.03e-6 near the 0.66 seam (x=-0.6220703125); probe t10 (c2) found 1630/3672 upper-branch elements (|x|>2.414213562373095) over tolerance, max error 3.26e-6 at x=-2.416015625. These are ordinary, in-domain FP16 values, not edge cases; the failures are systematic (hundreds to thousands of lattice points), not single-point ties or negligible near-zero absolute differences \u2014 errors reach 3-5x the tolerance. c3 (extrema \u00b165504) was rebutted (error only ~5e-8), showing the defect is in the FP32 rational evaluation in the middle and upper intervals, not at the extremes. All open claims have evidence, and the Skeptic reviewed the latest evidence and recorded no new claims. The declared contract permits approximations but only if they meet the 1e-6 absolute tolerance throughout the entire legal domain; the confirmed evidence shows they do not. Reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.77,
+        "input_tokens": 41248,
+        "output_tokens": 516
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T03:11:59Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: exhaustive FP16-lattice probes confirm two in-scope tolerance violations (c1 middle interval/0.66 seam max err 5.03e-6; c2 upper branch max err 3.26e-6), and c3 (extrema) was rebutted. Together they cover the three approximation intervals across the legal domain; no material, testable in-scope problem remains uncovered by existing claims.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reviewed_tool_event_count": 14,
+    "tool_event_id": "t15",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_147",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise atan using three range intervals and a rational approximation.\n\nSynthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\nThe original Cephes source credits Stephen L. Moshier, copyright 1984,\n1995 and 2000. This is not a claim of an upstream historical defect.\nSource: https://netlib.org/cephes/cmath.tgz (atan.c).\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    upper = magnitude > 2.414213562373095\n    middle = magnitude > 0.66\n    reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\n    centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\n    reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\n    angle = tl.where(upper, 1.5707963267948966,\n                     tl.where(middle, 0.7853981633974483, 0.0))\n    square = reduced * reduced\n    numerator = -0.8751\n    numerator = numerator * square + -16.16\n    numerator = numerator * square + -75.01\n    numerator = numerator * square + -122.9\n    numerator = numerator * square + -64.85\n    denominator = square + 24.86\n    denominator = denominator * square + 165.0\n    denominator = denominator * square + 432.9\n    denominator = denominator * square + 485.4\n    denominator = denominator * square + 194.6\n    correction = tl.div_rn(square * numerator, denominator)\n    local_angle = reduced * correction + reduced\n    value = angle + local_angle\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating atan of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _atan_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical atan independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.atan(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_147",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_147",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_147",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3691
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1959
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_147",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_147",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+          "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+          "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+          "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+          "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+          "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+          "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+          "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+          "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+        ],
+        "open_questions": [
+          "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+          "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+          "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+        ],
+        "risk_map": [
+          "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+          "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+          "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+          "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+          "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+          "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+          "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+          "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+        ],
+        "scope_notes": [
+          "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+          "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+          "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+          "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+        ],
+        "summary": "Described case_147: FP32 Triton atan (Cephes-style 3-interval rational approximation) on FP16 inputs with a global 1e-6 absolute tolerance over all finite FP16 values; mapped the branch structure, approximation constants, and primary accuracy/rounding risk surfaces."
+      },
+      "created_at": "2026-10-18T03:11:02Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+            "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+            "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+            "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+            "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+            "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+            "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+            "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+            "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+          ],
+          "open_questions": [
+            "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+            "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+            "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+          ],
+          "risk_map": [
+            "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+            "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+            "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+            "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+            "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+            "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+            "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+            "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+            "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+            "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+            "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Target: target[i] = atan(x[i]) in radians, elementwise, defined in real arithmetic on the exact stored FP16 value.",
+            "Input domain: 1-D FP16 tensor [N], 1<=N<=131072, CUDA, dense/contiguous (nonzero storage offsets legal), requires_grad=False, ordinary execution mode; every finite FP16 value legal including signed zeros, subnormals, and +/-65504; NaN/Inf out of domain.",
+            "Output: fresh finite FP32 tensor [N] on x.device, preserving x.",
+            "Tolerance: fixed absolute 1e-6, relative tolerance zero, single verdict for the whole implementation over the entire legal domain (not per-input).",
+            "validate_inputs() enforces the domain and is called by run(); reference() is FP64 torch.atan and accepts CPU; make_inputs() is example-only and does not restrict the domain.",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T03:11:02Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "FP32 Triton elementwise kernel: 3-way range reduction after abs(x): |x|>2.414213562373095 -> z=-1/|x| (via -1/max(|x|,1.0), so max is a no-op in that branch), angle=pi/2; 0.66<|x| -> z=(|x|-1)/(|x|+1), angle=pi/4; else z=|x|, angle=0.",
+            "Approximation: degree-5 numerator / degree-5 denominator rational in z^2 (Cephes-derived coefficients -0.8751,-16.16,-75.01,-122.9,-64.85 / 1,24.86,165.0,432.9,485.4,194.6), correction = z^2*num/den via tl.div_rn, result = angle + z*(1+correction), then sign restored via where(x<0, -value, value).",
+            "Input FP16 loaded and cast to FP32 (exact), output stored as FP32; masked loads/stores with BLOCK=256 grid; enable_fp_fusion=False and div_rn used to pin rounding behavior.",
+            "run() validates inputs, allocates a fresh FP32 output on x.device, launches kernel; reference() uses FP64 torch.atan.",
+            "Boundary constants: middle threshold 0.66, upper threshold 2.414213562373095 (=1+sqrt(2)), pi/2 and pi/4 constants in FP32-precision literals."
+          ],
+          "open_questions": [
+            "Does the FP32 rational approximation meet 1e-6 absolute error at the worst points of the domain (interval boundaries 0.66 and 2.414213562373095, and near the FP16 lattice around them), or does the double-precision-derived coefficient set break down in FP32 arithmetic?",
+            "Do subnormal FP16 inputs flow correctly through the polynomial path in Triton (any flush-to-zero behavior in FP32 intermediates)?",
+            "Is output bitwise/numerically stable at |x| exactly at thresholds when FP16 values land near 0.66 or 2.414213562373095 from either side?"
+          ],
+          "risk_map": [
+            "Absolute error 1e-6 is tight for an FP32 rational approximation: the FP32 Horner evaluation of numerator/denominator and the z*(1+correction) multiplication may exceed 1e-6 in parts of the domain even where the exact rational form would pass; worst spots are likely near the interval boundaries 0.66 and 2.414213562373095 and in the middle interval.",
+            "Upper branch: result = pi/2 + z*(1+correction) with z=-1/|x|; for large |x| (up to 65504) the local term is tiny (~1.5e-5) and cancellation is mild, but for |x| just above 2.414 the local term is large (~0.66*..) and total error is dominated by the rational approximation error there.",
+            "Literal constants (coefficients, thresholds, pi/2, pi/4) are given in more digits than FP32 can represent; rounding of the 0.66 threshold vs Cephes's 0.66 cutoff changes which inputs take which branch, which is fine only if both branches meet tolerance at the seam.",
+            "tl.maximum(magnitude, 1.0) inside the upper-branch reciprocal is dead in the taken branch but is computed for all lanes; verify no NaN/Inf edge from masked lanes (other=0.0 makes inactive lanes benign).",
+            "Sign handling: value=where(x<0,-value,value) preserves oddness; signed zeros: x=-0.0 gives +0.0 output, but contract states signed zeros are numerically equivalent, so this should be acceptable.",
+            "Subnormal FP16 inputs: cast to FP32 is exact and z is tiny, polynomial path should be fine, but flush-to-zero behavior in intermediates is worth an evidence check.",
+            "Grid: triton.cdiv(n,256) with N up to 131072 and mask index<N handles tails; BLOCK=256 fixed, no specialization risk for N not a multiple of 256.",
+            "Output freshness: torch.empty allocation per call, no in-place writes to x; x preserved."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 value in [-65504, 65504] including subnormals and signed zeros; N in [1,131072]; contiguous 1-D FP16 CUDA tensors with possibly nonzero storage offset.",
+            "Out of scope: NaN/Inf inputs, non-contiguous or non-1-D tensors, FP32/FP64 inputs, autograd behavior, CPU execution of run().",
+            "The tolerance is a fixed absolute 1e-6 against FP64 reference on the exact stored value; no per-distribution or per-seed verdicts; one global correctness verdict.",
+            "make_inputs (2*randn, size 4093) is example-only and does not bound the domain; adversarial values (extremes, subnormals, boundary-adjacent FP16 lattice points) are in scope."
+          ],
+          "summary": "Described case_147: FP32 Triton atan (Cephes-style 3-interval rational approximation) on FP16 inputs with a global 1e-6 absolute tolerance over all finite FP16 values; mapped the branch structure, approximation constants, and primary accuracy/rounding risk surfaces.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Cephes's double-precision coefficients give ~1e-16 error in FP64; carried into FP32 Horner evaluation, each rounded multiply/add contributes ~1e-7 relative error and the rational result is near 0.66 near the seam, so absolute error approaching or exceeding 1e-6 is plausible in the middle interval, especially just below/above 0.66.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6 for the entire legal domain (every finite FP16 value), and the verdict is a single global verdict."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-atan(x[i]))<=1e-6 for every finite FP16 value, i.e., a global verdict over the whole domain, so any in-domain input where FP32 evaluation of the rational exceeds 1e-6 is a direct contract violation.",
+        "statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam."
+      },
+      "created_at": "2026-10-18T03:11:15Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T03:11:15Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Cephes's double-precision coefficients give ~1e-16 error in FP64; carried into FP32 Horner evaluation, each rounded multiply/add contributes ~1e-7 relative error and the rational result is near 0.66 near the seam, so absolute error approaching or exceeding 1e-6 is plausible in the middle interval, especially just below/above 0.66.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6 for the entire legal domain (every finite FP16 value), and the verdict is a single global verdict."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual[i]-atan(x[i]))<=1e-6 for every finite FP16 value, i.e., a global verdict over the whole domain, so any in-domain input where FP32 evaluation of the rational exceeds 1e-6 is a direct contract violation.",
+        "statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:11:15Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "At z just above -0.4142, the local term z*(1+correction) is largest and polynomial evaluation error is amplified; combined with pi/2 rounding in FP32, the sum pi/2 + local can plausibly miss 1e-6, while cancellation is worse for large |x| only in relative terms.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The 1e-6 absolute tolerance applies to every finite FP16 value including both extrema +/-65504; no range-reduction or intermediate rounding is part of the target."
+          }
+        ],
+        "scope_rationale": "FP16 values just above 2.414... (e.g., 2.4375, 2.44921875) are legal inputs, and the contract demands 1e-6 absolute accuracy there.",
+        "statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504)."
+      },
+      "created_at": "2026-10-18T03:11:15Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-18T03:11:15Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "At z just above -0.4142, the local term z*(1+correction) is largest and polynomial evaluation error is amplified; combined with pi/2 rounding in FP32, the sum pi/2 + local can plausibly miss 1e-6, while cancellation is worse for large |x| only in relative terms.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The 1e-6 absolute tolerance applies to every finite FP16 value including both extrema +/-65504; no range-reduction or intermediate rounding is part of the target."
+          }
+        ],
+        "scope_rationale": "FP16 values just above 2.414... (e.g., 2.4375, 2.44921875) are legal inputs, and the contract demands 1e-6 absolute accuracy there.",
+        "statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504).",
+        "status": "open",
+        "updated_at": "2026-10-18T03:11:15Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.div_rn(1.0, 65504.0) in FP32 has ~6e-8 relative error, multiplied by z gives local term ~1.5e-5 with error ~1e-12 \u2014 benign; but the primary risk is that coefficient rounding in the numerator polynomial (values ~1e5 magnitude cancelling to ~small correction) amplifies FP32 rounding in the correction term at large square values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Both extrema +/-65504 are explicitly legal inputs and the fixed 1e-6 absolute tolerance applies to them."
+          }
+        ],
+        "scope_rationale": "The contract explicitly lists both extrema +/-65504 as legal inputs bound by the 1e-6 absolute tolerance.",
+        "statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding."
+      },
+      "created_at": "2026-10-18T03:11:15Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-10-18T03:11:15Z",
+        "evidence": [],
+        "id": "c3",
+        "raised_by": "skeptic",
+        "rationale": "tl.div_rn(1.0, 65504.0) in FP32 has ~6e-8 relative error, multiplied by z gives local term ~1.5e-5 with error ~1e-12 \u2014 benign; but the primary risk is that coefficient rounding in the numerator polynomial (values ~1e5 magnitude cancelling to ~small correction) amplifies FP32 rounding in the correction term at large square values.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Both extrema +/-65504 are explicitly legal inputs and the fixed 1e-6 absolute tolerance applies to them."
+          }
+        ],
+        "scope_rationale": "The contract explicitly lists both extrema +/-65504 as legal inputs bound by the 1e-6 absolute tolerance.",
+        "statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:11:15Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\n# All finite FP16 magnitudes in middle interval (0.66 < |x| <= 2.414213562373095)\n# plus lower-interval values near the 0.66 seam (0.6..2.5 covers both sides).\nvals = []\nv = torch.arange(0.5, 2.5, 0.00005, dtype=torch.float64)\nxf = v.to(torch.float16).unique().to(torch.float64)\nmask = (xf > 0.5) & (xf < 2.5)\nxf = xf[mask]\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\n# focus: middle interval elements\nmag = x.to(torch.float64).abs()\nmid = (mag > 0.66) & (mag <= 2.414213562373095)\nseam = (mag > 0.63) & (mag < 0.70)\nmiderr = err[mid]\nworst = torch.argmax(err)\nprint(json.dumps({\n    \"n\": int(x.numel()),\n    \"n_mid\": int(mid.sum().item()),\n    \"tol\": 1e-6,\n    \"max_abs_err_mid\": float(miderr.max().item()) if miderr.numel() else None,\n    \"n_over_tol_mid\": int((miderr > 1e-6).sum().item()) if miderr.numel() else None,\n    \"max_abs_err_seam\": float(err[seam].max().item()) if seam.sum() else None,\n    \"max_abs_err_all\": float(err.max().item()),\n    \"worst_x\": float(x[worst].item()),\n    \"worst_err\": float(err[worst].item()),\n}))\n",
+        "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim"
+      },
+      "created_at": "2026-10-18T03:11:34Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "ee4bf8a3031dc18d122f5a52fe6565b8888c17cc544d644b73a06dad56becb14"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "3c741a02d9cc2687e41ce61aab1b8bfdc89fb63afc077e4ec12c2ed7329e11ef"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "26743bbf69fc0a743ecf2f0be8a0e28593f0c2fb42cdf8f19cbafa8286f21587"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam.",
+        "cwd": "/root/cases/case_147",
+        "duration_s": 6.157593,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ee4bf8a3031dc18d122f5a52fe6565b8888c17cc544d644b73a06dad56becb14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3c741a02d9cc2687e41ce61aab1b8bfdc89fb63afc077e4ec12c2ed7329e11ef"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "26743bbf69fc0a743ecf2f0be8a0e28593f0c2fb42cdf8f19cbafa8286f21587"
+              }
+            ],
+            "duration_s": 6.157593,
+            "exit_code": 0,
+            "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_all": 5.03277156949089e-06,
+              "max_abs_err_mid": 3.309762251824111e-06,
+              "max_abs_err_seam": 5.019307532827533e-06,
+              "n": 4606,
+              "n_mid": 3866,
+              "n_over_tol_mid": 1174,
+              "tol": 1e-06,
+              "worst_err": 5.03277156949089e-06,
+              "worst_x": -0.6220703125
+            },
+            "stderr": "",
+            "stdout": "{\"n\": 4606, \"n_mid\": 3866, \"tol\": 1e-06, \"max_abs_err_mid\": 3.309762251824111e-06, \"n_over_tol_mid\": 1174, \"max_abs_err_seam\": 5.019307532827533e-06, \"max_abs_err_all\": 5.03277156949089e-06, \"worst_x\": -0.6220703125, \"worst_err\": 5.03277156949089e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim",
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err_all": 5.03277156949089e-06,
+          "max_abs_err_mid": 3.309762251824111e-06,
+          "max_abs_err_seam": 5.019307532827533e-06,
+          "n": 4606,
+          "n_mid": 3866,
+          "n_over_tol_mid": 1174,
+          "tol": 1e-06,
+          "worst_err": 5.03277156949089e-06,
+          "worst_x": -0.6220703125
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n\": 4606, \"n_mid\": 3866, \"tol\": 1e-06, \"max_abs_err_mid\": 3.309762251824111e-06, \"n_over_tol_mid\": 1174, \"max_abs_err_seam\": 5.019307532827533e-06, \"max_abs_err_all\": 5.03277156949089e-06, \"worst_x\": -0.6220703125, \"worst_err\": 5.03277156949089e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\n# Upper branch: FP16 values just above 2.414213562373095 and up through moderate |x|\nv = torch.arange(2.0, 8.0, 0.0005, dtype=torch.float64)\nxf = v.to(torch.float16).unique().to(torch.float64)\nmag = xf.abs()\nup = mag > 2.414213562373095\nxf = xf[up]\nx = torch.cat([(-xf).to(torch.float16), xf.to(torch.float16)]).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nworst = torch.argmax(err)\nnear_thr = x.to(torch.float64).abs() < 2.5\nprint(json.dumps({\n    \"n\": int(x.numel()),\n    \"tol\": 1e-6,\n    \"max_abs_err_upper\": float(err.max().item()),\n    \"n_over_tol\": int((err > 1e-6).sum().item()),\n    \"max_abs_err_near_thr\": float(err[near_thr].max().item()),\n    \"n_over_tol_near_thr\": int((err[near_thr] > 1e-6).sum().item()),\n    \"worst_x\": float(x[worst].item()),\n    \"worst_err\": float(err[worst].item()),\n}))\n",
+        "expected_signal": "max abs error in upper branch; >1e-6 confirms claim"
+      },
+      "created_at": "2026-10-18T03:11:39Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "7149a30761cd149372f2d8b24befd1621b1be8606317d212862344ccbcd2cb22"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "40b1b763a1406db3d4ccefcb188ea39064bc1d9ddab506f3117eb5dadee744ab"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "4dfb7a1c313aa7719703dcb8b168c8feafcb36fd51d240a8d4b0cc0ea4d1231d"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504).",
+        "cwd": "/root/cases/case_147",
+        "duration_s": 4.166693,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "7149a30761cd149372f2d8b24befd1621b1be8606317d212862344ccbcd2cb22"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "40b1b763a1406db3d4ccefcb188ea39064bc1d9ddab506f3117eb5dadee744ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "4dfb7a1c313aa7719703dcb8b168c8feafcb36fd51d240a8d4b0cc0ea4d1231d"
+              }
+            ],
+            "duration_s": 4.166693,
+            "exit_code": 0,
+            "expected_signal": "max abs error in upper branch; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_near_thr": 3.2626425252590963e-06,
+              "max_abs_err_upper": 3.2626425252590963e-06,
+              "n": 3672,
+              "n_over_tol": 1630,
+              "n_over_tol_near_thr": 86,
+              "tol": 1e-06,
+              "worst_err": 3.2626425252590963e-06,
+              "worst_x": -2.416015625
+            },
+            "stderr": "",
+            "stdout": "{\"n\": 3672, \"tol\": 1e-06, \"max_abs_err_upper\": 3.2626425252590963e-06, \"n_over_tol\": 1630, \"max_abs_err_near_thr\": 3.2626425252590963e-06, \"n_over_tol_near_thr\": 86, \"worst_x\": -2.416015625, \"worst_err\": 3.2626425252590963e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error in upper branch; >1e-6 confirms claim",
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err_near_thr": 3.2626425252590963e-06,
+          "max_abs_err_upper": 3.2626425252590963e-06,
+          "n": 3672,
+          "n_over_tol": 1630,
+          "n_over_tol_near_thr": 86,
+          "tol": 1e-06,
+          "worst_err": 3.2626425252590963e-06,
+          "worst_x": -2.416015625
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n\": 3672, \"tol\": 1e-06, \"max_abs_err_upper\": 3.2626425252590963e-06, \"n_over_tol\": 1630, \"max_abs_err_near_thr\": 3.2626425252590963e-06, \"n_over_tol_near_thr\": 86, \"worst_x\": -2.416015625, \"worst_err\": 3.2626425252590963e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c3",
+        "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel\n\nx = torch.tensor([65504.0, -65504.0, 65503.0, -65503.0, 60000.0, -60000.0],\n                 dtype=torch.float16).to(\"cuda\")\nout = kernel.run(x)\nref = torch.atan(x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nprint(json.dumps({\n    \"inputs\": [float(v) for v in x.to(torch.float64).tolist()],\n    \"outputs\": [float(v) for v in out.to(torch.float64).tolist()],\n    \"errs\": [float(v) for v in err.tolist()],\n    \"max_abs_err_extrema\": float(err.max().item()),\n    \"tol\": 1e-6,\n}))\n",
+        "expected_signal": "abs error at +/-65504; >1e-6 confirms claim"
+      },
+      "created_at": "2026-10-18T03:11:43Z",
+      "id": "t11",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t11_probe.py",
+            "sha256": "509754accf2697531cb5ca7f0b45c851ccbf22b1fb77a27bbecff0d7f47024a9"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t11_stdout.txt",
+            "sha256": "8866ea985a9442d9b75b4639babd120a2e3e27d652770850c11496ad62587b71"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t11_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t11_json_result.json",
+            "sha256": "9a6d1717c5473fccaa8681db62c82588f1f5fb05127e7b18fdd6f7c8d4cdda28"
+          }
+        ],
+        "claim_id": "c3",
+        "claim_statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding.",
+        "cwd": "/root/cases/case_147",
+        "duration_s": 3.949224,
+        "event_id": "t11",
+        "evidence_draft": {
+          "claim_id": "c3",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "509754accf2697531cb5ca7f0b45c851ccbf22b1fb77a27bbecff0d7f47024a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "8866ea985a9442d9b75b4639babd120a2e3e27d652770850c11496ad62587b71"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "9a6d1717c5473fccaa8681db62c82588f1f5fb05127e7b18fdd6f7c8d4cdda28"
+              }
+            ],
+            "duration_s": 3.949224,
+            "exit_code": 0,
+            "expected_signal": "abs error at +/-65504; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "errs": [
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                2.1077518175260934e-08,
+                2.1077518175260934e-08
+              ],
+              "inputs": [
+                65504.0,
+                -65504.0,
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "max_abs_err_extrema": 5.11656093049595e-08,
+              "outputs": [
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707796812057495,
+                -1.5707796812057495
+              ],
+              "tol": 1e-06
+            },
+            "stderr": "",
+            "stdout": "{\"inputs\": [65504.0, -65504.0, 65504.0, -65504.0, 60000.0, -60000.0], \"outputs\": [1.5707811117172241, -1.5707811117172241, 1.5707811117172241, -1.5707811117172241, 1.5707796812057495, -1.5707796812057495], \"errs\": [5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 2.1077518175260934e-08, 2.1077518175260934e-08], \"max_abs_err_extrema\": 5.11656093049595e-08, \"tol\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t11"
+        },
+        "exit_code": 0,
+        "expected_signal": "abs error at +/-65504; >1e-6 confirms claim",
+        "json_parse_error": null,
+        "json_result": {
+          "errs": [
+            5.11656093049595e-08,
+            5.11656093049595e-08,
+            5.11656093049595e-08,
+            5.11656093049595e-08,
+            2.1077518175260934e-08,
+            2.1077518175260934e-08
+          ],
+          "inputs": [
+            65504.0,
+            -65504.0,
+            65504.0,
+            -65504.0,
+            60000.0,
+            -60000.0
+          ],
+          "max_abs_err_extrema": 5.11656093049595e-08,
+          "outputs": [
+            1.5707811117172241,
+            -1.5707811117172241,
+            1.5707811117172241,
+            -1.5707811117172241,
+            1.5707796812057495,
+            -1.5707796812057495
+          ],
+          "tol": 1e-06
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"inputs\": [65504.0, -65504.0, 65504.0, -65504.0, 60000.0, -60000.0], \"outputs\": [1.5707811117172241, -1.5707811117172241, 1.5707811117172241, -1.5707811117172241, 1.5707796812057495, -1.5707796812057495], \"errs\": [5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 2.1077518175260934e-08, 2.1077518175260934e-08], \"max_abs_err_extrema\": 5.11656093049595e-08, \"tol\": 1e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err_all": 5.03277156949089e-06,
+          "max_abs_err_mid": 3.309762251824111e-06,
+          "max_abs_err_seam": 5.019307532827533e-06,
+          "n": 4606,
+          "n_mid": 3866,
+          "n_over_tol_mid": 1174,
+          "tol": 1e-06,
+          "worst_err": 5.03277156949089e-06,
+          "worst_x": -0.6220703125
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Exhaustive FP16-lattice scan around [0.5,2.5] (both signs, n=4606) shows kernel output vs FP64 atan exceeds 1e-6: 1174/3866 middle-interval elements over tolerance, max middle-interval error 3.31e-6, and worst overall error 5.03e-6 at x=-0.6220703125 (near the 0.66 branch seam, max seam error 5.02e-6). Claim confirmed: FP32 rational evaluation violates the 1e-6 absolute contract in the middle interval and near the 0.66 seam.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T03:11:54Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:11:15Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:11:54Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "ee4bf8a3031dc18d122f5a52fe6565b8888c17cc544d644b73a06dad56becb14"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "3c741a02d9cc2687e41ce61aab1b8bfdc89fb63afc077e4ec12c2ed7329e11ef"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "26743bbf69fc0a743ecf2f0be8a0e28593f0c2fb42cdf8f19cbafa8286f21587"
+                  }
+                ],
+                "duration_s": 6.157593,
+                "exit_code": 0,
+                "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err_all": 5.03277156949089e-06,
+                  "max_abs_err_mid": 3.309762251824111e-06,
+                  "max_abs_err_seam": 5.019307532827533e-06,
+                  "n": 4606,
+                  "n_mid": 3866,
+                  "n_over_tol_mid": 1174,
+                  "tol": 1e-06,
+                  "worst_err": 5.03277156949089e-06,
+                  "worst_x": -0.6220703125
+                },
+                "max_abs_err_all": 5.03277156949089e-06,
+                "max_abs_err_mid": 3.309762251824111e-06,
+                "max_abs_err_seam": 5.019307532827533e-06,
+                "n": 4606,
+                "n_mid": 3866,
+                "n_over_tol_mid": 1174,
+                "stderr": "",
+                "stdout": "{\"n\": 4606, \"n_mid\": 3866, \"tol\": 1e-06, \"max_abs_err_mid\": 3.309762251824111e-06, \"n_over_tol_mid\": 1174, \"max_abs_err_seam\": 5.019307532827533e-06, \"max_abs_err_all\": 5.03277156949089e-06, \"worst_x\": -0.6220703125, \"worst_err\": 5.03277156949089e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tol": 1e-06,
+                "worst_err": 5.03277156949089e-06,
+                "worst_x": -0.6220703125
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive FP16-lattice scan around [0.5,2.5] (both signs, n=4606) shows kernel output vs FP64 atan exceeds 1e-6: 1174/3866 middle-interval elements over tolerance, max middle-interval error 3.31e-6, and worst overall error 5.03e-6 at x=-0.6220703125 (near the 0.66 branch seam, max seam error 5.02e-6). Claim confirmed: FP32 rational evaluation violates the 1e-6 absolute contract in the middle interval and near the 0.66 seam.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Cephes's double-precision coefficients give ~1e-16 error in FP64; carried into FP32 Horner evaluation, each rounded multiply/add contributes ~1e-7 relative error and the rational result is near 0.66 near the seam, so absolute error approaching or exceeding 1e-6 is plausible in the middle interval, especially just below/above 0.66.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6 for the entire legal domain (every finite FP16 value), and the verdict is a single global verdict."
+            }
+          ],
+          "scope_rationale": "The contract requires abs(actual[i]-atan(x[i]))<=1e-6 for every finite FP16 value, i.e., a global verdict over the whole domain, so any in-domain input where FP32 evaluation of the rational exceeds 1e-6 is a direct contract violation.",
+          "statement": "The FP32 Horner evaluation of the degree-5/degree-5 rational approximation exceeds the 1e-6 absolute tolerance against FP64 atan for some in-domain FP16 input values, likely in the middle interval (0.66 < |x| <= 2.414213562373095) or near the 0.66 branch seam.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T03:11:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ee4bf8a3031dc18d122f5a52fe6565b8888c17cc544d644b73a06dad56becb14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "3c741a02d9cc2687e41ce61aab1b8bfdc89fb63afc077e4ec12c2ed7329e11ef"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "26743bbf69fc0a743ecf2f0be8a0e28593f0c2fb42cdf8f19cbafa8286f21587"
+              }
+            ],
+            "duration_s": 6.157593,
+            "exit_code": 0,
+            "expected_signal": "max abs error vs FP64 atan over 0.66-seam FP16 lattice; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_all": 5.03277156949089e-06,
+              "max_abs_err_mid": 3.309762251824111e-06,
+              "max_abs_err_seam": 5.019307532827533e-06,
+              "n": 4606,
+              "n_mid": 3866,
+              "n_over_tol_mid": 1174,
+              "tol": 1e-06,
+              "worst_err": 5.03277156949089e-06,
+              "worst_x": -0.6220703125
+            },
+            "max_abs_err_all": 5.03277156949089e-06,
+            "max_abs_err_mid": 3.309762251824111e-06,
+            "max_abs_err_seam": 5.019307532827533e-06,
+            "n": 4606,
+            "n_mid": 3866,
+            "n_over_tol_mid": 1174,
+            "stderr": "",
+            "stdout": "{\"n\": 4606, \"n_mid\": 3866, \"tol\": 1e-06, \"max_abs_err_mid\": 3.309762251824111e-06, \"n_over_tol_mid\": 1174, \"max_abs_err_seam\": 5.019307532827533e-06, \"max_abs_err_all\": 5.03277156949089e-06, \"worst_x\": -0.6220703125, \"worst_err\": 5.03277156949089e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "worst_err": 5.03277156949089e-06,
+            "worst_x": -0.6220703125
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive FP16-lattice scan around [0.5,2.5] (both signs, n=4606) shows kernel output vs FP64 atan exceeds 1e-6: 1174/3866 middle-interval elements over tolerance, max middle-interval error 3.31e-6, and worst overall error 5.03e-6 at x=-0.6220703125 (near the 0.66 branch seam, max seam error 5.02e-6). Claim confirmed: FP32 rational evaluation violates the 1e-6 absolute contract in the middle interval and near the 0.66 seam.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err_near_thr": 3.2626425252590963e-06,
+          "max_abs_err_upper": 3.2626425252590963e-06,
+          "n": 3672,
+          "n_over_tol": 1630,
+          "n_over_tol_near_thr": 86,
+          "tol": 1e-06,
+          "worst_err": 3.2626425252590963e-06,
+          "worst_x": -2.416015625
+        },
+        "event_id": "t10",
+        "status": "confirmed",
+        "summary": "Upper-branch FP16 lattice scan (|x|>2.414213562373095, up to 8.0, both signs, n=3672): 1630 elements exceed the 1e-6 absolute tolerance, max error 3.26e-6 at x=-2.416015625 (just above the branch threshold; 86 near-threshold values over tolerance). Claim confirmed: pi/2 + z*(1+correction) path violates the 1e-6 contract in the upper branch.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T03:11:54Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:11:15Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:11:54Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t10_probe.py",
+                    "sha256": "7149a30761cd149372f2d8b24befd1621b1be8606317d212862344ccbcd2cb22"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t10_stdout.txt",
+                    "sha256": "40b1b763a1406db3d4ccefcb188ea39064bc1d9ddab506f3117eb5dadee744ab"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t10_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t10_json_result.json",
+                    "sha256": "4dfb7a1c313aa7719703dcb8b168c8feafcb36fd51d240a8d4b0cc0ea4d1231d"
+                  }
+                ],
+                "duration_s": 4.166693,
+                "exit_code": 0,
+                "expected_signal": "max abs error in upper branch; >1e-6 confirms claim",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err_near_thr": 3.2626425252590963e-06,
+                  "max_abs_err_upper": 3.2626425252590963e-06,
+                  "n": 3672,
+                  "n_over_tol": 1630,
+                  "n_over_tol_near_thr": 86,
+                  "tol": 1e-06,
+                  "worst_err": 3.2626425252590963e-06,
+                  "worst_x": -2.416015625
+                },
+                "max_abs_err_near_thr": 3.2626425252590963e-06,
+                "max_abs_err_upper": 3.2626425252590963e-06,
+                "n": 3672,
+                "n_over_tol": 1630,
+                "n_over_tol_near_thr": 86,
+                "stderr": "",
+                "stdout": "{\"n\": 3672, \"tol\": 1e-06, \"max_abs_err_upper\": 3.2626425252590963e-06, \"n_over_tol\": 1630, \"max_abs_err_near_thr\": 3.2626425252590963e-06, \"n_over_tol_near_thr\": 86, \"worst_x\": -2.416015625, \"worst_err\": 3.2626425252590963e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tol": 1e-06,
+                "worst_err": 3.2626425252590963e-06,
+                "worst_x": -2.416015625
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Upper-branch FP16 lattice scan (|x|>2.414213562373095, up to 8.0, both signs, n=3672): 1630 elements exceed the 1e-6 absolute tolerance, max error 3.26e-6 at x=-2.416015625 (just above the branch threshold; 86 near-threshold values over tolerance). Claim confirmed: pi/2 + z*(1+correction) path violates the 1e-6 contract in the upper branch.",
+              "supports": "confirmed",
+              "tool_event_id": "t10"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "At z just above -0.4142, the local term z*(1+correction) is largest and polynomial evaluation error is amplified; combined with pi/2 rounding in FP32, the sum pi/2 + local can plausibly miss 1e-6, while cancellation is worse for large |x| only in relative terms.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The 1e-6 absolute tolerance applies to every finite FP16 value including both extrema +/-65504; no range-reduction or intermediate rounding is part of the target."
+            }
+          ],
+          "scope_rationale": "FP16 values just above 2.414... (e.g., 2.4375, 2.44921875) are legal inputs, and the contract demands 1e-6 absolute accuracy there.",
+          "statement": "In the upper branch (|x| > 2.414213562373095), the computed value pi/2 + z*(1+correction) with z=-1/|x| exceeds 1e-6 absolute error for |x| just above the threshold or at the extremes (e.g., FP16 values near 2.4375 or 65504).",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T03:11:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "7149a30761cd149372f2d8b24befd1621b1be8606317d212862344ccbcd2cb22"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "40b1b763a1406db3d4ccefcb188ea39064bc1d9ddab506f3117eb5dadee744ab"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "4dfb7a1c313aa7719703dcb8b168c8feafcb36fd51d240a8d4b0cc0ea4d1231d"
+              }
+            ],
+            "duration_s": 4.166693,
+            "exit_code": 0,
+            "expected_signal": "max abs error in upper branch; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err_near_thr": 3.2626425252590963e-06,
+              "max_abs_err_upper": 3.2626425252590963e-06,
+              "n": 3672,
+              "n_over_tol": 1630,
+              "n_over_tol_near_thr": 86,
+              "tol": 1e-06,
+              "worst_err": 3.2626425252590963e-06,
+              "worst_x": -2.416015625
+            },
+            "max_abs_err_near_thr": 3.2626425252590963e-06,
+            "max_abs_err_upper": 3.2626425252590963e-06,
+            "n": 3672,
+            "n_over_tol": 1630,
+            "n_over_tol_near_thr": 86,
+            "stderr": "",
+            "stdout": "{\"n\": 3672, \"tol\": 1e-06, \"max_abs_err_upper\": 3.2626425252590963e-06, \"n_over_tol\": 1630, \"max_abs_err_near_thr\": 3.2626425252590963e-06, \"n_over_tol_near_thr\": 86, \"worst_x\": -2.416015625, \"worst_err\": 3.2626425252590963e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06,
+            "worst_err": 3.2626425252590963e-06,
+            "worst_x": -2.416015625
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Upper-branch FP16 lattice scan (|x|>2.414213562373095, up to 8.0, both signs, n=3672): 1630 elements exceed the 1e-6 absolute tolerance, max error 3.26e-6 at x=-2.416015625 (just above the branch threshold; 86 near-threshold values over tolerance). Claim confirmed: pi/2 + z*(1+correction) path violates the 1e-6 contract in the upper branch.",
+          "supports": "confirmed",
+          "tool_event_id": "t10"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "err_60000": 2.1077518175260934e-08,
+          "err_65503": 5.11656093049595e-08,
+          "err_65504": 5.11656093049595e-08,
+          "max_abs_err_extrema": 5.11656093049595e-08,
+          "tol": 1e-06
+        },
+        "event_id": "t11",
+        "status": "rebutted",
+        "summary": "At the FP16 extrema \u00b165504 (and \u00b165503, \u00b160000), kernel error vs FP64 atan is only 5.12e-8 (\u00b165504) and 2.11e-8 (\u00b160000), far below the 1e-6 tolerance. Cancellation is mild at the extrema and the output is within contract there. Claim rebutted: extrema do not exceed 1e-6.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T03:11:54Z",
+      "id": "t14",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:11:15Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:11:54Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t11_probe.py",
+                    "sha256": "509754accf2697531cb5ca7f0b45c851ccbf22b1fb77a27bbecff0d7f47024a9"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t11_stdout.txt",
+                    "sha256": "8866ea985a9442d9b75b4639babd120a2e3e27d652770850c11496ad62587b71"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t11_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t11_json_result.json",
+                    "sha256": "9a6d1717c5473fccaa8681db62c82588f1f5fb05127e7b18fdd6f7c8d4cdda28"
+                  }
+                ],
+                "duration_s": 3.949224,
+                "err_60000": 2.1077518175260934e-08,
+                "err_65503": 5.11656093049595e-08,
+                "err_65504": 5.11656093049595e-08,
+                "exit_code": 0,
+                "expected_signal": "abs error at +/-65504; >1e-6 confirms claim",
+                "json_parse_error": null,
+                "json_result": {
+                  "errs": [
+                    5.11656093049595e-08,
+                    5.11656093049595e-08,
+                    5.11656093049595e-08,
+                    5.11656093049595e-08,
+                    2.1077518175260934e-08,
+                    2.1077518175260934e-08
+                  ],
+                  "inputs": [
+                    65504.0,
+                    -65504.0,
+                    65504.0,
+                    -65504.0,
+                    60000.0,
+                    -60000.0
+                  ],
+                  "max_abs_err_extrema": 5.11656093049595e-08,
+                  "outputs": [
+                    1.5707811117172241,
+                    -1.5707811117172241,
+                    1.5707811117172241,
+                    -1.5707811117172241,
+                    1.5707796812057495,
+                    -1.5707796812057495
+                  ],
+                  "tol": 1e-06
+                },
+                "max_abs_err_extrema": 5.11656093049595e-08,
+                "stderr": "",
+                "stdout": "{\"inputs\": [65504.0, -65504.0, 65504.0, -65504.0, 60000.0, -60000.0], \"outputs\": [1.5707811117172241, -1.5707811117172241, 1.5707811117172241, -1.5707811117172241, 1.5707796812057495, -1.5707796812057495], \"errs\": [5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 2.1077518175260934e-08, 2.1077518175260934e-08], \"max_abs_err_extrema\": 5.11656093049595e-08, \"tol\": 1e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tol": 1e-06
+              },
+              "id": "c3.e1",
+              "kind": "runtime_probe",
+              "summary": "At the FP16 extrema \u00b165504 (and \u00b165503, \u00b160000), kernel error vs FP64 atan is only 5.12e-8 (\u00b165504) and 2.11e-8 (\u00b160000), far below the 1e-6 tolerance. Cancellation is mild at the extrema and the output is within contract there. Claim rebutted: extrema do not exceed 1e-6.",
+              "supports": "rebutted",
+              "tool_event_id": "t11"
+            }
+          ],
+          "id": "c3",
+          "raised_by": "skeptic",
+          "rationale": "tl.div_rn(1.0, 65504.0) in FP32 has ~6e-8 relative error, multiplied by z gives local term ~1.5e-5 with error ~1e-12 \u2014 benign; but the primary risk is that coefficient rounding in the numerator polynomial (values ~1e5 magnitude cancelling to ~small correction) amplifies FP32 rounding in the correction term at large square values.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Both extrema +/-65504 are explicitly legal inputs and the fixed 1e-6 absolute tolerance applies to them."
+            }
+          ],
+          "scope_rationale": "The contract explicitly lists both extrema +/-65504 as legal inputs bound by the 1e-6 absolute tolerance.",
+          "statement": "At the FP16 extrema +/-65504, the output error exceeds 1e-6, due to FP32 rounding of the pi/2 constant combined with the tiny local term and div_rn reciprocal rounding.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T03:11:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t11_probe.py",
+                "sha256": "509754accf2697531cb5ca7f0b45c851ccbf22b1fb77a27bbecff0d7f47024a9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t11_stdout.txt",
+                "sha256": "8866ea985a9442d9b75b4639babd120a2e3e27d652770850c11496ad62587b71"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t11_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t11_json_result.json",
+                "sha256": "9a6d1717c5473fccaa8681db62c82588f1f5fb05127e7b18fdd6f7c8d4cdda28"
+              }
+            ],
+            "duration_s": 3.949224,
+            "err_60000": 2.1077518175260934e-08,
+            "err_65503": 5.11656093049595e-08,
+            "err_65504": 5.11656093049595e-08,
+            "exit_code": 0,
+            "expected_signal": "abs error at +/-65504; >1e-6 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "errs": [
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                5.11656093049595e-08,
+                2.1077518175260934e-08,
+                2.1077518175260934e-08
+              ],
+              "inputs": [
+                65504.0,
+                -65504.0,
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "max_abs_err_extrema": 5.11656093049595e-08,
+              "outputs": [
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707811117172241,
+                -1.5707811117172241,
+                1.5707796812057495,
+                -1.5707796812057495
+              ],
+              "tol": 1e-06
+            },
+            "max_abs_err_extrema": 5.11656093049595e-08,
+            "stderr": "",
+            "stdout": "{\"inputs\": [65504.0, -65504.0, 65504.0, -65504.0, 60000.0, -60000.0], \"outputs\": [1.5707811117172241, -1.5707811117172241, 1.5707811117172241, -1.5707811117172241, 1.5707796812057495, -1.5707796812057495], \"errs\": [5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 5.11656093049595e-08, 2.1077518175260934e-08, 2.1077518175260934e-08], \"max_abs_err_extrema\": 5.11656093049595e-08, \"tol\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tol": 1e-06
+          },
+          "id": "c3.e1",
+          "kind": "runtime_probe",
+          "summary": "At the FP16 extrema \u00b165504 (and \u00b165503, \u00b160000), kernel error vs FP64 atan is only 5.12e-8 (\u00b165504) and 2.11e-8 (\u00b160000), far below the 1e-6 tolerance. Cancellation is mild at the extrema and the output is within contract there. Claim rebutted: extrema do not exceed 1e-6.",
+          "supports": "rebutted",
+          "tool_event_id": "t11"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: exhaustive FP16-lattice probes confirm two in-scope tolerance violations (c1 middle interval/0.66 seam max err 5.03e-6; c2 upper branch max err 3.26e-6), and c3 (extrema) was rebutted. Together they cover the three approximation intervals across the legal domain; no material, testable in-scope problem remains uncovered by existing claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ]
+      },
+      "created_at": "2026-10-18T03:11:59Z",
+      "id": "t15",
+      "output": {
+        "created_at": "2026-10-18T03:11:59Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: exhaustive FP16-lattice probes confirm two in-scope tolerance violations (c1 middle interval/0.66 seam max err 5.03e-6; c2 upper branch max err 3.26e-6), and c3 (extrema) was rebutted. Together they cover the three approximation intervals across the legal domain; no material, testable in-scope problem remains uncovered by existing claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2",
+          "c3"
+        ],
+        "reviewed_tool_event_count": 14,
+        "tool_event_id": "t15",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt) requires abs(actual[i] - atan(x[i])) <= 1e-6 for every finite FP16 value, as a single global verdict. Confirmed in-scope runtime evidence shows this is violated broadly: probe t9 (c1) scanned the full FP16 lattice in [0.5,2.5] both signs and found 1174/3866 middle-interval elements over tolerance, max error 5.03e-6 near the 0.66 seam (x=-0.6220703125); probe t10 (c2) found 1630/3672 upper-branch elements (|x|>2.414213562373095) over tolerance, max error 3.26e-6 at x=-2.416015625. These are ordinary, in-domain FP16 values, not edge cases; the failures are systematic (hundreds to thousands of lattice points), not single-point ties or negligible near-zero absolute differences \u2014 errors reach 3-5x the tolerance. c3 (extrema \u00b165504) was rebutted (error only ~5e-8), showing the defect is in the FP32 rational evaluation in the middle and upper intervals, not at the extremes. All open claims have evidence, and the Skeptic reviewed the latest evidence and recorded no new claims. The declared contract permits approximations but only if they meet the 1e-6 absolute tolerance throughout the entire legal domain; the confirmed evidence shows they do not. Reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T03:12:09Z",
+      "id": "t16",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-18T03:12:09Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt) requires abs(actual[i] - atan(x[i])) <= 1e-6 for every finite FP16 value, as a single global verdict. Confirmed in-scope runtime evidence shows this is violated broadly: probe t9 (c1) scanned the full FP16 lattice in [0.5,2.5] both signs and found 1174/3866 middle-interval elements over tolerance, max error 5.03e-6 near the 0.66 seam (x=-0.6220703125); probe t10 (c2) found 1630/3672 upper-branch elements (|x|>2.414213562373095) over tolerance, max error 3.26e-6 at x=-2.416015625. These are ordinary, in-domain FP16 values, not edge cases; the failures are systematic (hundreds to thousands of lattice points), not single-point ties or negligible near-zero absolute differences \u2014 errors reach 3-5x the tolerance. c3 (extrema \u00b165504) was rebutted (error only ~5e-8), showing the defect is in the FP32 rational evaluation in the middle and upper intervals, not at the extremes. All open claims have evidence, and the Skeptic reviewed the latest evidence and recorded no new claims. The declared contract permits approximations but only if they meet the 1e-6 absolute tolerance throughout the entire legal domain; the confirmed evidence shows they do not. Reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-18T03:12:09Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt) requires abs(actual[i] - atan(x[i])) <= 1e-6 for every finite FP16 value, as a single global verdict. Confirmed in-scope runtime evidence shows this is violated broadly: probe t9 (c1) scanned the full FP16 lattice in [0.5,2.5] both signs and found 1174/3866 middle-interval elements over tolerance, max error 5.03e-6 near the 0.66 seam (x=-0.6220703125); probe t10 (c2) found 1630/3672 upper-branch elements (|x|>2.414213562373095) over tolerance, max error 3.26e-6 at x=-2.416015625. These are ordinary, in-domain FP16 values, not edge cases; the failures are systematic (hundreds to thousands of lattice points), not single-point ties or negligible near-zero absolute differences \u2014 errors reach 3-5x the tolerance. c3 (extrema \u00b165504) was rebutted (error only ~5e-8), showing the defect is in the FP32 rational evaluation in the middle and upper intervals, not at the extremes. All open claims have evidence, and the Skeptic reviewed the latest evidence and recorded no new claims. The declared contract permits approximations but only if they meet the 1e-6 absolute tolerance throughout the entire legal domain; the confirmed evidence shows they do not. Reject.",
+    "verdict": "reject"
+  }
+}

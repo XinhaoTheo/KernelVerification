@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_147\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Elementwise atan using three range intervals and a rational approximation.\\n2: \\n3: Synthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\\n4: The original Cephes source credits Stephen L. Moshier, copyright 1984,\\n5: 1995 and 2000. This is not a claim of an upstream historical defect.\\n6: Source: https://netlib.org/cephes/cmath.tgz (atan.c).\\n7: \\\"\\\"\\\"\\n8: import torch\\n9: import triton\\n10: import triton.language as tl\\n11: \\n12: \\n13: @triton.jit\\n14: def _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n15:     index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n16:     active = index < N\\n17:     x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\\n18:     magnitude = tl.abs(x)\\n19:     upper = magnitude > 2.414213562373095\\n20:     middle = magnitude > 0.66\\n21:     reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\\n22:     centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\\n23:     reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\\n24:     angle = tl.where(upper, 1.5707963267948966,\\n25:                      tl.where(middle, 0.7853981633974483, 0.0))\\n26:     square = reduced * reduced\\n27:     numerator = -0.8751\\n28:     numerator = numerator * square + -16.16\\n29:     numerator = numerator * square + -75.01\\n30:     numerator = numerator * square + -122.9\\n31:     numerator = numerator * square + -64.85\\n32:     denominator = square + 24.86\\n33:     denominator = denominator * square + 165.0\\n34:     denominator = denominator * square + 432.9\\n35:     denominator = denominator * square + 485.4\\n36:     denominator = denominator * square + 194.6\\n37:     correction = tl.div_rn(square * numerator, denominator)\\n38:     local_angle = reduced * correction + reduced\\n39:     value = angle + local_angle\\n40:     value = tl.where(x < 0.0, -value, value)\\n41:     tl.store(OUT + index, value, mask=active)\\n42: \\n43: \\n44: def validate_inputs(x, require_cuda=True):\\n45:     \\\"\\\"\\\"Validate the complete public input domain; also usable on CPU.\\\"\\\"\\\"\\n46:     def require(condition, message):\\n47:         if not condition:\\n48:             raise ValueError(message)\\n49: \\n50:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n51:     require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n52:     require(x.layout == torch.strided and x.is_contiguous(),\\n53:             \\\"contiguous strided input required\\\")\\n54:     require(not x.requires_grad and not x.is_inference(),\\n55:             \\\"ordinary non-gradient input required\\\")\\n56:     require(not x.is_neg() and not x.is_conj(),\\n57:             \\\"logical view flags are outside this domain\\\")\\n58:     require(not require_cuda or x.is_cuda, \\\"CUDA input required by run\\\")\\n59:     require(x.ndim == 1 and 1 <= x.numel() <= 131072,\\n60:             \\\"x must have shape [N] with N in [1,131072]\\\")\\n61:     require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n62:     require(bool(torch.isfinite(x).all().item()), \\\"all input values must be finite\\\")\\n63:     return {\\\"valid\\\": True, \\\"size\\\": x.numel()}\\n64: \\n65: \\n66: def run(x):\\n67:     \\\"\\\"\\\"Return a fresh FP32 tensor approximating atan of each stored input value.\\\"\\\"\\\"\\n68:     validate_inputs(x)\\n69:     n = x.numel()\\n70:     with torch.cuda.device(x.device):\\n71:         output = torch.empty((n,), dtype=torch.float32, device=x.device)\\n72:         _atan_kernel[(triton.cdiv(n, 256),)](\\n73:             x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n74:     return output\\n75: \\n76: \\n77: def reference(x):\\n78:     \\\"\\\"\\\"Evaluate mathematical atan independently using the FP64 library function.\\\"\\\"\\\"\\n79:     validate_inputs(x, require_cuda=False)\\n80:     return torch.atan(x.to(torch.float64))\\n81: \\n82: \\n83: def make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n84:     \\\"\\\"\\\"Convenience example generator, not a restriction on the input domain.\\\"\\\"\\\"\\n85:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n86:     x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\\n87:     return (x.to(device),)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute atan elementwise on stored FP16 values, returning FP32 output.\\nThe mathematical target is target[i] = atan(x[i]), in radians.\\n\\nInputs and complete public domain:\\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\\n\\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\\n\\n  abs(actual[i] - atan(x[i])) <= 1e-6.\\n\\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\\n\\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_147\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-18T03:11:45Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The Cephes coefficients are truncated (e.g. -0.8751 instead of full precision) and the intermediate arithmetic is FP32, so the rational approximation error may exceed the 1e-6 absolute tolerance required by the contract, especially near range-boundary points like 0.66 and 2.414.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6; EVERY finite FP16 value is legal, including both extrema +/-65504.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires abs error <= 1e-6 for every finite FP16 input value; a violation on any admitted input is a contract violation.\",\n      \"statement\": \"The kernel's output violates the 1e-6 absolute tolerance for at least one finite FP16 input value.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T03:11:45Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_147\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_147\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_147\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_147\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_147\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I'll record a claim that the FP32 truncated-coefficient approximation exceeds the 1e-6 absolute tolerance somewhere over the full finite FP16 domain, and test it exhaustively (all 65504 finite FP16 values fit in one 65536-element tensor).\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The Cephes coefficients are truncated (e.g. -0.8751 instead of full precision) and the intermediate arithmetic is FP32, so the rational approximation error may exceed the 1e-6 absolute tolerance required by the contract, especially near range-boundary points like 0.66 and 2.414.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6; EVERY finite FP16 value is legal, including both extrema +/-65504.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires abs error <= 1e-6 for every finite FP16 input value; a violation on any admitted input is a contract violation.\",\n            \"statement\": \"The kernel's output violates the 1e-6 absolute tolerance for at least one finite FP16 input value.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll run an exhaustive sweep over all 65536 FP16 bit patterns (finite ones legal), comparing the kernel against FP64 atan.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel as k\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nx = bits.to(torch.uint16).view(torch.float16).to(torch.float32)  # all bit patterns as fp16\\nfinite = torch.isfinite(x)\\nx = x[finite]\\n# validate_inputs needs fp16 contiguous cuda\\nx16 = x.to(torch.float16).contiguous().cuda()\\nref = torch.atan(x16.cpu().to(torch.float64)).cuda()\\nout = k.run(x16)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-6\\nviol = (err > tol)\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error vs FP64 atan over all finite FP16 values\\\",\\n    \\\"n_values\\\": int(x16.numel()),\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"max_err_value\\\": float(x16.cpu()[int(err.argmax())]),\\n    \\\"n_violations_1e-6\\\": int(viol.sum()),\\n    \\\"max_exceedance\\\": float((err - tol).max()),\\n}))\\nif viol.any():\\n    idx = torch.nonzero(viol).flatten()[:10]\\n    print(json.dumps({\\\"examples\\\": [[float(x16.cpu()[i]), float(out.cpu()[i]), float(ref.cpu()[i]), float(err[i])] for i in idx]}))\\n\",\n            \"expected_signal\": \"max_abs_err and violation count over entire legal domain\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_147\"\n      },\n      \"created_at\": \"2026-10-18T03:11:39Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_147\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Elementwise atan using three range intervals and a rational approximation.\\n\\nSynthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\\nThe original Cephes source credits Stephen L. Moshier, copyright 1984,\\n1995 and 2000. This is not a claim of an upstream historical defect.\\nSource: https://netlib.org/cephes/cmath.tgz (atan.c).\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    active = index < N\\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\\n    magnitude = tl.abs(x)\\n    upper = magnitude > 2.414213562373095\\n    middle = magnitude > 0.66\\n    reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\\n    centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\\n    reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\\n    angle = tl.where(upper, 1.5707963267948966,\\n                     tl.where(middle, 0.7853981633974483, 0.0))\\n    square = reduced * reduced\\n    numerator = -0.8751\\n    numerator = numerator * square + -16.16\\n    numerator = numerator * square + -75.01\\n    numerator = numerator * square + -122.9\\n    numerator = numerator * square + -64.85\\n    denominator = square + 24.86\\n    denominator = denominator * square + 165.0\\n    denominator = denominator * square + 432.9\\n    denominator = denominator * square + 485.4\\n    denominator = denominator * square + 194.6\\n    correction = tl.div_rn(square * numerator, denominator)\\n    local_angle = reduced * correction + reduced\\n    value = angle + local_angle\\n    value = tl.where(x < 0.0, -value, value)\\n    tl.store(OUT + index, value, mask=active)\\n\\n\\ndef validate_inputs(x, require_cuda=True):\\n    \\\"\\\"\\\"Validate the complete public input domain; also usable on CPU.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n    require(x.layout == torch.strided and x.is_contiguous(),\\n            \\\"contiguous strided input required\\\")\\n    require(not x.requires_grad and not x.is_inference(),\\n            \\\"ordinary non-gradient input required\\\")\\n    require(not x.is_neg() and not x.is_conj(),\\n            \\\"logical view flags are outside this domain\\\")\\n    require(not require_cuda or x.is_cuda, \\\"CUDA input required by run\\\")\\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\\n            \\\"x must have shape [N] with N in [1,131072]\\\")\\n    require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n    require(bool(torch.isfinite(x).all().item()), \\\"all input values must be finite\\\")\\n    return {\\\"valid\\\": True, \\\"size\\\": x.numel()}\\n\\n\\ndef run(x):\\n    \\\"\\\"\\\"Return a fresh FP32 tensor approximating atan of each stored input value.\\\"\\\"\\\"\\n    validate_inputs(x)\\n    n = x.numel()\\n    with torch.cuda.device(x.device):\\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\\n        _atan_kernel[(triton.cdiv(n, 256),)](\\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef reference(x):\\n    \\\"\\\"\\\"Evaluate mathematical atan independently using the FP64 library function.\\\"\\\"\\\"\\n    validate_inputs(x, require_cuda=False)\\n    return torch.atan(x.to(torch.float64))\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n    \\\"\\\"\\\"Convenience example generator, not a restriction on the input domain.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\\n    return (x.to(device),)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute atan elementwise on stored FP16 values, returning FP32 output.\\nThe mathematical target is target[i] = atan(x[i]), in radians.\\n\\nInputs and complete public domain:\\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\\n\\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\\n\\n  abs(actual[i] - atan(x[i])) <= 1e-6.\\n\\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\\n\\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_147\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_147\"\n      },\n      \"created_at\": \"2026-10-18T03:11:39Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute atan elementwise on stored FP16 values, returning FP32 output.\\nThe mathematical target is target[i] = atan(x[i]), in radians.\\n\\nInputs and complete public domain:\\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\\n\\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\\n\\n  abs(actual[i] - atan(x[i])) <= 1e-6.\\n\\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\\n\\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\\n\\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\\n\",\n        \"entry\": \"case_147\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_147\"\n      },\n      \"created_at\": \"2026-10-18T03:11:39Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_147\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3691\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1959\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_147\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T03:11:39Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_147\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The Cephes coefficients are truncated (e.g. -0.8751 instead of full precision) and the intermediate arithmetic is FP32, so the rational approximation error may exceed the 1e-6 absolute tolerance required by the contract, especially near range-boundary points like 0.66 and 2.414.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6; EVERY finite FP16 value is legal, including both extrema +/-65504.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires abs error <= 1e-6 for every finite FP16 input value; a violation on any admitted input is a contract violation.\",\n        \"statement\": \"The kernel's output violates the 1e-6 absolute tolerance for at least one finite FP16 input value.\"\n      },\n      \"created_at\": \"2026-10-18T03:11:45Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T03:11:45Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The Cephes coefficients are truncated (e.g. -0.8751 instead of full precision) and the intermediate arithmetic is FP32, so the rational approximation error may exceed the 1e-6 absolute tolerance required by the contract, especially near range-boundary points like 0.66 and 2.414.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6; EVERY finite FP16 value is legal, including both extrema +/-65504.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires abs error <= 1e-6 for every finite FP16 input value; a violation on any admitted input is a contract violation.\",\n        \"statement\": \"The kernel's output violates the 1e-6 absolute tolerance for at least one finite FP16 input value.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T03:11:45Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel as k\\n\\nbits = torch.arange(65536, dtype=torch.int32)\\nx = bits.to(torch.uint16).view(torch.float16).to(torch.float32)  # all bit patterns as fp16\\nfinite = torch.isfinite(x)\\nx = x[finite]\\n# validate_inputs needs fp16 contiguous cuda\\nx16 = x.to(torch.float16).contiguous().cuda()\\nref = torch.atan(x16.cpu().to(torch.float64)).cuda()\\nout = k.run(x16)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-6\\nviol = (err > tol)\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error vs FP64 atan over all finite FP16 values\\\",\\n    \\\"n_values\\\": int(x16.numel()),\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"max_err_value\\\": float(x16.cpu()[int(err.argmax())]),\\n    \\\"n_violations_1e-6\\\": int(viol.sum()),\\n    \\\"max_exceedance\\\": float((err - tol).max()),\\n}))\\nif viol.any():\\n    idx = torch.nonzero(viol).flatten()[:10]\\n    print(json.dumps({\\\"examples\\\": [[float(x16.cpu()[i]), float(out.cpu()[i]), float(ref.cpu()[i]), float(err[i])] for i in idx]}))\\n\",\n        \"expected_signal\": \"max_abs_err and violation count over entire legal domain\"\n      },\n      \"created_at\": \"2026-10-18T03:11:55Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"444d816879a09781b9950efe3b76a624412181dbfa4638310b08bb9dfbaca38c\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"f5380802b26903e9f19a23c89e0e5dfb6e2f7cee3b1375e7c1a6d0702a30dee2\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t6_json_result.json\",\n            \"sha256\": \"b14e7c948f9178fbd5591806631eaf5fc0547760eec0bb91b472975c15c51da0\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's output violates the 1e-6 absolute tolerance for at least one finite FP16 input value.\",\n        \"cwd\": \"/root/cases/case_147\",\n        \"duration_s\": 6.325873,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"444d816879a09781b9950efe3b76a624412181dbfa4638310b08bb9dfbaca38c\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"f5380802b26903e9f19a23c89e0e5dfb6e2f7cee3b1375e7c1a6d0702a30dee2\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t6_json_result.json\",\n                \"sha256\": \"b14e7c948f9178fbd5591806631eaf5fc0547760eec0bb91b472975c15c51da0\"\n              }\n            ],\n            \"duration_s\": 6.325873,\n            \"exit_code\": 0,\n            \"expected_signal\": \"max_abs_err and violation count over entire legal domain\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"examples\": [\n                [\n                  0.24365234375,\n                  0.23899653553962708,\n                  0.23899553350971703,\n                  1.002029910046609e-06\n                ],\n                [\n                  0.243896484375,\n                  0.23922698199748993,\n                  0.2392259796495975,\n                  1.0023478924370277e-06\n                ],\n                [\n                  0.2440185546875,\n                  0.23934219777584076,\n                  0.23934119300771659,\n                  1.0047681241742712e-06\n                ],\n                [\n                  0.244384765625,\n                  0.23968780040740967,\n                  0.23968679420464126,\n                  1.006202768411013e-06\n                ],\n                [\n                  0.2445068359375,\n                  0.2398029863834381,\n                  0.2398019816361031,\n                  1.004747334998335e-06\n                ],\n                [\n                  0.24462890625,\n                  0.23991817235946655,\n                  0.23991716257962645,\n                  1.009779840105418e-06\n                ],\n                [\n                  0.2447509765625,\n                  0.2400333434343338,\n                  0.24003233703270355,\n                  1.0064016302546719e-06\n                ],\n                [\n                  0.244873046875,\n                  0.24014851450920105,\n                  0.2401475049928276,\n                  1.0095163734402668e-06\n                ],\n                [\n                  0.2449951171875,\n                  0.2402636855840683,\n                  0.24026266645749286,\n                  1.0191265754355694e-06\n                ],\n                [\n                  0.2451171875,\n                  0.24037884175777435,\n                  0.24037782142419448,\n                  1.020333579876409e-06\n                ]\n              ]\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 atan over all finite FP16 values\\\", \\\"n_values\\\": 63488, \\\"max_abs_err\\\": 5.03277156949089e-06, \\\"max_err_value\\\": 0.6220703125, \\\"n_violations_1e-6\\\": 5606, \\\"max_exceedance\\\": 4.032771569490891e-06}\\n{\\\"examples\\\": [[0.24365234375, 0.23899653553962708, 0.23899553350971703, 1.002029910046609e-06], [0.243896484375, 0.23922698199748993, 0.2392259796495975, 1.0023478924370277e-06], [0.2440185546875, 0.23934219777584076, 0.23934119300771659, 1.0047681241742712e-06], [0.244384765625, 0.23968780040740967, 0.23968679420464126, 1.006202768411013e-06], [0.2445068359375, 0.2398029863834381, 0.2398019816361031, 1.004747334998335e-06], [0.24462890625, 0.23991817235946655, 0.23991716257962645, 1.009779840105418e-06], [0.2447509765625, 0.2400333434343338, 0.24003233703270355, 1.0064016302546719e-06], [0.244873046875, 0.24014851450920105, 0.2401475049928276, 1.0095163734402668e-06], [0.2449951171875, 0.2402636855840683, 0.24026266645749286, 1.0191265754355694e-06], [0.2451171875, 0.24037884175777435, 0.24037782142419448, 1.020333579876409e-06]]}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"max_abs_err and violation count over entire legal domain\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"examples\": [\n            [\n              0.24365234375,\n              0.23899653553962708,\n              0.23899553350971703,\n              1.002029910046609e-06\n            ],\n            [\n              0.243896484375,\n              0.23922698199748993,\n              0.2392259796495975,\n              1.0023478924370277e-06\n            ],\n            [\n              0.2440185546875,\n              0.23934219777584076,\n              0.23934119300771659,\n              1.0047681241742712e-06\n            ],\n            [\n              0.244384765625,\n              0.23968780040740967,\n              0.23968679420464126,\n              1.006202768411013e-06\n            ],\n            [\n              0.2445068359375,\n              0.2398029863834381,\n              0.2398019816361031,\n              1.004747334998335e-06\n            ],\n            [\n              0.24462890625,\n              0.23991817235946655,\n              0.23991716257962645,\n              1.009779840105418e-06\n            ],\n            [\n              0.2447509765625,\n              0.2400333434343338,\n              0.24003233703270355,\n              1.0064016302546719e-06\n            ],\n            [\n              0.244873046875,\n              0.24014851450920105,\n              0.2401475049928276,\n              1.0095163734402668e-06\n            ],\n            [\n              0.2449951171875,\n              0.2402636855840683,\n              0.24026266645749286,\n              1.0191265754355694e-06\n            ],\n            [\n              0.2451171875,\n              0.24037884175777435,\n              0.24037782142419448,\n              1.020333579876409e-06\n            ]\n          ]\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"metric\\\": \\\"max abs error vs FP64 atan over all finite FP16 values\\\", \\\"n_values\\\": 63488, \\\"max_abs_err\\\": 5.03277156949089e-06, \\\"max_err_value\\\": 0.6220703125, \\\"n_violations_1e-6\\\": 5606, \\\"max_exceedance\\\": 4.032771569490891e-06}\\n{\\\"examples\\\": [[0.24365234375, 0.23899653553962708, 0.23899553350971703, 1.002029910046609e-06], [0.243896484375, 0.23922698199748993, 0.2392259796495975, 1.0023478924370277e-06], [0.2440185546875, 0.23934219777584076, 0.23934119300771659, 1.0047681241742712e-06], [0.244384765625, 0.23968780040740967, 0.23968679420464126, 1.006202768411013e-06], [0.2445068359375, 0.2398029863834381, 0.2398019816361031, 1.004747334998335e-06], [0.24462890625, 0.23991817235946655, 0.23991716257962645, 1.009779840105418e-06], [0.2447509765625, 0.2400333434343338, 0.24003233703270355, 1.0064016302546719e-06], [0.244873046875, 0.24014851450920105, 0.2401475049928276, 1.0095163734402668e-06], [0.2449951171875, 0.2402636855840683, 0.24026266645749286, 1.0191265754355694e-06], [0.2451171875, 0.24037884175777435, 0.24037782142419448, 1.020333579876409e-06]]}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

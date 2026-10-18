@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-4bf232fc",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: an exhaustive bit-pattern sweep of all 65,504 finite FP16 inputs vs the contract oracle (c1), a targeted high-precision subnormal-boundary analysis (c2), and a validation edge-case probe (c3).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ad8087cdbf69ead",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, struct, json, math\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel_mod\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\n\\n# all finite FP16 bit patterns\\nvals = []\\nfor b in range(0x10000):\\n    x = struct.unpack('<e', b.to_bytes(2, 'little'))[0]\\n    if math.isfinite(x):\\n        vals.append(b)\\nxs = torch.frombuffer(bytearray(struct.pack('<%dH' % len(vals), *vals)), dtype=torch.float16).clone().cuda()\\n# torch.frombuffer of uint16 view as fp16: build directly\\nxs = torch.tensor([struct.unpack('<e', b.to_bytes(2,'little'))[0] for b in vals], dtype=torch.float16).cuda()\\nassert xs.numel() == len(vals)\\nsnap = xs.clone()\\nout = km.run(xs)\\nassert torch.equal(xs, snap), \\\"input mutated\\\"\\nref = km.reference(xs.cpu()).cuda()\\nbits_out = out.view(torch.int16).to(torch.int32).cpu().numpy()\\nbits_ref = ref.view(torch.int16).to(torch.int32).cpu().numpy()\\nmism = (bits_out != bits_ref)\\nmism_idx = [i for i in range(len(vals)) if mism[i]]\\nexamples = [{\\\"input_fp16\\\": float(xs.cpu()[i]), \\\"kernel_bits\\\": int(bits_out[i]) & 0xFFFF,\\n             \\\"ref_bits\\\": int(bits_ref[i]) & 0xFFFF, \\\"kernel_val\\\": float(out.cpu()[i]),\\n             \\\"ref_val\\\": float(ref.cpu()[i])} for i in mism_idx[:20]]\\n# ulp distance\\ndef ulp16(v):\\n    return struct.unpack('<e', struct.pack('<e', v))[0]\\nprint(json.dumps({\\\"num_inputs_tested\\\": len(vals), \\\"num_bit_mismatches\\\": len(mism_idx),\\n                 \\\"mismatch_examples\\\": examples, \\\"metric\\\": \\\"exact fp16 bit pattern vs fp64->RNE binary16 reference (exhaustive finite grid)\\\"}))\", \"expected_signal\": \"count of exact bit-pattern mismatches over the exhaustive finite FP16 grid\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b7167fe9ce60d99b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, struct, json, math\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel_mod\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\n\\n# sigmoid(x) near smallest FP16 subnormal: smallest sub 2^-24 ~5.96e-8, tie at 2^-25.\\n# sigmoid(-x)=exp(-x) roughly; boundary x ~ -ln(2^-25) ~ 17.3. Enumerate all FP16 x in [16.5, 18.5] plus negatives.\\nfrom decimal import Decimal, getcontext\\ngetcontext().prec = 60\\nimport numpy as np\\n\\ndef exact_sigmoid_half(v):  # v: float16 value; return Decimal sigmoid\\n    x = Decimal(v)\\n    # sigmoid = 1/(1+exp(-x)); for negatives use exp(x)/(1+exp(x))\\n    if v >= 0:\\n        e = (-x).exp()\\n        return Decimal(1)/ (Decimal(1)+e)\\n    else:\\n        e = x.exp()  # exp(x), x<0, tiny\\n        return e / (Decimal(1)+e)\\n\\ncand = []\\nall_bits = [b for b in range(0x10000) if math.isfinite(struct.unpack('<e', b.to_bytes(2,'little'))[0])]\\nxs_list = [struct.unpack('<e', b.to_bytes(2,'little'))[0] for b in all_bits]\\nxs = torch.tensor(xs_list, dtype=torch.float16)\\n# select |x| in [16,19]: sigmoid magnitude between ~1.1e-8 and ~1.1e-7 spans the 2^-25 tie\\nsel = [i for i, v in enumerate(xs_list) if 15.5 <= abs(v) <= 20.0]\\nsel_x = xs[torch.tensor(sel)].cuda()\\nout = km.run(sel_x)\\nout_bits = out.view(torch.int16).to(torch.int32).cpu().numpy()\\nmism = 0\\nexamples = []\\ntie_dist_min = None\\nfor j, i in enumerate(sel):\\n    v = xs_list[i]\\n    s = exact_sigmoid_half(v)\\n    # correctly rounded FP16 of exact decimal\\n    lo = s * 1  # use Decimal -> float via struct pack '<e' not decimal-aware; do manual RNE\\n    # compare decimal s against tie 2^-25 = 2.98023223876953125e-8\\n    half_sub = Decimal(2) ** Decimal(-25)\\n    full_sub = Decimal(2) ** Decimal(-24)\\n    if s >= full_sub + half_sub:  # won't happen here\\n        correct = \\\"above-subnormal-range\\\"\\n    elif s > half_sub:\\n        correct = 1  # smallest subnormal\\n    elif s < half_sub:\\n        correct = 0  # zero\\n    else:\\n        correct = \\\"exact-tie\\\"\\n    d = abs(s - half_sub)\\n    tie_dist_min = d if tie_dist_min is None else min(tie_dist_min, d)\\n    kb = int(out_bits[j]) & 0xFFFF\\n    kernel_sub = 1 if kb == 1 else (0 if kb == 0 else \\\"other\\\")\\n    if kernel_sub != correct:\\n        mism += 1\\n        examples.append({\\\"x\\\": v, \\\"exact_sigmoid\\\": str(s), \\\"correct\\\": str(correct),\\n                         \\\"kernel_bits\\\": kb, \\\"kernel_val\\\": float(out.cpu()[j])})\\nprint(json.dumps({\\\"inputs_tested\\\": len(sel), \\\"abs_x_range\\\": \\\"[15.5,20.0]\\\",\\n                  \\\"subnormal_boundary_mismatches\\\": mism, \\\"mismatch_examples\\\": examples,\\n                  \\\"min_distance_to_exact_tie\\\": str(tie_dist_min),\\n                  \\\"metric\\\": \\\"decimal-60 exact sigmoid vs FP16 subnormal tie 2^-25; kernel output classified as 0 / smallest-subnormal\\\"}))\", \"expected_signal\": \"mismatches near the smallest-subnormal tie using 60-digit exact sigmoid\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-bd84203a8586d649",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel_mod\\\", \\\"/root/cases/case_149/kernel.py\\\")\\nkm = importlib.util.module_from_spec(spec); spec.loader.exec_module(km)\\n\\nresults = {}\\ndef try_call(name, fn):\\n    try:\\n        out = fn()\\n        results[name] = {\\\"accepted\\\": True, \\\"value\\\": out if not isinstance(out, torch.Tensor) else {\\\"bits\\\": out.view(torch.int16).item()}}\\n    except Exception as e:\\n        results[name] = {\\\"accepted\\\": False, \\\"error\\\": type(e).__name__, \\\"msg\\\": str(e)[:120]}\\n\\n# legal: contiguous view with nonzero storage offset\\nbase = torch.randn(300, dtype=torch.float16).cuda()\\nview = base[7:263]  # contiguous, offset 7\\ntry_call(\\\"legal_offset_view\\\", lambda: (km.run(view), torch.equal(base[7:263], view))[0])\\n# check output correctness for the view\\ntry:\\n    o = km.run(view)\\n    r = km.reference(view)\\n    results[\\\"legal_offset_view_correct\\\"] = {\\\"bit_equal_to_reference\\\": bool((o.view(torch.int16) == r.view(torch.int16)).all().item()), \\\"expected\\\": True}\\nexcept Exception as e:\\n    results[\\\"legal_offset_view_correct\\\"] = {\\\"error\\\": str(e)[:120]}\\n\\n# legal: signed zeros, subnormals, max finite -> covered elsewhere, quick smoke\\nedge = torch.tensor([0.0, -0.0, 6.104e-5, -6.104e-5, 65504.0, -65504.0], dtype=torch.float16).cuda()\\no = km.run(edge); r = km.reference(edge)\\nresults[\\\"edge_values_bits_equal\\\"] = {\\\"expected\\\": True, \\\"actual\\\": bool((o.view(torch.int16) == r.view(torch.int16)).all().item()),\\n                                     \\\"out_bits\\\": o.view(torch.int16).cpu().tolist(), \\\"ref_bits\\\": r.view(torch.int16).cpu().tolist()}\\n\\n# illegal inputs must be rejected\\ntry_call(\\\"nan_rejected\\\", lambda: km.run(torch.tensor([float('nan')], dtype=torch.float16).cuda()))\\ntry_call(\\\"inf_rejected\\\", lambda: km.run(torch.tensor([float('inf')], dtype=torch.float16).cuda()))\\ntry_call(\\\"noncontig_rejected\\\", lambda: km.run(torch.randn(4, 8, dtype=torch.float16).cuda().t()[0]))\\ntry_call(\\\"wrong_dtype_rejected\\\", lambda: km.run(torch.randn(8, dtype=torch.float32).cuda()))\\ntry_call(\\\"cpu_rejected\\\", lambda: km.run(torch.randn(8, dtype=torch.float16)))\\ntry_call(\\\"empty_rejected\\\", lambda: km.run(torch.zeros(0, dtype=torch.float16).cuda()))\\ntry_call(\\\"too_big_rejected\\\", lambda: km.run(torch.zeros(131073, dtype=torch.float16).cuda()))\\nclass SubT(torch.Tensor): pass\\ntry_call(\\\"subclass_rejected\\\", lambda: km.run(torch.randn(8, dtype=torch.float16).cuda().as_subclass(SubT)))\\ntry:\\n    with torch.inference_mode():\\n        km.run(torch.randn(8, dtype=torch.float16).cuda())\\n    results[\\\"inference_mode_rejected\\\"] = {\\\"accepted\\\": True, \\\"expected\\\": False}\\nexcept Exception as e:\\n    results[\\\"inference_mode_rejected\\\"] = {\\\"accepted\\\": False, \\\"error\\\": type(e).__name__}\\ntry:\\n    g = torch.randn(8, dtype=torch.float16).cuda().requires_grad_(True)\\n    km.run(g); results[\\\"requires_grad_rejected\\\"] = {\\\"accepted\\\": True, \\\"expected\\\": False}\\nexcept Exception as e:\\n    results[\\\"requires_grad_rejected\\\"] = {\\\"accepted\\\": False, \\\"error\\\": type(e).__name__}\\n\\nprint(json.dumps(results))\", \"expected_signal\": \"legal edge inputs (offset view, signed zeros, subnormals, max finite) succeed and match reference; illegal inputs (NaN/Inf, non-contiguous, non-FP16, subclass, inference-mode) rejected\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Plan probes: exhaustive finite FP16 sweep (covers c1, c2 — bit-pattern vs high-precision reference using mpmath-free fp64? FP64 sigmoid then FP16 RNE, but reference itself is that; use FP64+ long double via struct '<e' which is RNE binary16 of FP64 — good enough since sigmoid is irrational and ties essentially impossible). For exactness use reference() itself. Exhaustive 65504 values in one run, compare bits.\n\nc3: probe edge cases: nonzero storage offset view, NaN, inf, non-contiguous, wrong dtype, subclass, inference mode; check acceptance/rejection and correctness for offset view.\n\nLaunch two probes in one response: c1+c2 combined? Better separate: c1 exhaustive sweep full grid; c2 focuses on large |x| region — but exhaustive includes it. Still run a separate c2 probe with high-precision (fp64) analysis of boundary inputs near subnormal threshold. Simplest: run c1 exhaustive (includes near-tie and subnormal), and c2 probe targeted on inputs x where sigmoid near 2.98e-8, computing exact with Python's math (fp64) plus exact exp? Use mpmath if available. I'll use mpmath or decimal for exp with 30 digits.\n\nAnd c3 edge validation probe. Three probes in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293205,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2597,
+    "prompt_tokens": 23569,
+    "total_tokens": 26166,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 284,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

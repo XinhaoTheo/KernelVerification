@@ -1,12 +1,14 @@
 # Success Cases
 
-Updated: October 11, 2026. Model: GLM-5p3 via Fireworks.
+Updated: October 17, 2026. Model: GLM-5p3 via Fireworks.
 
-This file is to document all cases that can show a tool-assisted workflow correcting a wrong verdict from a single model call without tools. **Success means a better verificationdecision**, including correctly accepting an implementation that looks suspicious.
+This file describes cases where tools helped the model correct an incorrect decision. A correct decision can be **Accept** or **Reject**.
 
-Each kernel has **one fixed accept/reject label under its stated contract**.
-Each kernel gets one verdict: accept or reject. If it fails on an input allowed by the problem description, it is incorrect.
-We ran all tests on an NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0. 
+Each kernel has **one fixed Accept or Reject label for its full problem description**. If a kernel fails on an input that the problem description permits, the kernel is incorrect.
+
+We ran all tests on an NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0.
+
+The table shows the trials described below. For cases 147, 149, and 151, it shows the first trial, `r1`. A separate table gives the results from five more trials.
 
 | Case | Kernel | Ground truth | No tools | Solo + tools | Debate + tools |
 |---|---|---|---|---|---|
@@ -14,6 +16,9 @@ We ran all tests on an NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0.
 | 114 | Paged sliding-window attention | Reject | Accept | Reject | Reject |
 | 127 | erf approximation | Reject | Accept | Reject | Reject |
 | 128 | GELU approximation | Accept | Reject | Accept | Accept |
+| 147 | Atan approximation | Reject | Accept | Reject | Reject |
+| 149 | Sigmoid rounding | Reject | Accept | Reject | Reject |
+| 151 | NTT coefficient conversion | Reject | Accept | Reject | Reject |
 
 ## 109 — RMSNorm backward
 
@@ -158,3 +163,136 @@ Additional checks covered tensor lengths, tail blocks, storage offsets, input pr
 **What this case demonstrates.** The no-tool model rejected the kernel based on an overly pessimistic error estimate. Tools supplied numerical evidence that the implementation meets the accuracy requirement, preventing a false rejection.
 
 Traces: [No tools](../traces_glm/case_128/single_call/r1/transcript.md) · [Solo](../traces_glm/case_128/solo/r1/transcript.md) · [Debate](../traces_glm/case_128/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r14.json).
+
+## 147 — Atan approximation
+
+**What it must do.** The kernel must calculate `atan(x)`, the inverse tangent of `x`, in radians. The [problem description](../triton_eval_cases/case_147/problem.txt) permits every finite FP16 input value. FP16 and FP32 are 16-bit and 32-bit floating-point formats. The output must use FP32 and have an absolute error of **at most `0.000001`**.
+
+**What goes wrong.** This synthetic kernel adapts the Cephes approximation and reduces its coefficients to four significant digits. These changes increase the approximation error. The [kernel](../triton_eval_cases/case_147/kernel.py) calculates a quotient of two polynomials:
+
+```python
+numerator = -0.8751
+numerator = numerator * square + -16.16
+numerator = numerator * square + -75.01
+numerator = numerator * square + -122.9
+numerator = numerator * square + -64.85
+denominator = square + 24.86
+denominator = denominator * square + 165.0
+denominator = denominator * square + 432.9
+denominator = denominator * square + 485.4
+denominator = denominator * square + 194.6
+correction = tl.div_rn(square * numerator, denominator)
+local_angle = reduced * correction + reduced
+```
+
+Earlier code converts `x` to the smaller interval that this approximation uses. But that conversion does not correct errors in the polynomial coefficients. FP32 arithmetic also cannot restore the removed coefficient digits.
+
+**What the model missed.** In `r1`, the model without tools recognized the Cephes formula and accepted the kernel. It assumed that the shorter coefficients kept sufficient accuracy. The accuracy of the Cephes formula does not show that this changed implementation is accurate.
+
+**What tools found.** Solo ran the kernel on all **63,488 finite FP16 encodings** and found **5,606 failures**. Independent validation gave these results:
+
+```text
+Input x             = 0.6220703125
+Kernel output       = 0.5564948320388794
+Mathematical atan   ≈ 0.5564897992673099
+Absolute error      ≈ 0.00000503277
+Allowed error       = 0.000001
+```
+
+The error is approximately five times the limit. Debate found a different input that also caused a failure. The two methods correctly returned **Reject**. Execution showed a numerical failure that the first response without tools did not identify.
+
+Traces, `r1`: [No tools](../traces_glm/case_147/single_call/r1/transcript.md) · [Solo](../traces_glm/case_147/solo/r1/transcript.md) · [Debate](../traces_glm/case_147/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r21.json).
+
+## 149 — Sigmoid rounding
+
+**What it must do.** The kernel must calculate `sigmoid(x) = 1 / (1 + exp(-x))` for every finite FP16 input. The [problem description](../triton_eval_cases/case_149/problem.txt) specifies the nearest FP16 value to the exact mathematical result. At an exact midpoint, the ties-to-even rule selects the value whose last stored fraction bit is zero. This task permits **no difference in the final FP16 bits**. It does not use an approximate error limit.
+
+**What goes wrong.** This synthetic [kernel](../triton_eval_cases/case_149/kernel.py) uses FP32 for the calculation, then converts the result to FP16:
+
+```python
+x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)
+exponential = libdevice.exp(-tl.abs(x))
+denominator = 1.0 + exponential
+numerator = tl.where(x < 0.0, exponential, 1.0)
+value = libdevice.div_rn(numerator, denominator)
+rounded = tl.inline_asm_elementwise(
+    "cvt.rn.f16.f32 $0, $1;", constraints="=h,f",
+    args=[value], dtype=tl.float16, is_pure=True, pack=1)
+```
+
+FP32 has more precision than FP16. But an FP32 calculation can put a result on an FP16 midpoint when the exact result is slightly below it. The final conversion then selects the wrong FP16 value.
+
+**What the model missed.** In `r1`, the model without tools considered midpoint errors too unlikely and accepted the kernel. It compared the small FP32 error with the larger distance between FP16 values. That comparison does not show correct rounding near a midpoint. The requirement applies to every permitted input, including rare cases.
+
+**What tools found.** Solo and Debate each ran the kernel on all **63,488 finite FP16 encodings**. Each found **seven incorrect outputs**. Independent validation gave these results:
+
+```text
+Input x                  = 0.0029296875
+Mathematical sigmoid     ≈ 0.5007324213511315
+Midpoint                 = 0.500732421875
+Correct FP16 output      = 0.50048828125
+Kernel FP16 output       = 0.5009765625
+```
+
+The exact result is below the midpoint, so the correct output is the lower FP16 value. The GPU kernel returns the upper FP16 value. This output does not agree with the task's explicit rounding requirement. Thus, the fixed label is **Reject**.
+
+Traces, `r1`: [No tools](../traces_glm/case_149/single_call/r1/transcript.md) · [Solo](../traces_glm/case_149/solo/r1/transcript.md) · [Debate](../traces_glm/case_149/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r24.json).
+
+## 151 — NTT coefficient conversion
+
+**What it must do.** An NTT, or number-theoretic transform, combines integer inputs with fixed coefficients. This kernel must calculate each output modulo 3329: it must return the remainder after division by 3329. The [problem description](../triton_eval_cases/case_151/problem.txt) permits rows of 64 or 128 integers, each from 0 to 3328. Every output must equal the mathematical result **exactly**. At output position zero, the result is the sum of the input row, modulo 3329.
+
+**What goes wrong.** This synthetic [kernel](../triton_eval_cases/case_151/kernel.py) combines two transform stages. It stores each coefficient in Montgomery form, which includes a scale factor `R = 65536`. For example, it stores coefficient `a` as `(a * R) % 3329`. The kernel then multiplies two stored coefficients:
+
+```python
+def _coefficient_product(left, right):
+    return (left * right) % _Q
+```
+
+Each operand already contains one factor of `R`. Their product contains two factors, but the later multiplication routine removes only one. The remaining factor changes the transform output. The coefficient calculation must remove one factor before the kernel uses the product.
+
+This explanatory sketch shows the missing conversion. It is not an excerpt from the kernel:
+
+```python
+a_R = (a * R) % q
+b_R = (b * R) % q
+product = (a_R * b_R) % q           # Contains two factors of R.
+coefficient = (product * R_inv) % q # Keep one factor of R.
+```
+
+Here, `q = 3329`, and `R_inv` is the modular inverse of `R`: `(R * R_inv) % q = 1`.
+
+**What the model missed.** The model without tools accepted the transform in all six trials. It treated the stage formulas and modular arithmetic as correct. But it did not correctly calculate the scale factors in the combined stages. In `r3`, it noticed the distinction between one and two factors, then incorrectly treated the representations as equivalent.
+
+**What tools found.** Solo and Debate ran the actual kernel and compared outputs with an independent integer reference. Each found permitted inputs that produced incorrect outputs. The [Solo trace from `r3`](../traces_glm/case_151/solo/r3/transcript.md) contains a simple example:
+
+```text
+Row length                 = 64
+Each input element         = 1
+Correct output at index 0  = 64
+Kernel output at index 0   = 2954
+```
+
+The correct sum is 64, which is less than 3329. Thus, the remainder must also be 64. The kernel returns 2954, so its fixed label is **Reject**. Execution exposed an error in the combined stages that the responses without tools did not resolve.
+
+Traces, `r1`: [No tools](../traces_glm/case_151/single_call/r1/transcript.md) · [Solo](../traces_glm/case_151/solo/r1/transcript.md) · [Debate](../traces_glm/case_151/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r23.json).
+
+## Repeat results
+
+Each new case has one initial trial, `r1`, and five more trials, `r2` through `r6`, for each method. The table below counts correct decisions in the **five more trials only**. The kernel code and problem description stayed the same.
+
+| Case | No tools: correct | Solo + tools: correct | Debate + tools: correct |
+|---|---|---|---|
+| 147 | 2/5 | 5/5 | 5/5 |
+| 149 | 2/5 | 5/5 | 4/5 |
+| 151 | 0/5 | 5/5 | 5/5 |
+
+**147:** Tools found failures in all five more trials. But the model without tools also returned the correct decision in two trials.
+
+**149:** Solo returned the correct decision in all five more trials. Debate returned four correct decisions and one response with insufficient evidence. Errors in its test code prevented a full test near the midpoint. The model without tools returned the correct decision in two trials.
+
+**151:** Each trial from `r2` through `r6` gave the same result. The model without tools accepted the incorrect kernel. Solo and Debate correctly rejected it. Each correct decision from a method with tools included an actual GPU failure on a permitted input.
+
+These results show a consistent difference for case 151 across the five more trials. Cases 147 and 149 show benefits from tools, but the difference does not occur in every trial. These selected cases do not show that Debate is better than Solo.
+
+Full trial records: [147](private_data/source_atan_pair.json) · [149](private_data/source_rounding_pair.json) · [151](private_data/source_ntt_pair.json).

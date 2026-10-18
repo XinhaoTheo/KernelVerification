@@ -1,0 +1,195 @@
+[
+  {
+    "created_at": "2026-10-18T03:17:16Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:18:33Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t12_probe.py",
+              "sha256": "8e01fb1cfe4ea9fd26311ead7f466511621154807e29e6297a0e74b2805a8208"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t12_stdout.txt",
+              "sha256": "3dd74a85d128536e0bf7460a73fcaca0eaf02bec3c808d8269ec0ff79c90d109"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t12_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t12_json_result.json",
+              "sha256": "45061368e8d11a1556490500933d965bc3bd3f516466137011204093cdff197d"
+            }
+          ],
+          "duration_s": 3.599647,
+          "exit_code": 0,
+          "expected_signal": "count of bit-exact mismatches vs reference over all 65504 finite FP16 inputs",
+          "json_parse_error": null,
+          "json_result": {
+            "first_nonfinite_bits": [
+              "0xfc00",
+              "0xfc01",
+              "0xfc02",
+              "0xfc03",
+              "0xfc04"
+            ],
+            "isfinite": false,
+            "n_nonfinite": 1024,
+            "numel": 64512
+          },
+          "n_nonfinite": 1024,
+          "numel": 64512,
+          "stderr": "",
+          "stdout": "{\"numel\": 64512, \"isfinite\": false, \"n_nonfinite\": 1024, \"first_nonfinite_bits\": [\"0xfc00\", \"0xfc01\", \"0xfc02\", \"0xfc03\", \"0xfc04\"]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Diagnostic run only: my NaN/Inf exclusion mask `(i>>10) != 0x1F` missed negative non-finite encodings (0xFC00.., where i>>10 == 0x3F), so the tensor contained 1024 negative NaN/Inf values and the finiteness precondition failed. No kernel output was produced; this says nothing about the claim. The corrected mask `((i>>10)&0x1F) != 0x1F` covers all finite FP16 encodings and will be used in the re-run.",
+        "supports": "inconclusive",
+        "tool_event_id": "t12"
+      },
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:19:30Z",
+        "data": {
+          "actual_finite_count": 63488,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t19_probe.py",
+              "sha256": "0f50b0bd87fdcbf89249c435f553225b82db374f12f0318d4786093acdd8e5d7"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t19_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t19_stderr.txt",
+              "sha256": "d3ef50a777b169ddc87f611d7a9d3704ce2db77094775b89bf18424d0ac8c2a4"
+            }
+          ],
+          "assert_failed_expected": 63504,
+          "duration_s": 3.638384,
+          "exit_code": 1,
+          "expected_signal": "bitwise mismatch count vs reference over all 63504 finite FP16 inputs",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r3/real_kernel_challenges/case_149/debate/probes/t19_probe.py\", line 9, in <module>\n    assert x.numel() == 63504, x.numel()\n           ^^^^^^^^^^^^^^^^^^\nAssertionError: 63488\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e2",
+        "kind": "runtime_probe",
+        "summary": "Probe-side count assertion error only: I asserted 63504 finite FP16 encodings, but the mask ((i>>10)&0x1F)!=0x1F correctly yields 63488 (65536 minus 2048 non-finite encodings across both signs). No kernel output was produced; inconclusive. Re-running with correct count 63488.",
+        "supports": "inconclusive",
+        "tool_event_id": "t19"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "libdevice.exp and div_rn introduce up to ~1-2 ULP FP32 error; some legal FP16 inputs have exact sigmoid values extremely close to a binary16 halfway point, where this intermediate error can flip the final rounding direction, violating the once-rounded exact-output requirement.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Each output must be the real sigmoid rounded ONCE to binary16 RNE; 'One failing legal input is evidence against the implementation'; all finite FP16 encodings are legal."
+      }
+    ],
+    "scope_rationale": "The contract requires exact single RNE rounding for every legal finite FP16 input, so an off-by-one-ULP final bit pattern on any input is a contract violation. Exhaustive sweep over all 65536 finite FP16 encodings compared bit-exactly against reference() is a decisive test.",
+    "statement": "For at least one finite FP16 input, the FP32 intermediate (libdevice.exp(-|x|) + div_rn) error places the computed value on the wrong side of a binary16 halfway point, so the final cvt.rn.f16.f32 result differs by one ULP from the correctly rounded sigmoid.",
+    "status": "inconclusive",
+    "updated_at": "2026-10-18T03:19:30Z"
+  },
+  {
+    "created_at": "2026-10-18T03:17:16Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:17:55Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "af14b68c37da9b65d9c790e5fc17c75f2e3380347c08ef69aae484d3c32eee3f"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "e094aff3830418f58f53f8b5655820ef3916dfd7108a233be68a3e979120242c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "f673df92578d34fef37d824b9f74d0d2cd18cfbd412b728fddd07cc075909930"
+            }
+          ],
+          "duration_s": 5.562027,
+          "exit_code": 0,
+          "expected_signal": "bitwise mismatch count in subnormal-output region vs reference",
+          "flushed_to_zero": 0,
+          "json_parse_error": null,
+          "json_result": {
+            "first_failures": [],
+            "flushed_to_zero": 0,
+            "n_mismatch": 0,
+            "n_tested": 799
+          },
+          "n_mismatch": 0,
+          "n_tested": 799,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 799, \"n_mismatch\": 0, \"flushed_to_zero\": 0, \"first_failures\": []}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "All 799 negative FP16 inputs in (-18.5, -11.0), where the correctly rounded sigmoid is a nonzero FP16 subnormal, produced bit-exact outputs vs reference(); zero mismatches and zero flushes-to-zero. cvt.rn.f16.f32 preserves subnormal results here; the FTZ-flush hypothesis is contradicted.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Triton's inline asm compilation may apply FTZ/flush-to-zero semantics for the conversion, which would zero subnormal results; the correct result for such x is a nonzero subnormal bit pattern (e.g., sigmoid(-11.09) \u2248 1.53e-5).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Exact FP16 bit patterns must hold for the whole public domain; every finite FP16 encoding is legal and subnormal inputs are explicitly in scope, implying subnormal outputs must be correctly represented."
+      }
+    ],
+    "scope_rationale": "Contract mandates exact FP16 bit patterns for all legal inputs; subnormal output values are the correctly rounded result for x in roughly (-18.5, -11.1), so flushing them to zero violates the exact-rounding requirement. A targeted probe on negative x in that range with bitwise comparison against reference() decides it.",
+    "statement": "For negative inputs x with |x| roughly in (11.1, 18.4), where the correctly rounded sigmoid is a nonzero FP16 subnormal, the kernel's cvt.rn.f16.f32 inline PTX path (or the FP32 division result) flushes or rounds to a value that mismatches the required subnormal bit pattern.",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T03:17:55Z"
+  }
+]

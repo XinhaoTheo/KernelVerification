@@ -1,0 +1,1125 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_147",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise atan using three range intervals and a rational approximation.\n\nSynthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\nThe original Cephes source credits Stephen L. Moshier, copyright 1984,\n1995 and 2000. This is not a claim of an upstream historical defect.\nSource: https://netlib.org/cephes/cmath.tgz (atan.c).\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    upper = magnitude > 2.414213562373095\n    middle = magnitude > 0.66\n    reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\n    centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\n    reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\n    angle = tl.where(upper, 1.5707963267948966,\n                     tl.where(middle, 0.7853981633974483, 0.0))\n    square = reduced * reduced\n    numerator = -0.8751\n    numerator = numerator * square + -16.16\n    numerator = numerator * square + -75.01\n    numerator = numerator * square + -122.9\n    numerator = numerator * square + -64.85\n    denominator = square + 24.86\n    denominator = denominator * square + 165.0\n    denominator = denominator * square + 432.9\n    denominator = denominator * square + 485.4\n    denominator = denominator * square + 194.6\n    correction = tl.div_rn(square * numerator, denominator)\n    local_angle = reduced * correction + reduced\n    value = angle + local_angle\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating atan of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _atan_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical atan independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.atan(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_147",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T03:10:46Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:15Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "9996a0b7bc358ff67c40f2002397095e03759e692fc2e962ee5aa17ce8226bcf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "9d82fb7d4134cc60dbd5ff295725826d19a71c540a084612901f0ee3d86d4b81"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "01227b79f505ffe3fc5064a39b0fc40447b5aca4e61c88744964a4c16912bf4e"
+              }
+            ],
+            "duration_s": 5.206838,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N": 63488,
+              "edge_errs": [
+                0.0,
+                0.0,
+                7.579122740649855e-14,
+                7.579122740649855e-14,
+                7.279189390466644e-23,
+                5.11656093049595e-08,
+                5.11656093049595e-08
+              ],
+              "edge_max_err": 5.11656093049595e-08,
+              "edge_outs": [
+                0.0,
+                0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                1.5707811117172241,
+                -1.5707811117172241
+              ],
+              "edge_values": [
+                0.0,
+                -0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                65504.0,
+                -65504.0
+              ],
+              "err_at_worst": 5.03277156949089e-06,
+              "max_abs_err": 5.03277156949089e-06,
+              "n_violations_1e-6": 5606,
+              "worst_out": null,
+              "worst_x": 0.6220703125
+            },
+            "max_abs_err": 5.03277156949089e-06,
+            "n_violations_1e-6": 5606,
+            "stderr": "",
+            "stdout": "{\"N\": 63488, \"max_abs_err\": 5.03277156949089e-06, \"n_violations_1e-6\": 5606, \"worst_x\": 0.6220703125, \"worst_out\": null, \"err_at_worst\": 5.03277156949089e-06, \"edge_max_err\": 5.11656093049595e-08, \"edge_values\": [0.0, -0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 65504.0, -65504.0], \"edge_outs\": [0.0, 0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 1.5707811117172241, -1.5707811117172241], \"edge_errs\": [0.0, 0.0, 7.579122740649855e-14, 7.579122740649855e-14, 7.279189390466644e-23, 5.11656093049595e-08, 5.11656093049595e-08]}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "worst_x": 0.6220703125
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63,488 finite FP16 values: 5,606 inputs exceed the 1e-6 absolute tolerance; max error 5.03e-6 at x=0.622. Violations concentrate in the rational-approximation region.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The polynomial constants appear truncated to ~4-5 significant digits compared to Cephes double values, so the rational approximation error is plausibly around 1e-5 or larger \u2014 well above the 1e-6 absolute tolerance the contract demands for every legal input.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6, and every finite FP16 value is legal, so accuracy must hold over the entire FP16 domain."
+        }
+      ],
+      "scope_rationale": "The contract requires abs(actual - atan(x)) <= 1e-6 for every finite FP16 input; testing all finite FP16 values (\u2264131072 elements) directly covers the declared domain.",
+      "statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T03:11:15Z"
+    },
+    {
+      "created_at": "2026-10-18T03:10:46Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:15Z",
+          "data": {
+            "edge_errs_max": 5.11656093049595e-08
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Signed zeros, subnormals, and \u00b165504 all produce outputs within 5.2e-8 of FP64 atan \u2014 far inside the 1e-6 tolerance.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "The kernel uses magnitude, tl.where(x<0,-value,value), and guards reciprocal with maximum(magnitude,1.0) only in the upper branch; need runtime evidence that zeros, subnormals and extrema are handled correctly within tolerance.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Signed zeros, subnormals and \u00b165504 are explicitly legal; output must be fresh finite FP32 with abs error <= 1e-6."
+        }
+      ],
+      "scope_rationale": "Contract explicitly includes signed zeros, subnormals, and \u00b165504 in the legal domain with the same 1e-6 bound.",
+      "statement": "Edge inputs (signed zeros, subnormals, \u00b165504) produce correct outputs within tolerance.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T03:11:18Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_147",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_147"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_147",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.245976045,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel uses truncated Cephes coefficients (e.g. `-16.16`, `-75.01`, `194.6`), which likely cannot meet the strict 1e-6 absolute tolerance. I'll record that claim and probe exhaustively over every finite FP16 value (the full legal domain fits in one tensor \u2264131072).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The polynomial constants appear truncated to ~4-5 significant digits compared to Cephes double values, so the rational approximation error is plausibly around 1e-5 or larger \u2014 well above the 1e-6 absolute tolerance the contract demands for every legal input.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6, and every finite FP16 value is legal, so accuracy must hold over the entire FP16 domain."
+              }
+            ],
+            "scope_rationale": "The contract requires abs(actual - atan(x)) <= 1e-6 for every finite FP16 input; testing all finite FP16 values (\u2264131072 elements) directly covers the declared domain.",
+            "statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "The kernel uses magnitude, tl.where(x<0,-value,value), and guards reciprocal with maximum(magnitude,1.0) only in the upper branch; need runtime evidence that zeros, subnormals and extrema are handled correctly within tolerance.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Signed zeros, subnormals and \u00b165504 are explicitly legal; output must be fresh finite FP32 with abs error <= 1e-6."
+              }
+            ],
+            "scope_rationale": "Contract explicitly includes signed zeros, subnormals, and \u00b165504 in the legal domain with the same 1e-6 bound.",
+            "statement": "Edge inputs (signed zeros, subnormals, \u00b165504) produce correct outputs within tolerance."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.246,
+        "input_tokens": 9299,
+        "output_tokens": 792
+      }
+    },
+    {
+      "duration_s": 5.326981298,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the exhaustive probe: every finite FP16 value (as int16 bit patterns) through `run` vs FP64 `atan`, which also covers edge inputs.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel as K\n\nbits = torch.arange(65536, dtype=torch.int32)\nbits[(bits == 0x7C00) | (bits == 0xFC00) | ((bits & 0x7F00) == 0x7F00)] = -1  # NaN/Inf excluded\nbits = bits[bits >= 0].to(torch.int16)\nx = bits.view(torch.float16).cuda()\nN = x.numel()\nerrs = []\nref = []\nfor chunk_start in range(0, N, 65536):\n    c = x[chunk_start:chunk_start+65536].contiguous()\n    out = K.run(c)\n    r = torch.atan(c.to(torch.float64))\n    errs.append((out.to(torch.float64) - r).abs())\nerr = torch.cat(errs)\nprint(json.dumps({\"N\": N, \"max_abs_err\": float(err.max()),\n  \"n_violations_1e-6\": int((err > 1e-6).sum()),\n  \"worst_bits\": int(bits[err.argmax()].item()) if False else None,\n  \"worst_x\": float(x[err.argmax()].item())}))\n",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.327,
+        "input_tokens": 11534,
+        "output_tokens": 336
+      }
+    },
+    {
+      "duration_s": 9.346085517000002,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed because my NaN/Inf exclusion used the wrong bit mask (0x7F00 instead of FP16's exponent mask 0x7C00), so the tensor still contained NaN/Inf and validate_inputs correctly rejected it. I'll rerun with the correct mask.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel as K\n\nbits = torch.arange(65536, dtype=torch.int32)\nbits[(bits & 0x7C00) == 0x7C00] = -1  # NaN/Inf excluded (exp all ones)\nbits = bits[bits >= 0].to(torch.int16)\nx = bits.view(torch.float16).cuda()\nN = x.numel()\nerrs = []\nfor chunk_start in range(0, N, 60000):\n    c = x[chunk_start:chunk_start+60000].contiguous()\n    out = K.run(c)\n    r = torch.atan(c.to(torch.float64))\n    errs.append((out.to(torch.float64) - r).abs())\nerr = torch.cat(errs)\nviol = (err > 1e-6).nonzero()\ninfo = {\"N\": int(N), \"max_abs_err\": float(err.max()),\n  \"n_violations_1e-6\": int((err > 1e-6).sum())}\nif info[\"n_violations_1e-6\"] > 0:\n    i = int(err.argmax())\n    info[\"worst_x\"] = float(x[i].item())\n    info[\"worst_out\"] = float(torch.cat(errs).sub(0).sum().item()) if False else None\n    info[\"err_at_worst\"] = float(err[i].item())\n    # also check signed zeros/subnormals/extrema specifically\nedges = torch.tensor([0.0, -0.0, 6.104e-5, -6.104e-5, 5.96e-8, 65504.0, -65504.0],\n                     dtype=torch.float16).cuda()\neout = K.run(edges.contiguous())\neref = torch.atan(edges.to(torch.float64))\neerr = (eout.to(torch.float64) - eref).abs()\ninfo[\"edge_max_err\"] = float(eerr.max())\ninfo[\"edge_values\"] = [float(v) for v in edges.cpu()]\ninfo[\"edge_outs\"] = [float(v) for v in eout.cpu()]\ninfo[\"edge_errs\"] = [float(v) for v in eerr.cpu()]\nprint(json.dumps(info))",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.346,
+        "input_tokens": 13552,
+        "output_tokens": 739
+      }
+    },
+    {
+      "duration_s": 5.670725390000001,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive probe over all 63,488 finite FP16 values found 5,606 tolerance violations (max abs error 5.03e-6 at x=0.622), while edge inputs are well within tolerance. I'll finalize the evidence and statuses.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 5.03277156949089e-06,
+              "n_violations_1e-6": 5606,
+              "worst_x": 0.6220703125
+            },
+            "event_id": "t8",
+            "summary": "Exhaustive sweep of all 63,488 finite FP16 values: 5,606 inputs exceed the 1e-6 absolute tolerance; max error 5.03e-6 at x=0.622. Violations concentrate in the rational-approximation region.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "edge_errs_max": 5.11656093049595e-08
+            },
+            "kind": "runtime_probe",
+            "summary": "Signed zeros, subnormals, and \u00b165504 all produce outputs within 5.2e-8 of FP64 atan \u2014 far inside the 1e-6 tolerance.",
+            "supports": "rebutted",
+            "tool_event_id": "t8"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.671,
+        "input_tokens": 17412,
+        "output_tokens": 366
+      }
+    },
+    {
+      "duration_s": 3.0916314090000014,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive probe resolved both claims: c1 confirmed (5,606 in-scope tolerance violations), c2's edge-input concern rebutted. I'll close c2's status and record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "rebutted"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.092,
+        "input_tokens": 22822,
+        "output_tokens": 82
+      }
+    },
+    {
+      "duration_s": 4.997308758000003,
+      "role": "solo",
+      "round": 7,
+      "text": "Both claims are resolved: c1 (in-scope accuracy failure) is confirmed by an exhaustive sweep of every finite FP16 value, and c2's edge-input concern was rebutted. I'll record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Exhaustive runtime probe (tool event t8) evaluated the kernel's run() against FP64 torch.atan over all 63,488 finite FP16 values \u2014 the complete legal domain declared by problem.txt (every finite FP16 value, abs error <= 1e-6 required per element). 5,606 inputs violate the 1e-6 absolute tolerance, with max absolute error 5.03e-6 at x=0.6220703125, concentrated in the rational-approximation region (truncated Cephes coefficients). Edge inputs (signed zeros, subnormals, \u00b165504) are fine (max 5.1e-8), so the failure is a genuine in-scope accuracy defect in the approximation itself, not a boundary mishandling.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.997,
+        "input_tokens": 23266,
+        "output_tokens": 266
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_147",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise atan using three range intervals and a rational approximation.\n\nSynthetic FP32 Triton adaptation of Cephes atan.c, Release 2.8 (June 2000).\nThe original Cephes source credits Stephen L. Moshier, copyright 1984,\n1995 and 2000. This is not a claim of an upstream historical defect.\nSource: https://netlib.org/cephes/cmath.tgz (atan.c).\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _atan_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    upper = magnitude > 2.414213562373095\n    middle = magnitude > 0.66\n    reciprocal = -tl.div_rn(1.0, tl.maximum(magnitude, 1.0))\n    centered = tl.div_rn(magnitude - 1.0, magnitude + 1.0)\n    reduced = tl.where(upper, reciprocal, tl.where(middle, centered, magnitude))\n    angle = tl.where(upper, 1.5707963267948966,\n                     tl.where(middle, 0.7853981633974483, 0.0))\n    square = reduced * reduced\n    numerator = -0.8751\n    numerator = numerator * square + -16.16\n    numerator = numerator * square + -75.01\n    numerator = numerator * square + -122.9\n    numerator = numerator * square + -64.85\n    denominator = square + 24.86\n    denominator = denominator * square + 165.0\n    denominator = denominator * square + 432.9\n    denominator = denominator * square + 485.4\n    denominator = denominator * square + 194.6\n    correction = tl.div_rn(square * numerator, denominator)\n    local_angle = reduced * correction + reduced\n    value = angle + local_angle\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating atan of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _atan_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical atan independently using the FP64 library function.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.atan(x.to(torch.float64))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_147",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute atan elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is target[i] = atan(x[i]), in radians.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive and negative subnormal values, and both extrema +/-65504. NaN and infinity are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided, contiguous, and on a CUDA device. Contiguous views with nonzero storage offsets are legal. The input has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes to the input. This forward operation does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x. Every output element must satisfy:\n\n  abs(actual[i] - atan(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent. The target is defined in real arithmetic on the exact stored input value. No particular range reduction, rational approximation or intermediate rounding is part of the mathematical target. Algebraic rewrites and approximations are permitted if they satisfy this fixed absolute tolerance throughout the entire legal domain. Correctness is one verdict for the implementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference() uses the independent FP64 library atan and returns FP64; it accepts CPU inputs. make_inputs() supplies examples only. This is a synthetic FP32 Triton adaptation of the range-reduced rational form in Cephes atan, not a reproduction of an upstream historical defect. The original double-precision implementation's accuracy claim does not establish this adaptation's accuracy.\n\nFrozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.\n",
+        "entry": "case_147",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_147"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_147",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3691
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1959
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_147",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T03:10:33Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_147",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The polynomial constants appear truncated to ~4-5 significant digits compared to Cephes double values, so the rational approximation error is plausibly around 1e-5 or larger \u2014 well above the 1e-6 absolute tolerance the contract demands for every legal input.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6, and every finite FP16 value is legal, so accuracy must hold over the entire FP16 domain."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual - atan(x)) <= 1e-6 for every finite FP16 input; testing all finite FP16 values (\u2264131072 elements) directly covers the declared domain.",
+        "statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs."
+      },
+      "created_at": "2026-10-18T03:10:46Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T03:10:46Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The polynomial constants appear truncated to ~4-5 significant digits compared to Cephes double values, so the rational approximation error is plausibly around 1e-5 or larger \u2014 well above the 1e-6 absolute tolerance the contract demands for every legal input.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6, and every finite FP16 value is legal, so accuracy must hold over the entire FP16 domain."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual - atan(x)) <= 1e-6 for every finite FP16 input; testing all finite FP16 values (\u2264131072 elements) directly covers the declared domain.",
+        "statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:10:46Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses magnitude, tl.where(x<0,-value,value), and guards reciprocal with maximum(magnitude,1.0) only in the upper branch; need runtime evidence that zeros, subnormals and extrema are handled correctly within tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Signed zeros, subnormals and \u00b165504 are explicitly legal; output must be fresh finite FP32 with abs error <= 1e-6."
+          }
+        ],
+        "scope_rationale": "Contract explicitly includes signed zeros, subnormals, and \u00b165504 in the legal domain with the same 1e-6 bound.",
+        "statement": "Edge inputs (signed zeros, subnormals, \u00b165504) produce correct outputs within tolerance."
+      },
+      "created_at": "2026-10-18T03:10:46Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T03:10:46Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "The kernel uses magnitude, tl.where(x<0,-value,value), and guards reciprocal with maximum(magnitude,1.0) only in the upper branch; need runtime evidence that zeros, subnormals and extrema are handled correctly within tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Signed zeros, subnormals and \u00b165504 are explicitly legal; output must be fresh finite FP32 with abs error <= 1e-6."
+          }
+        ],
+        "scope_rationale": "Contract explicitly includes signed zeros, subnormals, and \u00b165504 in the legal domain with the same 1e-6 bound.",
+        "statement": "Edge inputs (signed zeros, subnormals, \u00b165504) produce correct outputs within tolerance.",
+        "status": "open",
+        "updated_at": "2026-10-18T03:10:46Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel as K\n\nbits = torch.arange(65536, dtype=torch.int32)\nbits[(bits == 0x7C00) | (bits == 0xFC00) | ((bits & 0x7F00) == 0x7F00)] = -1  # NaN/Inf excluded\nbits = bits[bits >= 0].to(torch.int16)\nx = bits.view(torch.float16).cuda()\nN = x.numel()\nerrs = []\nref = []\nfor chunk_start in range(0, N, 65536):\n    c = x[chunk_start:chunk_start+65536].contiguous()\n    out = K.run(c)\n    r = torch.atan(c.to(torch.float64))\n    errs.append((out.to(torch.float64) - r).abs())\nerr = torch.cat(errs)\nprint(json.dumps({\"N\": N, \"max_abs_err\": float(err.max()),\n  \"n_violations_1e-6\": int((err > 1e-6).sum()),\n  \"worst_bits\": int(bits[err.argmax()].item()) if False else None,\n  \"worst_x\": float(x[err.argmax()].item())}))\n",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T03:10:55Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "d44d459a54f2f69da77d731f954711ee3a8e2e4b0b8589a1e099f57a732c286b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "36c09fa363a26b2ef4da72660bf944ac86c76057aee1038e9db83feab7b2407c"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs.",
+        "cwd": "/root/cases/case_147",
+        "duration_s": 4.013279,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "d44d459a54f2f69da77d731f954711ee3a8e2e4b0b8589a1e099f57a732c286b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "36c09fa363a26b2ef4da72660bf944ac86c76057aee1038e9db83feab7b2407c"
+              }
+            ],
+            "duration_s": 4.013279,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_147/solo/probes/t7_probe.py\", line 14, in <module>\n    out = K.run(c)\n          ^^^^^^^^\n  File \"/root/cases/case_147/kernel.py\", line 68, in run\n    validate_inputs(x)\n  File \"/root/cases/case_147/kernel.py\", line 62, in validate_inputs\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n  File \"/root/cases/case_147/kernel.py\", line 48, in require\n    raise ValueError(message)\nValueError: all input values must be finite\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_147/solo/probes/t7_probe.py\", line 14, in <module>\n    out = K.run(c)\n          ^^^^^^^^\n  File \"/root/cases/case_147/kernel.py\", line 68, in run\n    validate_inputs(x)\n  File \"/root/cases/case_147/kernel.py\", line 62, in validate_inputs\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n  File \"/root/cases/case_147/kernel.py\", line 48, in require\n    raise ValueError(message)\nValueError: all input values must be finite\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_147\")\nimport kernel as K\n\nbits = torch.arange(65536, dtype=torch.int32)\nbits[(bits & 0x7C00) == 0x7C00] = -1  # NaN/Inf excluded (exp all ones)\nbits = bits[bits >= 0].to(torch.int16)\nx = bits.view(torch.float16).cuda()\nN = x.numel()\nerrs = []\nfor chunk_start in range(0, N, 60000):\n    c = x[chunk_start:chunk_start+60000].contiguous()\n    out = K.run(c)\n    r = torch.atan(c.to(torch.float64))\n    errs.append((out.to(torch.float64) - r).abs())\nerr = torch.cat(errs)\nviol = (err > 1e-6).nonzero()\ninfo = {\"N\": int(N), \"max_abs_err\": float(err.max()),\n  \"n_violations_1e-6\": int((err > 1e-6).sum())}\nif info[\"n_violations_1e-6\"] > 0:\n    i = int(err.argmax())\n    info[\"worst_x\"] = float(x[i].item())\n    info[\"worst_out\"] = float(torch.cat(errs).sub(0).sum().item()) if False else None\n    info[\"err_at_worst\"] = float(err[i].item())\n    # also check signed zeros/subnormals/extrema specifically\nedges = torch.tensor([0.0, -0.0, 6.104e-5, -6.104e-5, 5.96e-8, 65504.0, -65504.0],\n                     dtype=torch.float16).cuda()\neout = K.run(edges.contiguous())\neref = torch.atan(edges.to(torch.float64))\neerr = (eout.to(torch.float64) - eref).abs()\ninfo[\"edge_max_err\"] = float(eerr.max())\ninfo[\"edge_values\"] = [float(v) for v in edges.cpu()]\ninfo[\"edge_outs\"] = [float(v) for v in eout.cpu()]\ninfo[\"edge_errs\"] = [float(v) for v in eerr.cpu()]\nprint(json.dumps(info))",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T03:11:09Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "9996a0b7bc358ff67c40f2002397095e03759e692fc2e962ee5aa17ce8226bcf"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "9d82fb7d4134cc60dbd5ff295725826d19a71c540a084612901f0ee3d86d4b81"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "01227b79f505ffe3fc5064a39b0fc40447b5aca4e61c88744964a4c16912bf4e"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs.",
+        "cwd": "/root/cases/case_147",
+        "duration_s": 5.206838,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "9996a0b7bc358ff67c40f2002397095e03759e692fc2e962ee5aa17ce8226bcf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "9d82fb7d4134cc60dbd5ff295725826d19a71c540a084612901f0ee3d86d4b81"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "01227b79f505ffe3fc5064a39b0fc40447b5aca4e61c88744964a4c16912bf4e"
+              }
+            ],
+            "duration_s": 5.206838,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N": 63488,
+              "edge_errs": [
+                0.0,
+                0.0,
+                7.579122740649855e-14,
+                7.579122740649855e-14,
+                7.279189390466644e-23,
+                5.11656093049595e-08,
+                5.11656093049595e-08
+              ],
+              "edge_max_err": 5.11656093049595e-08,
+              "edge_outs": [
+                0.0,
+                0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                1.5707811117172241,
+                -1.5707811117172241
+              ],
+              "edge_values": [
+                0.0,
+                -0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                65504.0,
+                -65504.0
+              ],
+              "err_at_worst": 5.03277156949089e-06,
+              "max_abs_err": 5.03277156949089e-06,
+              "n_violations_1e-6": 5606,
+              "worst_out": null,
+              "worst_x": 0.6220703125
+            },
+            "stderr": "",
+            "stdout": "{\"N\": 63488, \"max_abs_err\": 5.03277156949089e-06, \"n_violations_1e-6\": 5606, \"worst_x\": 0.6220703125, \"worst_out\": null, \"err_at_worst\": 5.03277156949089e-06, \"edge_max_err\": 5.11656093049595e-08, \"edge_values\": [0.0, -0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 65504.0, -65504.0], \"edge_outs\": [0.0, 0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 1.5707811117172241, -1.5707811117172241], \"edge_errs\": [0.0, 0.0, 7.579122740649855e-14, 7.579122740649855e-14, 7.279189390466644e-23, 5.11656093049595e-08, 5.11656093049595e-08]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "N": 63488,
+          "edge_errs": [
+            0.0,
+            0.0,
+            7.579122740649855e-14,
+            7.579122740649855e-14,
+            7.279189390466644e-23,
+            5.11656093049595e-08,
+            5.11656093049595e-08
+          ],
+          "edge_max_err": 5.11656093049595e-08,
+          "edge_outs": [
+            0.0,
+            0.0,
+            6.103515625e-05,
+            -6.103515625e-05,
+            5.960464477539063e-08,
+            1.5707811117172241,
+            -1.5707811117172241
+          ],
+          "edge_values": [
+            0.0,
+            -0.0,
+            6.103515625e-05,
+            -6.103515625e-05,
+            5.960464477539063e-08,
+            65504.0,
+            -65504.0
+          ],
+          "err_at_worst": 5.03277156949089e-06,
+          "max_abs_err": 5.03277156949089e-06,
+          "n_violations_1e-6": 5606,
+          "worst_out": null,
+          "worst_x": 0.6220703125
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"N\": 63488, \"max_abs_err\": 5.03277156949089e-06, \"n_violations_1e-6\": 5606, \"worst_x\": 0.6220703125, \"worst_out\": null, \"err_at_worst\": 5.03277156949089e-06, \"edge_max_err\": 5.11656093049595e-08, \"edge_values\": [0.0, -0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 65504.0, -65504.0], \"edge_outs\": [0.0, 0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 1.5707811117172241, -1.5707811117172241], \"edge_errs\": [0.0, 0.0, 7.579122740649855e-14, 7.579122740649855e-14, 7.279189390466644e-23, 5.11656093049595e-08, 5.11656093049595e-08]}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 5.03277156949089e-06,
+          "n_violations_1e-6": 5606,
+          "worst_x": 0.6220703125
+        },
+        "event_id": "t8",
+        "summary": "Exhaustive sweep of all 63,488 finite FP16 values: 5,606 inputs exceed the 1e-6 absolute tolerance; max error 5.03e-6 at x=0.622. Violations concentrate in the rational-approximation region.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T03:11:15Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T03:10:46Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T03:11:15Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "9996a0b7bc358ff67c40f2002397095e03759e692fc2e962ee5aa17ce8226bcf"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "9d82fb7d4134cc60dbd5ff295725826d19a71c540a084612901f0ee3d86d4b81"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "01227b79f505ffe3fc5064a39b0fc40447b5aca4e61c88744964a4c16912bf4e"
+                  }
+                ],
+                "duration_s": 5.206838,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "N": 63488,
+                  "edge_errs": [
+                    0.0,
+                    0.0,
+                    7.579122740649855e-14,
+                    7.579122740649855e-14,
+                    7.279189390466644e-23,
+                    5.11656093049595e-08,
+                    5.11656093049595e-08
+                  ],
+                  "edge_max_err": 5.11656093049595e-08,
+                  "edge_outs": [
+                    0.0,
+                    0.0,
+                    6.103515625e-05,
+                    -6.103515625e-05,
+                    5.960464477539063e-08,
+                    1.5707811117172241,
+                    -1.5707811117172241
+                  ],
+                  "edge_values": [
+                    0.0,
+                    -0.0,
+                    6.103515625e-05,
+                    -6.103515625e-05,
+                    5.960464477539063e-08,
+                    65504.0,
+                    -65504.0
+                  ],
+                  "err_at_worst": 5.03277156949089e-06,
+                  "max_abs_err": 5.03277156949089e-06,
+                  "n_violations_1e-6": 5606,
+                  "worst_out": null,
+                  "worst_x": 0.6220703125
+                },
+                "max_abs_err": 5.03277156949089e-06,
+                "n_violations_1e-6": 5606,
+                "stderr": "",
+                "stdout": "{\"N\": 63488, \"max_abs_err\": 5.03277156949089e-06, \"n_violations_1e-6\": 5606, \"worst_x\": 0.6220703125, \"worst_out\": null, \"err_at_worst\": 5.03277156949089e-06, \"edge_max_err\": 5.11656093049595e-08, \"edge_values\": [0.0, -0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 65504.0, -65504.0], \"edge_outs\": [0.0, 0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 1.5707811117172241, -1.5707811117172241], \"edge_errs\": [0.0, 0.0, 7.579122740649855e-14, 7.579122740649855e-14, 7.279189390466644e-23, 5.11656093049595e-08, 5.11656093049595e-08]}\n",
+                "timed_out": false,
+                "timeout_s": 300,
+                "worst_x": 0.6220703125
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63,488 finite FP16 values: 5,606 inputs exceed the 1e-6 absolute tolerance; max error 5.03e-6 at x=0.622. Violations concentrate in the rational-approximation region.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The polynomial constants appear truncated to ~4-5 significant digits compared to Cephes double values, so the rational approximation error is plausibly around 1e-5 or larger \u2014 well above the 1e-6 absolute tolerance the contract demands for every legal input.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - atan(x[i])) <= 1e-6, and every finite FP16 value is legal, so accuracy must hold over the entire FP16 domain."
+            }
+          ],
+          "scope_rationale": "The contract requires abs(actual - atan(x)) <= 1e-6 for every finite FP16 input; testing all finite FP16 values (\u2264131072 elements) directly covers the declared domain.",
+          "statement": "The FP32 Cephes-style approximation with truncated coefficients fails the 1e-6 absolute tolerance for some finite FP16 inputs.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T03:11:15Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T03:11:15Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "9996a0b7bc358ff67c40f2002397095e03759e692fc2e962ee5aa17ce8226bcf"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "9d82fb7d4134cc60dbd5ff295725826d19a71c540a084612901f0ee3d86d4b81"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "01227b79f505ffe3fc5064a39b0fc40447b5aca4e61c88744964a4c16912bf4e"
+              }
+            ],
+            "duration_s": 5.206838,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "N": 63488,
+              "edge_errs": [
+                0.0,
+                0.0,
+                7.579122740649855e-14,
+                7.579122740649855e-14,
+                7.279189390466644e-23,
+                5.11656093049595e-08,
+                5.11656093049595e-08
+              ],
+              "edge_max_err": 5.11656093049595e-08,
+              "edge_outs": [
+                0.0,
+                0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                1.5707811117172241,
+                -1.5707811117172241
+              ],
+              "edge_values": [
+                0.0,
+                -0.0,
+                6.103515625e-05,
+                -6.103515625e-05,
+                5.960464477539063e-08,
+                65504.0,
+                -65504.0
+              ],
+              "err_at_worst": 5.03277156949089e-06,
+              "max_abs_err": 5.03277156949089e-06,
+              "n_violations_1e-6": 5606,
+              "worst_out": null,
+              "worst_x": 0.6220703125
+            },
+            "max_abs_err": 5.03277156949089e-06,
+            "n_violations_1e-6": 5606,
+            "stderr": "",
+            "stdout": "{\"N\": 63488, \"max_abs_err\": 5.03277156949089e-06, \"n_violations_1e-6\": 5606, \"worst_x\": 0.6220703125, \"worst_out\": null, \"err_at_worst\": 5.03277156949089e-06, \"edge_max_err\": 5.11656093049595e-08, \"edge_values\": [0.0, -0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 65504.0, -65504.0], \"edge_outs\": [0.0, 0.0, 6.103515625e-05, -6.103515625e-05, 5.960464477539063e-08, 1.5707811117172241, -1.5707811117172241], \"edge_errs\": [0.0, 0.0, 7.579122740649855e-14, 7.579122740649855e-14, 7.279189390466644e-23, 5.11656093049595e-08, 5.11656093049595e-08]}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "worst_x": 0.6220703125
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63,488 finite FP16 values: 5,606 inputs exceed the 1e-6 absolute tolerance; max error 5.03e-6 at x=0.622. Violations concentrate in the rational-approximation region.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "edge_errs_max": 5.11656093049595e-08
+        },
+        "kind": "runtime_probe",
+        "summary": "Signed zeros, subnormals, and \u00b165504 all produce outputs within 5.2e-8 of FP64 atan \u2014 far inside the 1e-6 tolerance.",
+        "supports": "rebutted",
+        "tool_event_id": "t8"
+      },
+      "created_at": "2026-10-18T03:11:15Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-10-18T03:11:15Z",
+        "data": {
+          "edge_errs_max": 5.11656093049595e-08
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Signed zeros, subnormals, and \u00b165504 all produce outputs within 5.2e-8 of FP64 atan \u2014 far inside the 1e-6 tolerance.",
+        "supports": "rebutted",
+        "tool_event_id": "t8"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "rebutted"
+      },
+      "created_at": "2026-10-18T03:11:18Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-10-18T03:10:46Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-10-18T03:11:15Z",
+            "data": {
+              "edge_errs_max": 5.11656093049595e-08
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "Signed zeros, subnormals, and \u00b165504 all produce outputs within 5.2e-8 of FP64 atan \u2014 far inside the 1e-6 tolerance.",
+            "supports": "rebutted",
+            "tool_event_id": "t8"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "The kernel uses magnitude, tl.where(x<0,-value,value), and guards reciprocal with maximum(magnitude,1.0) only in the upper branch; need runtime evidence that zeros, subnormals and extrema are handled correctly within tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Signed zeros, subnormals and \u00b165504 are explicitly legal; output must be fresh finite FP32 with abs error <= 1e-6."
+          }
+        ],
+        "scope_rationale": "Contract explicitly includes signed zeros, subnormals, and \u00b165504 in the legal domain with the same 1e-6 bound.",
+        "statement": "Edge inputs (signed zeros, subnormals, \u00b165504) produce correct outputs within tolerance.",
+        "status": "rebutted",
+        "updated_at": "2026-10-18T03:11:18Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Exhaustive runtime probe (tool event t8) evaluated the kernel's run() against FP64 torch.atan over all 63,488 finite FP16 values \u2014 the complete legal domain declared by problem.txt (every finite FP16 value, abs error <= 1e-6 required per element). 5,606 inputs violate the 1e-6 absolute tolerance, with max absolute error 5.03e-6 at x=0.6220703125, concentrated in the rational-approximation region (truncated Cephes coefficients). Edge inputs (signed zeros, subnormals, \u00b165504) are fine (max 5.1e-8), so the failure is a genuine in-scope accuracy defect in the approximation itself, not a boundary mishandling.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T03:11:23Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-18T03:11:23Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Exhaustive runtime probe (tool event t8) evaluated the kernel's run() against FP64 torch.atan over all 63,488 finite FP16 values \u2014 the complete legal domain declared by problem.txt (every finite FP16 value, abs error <= 1e-6 required per element). 5,606 inputs violate the 1e-6 absolute tolerance, with max absolute error 5.03e-6 at x=0.6220703125, concentrated in the rational-approximation region (truncated Cephes coefficients). Edge inputs (signed zeros, subnormals, \u00b165504) are fine (max 5.1e-8), so the failure is a genuine in-scope accuracy defect in the approximation itself, not a boundary mishandling.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-18T03:11:23Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Exhaustive runtime probe (tool event t8) evaluated the kernel's run() against FP64 torch.atan over all 63,488 finite FP16 values \u2014 the complete legal domain declared by problem.txt (every finite FP16 value, abs error <= 1e-6 required per element). 5,606 inputs violate the 1e-6 absolute tolerance, with max absolute error 5.03e-6 at x=0.6220703125, concentrated in the rational-approximation region (truncated Cephes coefficients). Edge inputs (signed zeros, subnormals, \u00b165504) are fine (max 5.1e-8), so the failure is a genuine in-scope accuracy defect in the approximation itself, not a boundary mishandling.",
+    "verdict": "reject"
+  }
+}

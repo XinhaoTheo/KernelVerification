@@ -1,0 +1,65 @@
+{
+  "id": "chatcmpl-e04bc5db",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm launching corrected probes with a sound oracle (struct.pack('<e') of high-precision mpmath sigmoid, cross-checked against the artifact's own reference()) — one exhaustive full-domain sweep for c1, and a region probe for c3 on the actual negative-x subnormal/underflow region (c2 is covered jointly by the c1 sweep). These are independent, so I'm batching them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b262089284a7ea37",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, struct, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nfrom kernel import run, reference\\nimport mpmath as mp\\nmp.mp.prec = 120\\n\\ncodes = []\\nfor b in range(65536):\\n    v = struct.unpack(\\\"<e\\\", b.to_bytes(2, \\\"little\\\"))[0]\\n    if v == v and abs(v) != float(\\\"inf\\\"):\\n        codes.append(b)\\npayload = bytearray()\\nfor b in codes: payload += b.to_bytes(2, \\\"little\\\")\\nx = torch.frombuffer(bytearray(payload), dtype=torch.float16).clone().to(\\\"cuda\\\")\\ny = run(x).cpu()\\ngot_bits = y.view(torch.uint16).tolist()\\nxl = x.cpu().tolist()\\n\\n# Sound oracle: mpmath high-precision sigmoid -> struct.pack('<e') RNE\\ndef correct_bits(xv):\\n    xm = mp.mpf(float(xv))\\n    if xm >= 0:\\n        s = 1 / (1 + mp.exp(-xm))\\n    else:\\n        e = mp.exp(xm)\\n        s = e / (1 + e)\\n    packed = struct.pack(\\\"<e\\\", float(s))\\n    return int.from_bytes(packed, \\\"little\\\")\\n\\n# Sanity-check oracle on hand-verified cases\\nsanity = {}\\nfor xv in (0.0029296875, 8.3203125, 0.0, -0.0, -11.0, -18.375, -18.4375):\\n    sanity[xv] = correct_bits(xv)\\n\\n# Cross-check: artifact reference() on the same full tensor\\nref = reference(x).cpu()\\nref_bits = ref.view(torch.uint16).tolist()\\nref_vs_oracle_mism = 0\\n\\nmismatches = []\\nfor i in range(len(codes)):\\n    expected = correct_bits(xl[i])\\n    if expected != ref_bits[i]:\\n        ref_vs_oracle_mism += 1\\n    if expected != got_bits[i]:\\n        if len(mismatches) < 15:\\n            mismatches.append({\\\"x\\\": xl[i], \\\"expected_bits\\\": expected, \\\"got_bits\\\": got_bits[i],\\n                               \\\"ref_bits\\\": ref_bits[i]})\\n\\nprint(\\\"sanity_oracle_bits(x=0.0029296875 expect 0x3802):\\\", hex(sanity[0.0029296875]))\\nprint(\\\"sanity_oracle_bits(x=8.3203125 expect 0x3c00):\\\", hex(sanity[8.3203125]))\\nprint(\\\"sanity_oracle_bits(x=0.0/-0.0 expect 0x3800):\\\", hex(sanity[0.0]), hex(sanity[-0.0]))\\nprint(\\\"sanity_oracle_bits(x=-11.0, -18.375, -18.4375):\\\", hex(sanity[-11.0]), hex(sanity[-18.375]), hex(sanity[-18.4375]))\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"exact FP16 bit-pattern equality, exhaustive sweep over all 65504 finite FP16 inputs, oracle = mpmath(120-bit) sigmoid packed via struct.pack('<e') RNE, cross-checked vs artifact reference()\\\",\\n    \\\"n_tested\\\": len(codes),\\n    \\\"mismatch_count\\\": len(mismatches),\\n    \\\"oracle_vs_reference_mismatch_count\\\": ref_vs_oracle_mism,\\n    \\\"sanity_x_0.0029296875_oracle_bits\\\": sanity[0.0029296875],\\n    \\\"sanity_x_8.3203125_oracle_bits\\\": sanity[8.3203125],\\n    \\\"first_mismatches\\\": mismatches,\\n}))\\n\", \"expected_signal\": \"mismatch_count == 0 confirms kernel matches correctly-rounded FP16 everywhere; nonzero count confirms c1\", \"timeout_s\": 600}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-924be7de09a9539c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, struct, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nfrom kernel import run\\nimport mpmath as mp\\nmp.mp.prec = 120\\n\\n# Region: large NEGATIVE x, subnormal-output range and underflow cutoff.\\ncodes = []\\nfor b in range(65536):\\n    v = struct.unpack(\\\"<e\\\", b.to_bytes(2, \\\"little\\\"))[0]\\n    if v == v and abs(v) != float(\\\"inf\\\") and -20.0 <= v <= -9.0:\\n        codes.append((v, b))\\ncodes.sort()\\npayload = bytearray()\\nfor _, b in codes: payload += b.to_bytes(2, \\\"little\\\")\\nx = torch.frombuffer(bytearray(payload), dtype=torch.float16).clone().to(\\\"cuda\\\")\\ny = run(x).cpu()\\ngot_bits = y.view(torch.uint16).tolist()\\nxl = x.cpu().tolist()\\n\\ndef correct_bits(xv):\\n    xm = mp.mpf(float(xv))\\n    e = mp.exp(xm)\\n    s = e / (1 + e)\\n    return int.from_bytes(struct.pack(\\\"<e\\\", float(s)), \\\"little\\\")\\n\\nmism = []\\nsub_mism = 0; zero_mism = 0\\nfor i in range(len(codes)):\\n    exp = correct_bits(xl[i])\\n    if exp != got_bits[i]:\\n        mism.append({\\\"x\\\": xl[i], \\\"expected_bits\\\": exp, \\\"got_bits\\\": got_bits[i]})\\n        if 0 < exp < 1024: sub_mism += 1\\n        if exp == 0 or got_bits[i] == 0: zero_mism += 1\\n\\n# boundary census: smallest x with nonzero output, largest x with +0 output\\nsmallest_nonzero = None; largest_zero = None\\nfor i in range(len(codes)):\\n    if got_bits[i] != 0 and smallest_nonzero is None: smallest_nonzero = xl[i]\\n    if got_bits[i] == 0: largest_zero = xl[i]\\n# expected cutoff: smallest x where exact sigmoid >= 2^-25\\nexp_smallest_nonzero = None; exp_largest_zero = None\\nfor i in range(len(codes)):\\n    xb = correct_bits(xl[i])\\n    if xb != 0 and exp_smallest_nonzero is None: exp_smallest_nonzero = xl[i]\\n    if xb == 0: exp_largest_zero = xl[i]\\n\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"exact FP16 bit-pattern equality in negative-x subnormal/underflow region [-20,-9], oracle = mpmath(120-bit) sigmoid via struct.pack('<e') RNE\\\",\\n    \\\"n_tested\\\": len(codes),\\n    \\\"mismatch_count\\\": len(mism),\\n    \\\"subnormal_region_mismatches\\\": sub_mism,\\n    \\\"underflow_zero_mismatches\\\": zero_mism,\\n    \\\"kernel_smallest_x_nonzero_output\\\": smallest_nonzero,\\n    \\\"kernel_largest_x_zero_output\\\": largest_zero,\\n    \\\"oracle_smallest_x_nonzero\\\": exp_smallest_nonzero,\\n    \\\"oracle_largest_x_zero\\\": exp_largest_zero,\\n    \\\"first_mismatches\\\": mism[:10],\\n}))\\n\", \"expected_signal\": \"nonzero mismatch count in negative-x subnormal region or wrong +0 vs smallest-subnormal decision near x=-18.4 cutoff\", \"timeout_s\": 600}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293577,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1664,
+    "prompt_tokens": 48933,
+    "total_tokens": 50597,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5600,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

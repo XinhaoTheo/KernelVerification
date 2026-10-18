@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-f431228d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive sweep of all finite FP16 values through the kernel (65504 values fit within N≤131072... actually 65536 total, but I'll chunk into batches under the limit) and compare to FP64 atan.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-86596e023dd68df6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, numpy as np, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_147\\\")\\nimport kernel\\n\\n# all finite FP16 bit patterns\\nbits = np.arange(0, 65536, dtype=np.uint16)\\nallvals = torch.from_numpy(bits.view(np.float16).copy()).to(torch.float32)\\nfinite = torch.isfinite(allvals)\\nvals = allvals[finite]  # 65534 finite values\\nprint(\\\"num finite fp16:\\\", vals.numel())\\n\\nerrs = []\\nB = 30000\\nref = torch.atan(vals.to(torch.float64))\\nouts = []\\nfor i in range(0, vals.numel(), B):\\n    chunk = vals[i:i+B].to(torch.float16).cuda()\\n    out = kernel.run(chunk)\\n    outs.append(out.cpu())\\nactual = torch.cat(outs).to(torch.float64)\\nerr = (actual - ref).abs()\\nmaxerr = err.max().item()\\nidx = int(err.argmax())\\nres = {\\n  \\\"metric\\\": \\\"max absolute error over all finite FP16 values vs FP64 atan\\\",\\n  \\\"num_values\\\": int(vals.numel()),\\n  \\\"max_abs_err\\\": maxerr,\\n  \\\"tolerance\\\": 1e-6,\\n  \\\"violations\\\": int((err > 1e-6).sum()),\\n  \\\"worst_input\\\": float(vals[idx]),\\n  \\\"worst_actual\\\": float(actual[idx]),\\n  \\\"worst_ref\\\": float(ref[idx]),\\n}\\nprint(json.dumps(res))\\n# also error profile by magnitude region\\nfor name, mask in [(\\\"|x|<0.66\\\", vals.abs()<=0.66), (\\\"0.66<|x|<=2.414\\\", (vals.abs()>0.66)&(vals.abs()<=2.414213562373095)), (\\\"|x|>2.414\\\", vals.abs()>2.414213562373095)]:\\n    m = mask.cpu()\\n    res[name] = float(err[m].max())\\nprint(json.dumps({k: v for k, v in res.items()}))\", \"expected_signal\": \"max_abs_err > 1e-6 confirms claim\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792292860,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 529,
+    "prompt_tokens": 10568,
+    "total_tokens": 11097,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6433,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

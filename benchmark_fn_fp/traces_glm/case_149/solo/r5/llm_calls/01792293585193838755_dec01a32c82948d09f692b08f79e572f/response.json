@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-d5ddd6ad",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the exhaustive probe over all 65536 FP16 bit patterns, comparing kernel output bits against a correctly-rounded FP64 reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ba3a4c13ba1d90e6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, struct, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_149\\\")\\nimport kernel\\n\\nbits = torch.arange(0, 65536, dtype=torch.int32).to(torch.uint16)\\nx_all = bits.view(torch.float16).cuda()  # all encodings incl NaN/Inf\\nx_cpu_all = bits.view(torch.float16)\\nfinite_mask = torch.isfinite(x_cpu_all)\\n# run in chunks of 131072? N max 131072, fine to run all at once but exclude nonfinite\\nidx = torch.nonzero(finite_mask).flatten()\\nx = x_cpu_all[idx].cuda()  # 65504 finite encodings\\nN = x.numel()\\nprint(\\\"N finite encodings:\\\", N)\\n\\nout = kernel.run(x)\\nref = kernel.reference(x)\\n\\nout_bits = out.view(torch.int16).cpu().to(torch.int32) & 0xFFFF\\nref_bits = ref.view(torch.int16).cpu().to(torch.int32) & 0xFFFF\\nmism = (out_bits != ref_bits).nonzero().flatten()\\n\\n# also compute FP64 ground truth independently (mpmath-free: use python math + struct pack '<e')\\ndef fp64_ref(xi):\\n    v = 1.0/(1.0+math.exp(-float(xi)))\\n    return struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", v))[0]\\n\\nextra_check = 0\\nfor i in mism.tolist()[:50]:\\n    xi = x_cpu_all[idx[i]]\\n    true_r = fp64_ref(xi)\\n    print(\\\"mismatch input:\\\", float(xi), \\\"kernel:\\\", float(out[i].cpu()), \\\"ref:\\\", float(ref[i].cpu()), \\\"fp64:\\\", true_r,\\n          \\\"kernel_bits:\\\", hex(out_bits[i].item()), \\\"ref_bits:\\\", hex(ref_bits[i].item()))\\n\\nimport json\\nprint(json.dumps({\\\"metric\\\":\\\"exact fp16 bit pattern vs FP64 correctly-rounded reference\\\",\\n \\\"mismatch_count\\\": int(mism.numel()), \\\"N\\\": int(N)}))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293585,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 480,
+    "prompt_tokens": 10527,
+    "total_tokens": 11007,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6286,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-85134c93",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The kernel computes sigmoid in FP64 with a single FP16 rounding. Since the domain is all finite FP16 values (61,440 encodings), I'll test exhaustively against a high-precision (mpmath) reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-991163b3122275c5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport json, math, struct, torch\\nfrom mpmath import mp, mpf, exp as mpexp\\nmp.dps = 60\\n\\n# all finite FP16 bit patterns\\nvals = []\\npatterns = []\\nfor p in range(65536):\\n    b = struct.pack(\\\"<H\\\", p)\\n    f = struct.unpack(\\\"<e\\\", b)[0]\\n    if math.isfinite(f):\\n        vals.append(f)\\n        patterns.append(p)\\nprint(\\\"finite count\\\", len(vals))\\n\\n# high-precision reference: correct RN rounding of real sigmoid to fp16\\n# Use Fraction/mpf to get exact-ish real value; round manually with round-half-even.\\nref_bits = []\\nfor f in vals:\\n    x = mpf(f)\\n    s = mpf(1)/(1 + mpexp(-x))\\n    # round to fp16 via struct with mpmath -> convert with careful tie handling:\\n    # easiest: use struct only if not a tie; detect ties by checking neighborhood.\\n    # Do manual rounding: represent s as mpf, find fp16 candidates via nextafter.\\n    lo = mpf(struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", float(s)))[0])\\n    # better: compute candidates by converting mpf to float, then check rounding directly.\\n    # Manual: get exponent, construct.\\n    # Simpler robust approach: use Python float(s) is double-rounded -> can be wrong at ties.\\n    # Use mpmath to pick between two nearest fp16 values:\\n    def fp16_candidates(v):\\n        fl = float(v)\\n        a = struct.unpack(\\\"<e\\\", struct.pack(\\\"<e\\\", fl))[0]\\n        # get neighbor below and above using bit manipulation on candidate\\n        import struct as st\\n        bits = st.unpack(\\\"<H\\\", st.pack(\\\"<e\\\", a))[0]\\n        if a == 0:\\n            below_bits, above_bits = 0x8000, 0x0001  # -0, smallest subnormal\\n        elif bits & 0x8000:  # negative\\n            if bits == 0x8000:\\n                below_bits, above_bits = 0x8001, 0x0000\\n            else:\\n                below_bits, above_bits = bits+1, bits-1\\n        else:\\n            below_bits, above_bits = bits-1, bits+1\\n        b = struct.unpack(\\\"<e\\\", st.pack(\\\"<H\\\", below_bits))[0]\\n        c = struct.unpack(\\\"<e\\\", st.pack(\\\"<H\\\", above_bits))[0]\\n        return b, a, c, below_bits, bits, above_bits\\n    b, mid, a, bb, mb, ab = fp16_candidates(s)\\n    if s == mpf(mid):\\n        chosen = mb if (struct.unpack(\\\"<H\\\", struct.pack(\\\"<e\\\", mid))[0] & 1) == 0 else (ab if False else None)\\n        # even tie: pick candidate with even last bit\\n        chosen = mb if (mb & 1)==0 else ab\\n    elif s < mpf(mid):\\n        # between below and mid\\n        if s - mpf(b) < mpf(mid) - s:\\n            chosen = bb\\n        elif s - mpf(b) > mpf(mid) - s:\\n            chosen = mb\\n        else:\\n            chosen = bb if (bb & 1)==0 else mb\\n    else:\\n        if s - mpf(mid) < mpf(a) - s:\\n            chosen = mb\\n        elif s - mpf(mid) > mpf(a) - s:\\n            chosen = ab\\n        else:\\n            chosen = mb if (mb & 1)==0 else ab\\n    ref_bits.append(chosen)\\n\\nN = len(vals)\\nx_gpu = torch.tensor(vals, dtype=torch.float16, device=\\\"cuda\\\")\\nimport sys\\nsys.path.insert(0, \\\"/root/cases/case_148\\\")\\nimport kernel\\nout = kernel.run(x_gpu)\\nout_bits = out.view(torch.int16).cpu().numpy().astype(\\\"int64\\\") & 0xFFFF\\nref_arr = [ (b if b < 32768 else b - 65536) for b in ref_bits ]\\nmism = []\\nfor i in range(N):\\n    if out_bits[i] != ref_arr[i]:\\n        mism.append((vals[i], patterns[i], int(out_bits[i]), ref_bits[i]))\\nprint(\\\"mismatches:\\\", len(mism))\\nfor m in mism[:20]:\\n    print(m)\\nprint(json.dumps({\\\"mismatch_count\\\": len(mism), \\\"tested\\\": N}))\\n\", \"expected_signal\": \"exhaustive fp16-domain bit-exact comparison\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run an exhaustive probe: all finite FP16 values, compare kernel output vs high-precision reference (mpmath or torch float64 + careful rounding? Better use mpmath with correct exp). 65536 - excluded NaN/Inf; there are 3072 inf/nan patterns? FP16 has 65536; finite = 61440. Kernel run requires N<=131072, so a single tensor of 61440 works.\n\nReference: compute sigmoid in high precision. Python's math.exp is double; sigmoid in FP64 might itself round incorrectly in ties near midpoints. Use mpmath with 50 dps. That's 61440 mpmath computations — fine.\n\nAlso check the kernel uses tl.where x<0 branch: for x>=0 numerator=1, denom=1+exp(-x), value=1/(1+exp(-x)) = sigmoid. For x<0: e/(1+e) = 1/(1+e^{x}) = sigmoid(x). Correct math. Question is whether FP64 libdevice exp + div + single round to fp16 gives correctly rounded result everywhere. Known failures possible near half-way points. Exhaustive test decides.\n\nWrite probe with run_claim_probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792293170,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1291,
+    "prompt_tokens": 10285,
+    "total_tokens": 11576,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 257,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6246,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

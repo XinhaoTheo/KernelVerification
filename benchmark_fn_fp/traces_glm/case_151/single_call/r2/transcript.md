@@ -1,0 +1,667 @@
+# Single-call trace
+
+## System prompt
+
+You are verifying whether a GPU (Triton) kernel implementation is correct.
+
+You will be given:
+1. A problem statement describing the operation's contract and its reference behavior.
+2. The kernel implementation under test.
+
+Decide one of:
+- "reject": the implementation has a real defect / violates the stated contract.
+- "trust": the implementation is correct, or is an equally valid alternative implementation.
+- "needs_more_evidence": you genuinely cannot tell.
+
+Answer with the JSON object required by the output schema.
+Output schema:
+{"type": "object", "required": ["verdict", "confidence", "reason"], "properties": {"verdict": {"type": "string", "enum": ["trust", "reject", "needs_more_evidence"], "description": "'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell."}, "confidence": {"type": "number", "description": "0.0 to 1.0."}, "reason": {"type": "string", "description": "One or two sentences."}}, "additionalProperties": false}
+
+## User prompt
+
+## Problem statement (contract + reference behavior)
+
+Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.
+
+For a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is
+
+    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.
+
+Return the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.
+
+Inputs and complete public domain:
+- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.
+- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.
+- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.
+- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.
+
+Return a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.
+
+validate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.
+
+NTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Forward cyclic NTT with fused butterfly stages.
+
+Original synthetic Triton implementation, not an upstream cryptographic kernel.
+"""
+import torch
+import triton
+import triton.language as tl
+
+_Q = 3329
+_ROOT = 17
+_R = 1 << 16
+_R_INV = pow(_R, -1, _Q)
+
+
+def _coefficient_product(left, right):
+    return (left * right) % _Q
+
+
+def _make_coefficients(width):
+    """Pack the coefficient banks for each fused stage and optional last stage."""
+    omega = pow(_ROOT, 256 // width, _Q)
+    result = []
+    half = 1
+    for _ in range((width.bit_length() - 1) // 2):
+        first = [(_R * pow(omega, j * width // (2 * half), _Q)) % _Q
+                 for j in range(half)]
+        second = [(_R * pow(omega, j * width // (4 * half), _Q)) % _Q
+                  for j in range(half)]
+        upper = [(_R * pow(omega, (j + half) * width // (4 * half), _Q)) % _Q
+                 for j in range(half)]
+        cross_low = [_coefficient_product(a, b) for a, b in zip(first, second)]
+        cross_high = [_coefficient_product(a, b) for a, b in zip(first, upper)]
+        result.extend(first + second + upper + cross_low + cross_high)
+        half *= 4
+    if (width.bit_length() - 1) % 2:
+        result.extend([(_R * pow(omega, j, _Q)) % _Q for j in range(width // 2)])
+    return result
+
+
+@triton.jit
+def _multiply(value, coefficient):
+    product = value.to(tl.int64) * coefficient.to(tl.int64)
+    correction = (product * 3327) & 65535
+    reduced = (product + correction * 3329) >> 16
+    return tl.where(reduced >= 3329, reduced - 3329, reduced).to(tl.int32)
+
+
+@triton.jit
+def _transform_kernel(X, COEFFICIENTS, OUT, N: tl.constexpr, LOG_N: tl.constexpr):
+    row = tl.program_id(0)
+    lane = tl.arange(0, N)
+    source = tl.full((N,), 0, tl.int32)
+    for bit in tl.static_range(0, LOG_N):
+        source = source | (((lane >> bit) & 1) << (LOG_N - 1 - bit))
+    value = tl.load(X + row * N + source).to(tl.int32)
+
+    for stage in tl.static_range(0, LOG_N // 2):
+        half = 1 << (2 * stage)
+        local = lane % half
+        base = (lane // (4 * half)) * (4 * half) + local
+        quadrant = (lane // half) & 3
+        a = tl.gather(value, base, axis=0)
+        b = tl.gather(value, base + half, axis=0)
+        c = tl.gather(value, base + 2 * half, axis=0)
+        d = tl.gather(value, base + 3 * half, axis=0)
+        start = 5 * (half - 1) // 3
+        first = tl.load(COEFFICIENTS + start + local)
+        second = tl.load(COEFFICIENTS + start + half + local)
+        upper = tl.load(COEFFICIENTS + start + 2 * half + local)
+        cross_low = tl.load(COEFFICIENTS + start + 3 * half + local)
+        cross_high = tl.load(COEFFICIENTS + start + 4 * half + local)
+        p = _multiply(b, first)
+        c_low = _multiply(c, second)
+        c_high = _multiply(c, upper)
+        d_low = _multiply(d, cross_low)
+        d_high = _multiply(d, cross_high)
+        lower_sum = a + p + c_low + d_low
+        lower_difference = a + p - c_low - d_low
+        upper_sum = a - p + c_high - d_high
+        upper_difference = a - p - c_high + d_high
+        value = tl.where(quadrant == 0, lower_sum,
+                         tl.where(quadrant == 1, upper_sum,
+                                  tl.where(quadrant == 2, lower_difference, upper_difference)))
+        value = (value + 2 * 3329) % 3329
+
+    if LOG_N % 2:
+        half = N // 2
+        local = lane % half
+        left = tl.gather(value, local, axis=0)
+        right = tl.gather(value, local + half, axis=0)
+        start = 5 * ((1 << (2 * (LOG_N // 2))) - 1) // 3
+        coefficient = tl.load(COEFFICIENTS + start + local)
+        weighted = _multiply(right, coefficient)
+        value = tl.where(lane < half, left + weighted, left - weighted)
+        value = (value + 3329) % 3329
+    tl.store(OUT + row * N + lane, value)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public field and tensor domain."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(), "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(), "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(), "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (64, 128),
+            "x must have shape [B,N], B in [1,128] and N in {64,128}")
+    require(x.dtype == torch.int32, "int32 input required")
+    require(bool(((x >= 0) & (x < 3329)).all()), "canonical field values 0..3328 required")
+    return {"valid": True, "batch": x.shape[0], "width": x.shape[1]}
+
+
+def run(x):
+    validate_inputs(x)
+    batch, width = x.shape
+    with torch.cuda.device(x.device):
+        coefficients = torch.tensor(_make_coefficients(width), dtype=torch.int32, device=x.device)
+        output = torch.empty_like(x)
+        _transform_kernel[(batch,)](
+            x, coefficients, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)
+    return output
+
+
+def reference(x):
+    """Direct modular DFT, independent of the coefficient banks and butterflies."""
+    validate_inputs(x, require_cuda=False)
+    width = x.shape[1]
+    matrix = [[pow(17, (256 // width) * k * j, 3329) for j in range(width)]
+              for k in range(width)]
+    coefficients = torch.tensor(matrix, dtype=torch.int64, device=x.device)
+    products = x.to(torch.int64)[:, None, :] * coefficients[None, :, :]
+    return (products.sum(dim=2) % 3329).to(torch.int32)
+
+
+def make_inputs(device="cuda", batch=7, width=64, seed=0):
+    """Examples only; every canonical field-valued row is legal."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = torch.randint(0, 3329, (batch, width), generator=generator, dtype=torch.int32)
+    return (x.to(device),)
+
+```
+
+Is this implementation correct?
+
+## Provider reasoning (verbatim)
+
+Let me analyze. The kernel is a radix-4 style fused NTT with bit-reversal permutation input. Need to verify the coefficient bank indexing and butterfly math. This is tricky; let me check the details.
+
+DIT radix-4: after bit-reversal, at each stage with half-size m, we have elements at positions base, base+m, base+2m, base+3m where base is a multiple of 4m. Twiddle factors: butterfly with W = omega^(N/(4m))? Actually standard radix-4 DIT butterfly:
+
+X0 = A + W^0*B... hmm let's write general radix-4 butterfly with twiddles t1 = W^{k}, t2 = W^{2k}, t3 = W^{3k}, where W = omega^{N/(4m)}... Actually per contract: values a,b,c,d with exponents... Standard radix-4 DIT butterfly (from vectorized NTT literature, e.g. Poseidon2/NTT in Triton from Ingonyx):
+
+Given m = half, tw = omega^(m?) Let me recall the ingonyx radix-4 butterfly code:
+
+```
+X0 = (a + b*tw0 + c*tw1 + d*tw2) mod q
+X1 = (a - i? ...)
+```
+
+Standard radix-4 DIF/DIT butterfly from the ingonyx NTT:
+```
+a' = a + b*w^{k} ... 
+```
+Ingonyx radix-4 DIT (complete butterfly):
+X0 = a + b + c + d
+X1 = a - i b - c + i d  ... complex.
+
+For modular NTT with omega = root of order N, radix-4 butterfly with k twiddle: outputs for four-point DFT of (a, b*t, c*t^2, d*t^3):
+
+X0 = a + bt + ct² + dt³
+X1 = a - i bt - ct² + i dt³  — involves i = N/4 root of unity.
+
+Hmm but here they use "upper" coefficients: second = omega^(j*width/(4*half))... Let's decode.
+
+Coefficients: for half=m (power of 4 progression: m=1,4,16,...). Wait, half starts at 1 and multiplies by 4 each fused stage. For width 64, LOG_N=6, LOG_N//2=3 fused stages with half = 1,4,16. Then LOG_N%2 = 0 for N=64 (6 even)? 6%2=0, so no last stage. For N=128, LOG_N=7, 3 fused stages (half=1,4,16), then last stage half=64.
+
+Coefficient indices: first[j] = R*omega^{j*W/(2m)}, j=0..m-1. second[j]=R*omega^{j*W/(4m)}, upper[j]=R*omega^{(j+m)*W/(4m)}, cross_low = first*second, cross_high = first*upper.
+
+So first uses twiddle ω^{N/(2m)·j}, i.e. exponent step N/(2m). With N=64, m=1: first = ω^{32}? wait j=0 only, so first=ω^0=1? j*W/(2m) with m=1: j=0 → ω^0=1. Hmm, first = [R*1] = [R]. That seems odd but stage 0 with m=1: butterfly on 4 adjacent elements with twiddles 1? Actually at the first stage (m=1), the radix-4 butterfly is a plain 4-point DFT with twiddles all 1 (since exponents multiples of N/4 give powers of i). Hmm, the butterfly formula:
+
+lower_sum = a + p + c_low + d_low
+lower_difference = a + p - c_low - d_low
+upper_sum = a - p + c_high - d_high
+upper_difference = a - p - c_high + d_high
+
+where p = b*first, c_low = c*second, c_high = c*upper, d_low = d*cross_low = d*first*second, d_high = d*first*upper.
+
+Check radix-4 DIT butterfly correctness: The DIT radix-4 butterfly with twiddle W (per stage, W = ω^{N/(4m)}? Let's derive. In DIT after bit-reversal, stage with half-size m combines sub-results of size m from positions base..base+m-1 (covering blocks of 2m and 4m). The standard radix-4 DIT butterfly (e.g., from "Fast Fourier transform algorithms" or the well-known ingonyx code):
+
+```
+X0 = (a + b + c + d) with twiddles?
+```
+
+Actually ingonyx's ntt radix4_complete butterfly:
+
+```
+a1 = a + c
+a2 = a - c
+b1 = b + d
+b2 = b - d
+... no that's radix-4 DIF.
+```
+
+Let me derive the math. In a DIT Cooley-Tukey with radix 4: after first stage, at each subsequent stage with half m, we treat the sequence as 4 interleaved DFTs of length... Actually after bit-reversal reorder, stage m: elements at positions base, base+m, base+2m, base+3m where base ranges over blocks. The butterfly computes a 4-point DFT with twiddle exponents scaled.
+
+The correct radix-4 DIT butterfly for NTT (from Ingonyx triton NTT, which this resembles strongly):
+
+```
+# butterfly:
+X0 = a + b*tw_{2k} + c*tw_k... 
+```
+
+Ingonyx radix4_complete_butterfly:
+
+```
+tmp_value = c*q_mod ... 
+a1 = (a + c) 
+```
+
+Actually let me just derive from scratch. Standard CT DIT: split x into 4 subsequences x(4j+r), DFT_N[k] = sum over r of ω^{rk} DFT_{N/4}^{(r)}[k mod N/4]. Radix-4 stage with m = N/4^{s+1} at stage s... The butterfly at size 4m combines four m-length DFTs into a 4m-length DFT:
+
+Y[4m block, k'] where k' = k mod m? Hmm.
+
+Butterfly for block of size 4m: inputs A[k], B[k], C[k], D[k] (k=0..m-1) are DFT_m of the four subsequences. Output for frequency q (0..4m-1):
+
+Out[q] = A[k] + ω4m^{q·0? }... The formula: Out[q] = sum_{r=0}^{3} ω_{4m}^{q·r?} ... Actually CT: X[q] = Σ_r ω_{4m}^{q r} Xr[k] where k = q mod m and Xr is the r-th subsequence DFT_m. Wait more precisely X[q] = Σ_r ω_N^{...}. For block-local: within block of length 4m, Out[q] = Σ_{r} ω_{4m}^{q·r} Xr[q mod m].
+
+Write q = 4ℓ + s, s=0..3, and let k = q mod m. Hmm, standard radix-4 butterfly with twiddle t = ω_{4m}^k:
+
+Out[q] where q = 4ℓ + s:
+X0 = A[k] + t·B[k]? Let's use: ω_{4m}^{q r} = ω_{4m}^{(4ℓ+s) r} = ω_m^{ℓ r} · ω_{4m}^{s r}·... hmm ω_{4m}^{4ℓr} = ω^{... } = (ω_{4m}^4)^{ℓr} = ω_m^{ℓ r}. That's messy since it depends on ℓr mod m. Alternative standard form: compute per k the butterfly with twiddles ω_{4m}^{k}, ω_{4m}^{2k}, ω_{4m}^{3k} to get intermediate U0..U3, then output Out[4ℓ+s] = ω_{4m}^{?}... Actually standard radix-4 DIT butterfly:
+
+For each k in 0..m-1:
+  T1 = B[k]·ω_{4m}^k? No.
+
+Standard (analog of radix-2 where Out[2ℓ] = A[ℓ]+ω^ℓ B[ℓ], Out[2ℓ+1]=A[ℓ]−ω^ℓ B[ℓ], with k=ℓ and twiddle ω_{2m}^ℓ; note frequency index equals ℓ for radix-2). For radix-4:
+
+Out[4ℓ+s] = Σ_r ω_{4m}^{(4ℓ+s)r} Xr[ℓ]. Hmm but Xr index is ℓ? In radix-2 CT: X[k] for k=2ℓ uses even subseq DFT at ℓ. Yes, X[2ℓ] = Σ_r ω_N^{2ℓr} Xr[ℓ], ω_N^{2ℓr} with r∈{0,1}: = Σ ω_m^{ℓ r} ω_N^{s r} where s=k mod 2. Hmm, radix-2: X[2ℓ] = E[ℓ] + ω_N^{2ℓ}? Let me not over-derive; the standard butterfly:
+
+For k in 0..m-1 (k is the frequency index within sub-DFTs):
+  U = A[k] + ω_{4m}^{4k?}... 
+
+The clean standard radix-4 butterfly (Oppenheim): with W = ω_{4m}, Xr = subseq DFTs, for k=0..m-1:
+  T0 = ω_{4m}^{k}·? The DIT radix-4 butterfly:
+  G0 = (A[k]+C[k]) , etc. — that's the version where twiddles are applied first? Actually there are two orderings.
+
+Simplest check: verify against known ingonyx code. Ingonyx "radix-4 complete butterfly" for NTT (from go-neg-... "ntt_kernel"):
+
+```
+def radix4_complete_butterfly(...):
+    a1 = (a + c) mod q
+    a2 = (a - c) mod q
+    b1 = (b + d) mod q
+    b2 = (b - d) mod q
+    ...
+```
+That's radix-4 DIF.
+
+Hmm. Alternatively, this implementation resembles the ingonyx Triton NTT (from "Accelerating NTT" paper / icicle-like). Let me just verify the butterfly math directly with a tiny symbolic check.
+
+Butterfly given: quadrants q0..q3 receive:
+q0: a + b·t1 + c·t2 + d·t1t2
+q1: a − b·t1 + c·t3 − d·t1t3
+q2: a + b·t1 − c·t2 − d·t1t2
+q3: a − b·t1 − c·t3 + d·t1t3
+
+where t1 = first = ω^{N/(2m)·j}, t2 = second = ω^{N/(4m)·j}, t3 = upper = ω^{N/(4m)·(j+m)} = t2 · ω^{N/4} = t2·i (i = ω^{N/4}, sqrt(−1) element, since ω^{N/4} has order 4).
+
+Note t1 = ω^{N/(2m)·j} = t2²·? ω^{N/(2m)·j} = (ω^{N/(4m)·j})² = t2². So t1 = t2². Good, consistent with radix-4 DFT structure: a 4-point DFT with twiddle t = t2: weights for subseq r are t^{r²?}... Actually the DFT-like weights: for radix-4, the intermediate 4-point transform uses i = ω^{N/4}.
+
+Standard radix-4 DIT butterfly (with twiddles applied at input):
+Xq = Σ_{r=0}^{3} Xr · ω_{4}^{?} where twiddle ω_{4m}^{k·r}. Let k=j (frequency index in sub-DFTs), t = ω_{4m}^{j} = t2. Then intermediate:
+
+U_s = Σ_r Xr[k] · ω_4^{s r} · t^{r}? Hmm.
+
+Let me derive properly. Block of size 4m; sub-DFTs A,B,C,D each length m (of the decimated-by-4 subsequences). Frequency q ∈ [0,4m), write q = 4ℓ + s, s∈{0..3}, ℓ∈[0,m). Then
+
+Out[q] = Σ_r ω_{4m}^{q r} Xr[ℓ]  (Xr is sub-DFT indexed at ℓ? No—sub-DFT index is q mod m... hmm.)
+
+CT recursion: X[q] = Σ_r ω_N^{q r (N/(4m))?}... This is getting complicated because stage isn't the full recursion. Let's think in terms of iterative radix-4 DIT with bit-reversed input: standard algorithm (like radix-2 DIT with digit-reversed input).
+
+For radix-2: after bit-reversal, stage with m (half-size): butterfly combines positions p and p+m within block of 2m: Out[2ℓ? ] — with digit-reversed input, at stage m the outputs at positions 2ℓ and 2ℓ+1? Hmm no. In iterative DIT FFT with bit-reversed input, at stage with half-size m, butterfly: for each block start p (multiple of 2m) and j∈[0,m):
+  u = data[p+j], v = data[p+j+m]·ω_{2m}^j
+  data[p+j] = u+v; data[p+j+m] = u−v.
+Output positions are linear frequency order at the end.
+
+Generalize radix-4: at stage with quarter-size m, block size 4m, for j∈[0,m):
+  a,b,c,d = data[p+j], data[p+j+m], data[p+j+2m], data[p+j+3m]
+  twiddles: ω_{4m}^{j}, ω_{4m}^{2j}, ω_{4m}^{3j}
+  The 4-point DFT with these twiddles:
+  Out[p + j]? Standard radix-4 butterfly (from FFTW/standard):
+  X0 = a + b w^j + c w^{2j} + d w^{3j}
+  X1 = a − i b w^j − c w^{2j} + i d w^{3j}? Hmm.
+
+Standard radix-4 DIT butterfly:
+t = ω_{4m}^j
+X[p+j]       = a + t b + t² c + t³ d? No...
+
+Actually standard radix-4 DIT butterfly (Oppenheim, with twiddles applied before the 4-point DFT):
+X1 = (a + c) + (b + d)·t?  Hmm, there are two equivalent formulations:
+
+Formulation (twiddle after 4-point DFT): 
+  Compute U_s = 4-point DFT of (a,b,c,d): U0=a+b+c+d, U1=a−ib−c+id, U2=a−b+c−d, U3=a+ib−c−id.
+  Then Out[p+j+s·m]? No, output indices: Out[4j+s]... but p+j positions...
+
+Hmm, the output layout for radix-4 DIT: outputs at indices p + s·m + j? That doesn't match storing at base..base+3m in-place per j. Actually radix-4 DIT in-place: butterfly for j writes to positions p+j, p+j+m, p+j+2m, p+j+3m (same as reads), and frequencies: Out[p + j] corresponds to... let me check with small case N=4, m=1, p=0, j=0: a=x[0] (bit-reversed = x[0]), b=x[1]→br=x[2], etc. For N=4, DFT: X[k]=Σ ω^{jk} x[br(j)]... With digit-reversed input: input to butterfly a=x[br0], b=x[br1], c=x[br2], d=x[br3] where br is base-4 digit reversal of index j... For N=4, order 4 digit reversal of (0,1,2,3) is itself.
+
+X[k] = Σ_j ω_N^{jk} x[j] = a + b ω^k + c ω^{2k} + d ω^{3k}.
+
+So X0 = a+b+c+d, X1 = a + bω + cω² + dω³, X2 = a + c? ω²=−1, ω= i: X2 = a − b + c − d, X3 = a − ib − c + ib? Let's write with i=ω (order 4): X1 = a + ib − c − id? ω^{1·1}=i, ω^{2}=−1, ω^3=−i: X1 = a + ib − c − id. X3 = a − ib − c + id.
+
+So per k, outputs use twiddles ω^{jk} for k=0..3 with ω=ω_4=i. Generalize to stage m, j: replace x[j·r] contribution: at stage with sub-block size m, block 4m: Out at frequency 4ℓ+s within block:
+
+The butterfly should compute, for input positions p+j+r·m holding values V_r (r=0..3), the contributions to frequencies. In DIT with digit-reversed input, after the previous stages, V_r[j] = DFT_m of subsequence r (for subsequences of the block decimated by 4), at frequency j? Hmm — with digit-reversal, the ordering means... In radix-2 DIT iterative: after stages up to size m, position p+j holds DFT_m of the appropriate subsequence at frequency j (since digit-reversed input means outputs in natural order). Yes: with bit-reversed input, after stage producing size-m blocks, data[p + j] = DFT at frequency j of the subsequence. Then butterfly at stage m (block 2m):
+
+data[p+j] (new) = freq 2j of block? Let's verify radix-2: block 2m, positions p+j (A[j]=subseq even DFT at freq j) and p+j+m (B[j]). New values:
+u+v at position p+j → this is Out[2j]? For N=2: a, b; Out[0]=a+b at pos 0, Out[1]=a−b at pos 1 (with ω_2=−1, twiddle ω_{2m}^j=ω^{j}... for N=2, m=1, j=0, twiddle=1). Position p+j gets freq 2j, position p+j+m gets freq 2j+1. Check general: freq f=2ℓ+s. Out[f] = A[ℓ] + ω_N^{f·m?}... In the iterative algorithm, position p+j after stage holds frequency 2j (even freqs at low positions? no—positions p+j and p+j+m hold freqs 2j and 2j+1). Then at next stage 2m, position q holds frequency... this must be consistent: freq index in binary reversed gradually. Yes, this is standard: with bit-reversed input, after each stage, position index's low bits equal frequency's low bits. Position p+j within block of 2m: frequency ≡ 2j mod 4? Hmm, frequency's low bits match position's high... Actually standard result: after stage with half-size m, output at position i corresponds to frequency where the top log2(2m) bits of frequency equal... 
+
+OK this derivation-by-memory is unreliable. Better: trust the structure and check the final stage and indexing consistency, or do a small symbolic trace. Given N=64 supported, can't trace 64 by hand, but I can check the algebra of the butterfly assuming it's the standard radix-4 DIT butterfly from the ingonyx Triton NTT (this code is clearly modeled on that). Ingonyx's Triton NTT (from the paper "Accelerating Zero-Knowledge Proofs"—ntt kernel) uses radix-4 with:
+
+```
+X0 = a + b*tw0 + c*tw1 + d*tw2
+X1 = a - b*tw0 + c*tw1 - d*tw2  ... 
+```
+
+Hmm actually I recall the ingonyx radix4 butterfly:
+
+```
+X_0 = (a + c) + tw*(b + d) ... no.
+```
+
+Let me just verify the butterfly algebraically as a 4-point decomposition.
+
+Claim: radix-4 DIT butterfly at stage m computes, for j∈[0,m), with t = ω_{4m}^j, i = ω_{4} = ω^{N/4} (order 4):
+
+Out[freq 4j+0] = a + t b + t² c + t³ d? Hmm but where does the write go? Writes go to positions base+j (quadrant 0), base+j+m (q1), base+j+2m (q2), base+j+3m (q3) — since lane with local=j and quadrant=(lane//half)&3... wait, base = (lane//(4*half))*(4*half) + local, and quadrant = (lane//half)&3. So lane = block*4m + q*m + j with q = (lane//m)&3? Hmm, (lane//half)&3 with half=m: lane = B*4m + q*m + j, lane//m = B*4 + q, &3 = q. Yes. So output position base + q*m + j where base = B*4m + j. Wait base = (lane//(4m))*4m + local = B*4m + j. So output position = B*4m + q*m + j.
+
+Reads: a at base=B*4m+j? gather(value, base) — base = B*4m + j. Hmm, but reads should be at B*4m + j, +m, +2m, +3m. Yes: a=V[B*4m+j], b=V[...+j+m], etc. And writes to positions B*4m + q*m + j. So after the stage, position holds frequency... this is the standard "digit reversal completes gradually" layout: position B*4m + q*m + j ↔ frequency B*4m + ... hmm.
+
+Actually in radix-4 DIT with digit-reversed input, at stage with sub-size m, within block of 4m at base P=B*4m: input V[P + r*m + j]? Wait, before this stage, blocks are of size m: position P + r*m + j (j∈[0,m)) holds the DFT_m of subsequence r at frequency j. The butterfly combines the four size-m blocks into a size-4m block. Output positions: after the stage, the block of size 4m is stored such that position P + q*m + j? Hmm, no—after stage, position P + f should hold frequency f of the 4m-block? At the end (last stage), output is at position = frequency (lane, natural order). Final stage here: reads left=gather(value, local), right=gather(value, local+half) with half=N/2, writes at lane: lane<half → left+weighted at position lane; else left−weighted. So reads: position j and j+N/2, outputs at j and j+N/2. So before the last stage, position j holds... radix-2 final: positions j and j+m hold A[j], B[j]; outputs freq 2j at position j? No wait: for the last stage in standard DIT with digit-reversed input, after it output is natural order: position j_out = freq. Standard radix-2 butterfly: u=A[j], v=ω^j B[j]; freq 2j = u+v stored at position... In iterative Cooley-Tukey with bit-reversed input, the final output at position f. Standard loop: for len=2..N: for each block, for j: u=d[p+j], v=d[p+j+len/2]*w^j; d[p+j]=u+v, d[p+j+len/2]=u−v. At the end d[f] = X[f]. So intermediate: after stage len, position p+j within block holds frequency whose low bits... position i in block of size len at "sub-position" j (=i mod len/2, q = i//(len/2) within block): holds frequency f with f mod len = ... Let me just check N=4 radix-2: bit-reverse input: d = [x0, x2, x1, x3]. Stage len=2: block p=0: u=d0=x0, v=d1*x ω^0 = x2 → d0=x0+x2 (freq 0 of first half? these are freq 0 of {x0,x2} and {x1,x3}) → d0 = X[0], d1 = X[2]. Block p=2: d2 = x1+x3 = X[1], d3 = X[3]. So after stage, position i holds freq: 0→0,1→2,2→1,3→3: freq = bitreverse limited... position i in binary b1 b0 holds freq b0 b1 within... yes: position i's bits reversed give frequency so far. So after stage with half m, position P+q*m+j holds frequency ... bits: frequency low bits = q appended appropriately. Specifically, position within block: q*m+j, freq = j*(4) + q? Check: position 1 (q=1,j=0) holds freq 2 = j*2 + q with radix-2, m=1. Position 2 (q=0? block...). In radix-2 example: position 1 = q*m+j with m=1: q=1,j=0 → freq = j*2+q = 1? But actual freq is 2. Hmm. Let's recompute: N=4, stage len=2 (m=1): block P=0: positions 0,1 → freqs 0,2. Position 0: j=0,q=0 → freq 0. Position 1: i=1, j = i mod m=0, q = i//m=1 → freq 2 = 2j + q? 2*0+1=1 ≠ 2. Try freq = q*2 + j: 1*2+0=2 ✓. Position 2: block P=2, j=0, q=0 → freq = 0*2+... hmm but with block base: freq global = blockFreqBase + local. Block 2 covers freqs {1,3}: position 2 = P + q*m + j with q=0 → freq 1; position 3 q=1 → freq 3. So freq = (P//2)*(2) + q*... freq = 2*(P//m/2)? General: freq = (P // (2m)) * (2m) + 2*j + q? Check position 1: P=0, 2m=2, j=0, q=1: freq = 0 + 0 + 1 = 1? Wrong, should be 2.
+
+Hmm. Let me recheck: d = [x0, x2, x1, x3] bit-reversed of [x0,x1,x2,x3] (bit-reverse of index 1=2, 2=1). Stage len=2, m=1: butterfly u=d[p+j], v=d[p+j+m]: p=0: u=d0, v=d1: d0=x0+x2 = X[0]? X[0]=x0+x1+x2+x3. No! d0 = x0+x2 is not X[0]. Oh right—after only the first stage, d0 = sum of even... it's the intermediate: d0 = E[0] where E = DFT of even subseq {x0,x2}. Then next stage len=4: p=0, j=0: u=d0, v=d2 * ω^0? v = d[p+j+m] = d2. d0_new = d0 + d2 = x0+x2+x1+x3 = X[0] ✓ at position 0. d1_new = d1 + d3 = x2... d1 = x0−x2, d3 = x1−x3, d1_new = X[2] at position 1 ✓. d2 = d0 − d2 = X[1] at position 2 ✓. So final positions: pos 0,1 hold even freqs 0,2? pos1 holds freq 2, pos2 holds freq 1. So final layout: position i holds freq where... pos 0→0, 1→2, 2→1, 3→3. That's freq = bitreverse? No: output is supposed to be natural order at end! But here position 1 holds freq 2. Contradiction → my butterfly assignment is wrong. Correct iterative CT with bit-reversed input gives natural output. Let me redo: bit-reversed input d = [x0, x2, x1, x3]. Standard: stage len=2: butterflies (0,1) and (2,3): d0' = x0+x2, d1' = x0−x2, d2' = x1+x3, d3' = x1−x3. Stage len=4: butterfly (0,2): u=d0', v=d2'*ω^0: d0''=x0+x2+x1+x3=X[0] ✓ pos0. d2''= x0+x2−x1−x3 = X[2] ✓ pos2 holds freq 2. And butterfly (1,3): u=d1', v=d3'*ω^1 (twiddle ω_N^j with j=1): d1'' = (x0−x2) + i(x1−x3)... wait ω^1 where ω = ω_4 = i? twiddle is ω_N^{j·?}. In iterative CT: v = d[p+j+m] * ω_N^{j} — no: twiddle ω_{len}^j = ω_N^{j·N/len}. For len=4, j=1: ω_4^1 = i. d1'' = (x0−x2) + i(x1−x3) = X[1]? X[1] = x0 + i x1 − x2 − i x3 = (x0−x2) + i(x1−x3) ✓ pos1 = freq 1 ✓. d3'' = (x0−x2) − i(x1−x3) = X[3] ✓.
+
+So my earlier claim "position 1 holds freq 2 after stage len=2" was about intermediate; fine. Key: writes at p+j and p+j+m correspond to freqs (within the eventual natural order) — position p+j gets "sum" branch and ends as freq with bit... The pattern: at stage len, position p+j (low half of block) and p+j+m (high half). After all stages, position = freq. Good, standard.
+
+So for radix-4 analog: stage with m (quarter size), block 4m, reads at P+j, P+j+m, P+j+2m, P+j+3m, writes to positions P + q*m + j (q=0..3 as quadrant). And output frequencies: which freq does each write position correspond to? At the end of all stages, position = freq. So during the algorithm, the invariant is: position's low 2 digits (base 4) within the block... Analogous to radix-2 where at stage len, position p+j vs p+j+m correspond to freq bit 0 vs 1 at that stage's level. In radix-2, within block of len, position i = j + q*m? no, position p + j and p + j + m: the frequency each maps to: freq bit at position log2(len)-1 (the most significant of the bits determined so far... ). Let me establish with N=16 radix-2 trace mentally? That's heavy. Alternative: derive radix-4 butterfly directly.
+
+Radix-4 derivation: at stage m, block P of size 4m. Before stage: the four size-m sub-blocks at P+j·? hold DFT_m of the four subsequences (decimation by 4 of the block's elements in some digit-reversed sense). After stage: block P holds DFT_{4m} in "partially natural" order: position P + f? If the last fused stage for N=64 (3 radix-4 stages, LOG_N=6) ends with natural order output (stored at lane), then the invariant is: after stage with quarter-size m, position P + 4? Hmm — after the final stage, output written at lane (natural). The final radix-4 stage for N=64 has m=16, block = 64 = N, writes at positions q*16 + j... wait no: writes at base + q*half where base = (lane//(4m))*4m + j = j (single block), positions q*m + j for q∈0..3, j∈0..15. And these must be natural frequency order: freq = q*m + j? So freq = q*16 + j: freq's base-4 digits: q is the most significant base-4 digit? freq = q·m + j means the high radix-4 digit of freq is q, low digits j. Hmm, that would mean quadrant q ↔ frequency digit. 
+
+But wait — for N=64, LOG_N=6, stages: half = 1, 4, 16 (three stages: stage index 0,1,2 with half = 4^s). Final stage half=16, m=16, block size 64=N. Output position = q*16 + j must equal frequency. So freq = q·m + j, i.e., high base-4 digit is q, and remaining digits form j in... j ranges 0..15 covering lower digits.
+
+For the intermediate stage m=4 (block size 16): writes at position B*16 + q*4 + j. Frequency (global, 6 bits, 3 base-4 digits d2 d1 d0): block B covers freqs with top digit d2 = B. Within block, freq = d1·4 + d0 (as base-4 two-digit number = value 0..15). Position within block = q*4 + j. So q ↔ d1 and j ↔ d0? But j ranges over 0..3 (m=4, j∈[0,4)) — hmm m=4 means j∈[0,4), position q*4+j, q∈0..3: 16 positions. j is 2 bits (base-4 digit d0), q is d1. So invariant: position within block = q·m + j where j covers the lower digits, q is the next digit. Consistent with final stage: freq = q*m + j with j covering lower digits (m=16, j 0..15 = two lower digits). 
+
+So invariant: at stage with quarter-size m, within block of 4m: position = q·m + j ↔ frequency with digit q at radix-4 position log4(4m)−1... and j = lower digits. And reads at P + r·m + j (r=0..3): before the stage, what does position P + r·m + j hold? By induction, before this stage, blocks were of size m, and position P + r*m + j holds, within sub-block r, ... the sub-block r occupies positions P+r*m..P+r*m+m−1, and by invariant of previous stages, within sub-block of size m, position j (relative) corresponds to frequency j of that sub-block's DFT_m? Hmm: previous stage had quarter-size m/4 producing blocks of size m with writes at q'·(m/4) + j' — meaning within the size-m block, position = digit pattern, and frequencies of DFT_m: freq_local = q'·(m/4)+j'? So position within block = freq_local of the sub-DFT? Wait but that requires digit-reversal input so that... hmm, actually with digit-reversed input and this write pattern, after each stage position within block = frequency index of that block's DFT (natural). Let me double check with radix-2 N=4: stage len=2 (m=1): writes at p+j and p+j+m: within block of size 2, positions 0,1 = freqs 0,1 of the size-2 DFT ✓ (d0'=x0+x2 = freq0, d1' = x0−x2 = freq1 of {x0,x2}). Then stage len=4: position p+j and p+j+2: final position = freq ✓ natural. Great: so invariant: position within block = natural frequency of block's DFT. Reads at P + r*m + j = sub-block r, freq j of DFT_m^{(r)}.
+
+Now the butterfly: block of size 4m, we have A[j],B[j],C[j],D[j] = DFT_m of subsequences x[4t+r + block offset...] at frequency j. The DFT_{4m} of the block at frequency f: 
+
+Out[f] = Σ_{n=0}^{4m−1} x[n] ω_{4m}^{fn}. Decimate n = 4t + r: Out[f] = Σ_r Σ_t x[4t+r] ω_{4m}^{f(4t+r)} = Σ_r ω_{4m}^{fr} Σ_t x[4t+r] ω_m^{ft} = Σ_r ω_{4m}^{fr} X_r[f mod m].
+
+So Out[f] = Σ_{r=0}^3 ω_{4m}^{f·r} X_r[k], k = f mod m.
+
+Now the write position for frequency f = q·m + j... wait f = q*m + j is the position, and j must equal f mod m ✓ (j < m), q = floor(f/m) ∈ 0..3 ✓. So for output at position q*m+j (quadrant q), we need:
+
+Out[qm+j] = Σ_r ω_{4m}^{(qm+j) r} X_r[j] = Σ_r ω_{4m}^{jr} · ω_{4m}^{qmr} · X_r[j].
+
+ω_{4m}^{q m r} = (ω_{4m}^{m})^{qr} = ω_4^{qr} = i^{qr}.
+
+Let t = ω_{4m}^{j} (twiddle), and note ω_{4m}^{jr} = t^r. So:
+
+Out[qm+j] = A[j]·i^{0} + B[j]·t·i^{q} + C[j]·t²·i^{2q} + D[j]·t³·i^{3q}.
+
+Check q=0: A + tB + t²C + t³D.
+The kernel's quadrant 0: lower_sum = a + p + c_low + d_low = a + t1·b + t2·c + (t1t2)·d where t1 = first = ω^{N/(2m)·j}, t2 = second = ω^{N/(4m)·j}.
+
+Is t1 = t²? ω^{N/(2m)·j} = (ω^{N/(4m)})^{2j} = t². ✓. t1t2 = t³ ✓. So quadrant 0 = A + tB + t²C + t³D ✓ matches.
+
+Quadrant 1 (freq f = m + j): expected A + i t B + i² t² C + i³ t³ D = A + i tB − t² C − i t³ D.
+
+Kernel q1: upper_sum = a − p + c_high − d_high = a − t1·b + t3·c − t1t3·d, where t3 = upper = ω^{N/(4m)·(j+m)} = t2 · ω^{N/(4m)·m} = t2 · ω^{N/4} = t2 · i.
+
+So q1 = a − t² b + (t·i) c − t²·t·i·d = a − t²b + i t c − i t³ d.
+
+Expected: a + i t b − t² c − i t³ d. Kernel has the terms negated on b and c relative to expected (kernel: −t²b + itc; expected: +itb − t²c). These differ! Unless... hmm. Wait — maybe the quadrant↔digit mapping is different. Maybe q corresponds differently, e.g., output digit q means f = j*4 + q or similar. Let me check the final stage invariant more carefully, and check quadrant 2.
+
+Kernel q2: lower_difference = a + p − c_low − d_low = a + t²b − t²c... wait c_low = c·t2 = c·t²? Hmm, c_low = _multiply(c, second) = c·t2 = c·t²? But t² should be the coefficient for C, which is t² ✓ (since t1 = t²). Wait I need to recompute: t := ω_{4m}^j = second. Then first = t², cross_low = t³, upper = t·i, cross_high = t²·t·i = t³·i.
+
+q0 = a + b t² + c t + d t³.
+Expected q0 (f = 0·m + j): a + b t + c t² + d t³.
+
+These differ: kernel has b and c swapped coefficients. Hmm! So either my mapping of first/second to b/c is off, or the twiddle assignment... Let me recheck first and second definitions:
+
+first = [R * ω^{j·width/(2·half)}] → exponent j·N/(2m).
+second = [R * ω^{j·width/(4·half)}] → exponent j·N/(4m).
+
+With half = m: first uses N/(2m), second uses N/(4m). ω_{4m} = ω^{N/(4m)}. So second = t, first = t². So p = b·t², c_low = c·t, d_low = d·t³.
+
+Expected: B coefficient t, C coefficient t². Kernel: B gets t², C gets t. Mismatch!
+
+Hmm. Unless the decimation is different — maybe reads a,b,c,d at positions +m, +2m, +3m correspond to subsequences differently, or the digit mapping is such that the "frequency" formula differs. Let me reconsider: maybe f mod m and f's digit structure. Position q·m + j: maybe this corresponds to frequency where digit order is reversed: freq = j·4 + q? For N=64, final stage m=16: freq = j·4 + q with j∈0..15, q∈0..3 gives values up to 63 ✓. Then which is right? The output must be natural order at the end. Both mappings are bijections; the correct one depends on the bit-reversal permutation at input and stage progression. Let me trace a small radix-4 example fully: N=16, LOG_N=4, stages: fused stages = LOG_N//2 = 2, half = 1, 4. Then LOG_N%2=0, no last stage. Wait N=16 not in domain but for analysis. Actually let's do N=4? LOG_N=2, LOG_N//2=1 fused stage with half=1, then LOG_N%2=0. Fine but small.
+
+Better: trace N=16 conceptually with the kernel's exact indexing. Hmm, heavy but let's try key parts.
+
+Kernel N=16, LOG_N=4. Stage 0: half=1, m=1. lane: source = bit-reversal of lane (4 bits reversed). value[lane] = x[br4(lane)] where br4 reverses 4 bits. 
+
+Butterfly stage 0 (m=1): lane ∈ 0..15. base = (lane//4)*4 + local, local = lane%1 = 0. So base = (lane//4)*4 = lane & ~3. quadrant = (lane//1)&3 = lane&3... wait quadrant = (lane // half)&3 = lane & 3 (since half=1). Hmm, but lane = B*4 + q·1 + 0 where q = lane&3 — but reads: a = V[base] = V[B*4], b = V[B*4+1], c = V[B*4+2], d = V[B*4+3]. Writes: position = base + q... wait output value at lane = base + q*m + j = B*4 + q. So position B*4 + q gets quadrant q of butterfly on (V[B*4], V[B*4+1], V[B*4+2], V[B*4+3]).
+
+Coefficients m=1: j=0 only: first = ω^{0} = 1, second = 1, upper = ω^{N/(4)·(0+1)} = ω^4 = ω_{4}·? ω^{N/(4m)·(j+m)} = ω^{16/4·1} = ω^4. ω = ω_{16} (order 16). ω_{16}^4 = i (order 4). So t=1, t²=1, upper = t·i = i, cross_high = t³·i = i.
+
+Butterfly values:
+q0 = a + b·1 + c·1 + d·1 = a+b+c+d → position B*4+0.
+q1 = a − b + c·i − d·i → position B*4+1.
+q2 = a + b − c − d → position B*4+2.
+q3 = a − b − c·i + d·i → position B*4+3.
+
+Stage 1 (m=4): base = (lane//16)*16 + local, local = lane % 4, quadrant = (lane//4)&3. Single block, base = lane%4 = j. Reads a=V[j], b=V[j+4], c=V[j+8], d=V[j+12]. Writes position j + q*4.
+
+Coefficients m=4: first[j'] = ω^{16j'/(2·4)} = ω_{16}^{2j'}, j'=0..3. second = ω^{16j'/(16)} = ω_{16}^{j'} = t. upper = ω^{16(j'+4)/16} = t·ω^4 = t·i. first = t²? ω_{16}^{2j} = t² ✓.
+
+So stage-1 butterfly with t = ω_{16}^j:
+q0 = a + t²b + t c + t³ d → position j+0
+q1 = a − t²b + itc − it³d → position j+4
+q2 = a + t²b − tc − t³d → position j+8
+q3 = a − t²b − itc + it³d → position j+12
+
+Now check against true DFT. Compute X[f] = Σ_n x[br(n)]·ω^{nf}? Let's compute what the kernel gives for, say, X[1] (f=1, position 1): position 1 after stage 1 = j=1, q=0: q0 with t=ω: value = a + t²b + tc + t³d where a = V[1] (after stage 0), b = V[5], c = V[9], d = V[13].
+
+After stage 0: V[B*4 + q] holds butterfly outputs of (x[br(B*4)], x[br(B*4+1)], x[br(B*4+2)], x[br(B*4+3)]).
+
+br4 for N=16 (4-bit reversal): br(0)=0, br(1)=8, br(2)=4, br(3)=12, br(4)=2, br(5)=10, br(6)=6, br(7)=14, br(8)=1, br(9)=9, br(10)=5, br(11)=13, br(12)=3, br(13)=11, br(14)=7, br(15)=15.
+
+Hmm wait — the kernel's bit-reversal: source = reverse of LOG_N bits of lane. Then value[lane] = x[source]. So value at position lane holds x[br(lane)].
+
+Stage 0 butterfly on block B: elements x[br(4B)], x[br(4B+1)], x[br(4B+2)], x[br(4B+3)]. Note br(4B+q) for B∈0..3, q∈0..3: 4B+q has bits b1 b0 q (b1b0 = B). Reversed: q b0 b1. So x index = 4q + B' where B'=bits(b0,b1) = br2(B). So stage-0 butterfly on (x[4·0+br2(B)], x[4+br2(B)], x[8+br2(B)], x[12+br2(B)]) = the four subsequences (decimation 4) of sub-block br2(B), in order r=0..3. 
+
+Stage 0 computes for each B: position 4B+q gets:
+q0: sum of the 4 subsequence elements — this is DFT_4 of subsequence-group at... but in a proper radix-4 DIT, stage 0 (m=1) computes 4-point DFTs of groups {x[4t+r]}? Hmm — in radix-4 DIT with digit-reversed input, the first stage combines elements x[br(i)] for i in blocks of 4, which as computed = groups {x[4t+r]} for fixed br2(B) group of t. And the 4-point DFT with twiddles all 1 and i powers — the correct first-stage butterfly: Out[q'] where output position 4B+q' ↔ frequency digit... The 4-point DFT of (a,b,c,d) = (x[4t0+? ...]) hmm.
+
+Let me just directly compute the kernel's X[1] and compare with truth for N=16, using symbolic ω. Set ω = ω16.
+
+Position 1 output = q0(j=1) of stage 1 = a + t²b + tc + t³d, t = ω^1.
+a = V[1] after stage 0 = position 4·0+1 → B=0, q=1 → q1 output of butterfly on (x[br(0)]=x[0], x[br(1)]=x[8], x[br(2)]=x[4], x[br(3)]=x[12]): a0=x[0], b0=x[8], c0=x[4], d0=x[12].
+q1 = a0 − b0 + i·c0 − i·d0 = x0 − x8 + i x4 − i x12.
+
+Similarly:
+b = V[5] = position 4·1+1 → B=1, q=1: butterfly on x[br(4)]=x[2], x[br(5)]=x[10], x[br(6)]=x[6], x[br(7)]=x[14]: q1 = x2 − x10 + i x6 − i x14.
+c = V[9] = B=2, q=1: x[br(8)]=x[1], x[9], x[5], x[13]: q1 = x1 − x9 + i x5 − i x13.
+d = V[13] = B=3, q=1: x[3], x[11], x[7], x[15]: q1 = x3 − x11 + i x7 − i x15.
+
+X[1]_kernel = a + ω²b + ωc + ω³d
+= [x0 − x8 + i x4 − i x12]
++ ω²[x2 − x10 + i x6 − i x14]
++ ω[x1 − x9 + i x5 − i x13]
++ ω³[x3 − x11 + i x7 − i x15].
+
+True X[1] = Σ_n x[n]·ω^{n·1} = x0 + ω x1 + ω² x2 + ω³ x3 + ω⁴x4 + ω⁵x5 + ω⁶ x6 + ω⁷ x7 + ω⁸ x8 + ... ω^{15} x15.
+
+ω^4 = i, ω^8 = −1, ω^12 = −i.
+
+Coefficient of x0 in kernel: 1 ✓ (true 1).
+x1: kernel: ω (from c) ✓ true ω.
+x2: kernel ω² ✓.
+x3: kernel ω³ ✓.
+x4: kernel: i (from a) ✓ true ω⁴=i.
+x5: kernel: from c term: ω·i = ω⁵ ✓.
+x6: from b: ω²·i = ω⁶ ✓.
+x7: from d: ω³·i = ω⁷ ✓.
+x8: kernel: from a: −1 = ω⁸ ✓.
+x9: from c: ω·(−1) = ω⁹ ✓ (since q1 of c has −x9). 
+x10: from b: ω²·(−1) = ω^{10} ✓.
+x11: from d: ω³·(−1) = ω^{11} ✓.
+x12: from a: −i = ω^{12} ✓.
+x13: from c: ω·(−i) = ω^{13} ✓.
+x14: b: ω²·(−i) = ω^{14} ✓.
+x15: d: ω³·(−i) = ω^{15} ✓.
+
+X[1] is exactly correct! So my earlier concern (b/c coefficient swap) was wrong — the layout works out because the digit structure differs from my naive assumption. Let me also verify another position, say X[4] (position 4 = j=0, q=1): q1(j=0) with t=1: value = a − b·1 + i·c·1 − i·d·1 where a=V[0], b=V[4], c=V[8], d=V[12].
+
+V[0] = q0 of B=0: x0 + x8 + x4 + x12.
+V[4] = q0 of B=1: x2 + x10 + x6 + x14.
+V[8] = q0 of B=2: x1 + x9 + x5 + x13.
+V[12] = q0 of B=3: x3 + x11 + x7 + x15.
+
+X[4]_kernel = (x0+x8+x4+x12) − (x2+x10+x6+x14) + i(x1+x9+x5+x13) − i(x3+x11+x7+x15).
+
+True X[4] = Σ x_n ω^{4n}: ω^{4n} = i^n: x0 + i x1 − x2 − i x3 + i? n=4: i⁴=1: x4 + i x5 − x6 − i x7 + n=8: i⁸=1: x8 + i x9 − x10 − i x10... let me list: coefficients: n:0→1,1→i,2→−1,3→−i,4→1,5→i,6→−1,7→−i,8→1,9→i,10→−1,11→−i,12→1,13→i,14→−1,15→−i.
+
+So true X[4] = (x0+x4+x8+x12) + i(x1+x5+x9+x13) − (x2+x6+x10+x14) − i(x3+x7+x11+x15).
+
+Kernel: (x0+x4+x8+x12) − (x2+x6+x10+x14) + i(x1+x5+x9+x13) − i(x3+x7+x11+x15). Same ✓.
+
+Check X[2] (position 2 = j=2, q=0): q0(j=2) with t=ω²: a + t²b + tc + t³d, t=ω². a=V[2], b=V[6], c=V[10], d=V[14].
+
+V[2] = q2 of B=0: a0 + b0 − c0 − d0 = x0 + x8 − x4 − x12.
+V[6] = q2 of B=1: x2 + x10 − x6 − x14.
+V[10] = q2 of B=2: x1 + x9 − x5 − x13.
+V[14] = q2 of B=3: x3 + x11 − x7 − x15.
+
+X[2]_kernel = (x0+x8−x4−x12) + ω⁴(x2+x10−x6−x14) + ω²(x1+x9−x5−x13) + ω⁶(x3+x11−x7−x15).
+
+ω⁴=i, ω⁶=ω²·i.
+
+True X[2] = Σ x_n ω^{2n}: coefficients: n:0→1,1→ω²,2→ω⁴,3→ω⁶,4→ω⁸,5→ω^{10},6→ω^{12},7→ω^{14},8→ω^{16}=1,9→ω²,10→ω⁴,11→ω⁶,12→1,13→ω²,14→ω⁴,15→ω⁶.
+
+Group: x0: 1 ✓. x1: kernel ω² ✓. x2: i=ω⁴ ✓. x3: ω⁶ ✓. x4: kernel −1 = ω⁸ ✓. x5: ω²·(−1) = ω^{10} ✓. x6: i·(−1) = ω^{12} ✓. x7: ω⁶·(−1) = ω^{14} ✓. x8: 1 ✓. x9: ω² ✓. x10: i ✓. x11: ω⁶ ✓. x12: −1 ✓. x13: −ω² = ω^{10} ✓. x14: −i = ω^{12} ✓. x15: −ω⁶ = ω^{14} ✓. 
+
+So the fused radix-4 structure is correct for N=16 (all positions presumably by symmetry). Now verify:
+
+1. The last radix-2 stage for N=128 (LOG_N=7). Before last stage: after 3 radix-4 stages, position holds... The invariant: after stages producing blocks of size 4^3=64, position within block = frequency within block, but blocks are of size 64 while N=128. So the array is two blocks of 64; position p (global) holds DFT_64 of block p//64 at frequency p%64, where blocks are the two halves of the (bit-reversed-permuted) sequence... And the final radix-2 stage combines positions j and j+64 with twiddle coefficient[j] = ω^{j} (last-stage coefficients: [R·ω^{j} for j in range(width//2)] where omega = ω_{128}). Final stage: value = left ± right·ω^j at positions j, j+64. Standard radix-2 final DIT: positions j and j+m hold A[j], B[j] (sub-DFTs of even/odd decimation at freq j); outputs: freq 2j at position j? Hmm wait — but the final output must be natural order. Standard radix-2 CT: X[f], f = 2ℓ+s: X = A[ℓ] + (−1)^s ω^ℓ? Hmm: X[2ℓ] = A[ℓ] + ω_N^{?}... Let me derive: decimate n = 2t + r: X[f] = Σ_r ω_N^{fr} X_r[f mod (N/2)]. Position j (j<N/2) must hold freq f = j (natural). So f = j ∈ [0,64), f mod 64 = j, and position j+64 holds freq f = j+64, f mod 64 = j, r digit = f//64 = 1.
+
+X[j] = A[j] + ω_N^{j·0}·? wait ω_N^{fr} with f=j: r=0: ω^0; r=1: ω_N^{j}. So X[j] = A[j] + ω^j B[j] ✓ — kernel: position j gets left + weighted = A? left = V[j] = gather(value, local) with local = lane%64... but wait: is V[j] the "even" sub-DFT A[j]? The two blocks of 64: which block corresponds to r=0 (even decimation) depends on the bit-reversal. Given the correctness of the N=64 case (which requires the full pipeline to give natural-order correct output), and the fused stages are identical for N=128 (same coefficient banks for width 128 with omega = ω_128 — check: _make_coefficients(128): omega = 17^{256/128} = 17² = ω_128; stages: (7-1)//2 = 3 stages, half = 1,4,16, same structure; then last stage since (7-1)%2=1: coefficients [R·ω_128^j for j in 0..63]).
+
+For N=64: (6-1)//2? width.bit_length() for 64 = 7, so (7-1)//2 = 3 stages, half=1,4,16, and (7-1)%2 = 0 → no last stage. Wait, LOG_N = 6 but _make_coefficients uses width.bit_length()−1 = 6, and kernel LOG_N = width.bit_length()−1 = 6. Stages: LOG_N//2 = 3 fused stages ✓ matches coefficient loop count ((6)//2=3, half=1,4,16 ✓). LOG_N%2=0, no last stage ✓. And final fused stage with half=16, block size 64 = N → natural order output ✓ (as verified structurally via N=16 analog where stages half=1,4 and no last stage, which I verified exactly for X[1], X[2], X[4] — and by the algebra the pattern holds generally).
+
+For N=128: 3 fused stages half=1,4,16 (blocks of 64), then last radix-2 stage. The last stage: left = V[lane], right = V[lane+64]... wait: left = gather(value, local), local = lane % 64; for lane ≥ 64, left = V[lane−64]?? Hmm: local = lane % half = lane % 64. For lane ∈ [64,128), local = lane−64. left = V[local], right = V[local+64]. Then value = where(lane < 64, left+weighted, left−weighted), stored at lane. So position lane<64 gets V[lane] + ω^lane V[lane+64]; position lane≥64 gets V[lane−64] − ω^{lane−64} V[lane]. Matches the formula X[j] = A[j] + ω^j B[j], X[j+64] = A[j] − ω^j B[j], provided V[j] = A[j] (r=0 sub-DFT) and V[j+64] = B[j] (r=1). Which half is "even" decimation: with bit-reversal of all 7 bits at input, the first fused stage's groups... In the N=16 verification, the bit reversal at input was full LOG_N bits and everything worked. For N=128 the same construction: full 7-bit reversal; the three radix-4 stages handle the low 6 bits; the top bit of the reversed index determines which half. Reversed index's top bit = original index's LSB = decimation parity r ✓. So V[j] (first half) corresponds to elements with original n even = r=0 ✓. So the last stage is correct provided the invariant "block output at position = frequency within block" holds — verified structurally via N=16 trace (positions held correct partial results). Also for N=64 verified fully at three representative positions; the algebra generalizes.
+
+Wait, but for N=64, the input bit-reversal is 6 bits and there are 3 radix-4 stages handling all 6 bits — matches N=16 case (4 bits, 2 stages) which I verified exactly. Good.
+
+One more check: the last-stage coefficient start index: start = 5*((1<<(2*(LOG_N//2)))−1)//3. For LOG_N=7: 2*3=6, (1<<6 −1)*5/3 = 63*5/3 = 105. Total coefficients from fused stages: sum over half=1,4,16 of 5*(half + ... ) — each stage contributes 5 lists of length half: 5*(1+4+16) = 105 ✓. So last-stage coefficients appended at offset 105 ✓, length 64 = width//2 ✓.
+
+Fused stage start indices: stage s has half=4^s; start = 5*(half−1)//3 = 5*(4^s −1)/3 = 5*(1+4+...+4^{s−1}) ✓ cumulative ✓.
+
+2. Montgomery-ish reduction in _multiply: coefficients are in Montgomery form R·w mod q (R=2^16). product = value·(R·w) — value in [0,3328] canonical? Values entering _multiply: b, c, d are gathered from value which was reduced mod 3329 into [0,3328] ✓ (after each stage value = (... + 2q) % q; initial values are x ∈ [0,3328] ✓). So product = v·R·w ∈ [0, 3328²·...] — int64 fine.
+
+Reduction: correction = (product * 3327) & 65535; reduced = (product + correction*3329) >> 16. This is standard Montgomery REDC with q' = −q^{-1} mod 2^16. Check: q=3329, q·? Is 3327 ≡ −q^{-1} mod 2^16? Need q·3327 ≡ −1 mod 65536: 3329·3327 = 3329·3327 = 3329·3000=9,987,000; 3329·327=1,088,583; total 11,075,583. mod 65536: 11,075,583 /65536 = 168.9...; 168·65536 = 11,010,048; remainder 65,535 = −1 mod 65536 ✓. So REDC: product + correction·q ≡ product − product·q·q^{-1} ≡ 0 mod 2^16 ✓, so reduced = product/2^16 mod q computed correctly. REDC output = (product·R^{-1}) mod q, in range: product < 3328·3328·? product = v·(R·w mod q) ≤ 3328·3328 ≈ 11,075,584. correction ≤ 65535, correction·q ≤ 65535·3329 ≈ 218 million; sum ≈ 229M; >>16 ≈ 3496 < 2·q? REDC gives result in [0, 2q) roughly; the tl.where(reduced >= 3329, reduced−3329, reduced) handles one subtraction. Standard REDC with inputs < q: product ≤ (q−1)·(q−1)... wait product = v·coeff where coeff = R·w mod q < q. product ≤ 3328² = 11,075,584 < 2^24. correction·q: correction = product·q' mod 2^16 ≤ 65535 → correction·q ≤ 218,010,615? 65535·3329 = 218,154,  65535·3329 = 65535·3329 ≈ 218.1M. Sum ≤ 229.2M < 2^28. >>16 ≤ 3496. REDC theory: result = product·R^{-1} mod q, and since product < q²... product < q² = 11,075,  q² = 3329² = 11,082,241. product ≤ 3328·3328 = 11,075,584 < q². REDC with product < q² gives result < 2q? Standard: REDC(product) for product < q² yields value in [0, 2q−?]. Actually (product + correction·q)/2^16: correction·q ≡ −product mod 2^16, so numerator divisible by 2^16, numerator ≤ product + (2^16−1)q < q² + 2^16 q = q(q + 2^16). /2^16 = q(q+2^16)/2^16 = q·(q/2^16 + 1) ≈ q·(0.0508+1) = 1.05q < 2q. So result in [0, ~1.05q]? Hmm more carefully: numerator/2^16 ≡ product·R^{-1} (mod q) and numerator/2^16 < q·(q+2^16)/2^16. q+2^16 = 3329+65536 = 68865; /2^16 = 1.0508; so < 1.0508q = 3497.6. And the true residue is < q, so reduced ∈ [true, true + 3497.6−...]— reduced could be up to 3497 which exceeds 3329 by at most one q (since reduced ≡ true mod q and reduced < 3497.6 < 2q). tl.where subtracts q once if ≥ q ✓. Result: coeff·v·R^{-1} = v·w mod q ∈ [0, 3328] ✓.
+
+3. Overflow/intermediate sums: lower_sum = a + p + c_low + d_low ≤ 4·3328 = 13312, plus 2·3329 = 19971 < int32 max ✓. Then % 3329 in Triton on int32 — values non-negative after adding 2q? lower_difference = a + p − c_low − d_low ∈ [−6656, 6656]; +2q → [−1?]: −6656+6658 = 2 ≥ 0 ✓. upper_sum = a − p + c_high − d_high ∈ [−6656, 6656] ✓ +2q ≥ 2 ✓. upper_difference similar ✓. % on non-negative int32 fine.
+
+Last stage: left + weighted ≤ 6656, +3329 = 9985 ✓; left − weighted ≥ −3328, +3329 ≥ 1 ✓.
+
+4. tl.gather with base as a tensor of indices — gather(value, base, axis=0): base is int32 tensor; positions within [0,N) ✓ (base = (lane//(4m))*4m + local ≤ N−m? lane//(4m) ∈ [0, N/4m), base ≤ N−4m + m−1, base+3m ≤ N−1 ✓).
+
+5. tl.store(OUT + row*N + lane, value) — value after % is int32 in [0,3328] ✓, output dtype int32 ✓, fresh tensor (empty_like) ✓, preserves x ✓.
+
+6. Bit-reversal source: for bit in range(LOG_N): source |= ((lane>>bit)&1) << (LOG_N−1−bit) ✓ full reversal.
+
+7. Coefficient construction for width 64 vs 128: for 64, omega = 17^{256/64} = 17^4 = ω_64 ✓ order 64. first exponent j·64/(2m): for m=16, j∈0..15: j·2 → ω^{2j} = ω_{64}^{j·64/32}? Hmm ω^{j·N/(2m)} = ω_{4m}^{?}: ω^{N/(2m)·j} = (ω^{N/(4m)})^{2j}? ω^{N/(2m)} = ω_{2m}. Is ω_{2m} = ω_{4m}²? ω_{4m} = ω^{N/(4m)}, squared = ω^{N/(2m)} = ω_{2m} ✓. So first = ω_{2m}^j = (ω_{4m}^j)² = t². ✓ consistent with my N=16 analysis where I verified exactly. 
+
+Wait — in my N=16 verification, I used first = ω^{N/(2m)·j} and second = ω^{N/(4m)·j} — let me recheck against code: code says first exponent j*width//(2*half), second j*width//(4*half). Yes. And in the trace I computed q0 = a + t²b + tc + t³d and verified X[1] and X[2] come out exactly correct. 
+
+8. One subtlety: exponent j*width//(2*half) uses integer division: j*width/(2m) — is j·width always divisible by 2m? j < m, j·N/(2m): for j and N/(2m)... N=4^s·... N=64: m ∈ {1,4,16}: j·64/(2m): m=16: j·2 ✓ integer. m=4: j·8 ✓. m=1: 0 ✓. N=128: m∈{1,4,16}: j·128/(2m): m=16: j·4 ✓. Fine, and even if not, Python // before pow would be wrong exponent—but it's exact here. Also (j+half)*width//(4*half): m=16, N=128: (j+16)·128/64 = 2(j+16) ✓.
+
+9. Numerical check of last-stage for N=128 twiddle: coefficient[j] = R·ω_128^j, ω_128 = 17². X[j] for j<64 needs twiddle ω_128^{j} ✓ (from derivation: ω_N^{f·r} with f=j, r=1: ω_N^j ✓). Position j+64: f = j+64, X = A[j] + ω^{(j+64)}B[j] = A[j] + ω^j·ω^{64} B[j] = A[j] − ω^j B[j] (ω^{64} = −1 since order 128) ✓ matches left − weighted ✓.
+
+10. R_INV computed but unused — harmless.
+
+11. int64 product: value.to(int64)·coefficient.to(int64) — coefficient loaded as int32 from int32 tensor, converted ✓ no overflow.
+
+12. torch.tensor(_make_coefficients(width)) — list of ints, fine. Triton kernel launch with grid (batch,), num_warps=4, N up to 128 → 128 lanes, 4 warps=128 threads ✓.
+
+13. tl.gather available in Triton 3.4 ✓.
+
+One more: for N=64, is the third fused stage's block the full row and output natural order? Verified via N=16 analog (2 stages, full coverage). For N=64, 3 stages cover 6 bits ✓.
+
+Also check quadrant mapping consistency in my N=16 verification — I verified positions 1, 2, 4 exactly correct, and the general algebra follows the same pattern; also positions like X[3], X[5] would follow by the same structure. I'm fairly confident.
+
+Also the fused stages' twiddle i = ω^{N/4}: for N=64, i = ω_64^{16} — upper = second·i: upper exponent = (j+m)·N/(4m) = jN/(4m) + N/4 ✓.
+
+Also check that in stage s of N=128, blocks of size 64 are correct sub-transforms: the fused stages compute per-64-block DFTs of the digit-reversed subsequences — the same as N=64 case with the top bit fixed. The bit reversal includes the top bit, meaning block b (b = top bit of lane) gathers x[6-bit-reversed within... ] — elements with original LSB = b. ✓ (as argued). And the sub-DFT of the decimated-by-2 subsequence uses ω_64 = ω_128² — is that what the fused stages use? _make_coefficients(128) uses omega = ω_128 and exponents N/(2m) etc. with width=128. Hmm! Wait: the fused stages for width=128 use ω_128-based twiddles with width=128 in exponents — e.g., first exponent j·128/(2m). But the blocks are of size 64, so within-block transforms should use ω_{4m} = ω_64^{64/(4m)}? Let me recheck: in my N=16 derivation, the twiddle t = ω_{4m} where ω_{4m} = ω_N^{N/(4m)} with N = full width. For N=128 at stage m=16: 4m=64, t = ω_{128}^{128/64} = ω_128² = ω_64 ✓. Yes! ω_{4m} = ω^{N/(4m)} — the code's exponent j·N/(4m) = t^j with t = ω^{N/(4m)} = ω_{4m} ✓. The "block-relative" ω_{4m} is exactly ω_N^{N/(4m)} regardless of block size ✓. Great — the formula Out = Σ_r ω_{4m}^{fr} X_r[k] was derived per-block with block-local ω_{4m}, and code uses global ω_N^{N/(4m)} = ω_{4m} ✓.
+
+But careful: derivation per block of size 4m where the block's DFT uses ω_{4m} — yes since block covers 4m consecutive (in decimated subsequence sense) elements. For N=128, the top-level blocks of size 64 each are DFT_64 with ω_64 = ω_128² ✓, and the derivation Out_block[f] = Σ_r ω_64^{fr} Xr[f mod m] holds within each block, with the last radix-2 stage then combining with ω_128 ✓. All consistent.
+
+Edge: B up to 128, grid (batch,) fine. x contiguous with storage offset — X + row*N + source uses x.data_ptr base ✓ Triton handles storage offset via tensor pointer ✓.
+
+x is int32, value loaded .to(tl.int32) fine.
+
+I'm convinced: trust. Confidence ~0.9.
+
+## Final response (verbatim)
+
+{"verdict": "trust", "confidence": 0.9, "reason": "I verified the algorithm end-to-end: the full-log2 bit-reversal load, the fused radix-4 DIT butterfly (with first=ω_{2m}^j=t², second=t, upper=t·i, cross terms t³, t³i, and quadrant writes at base+q·m+j) reproduces the exact DFT coefficients — I symbolically traced the N=16 instance and positions X[1], X[2], X[4] match exactly, and the structure generalizes to N=64 (3 fused stages, natural-order output) and N=128 (blocks of 64 plus a correct final radix-2 stage with twiddle ω_128^j and ω_128^64=−1). Coefficient bank offsets (5·(4^s−1)/3 cumulative, last-stage at offset 105 for width 128) are consistent, the REDC reduction (3329·3327 ≡ −1 mod 2^16) with the conditional subtract yields exact residues for inputs < q, all intermediates stay in safe non-negative int32 range, and validation/launch details (contiguous offset views, fresh output, int32) satisfy the contract."}
+
+## Verdict
+
+{
+  "verdict": "trust",
+  "confidence": 0.9,
+  "reason": "I verified the algorithm end-to-end: the full-log2 bit-reversal load, the fused radix-4 DIT butterfly (with first=ω_{2m}^j=t², second=t, upper=t·i, cross terms t³, t³i, and quadrant writes at base+q·m+j) reproduces the exact DFT coefficients — I symbolically traced the N=16 instance and positions X[1], X[2], X[4] match exactly, and the structure generalizes to N=64 (3 fused stages, natural-order output) and N=128 (blocks of 64 plus a correct final radix-2 stage with twiddle ω_128^j and ω_128^64=−1). Coefficient bank offsets (5·(4^s−1)/3 cumulative, last-stage at offset 105 for width 128) are consistent, the REDC reduction (3329·3327 ≡ −1 mod 2^16) with the conditional subtract yields exact residues for inputs < q, all intermediates stay in safe non-negative int32 range, and validation/launch details (contiguous offset views, fresh output, int32) satisfy the contract."
+}
+
+## Usage and stop reason
+
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "provider": "fireworks",
+  "response": {
+    "verdict": "trust",
+    "confidence": 0.9,
+    "reason": "I verified the algorithm end-to-end: the full-log2 bit-reversal load, the fused radix-4 DIT butterfly (with first=ω_{2m}^j=t², second=t, upper=t·i, cross terms t³, t³i, and quadrant writes at base+q·m+j) reproduces the exact DFT coefficients — I symbolically traced the N=16 instance and positions X[1], X[2], X[4] match exactly, and the structure generalizes to N=64 (3 fused stages, natural-order output) and N=128 (blocks of 64 plus a correct final radix-2 stage with twiddle ω_128^j and ω_128^64=−1). Coefficient bank offsets (5·(4^s−1)/3 cumulative, last-stage at offset 105 for width 128) are consistent, the REDC reduction (3329·3327 ≡ −1 mod 2^16) with the conditional subtract yields exact residues for inputs < q, all intermediates stay in safe non-negative int32 range, and validation/launch details (contiguous offset views, fresh output, int32) satisfy the contract."
+  },
+  "reasoning_effort": "low",
+  "timeout_s": 1800,
+  "usage": {
+    "input_tokens": 2542,
+    "output_tokens": 18426
+  },
+  "stop_reason": "stop",
+  "max_tokens": 32768,
+  "elapsed_s": 289.6718795420602,
+  "kernel_sha256": "63aebdc10f9a98863a960c2b71e23e412fc1bbdd356d326a5e7ab13773e1fed7",
+  "problem_sha256": "ccbc062046ba2d26cc626dae40c44cca9bd7ab098789bd0a2715c46881775903",
+  "prompt_variant": "original",
+  "estimated_usd": 0.0846332,
+  "pricing_snapshot": {
+    "input_per_million": 1.4,
+    "output_per_million": 4.4,
+    "cache_write_multiplier": 1.0,
+    "cache_read_multiplier": 1.0,
+    "basis": "published list price; cached input conservatively billed as uncached; excludes GPU",
+    "checked_at": "2026-10-03",
+    "source": "https://fireworks.ai/models/fireworks/glm-5p3"
+  },
+  "pricing": "dated list-price estimate; not invoice; excludes GPU and unreported HTTP usage"
+}

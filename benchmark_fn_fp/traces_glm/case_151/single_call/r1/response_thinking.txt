@@ -1,0 +1,209 @@
+Need to check the fused 4-point butterfly correctness and the packing of coefficients.
+
+The fused radix-4 butterfly computes a 4-point DFT with twiddles. Standard Cooley-Turkey stage at size 4*half, with twiddle w^j where w = omega^(width/(4*half))? Let's think: standard DIF/DIT... The transform computes out[k]=sum x[j] w^{jk} with w = omega_N of order N.
+
+The fused stage butterfly (size-4 DFT with twiddles): for stage with half m, the butterfly computes (for DIT after bit-reversal?). They load input bit-reversed. Then stage combines blocks... This is a radix-4 DIT NTT: at each stage, the twiddle for position j (within half m) is w_N^{j*N/(4m)}? Actually in DIT radix-4, butterfly inputs are X[k], X[k+m], X[k+2m], X[k+3m], twiddle factors w^{j*(N/(4m))} for each of the three.
+
+Twiddle values: first = w^{j*width/(2*half)}? Check: first uses exponent j*width//(2*half) = j*N/(2m). Hmm, standard radix-4 DIT twiddle for input k+m (m=half) is w_N^{j * N/(4m)}. Here exponent is j*N/(2m) — that's the square. Hmm.
+
+Wait, maybe it's DIF ordering. Let me carefully check with a small case: N=4, width... actually supported N are 64,128 but logic is general. Consider N=4, LOG_N=2, one fused stage, half=1. Coefficients: first=[R*w^{j*4/2}] j=0 → w^0=1. second = w^{j*4/4}=w^j, j=0 → 1. upper = w^{(j+1)*4/4} = w^1. cross_low = 1*w^1=w, cross_high = w. So coefficients: first=1, second=1, upper=w, cross=w, cross=w.
+
+Butterfly with half=1: local = lane%1=0, base=(lane//4)*4+0 = 0 for all lanes (N=4, lane//4 = 0 for lane<4). quadrant = (lane//1)&3 = lane. So a=x0,b=x1,c=x2,d=x3. p=b*1=b; c_low=c*1=c; c_high=c*w; d_low=d*w; d_high=d*w.
+
+lower_sum = a+b+c+d → quadrant 0 (lane 0) = X0. ✓ (DFT k=0)
+upper_sum = a - b + c*w - d*w → lane 1 gets k=1: x0 - x1 + w x2 - w x3? DFT k=1: x0 + w x1 + w^2 x2 + w^3 x3. Not equal generally. Hmm — unless this is DIF and output order is bit-reversed/digit-reversed rather than natural order.
+
+The problem requires output in natural frequency order. The kernel stores to OUT + lane directly with lane being natural order, but input was bit-reversed. For a DIT transform: bit-reverse input, natural output. So the butterfly should be DIT. But the math above shows mismatch for k=1. Let me recompute assuming the stage output ordering... For radix-4 DIT with one stage (N=4): after bit-reversal (base 4, log2(4)=2 bits, bit reversal swaps 1 and 2). source for lane: bit reversal. lane0→0, lane1→2, lane2→1, lane3→3. So value = x in bit-reversed order: value[0]=x0, value[1]=x2, value[2]=x1, value[3]=x3.
+
+Then a=v0=x0, b=v1=x2, c=v2=x1, d=v3=x3. Results: k=0: x0+x2+x1+x3 ✓. k=1 (lane1, upper_sum): a - b + c_high - d_high = x0 - x2 + w x1 - w x3. DFT k=1: x0 + w x1 + w² x2 + w³ x3. With w=i (order 4): -x2 = w²x2 ✓, -w x3 = w³ x3 ✓. So matches if w has order 4: w² = -1. Indeed for order-4 root: -b = w²·x2, -d·w = w³ x3. ✓ general since w²≡ -1 mod... no, generally w^{N/... } hmm. w here is omega_N of order N. For general radix-4 DIT, the butterfly is:
+
+X_k+m = (a + w^j... ) — standard radix-4 DIT butterfly with twiddle w^j (w = W_{N/m}? depends).
+
+Standard radix-4 DIT butterfly (after bit-reversal, stage combining span m=half... actually the stage that reduces span from N to N/4 uses twiddles W_N^j with j = lane index within m, m = N/4):
+
+A = a + c_low... let me recall standard formulas. Radix-4 DIT with m = N/4? Let's derive: with N=4m, twiddle t = W_N^j? Hmm let me derive for N=4 case general w of order N... For the N=4 case the stage twiddle was w = W_4.
+
+Let me just derive from the structure. After first fused stage with half=1, output lane gets:
+
+lane0: a + b·t1 + c·t2 + d·t3'  where t1=first, t2=second, t3'=cross_low
+lane1: a - b·t1 + c·t3 - d·t4 (upper)
+lane2: a + b·t1 - c·t2 - d·t3'
+lane3: a - b·t1 - c·t3 + d·t4
+
+This is a 4-point DFT of (a, b·t1, c·t2?, ...) hmm. Actually this is DFT4 applied to (a, b·t1, c·t2, d·t3')? DFT4: y0 = s0+s1+s2+s3, y1 = s0 + i s1 - s2 - i s3, y2 = s0-s1+s2-s3, y3 = s0 - i s1 - s2 + i s3. With i ≡ ... the pattern here uses signs ±t rather than powers of i. Here lane1 uses -c·t3 + d·t4 rather than -c·t2 - d·t3'. So twiddles differ per lane — that's a fused twiddle (absorbing powers of W_4 into twiddles), typical of radix-4 DIF actually.
+
+This is the radix-4 DIF butterfly pattern: y0 = a + b t1 + c t2 + d t3, y1 = a - b t1 + c t4 - d t5... Actually the standard radix-4 DIF (decimation in frequency) butterfly:
+
+E = (a+b+c+d)/... X[k] = a + W_N^{...}. Standard radix-4 DIF butterfly for k = 0..m-1, with m = N/4:
+X[k]        = a + b + c + d
+X[k+m]      = (a - b + c - d) W^{k}... hmm signs.
+
+Standard radix-4 DIF (Gentleman-Sande):
+X[k] = a + b + c + d
+X[k+m] = (a - i b... no.
+
+Let me just directly verify against small reference symbolically with w = omega_N, N general. Better: verify N=64, one... too complex manually. Alternative: trust-but-verify via structure: the pattern
+
+y0 = a + b t1 + c t2 + d t3
+y1 = a - b t1 + c t4 - d t5
+y2 = a + b t1 - c t2 - d t3
+y3 = a - b t1 - c t4 + d t5
+
+with t1 = W^{2jN/(4m)}?? Coefficients in code: half=m (span of combined? with block size 4m). first = W^{j·N/(2m)}, second = W^{j·N/(4m)}, upper = W^{(j+m)N/(4m)}, cross_low = first·second = W^{jN/(2m) + jN/(4m)} = W^{3jN/(4m)}, cross_high = first·upper = W^{jN/(2m) + (j+m)N/(4m)} = W^{3jN/(4m) + mN/(4m)} = W^{3jN/(4m) + N/4}.
+
+Note N/4 exponent: W^{N/4} = i (4th root of unity). So cross_high = cross_low · i. Similarly upper = second·i... wait upper = W^{(j+m)N/(4m)} = second · W^{N/4} = second · i. And first = W^{jN/(2m)} = second². So set u = second = W^{jN/(4m)}. Then:
+
+y0 = a + b u² + c u + d u³
+y1 = a - b u² + c u·i - d u³·i... wait cross_high = first·upper = u²·(u·i)= u³ i. Hmm cross_high = u³·i? cross_high = W^{3jN/(4m)}·i = u³ i. And upper = u·i.
+
+y1 = a - b u² + c(u i) - d(u³ i)? code: upper_sum = a - p + c_high - d_high = a - b u² + c(u i) - d(u³ i).
+
+Hmm that seems weird: c multiplied by u·i and d by u³·i. Compare with radix-4 DIF butterfly: given inputs a,b,c,d at positions offset j, j+m, j+2m, j+3m with m = span... Standard DIF radix-4 (m = N/4... in DIF, first stage splits into N/4 blocks of size 4):
+
+For block starting at 4j? DIF radix-4 with twiddles applied after butterfly: 
+t1 = a + c; t2 = b + d; y0-part... The classic:
+
+A = (a + b + c + d)
+B = (a - b + c - d) W^{k}   ... signs: for radix-4 DIF:
+X[k] = a+b+c+d
+X[k+N/4] = (a + i b - c - i d) W^k ... 
+
+Hmm, let me just check the N=4 case numerically since it worked earlier. For N=4, m(half)=1, u = W^{j·4/4} = W^j = w^0 = 1 for j=0. Then upper = u·i where i = W^{4/4}=W^1=w. cross_high = u³ i = w. cross_low = u³ = 1. Matches earlier: second=1, upper=w, cross_low=1, cross_high=w. ✓ And we verified y1 = x0 - x2 + w x1 - w x3 = correct DFT (with bit-reversed input). Good.
+
+Now check y2 and y3 for N=4: lane2 (quadrant 2, lower_difference) = a + p - c_low - d_low = x0 + x2 - x1 - x3. DFT k=2: x0 + w²x1 + w⁴x2 + w⁶x3 = x0 - x1 + x2 - x3. ✓ (w²=-1, w⁴=1, w⁶=w²=-1).
+
+lane3 = a - p - c_high + d_high = x0 - x2 - w x1 + w x3. DFT k=3: x0 + w³ x1 + w⁶ x2 + w⁹ x3 = x0 - w x1 - x2 + w x3. ✓.
+
+So single fused stage with bit-reversed input produces natural order output — consistent with radix-4 DIT where the butterfly is applied after twiddles... Actually this is radix-4 DIT with pre-multiplied twiddles (twiddle before butterfly), which is valid.
+
+But wait — input is bit-reversed with base-2 bit reversal (bit by bit), not base-4 digit reversal. For radix-4 DIT after radix-2 bit reversal... Actually DIT radix-4 requires digit-reversal base 4. But bit-reversal base 2 equals... For radix-4 DIT with LOG_N even (N=64: LOG_N=6, 3 fused stages; N=128: LOG_N=7, 3 fused + last radix-2), digit reversal base-4 of LOG_N/2 digits equals base-2 bit reversal of the same number of bits? Base-4 digit reversal of d digits reverses pairs of bits, which equals bit reversal of 2d bits. Yes, equal. And last radix-2 stage handles odd case; combined with bit-reversal base 2, the ordering works out (standard mixed DIT with bit-reversed input base 2 works with any radix decomposition since bit reversal is universal).
+
+Now check the stage generality. Derive the general fused stage. Stage s, half = m = 4^s. Butterfly reads a=v[base], b=v[base+m], c=v[base+2m], d=v[base+3m] where base = (lane//(4m))*4m + lane%m. So within block of size 4m, position j=lane%m gets a,b,c,d at offsets j, j+m, j+2m, j+3m. This is a DIT stage: after previous stages, blocks of size m are self-contained... in DIT, sub-transforms of size m completed, and this stage combines 4 sub-transforms of size m into one of size 4m, with twiddles.
+
+DIT combination: for a size-4m DFT built from 4 size-m DFTs: inputs A_j = X[j] (first m block, DFT of first quarter of data), B_j, C_j, D_j. Result for output index k = k0 + q·m? No wait — in DIT, sub-transforms of size m compute partial DFTs with stride 4m: A_j = sum over t of x[4m·...]. Standard: for k in [0,m), output y[k], y[k+m], y[k+2m], y[k+3m]:
+
+y[k] = A_k + W_{4m}^k B_k + W_{4m}^{2k} C_k + W_{4m}^{3k} D_k
+y[k+m] = A_k - i W^k B_k... with W = W_{4m}:
+
+y[k+m] = A_k + W^{k+m} B_k + W^{2k+2m} C_k + W^{3k+3m} D_k = A_k - i W^k B_k - W^{2k} C_k + i W^{3k} D_k
+y[k+2m] = A_k + W^{2k+4m}... = A_k - W^{2k}C... wait W^{2(k+2m)} = W^{2k+4m}=W^{2k}. y[k+2m] = A_k + W^{k+2m} B + W^{2k} C + W^{3k+6m} D = A_k - i W^k B_k + W^{2k} C_k - i W^{3k} D_k.
+y[k+3m] = A_k - i W^k B - W^{2k} C + i W^{3k} D... let me compute: W^{k+3m} = W^k · W^{3m} = W^k · (-i)? W^{4m}=1, W^m = primitive 4th root = i (with proper choice). So W^{3m} = -i. W^{2(k+3m)} = W^{2k}·W^{6m} = W^{2k}·W^{2m}·... W^{6m}=W^{4m}·W^{2m}=W^{2m}=-1. So -W^{2k}. W^{3(k+3m)} = W^{3k} W^{9m} = W^{3k}·W^{8m}W^m = W^{3k}·i... W^{9m} = W^{8m}·W^m = W^m = i. So +i W^{3k} D.
+
+So:
+y[k] = A + u² B + u C + u³ D   where u = W^k? Wait I set twiddles: W^k B, W^{2k} C, W^{3k} D. Hmm, order: A + W^k B + W^{2k} C + W^{3k} D. With u = W^k: A + u B + u² C + u³ D.
+y[k+m] = A - iu B - u² C + i u³ D
+y[k+2m] = A + i u... wait recompute y[k+2m]: W^{k+2m} = W^k · W^{2m} = u·(-1) = -u. Hmm, W^{2m} = -1 (since W^m=i). So B coefficient is -u? Let me redo: earlier I wrote W^{k+2m} = -i W^k — wrong. W^{k+2m} = W^k·W^{2m} = -u. Similarly W^{3(k+2m)} = W^{3k+6m} = W^{3k}·W^{6m} = W^{3k}·(-1) = -u³.
+
+Redo:
+y[k] = A + u B + u² C + u³ D
+y[k+m] = A + W^{k+m}B + W^{2k+2m}C + W^{3k+3m}D = A + (u·i)B + (u²·(-1))C + (u³·(-i))D
+y[k+2m] = A + W^{k+2m}B + W^{2k}C + W^{3k+6m}D = A - u B + u² C - u³ D
+y[k+3m] = A + W^{k+3m}B + W^{2k+6m}C + W^{3k+9m}D = A + (-iu)B - u²C + (i u³)D
+
+Now compare with kernel: quadrant assignments: lane = base position; quadrant = (lane//m)&3 for lanes within the block. lane = (block)*4m + q·m + j? Wait: base = (lane//(4m))*4m + lane%m, quadrant = (lane//m)&3. So lane q·m+j, q∈{0..3}, j = local. Output y[k] with k = q·m + j? The kernel stores value indexed by lane (natural). So quadrant q should give y[q·m + j].
+
+Kernel: 
+q0: a + p + c_low + d_low where p = b·t1, t1 = first = W_N^{j·N/(2m)}, c_low = c·(t1·t2), d_low = d·(t1·t3).
+Let W_N = omega of order N. W_{4m} in DIT = omega_N^{N/(4m)}. t2 = second = W_N^{jN/(4m)} = u (with u = W_{4m}^j). t1 = W_N^{jN/(2m)} = u². upper = W_N^{(j+m)N/(4m)} = u·W_N^{mN/(4m)} = u·W_N^{N/4} = u·i. cross_low = t1·t2 = u³. cross_high = t1·upper = u³ i.
+
+q0: a + b u² + c u³ + d·(u³)?? wait d_low = d·cross_low = d u³. So q0 = a + b u² + c u³ + d u³?? That doesn't match y[k] = A + uB + u²C + u³D. Hmm wait — check coefficient-role assignment: p = b·first = b u². c_low = c·second = c u. d_low = d·cross_low = d·u³. So q0 = a + b u² + c u + d u³. But expected y[k]= A + uB + u²C + u³D. Mismatch: b and c twiddles swapped!
+
+Hmm but in the N=4 case u=1, u²=1, all equal, so it passed. Need care: maybe the roles of b and c are swapped because bit-reversal ordering vs. which sub-block maps to which. In DIT, the four sub-blocks of size m in the (bit-reversed) array correspond to data quarters in bit-reversed order. The sub-transform A_k = DFT_m of data at positions ≡ 0 mod 4 (stride 4m), B_k for positions ≡ 1 mod 4m, etc. After bit-reversal by base-2 bits, block at reversed positions... Hmm, this is getting complicated. The bit reversal maps natural index n = sum bits to reversed; the sub-arrays of size m in the reversed array correspond to data subsets with fixed top (in reversed = bottom original) bits... 
+
+Actually the ordering issue: in radix-4 DIT at stage with half=m (having already done stages 1..s-1 producing blocks of size m), the array after previous stages holds, at positions within block, DFTs. The butterfly reading offsets j, j+m, j+2m, j+3m combining four size-m transforms: this is standard. The twiddle for the ℓ-th sub-block (offset ℓm) is W_{4m}^{ℓj}? Standard DIT combination:
+
+y[qm + j] = sum_{ℓ=0}^{3} T_ℓ[j] · W_{4m}^{ℓ·(qm+j)} / ... no. Let me redo properly. Size-4m DFT: X[k] = sum_{n=0}^{4m-1} x[n] W_{4m}^{nk}. Decompose n = 4n' + ℓ? or n = ℓm + n'? Two choices. DIT decomposition: n = 4p + ℓ (ℓ = which quarter of input), giving sub-transforms of size m over p with stride 4. Hmm, but then which sub-transform ends up where after prior stages?
+
+The kernel's structure: at stage s with half=m=4^s, previous stages combined... Actually stage s=0 has half=1: butterfly reads individual elements at offsets j=0..0 within block of 4. Elements are in bit-reversed order. So the first stage combines elements x_br[0..3] where br is bit-reversal of LOG_N bits.
+
+Bit reversal of full index. x_br[i] = x[rev(i)]. rev(i) for i in [0,4): i's low 2 bits reversed → rev(0)=0, rev(1)=2, rev(2)=1, rev(3)=3 (reversing top 2 bits of LOG_N-bit index... careful: rev reverses all LOG_N bits, but for i<4 with LOG_N≥2, the top bits are 0, so rev(i) = reverse of low bits placed at top positions... rev_6(1) = rev of 000001 = 100000 = 32. Hmm! That's the issue: bit reversal over LOG_N bits, so within the first block of 4, indices are 0, N/4, N/2, 3N/4 positions in original data? rev(0)=0, rev(1)=N/2, rev(2)=N/4, rev(3)=3N/4.
+
+So a,b,c,d = x[0], x[N/2], x[N/4], x[3N/4] (order for j=0, lane... base for stage 0, m=1: lane 0..3, base = 0 (lane//4=0 for N≥4... N=64 fine). a=x_br[0]=x[0], b=x_br[1]=x[rev(1)]=x[N/2], c=x_br[2]=x[N/4], d=x_br[3]=x[3N/4].
+
+For DIT radix-4 stage-0 with digit-reversal base-4: within a block of 4, br4 indices would be digit-reversed: block element ℓ = data at position with digit... For DIT, sub-problem for first stage: x[n] where n = 4p + ℓ; the size-m (=1) "transforms" are individual x[4p+ℓ]. Digit reversal base 4 places x[4p+ℓ] at position... After full digit reversal, position for element with digits: reversed digits. Element n with base-4 digits (d_{D-1},...,d_0), placed at position with digits reversed (d_0,...,d_{D-1}). First block of 4 (positions 0-3) contains elements whose reversed digits put them there: position i has digits (0,...,0, i_1 i_0) reversed → original digits (i_0 i_1, 0,...,0) → n = i_0·4^{D-1} + i_1·4^{D-2}. So position 0→x[0], 1→x[4^{D-1}] = x[N/4], 2→x[2·4^{D-1}]=x[N/2], 3→x[3N/4]. So digit-reversed order: (0, N/4, N/2, 3N/4), but bit-reversed gives (0, N/2, N/4, 3N/4). Positions 1 and 2 swapped!
+
+But wait — with base-2 bit reversal of LOG_N bits: rev_6(1)=32=N/2, rev_6(2)=16=N/4. So bit-reversal gives b=x[N/2], c=x[N/4] — different from digit reversal. Hmm, but bit-reversal base 2 IS the correct universal reordering for any DIT factorization! For radix-4 DIT: n's base-2 bits; reversal maps n to rev(n). Position i in reversed array holds x[rev(i)]. rev(i) for i=0..3 (top bits zero): i=1 → 100000₂ = N/2. So position 1 holds x[N/2]. Under radix-4 DIT decomposition n = 4p + ℓ... hmm, with bit-reversal, the sub-transforms combine differently.
+
+The point: with base-2 bit reversal, DIT radix-4 stage: position block of size m: positions j, j+m, j+2m, j+3m hold elements... Since bit reversal is the correct input permutation for DIT with any radix, the butterfly at offsets ℓm must correspond to data quarter ℓ. Which quarter? Position i (in reversed array) = x[rev(i)]. rev(j + ℓm): j + ℓm has bits: low 2s bits = j (since m=4^s), then ℓ in bits 2s..2s+1, zeros above. rev puts bit 2s+1.. at top. rev(j + ℓm) = rev(ℓ)·... : rev of (ℓ at bits 2s,2s+1, j at low) = (j's bits reversed placed at top... ) = j_rev_high + (reversed ℓ bits) placed at bits LOG_N-2s-2, LOG_N-2s-1, where reversed ℓ (2 bits) = swap of ℓ's two bits: rev2(0)=0, rev2(1)=2, rev2(2)=1, rev2(3)=3.
+
+So sub-block ℓ corresponds to data with stride-4m subsequence index rev2(ℓ) at quarter... In DIT terms: data x[n], n = q·(N/4)... Let me define: sub-transform of size m for DIT comes from x[4m·t + ℓ·m... no. Ugh.
+
+Alternative cleaner approach: trust bit-reversal is the universal DIT permutation. Then radix-4 DIT butterfly at stage s combines the 4 sub-arrays at offsets ℓm within a block, and the twiddle for sub-array ℓ, position j is W_{4m}^{ℓ' j} where ℓ' depends on which data-stride the sub-array corresponds to. Given bit-reversal: sub-array at offset ℓm holds partial results from data x[4t + something]. Specifically at stage s, sub-arrays of size m at offset ℓm (block-aligned) were formed by stage s-1 butterfly reading offsets ℓ'm' etc. Recursively, sub-array at block-relative offset ℓ·m (ℓ ∈ 0..3, bits 2s..2s+1 of position) corresponds to original data indices n with bits at positions 2s, 2s+1 (in natural bit numbering from LSB) equal to rev2(ℓ) = swap of ℓ bits. Hmm wait: at stage 0, position i (i bits 0,1) holds x with data bits (LOG_N-1, LOG_N-2) equal to rev of i's bits... rev(i) top bits: rev(i) has bit (LOG_N-1) = i's bit 0, bit (LOG_N-2) = i's bit 1. So sub-element at offset i (i = 0..3) holds data with bits (b_{L-1}, b_{L-2}) = (i_0, i_1). So ℓ=1 (bits 01 → i_0=1,i_1=0 → data bits (1,0) → b_{L-1}=1, b_{L-2}=0 → n ≡ 2·(N/4) = N/2 mod N). So sub-array ℓ=1 ↔ data n ≡ ℓ''·(N/4) with ℓ'' = rev2(ℓ)? For ℓ=1: rev2(1) = 2 → n ≡ 2N/4 = N/2 ✓. ℓ=2: rev2(2)=1 → n ≡ N/4 ✓ matches earlier (c=x[N/4]). 
+
+So the four sub-blocks correspond to data quarters ℓ'' = rev2(ℓ) = {0→0, 1→2, 2→1, 3→3}.
+
+Now DIT radix-4 combination for size 4m: sub-transform from data quarter ℓ'' (n ≡ ℓ'' mod 4, i.e., x[ℓ'' + 4t]): its size-m DFT with W_m^{...}? The combined transform: X[k] = sum_ℓ'' sum_t x[4t+ℓ''] W_{4m}^{(4t+ℓ'')k} = sum_ℓ'' W_{4m}^{ℓ'' k} · (sum_t x[4t+ℓ''] W_m^{tk}).
+
+The sub-array value at position j (within size-m block) equals sum_t x[4t+ℓ''] W_m^{t·(something)}? At stage s, after s stages, the partial value at position (block, ℓ, j) is... the DFT_m evaluated at frequency depends on position j. Given standard DIT with bit-reversal, the partial transform at stage s for sub-array ℓ at internal index j: equals DFT over t of x[4t+ℓ''] at frequency j·(4m/N)·... Let me just say: partial P_ℓ[j] = sum_t x[4t+ℓ'']·W_m^{t j} (frequency j, using W_m = W_{4m}^4). Then:
+
+X[k] with k = qm + j (q = quadrant, output position)? No — output X at index k; the butterfly writes quadrant q to position qm+j. Final stage output is natural order, so position qm+j ↔ frequency qm+j... but that's only the final stage's indexing; intermediate stages also write to lane qm+j (lane-relative). For the last stage, lane = natural output index. For stage s to be correct DIT, quadrant q at internal position must correspond to frequency... In DIT, intermediate values at position i represent partial sums grouped by frequency i mod (current block size)? Actually in DIT (decimation in time), intermediate arrays hold transforms where position p within block of size M holds frequency p (mod M... within block: frequency p of that block's transform). Hmm, in DIT after stage with block size M, position p in block b holds X-contribution for frequency ≡ p mod M. Yes: DIT builds X[k] with k = b + p·(N/M)... final stage block size N, position = frequency.
+
+So at stage s (creating blocks of size 4m), quadrant q, position qm+j holds frequency component qm+j (mod 4m) of the block. So:
+
+X_block[qm+j] = sum_ℓ'' W_{4m}^{ℓ''(qm+j)} P_ℓ[j] where P_ℓ[j] = sum_t x[block-base + 4t + ℓ''] W_m^{tj}, sub-array ℓ ↔ quarter ℓ''=rev2(ℓ).
+
+Hmm wait, frequency argument in P: P should be evaluated at frequency (qm+j) mod m = j. Good: W_m^{t·j}. And W_{4m}^{ℓ''(qm+j)} = W_{4m}^{ℓ'' j} · W_{4m}^{ℓ'' qm} = u^{ℓ''} · i^{ℓ'' q} where u = W_{4m}^j, i = W_{4m}^m.
+
+So X[q] = sum_ℓ A_ℓ · u^{ℓ''} · i^{ℓ'' q}, where A_ℓ = P_ℓ[j] (sub-array value at offset ℓm+j).
+
+ℓ''=rev2(ℓ): ℓ=0→ℓ''=0; ℓ=1→ℓ''=2; ℓ=2→ℓ''=1; ℓ=3→ℓ''=3.
+
+So:
+X[q] = A_0 + A_1·u²·i^{2q} + A_2·u·i^{q} + A_3·u³·i^{3q}
+
+with A_1 = value at offset m (=kernel's b), A_2 = value at offset 2m (=c), A_3 = d, A_0 = a.
+
+q=0: a + b u² + c u + d u³.
+q=1: a + b u²·i² + c u·i + d u³·i³ = a - b u² + c u i + d u³ i·(-1)... i³ = -i. So q=1: a - b u² + c u i - d u³ i.
+q=2: i^{2·2}=i⁴=1, i²=-1: a + b u² + c u·(-1)... i^q = i² = -1: a + b u²·(i^{4}=1)?? recompute: q=2: b·u²·i^{2q}=i⁴=1 → +b u². c·u·i^{q}=i²=-1 → -c u. d·u³·i^{3q}=i⁶=-1 → -d u³. So q=2: a + b u² - c u - d u³.
+q=3: i^{6}=-1 for b: -b u². c: i³=-i: -c u i. d: i⁹=i: +d u³ i. q=3: a - b u² - c u i + d u³ i.
+
+Now kernel:
+q0: a + p + c_low + d_low = a + b·t1 + c·t2 + d·t3 where t1=first=u², t2=second=u, t3=cross_low=u³. → a + b u² + c u + d u³ ✓ matches.
+q1: upper_sum = a - p + c_high - d_high = a - b u² + c·(u i) - d·(u³ i) ✓ matches q=1.
+q2: lower_difference = a + p - c_low - d_low = a + b u² - c u - d u³ ✓.
+q3: upper_difference = a - p - c_high + d_high = a - b u² - c u i + d u³ i ✓.
+
+The math checks out. Now i must equal W_{4m}^m: with W_N = omega, W_{4m}^m = omega^{N/(4m)·m} = omega^{N/4}. And the twiddles: u = W_{4m}^j = omega^{jN/(4m)} — code: second = omega^{j·width/(4·half)} ✓. first = omega^{j·N/(2m)} = u² ✓. upper = omega^{(j+m)N/(4m)} = u·omega^{N/4} = u·i ✓ (requires omega^{mN/(4m)}=omega^{N/4}, yes). cross products ✓.
+
+Now the last radix-2 stage (LOG_N odd, N=128): after 3 fused stages (m up to 4²=16, blocks of 64), final stage half=64: combines two halves with twiddle omega^j (code: coefficient = R·omega^j for j in range(width//2)). For DIT final radix-2: X[j] = A_j + W_N^j B_j, X[j+N/2] = A_j - W_N^j B_j (since W_N^{N/2} = -1; omega has order N so W_N^{N/2}=-1 ✓). Code: value = where(lane<half, left+weighted, left-weighted) ✓. left = value at lane (for lane<half) — gather at local for lane<half, and for lane≥half, local = lane-half, left = A_{lane-half} ✓.
+
+The start offsets for coefficient loading: stage s: start = 5·(m-1)/3 where m=4^s: (1+4+16+...+4^{s-1})·5 = 5(4^s-1)/3 ✓. Last stage: start = 5(4^{LOG_N//2}-1)/3 ✓, then width/2 coefficients. Total bank size: 5·(4^{(LOG_N)/2 ...)-1)/3 + N/2 matches list length ✓ (for even LOG_N the list has only fused stages).
+
+Barrett reduction in _multiply: coefficient = R·w mod Q, value < 3329? value could be up to 3328 but also after butterflies value reduced mod 3329 into [0,3328] via `(value + 2*3329) % 3329` — wait, negative values: lower_difference can be as low as a+p-c-d... a,b,c,d in [0,3328] each? p = b·t1 mod Q in [0,3328]. a + p - c_low - d_low ≥ -(2·3328) = -6656. +2·3329 = 6658 covers it. Max: a+p+c+d ≤ 4·3328 = 13312; % 3329 in Triton handles positive fine (Python-style % for nonneg). Min -6656 + 6658 = 2 ≥ 0 ✓. Good.
+
+Barrett: product = value·coef where coef = R·w mod Q, value ∈ [0,3328], product ≤ 3328·3328 < 2^22. correction = (product·3327) & 65535 — this is Barrett with factor floor(65536/3329) = 19 (since 3329·19 = 63251, 65536-63251=2285; floor(2^16/3329): 3329·19=63251 ≤ 65536, 3329·20=66580>65536 → 19). Is 3327 = floor(65536/3329)? 3329·19 = 63251. Hmm 3327 ≠ 19. Wait — maybe they use a different identity: correction = (product mod 2^16)·3327? That's odd. Let me check: standard Barrett: q = floor(product·m')/2^16 with m' = floor(2^16/3329) = 19. Here correction = (product · 3327) & 65535, reduced = (product + correction·3329) >> 16.
+
+Hmm, this looks like the "lazy Barrett" using m' = 2^16 - ... Let me test: we want reduced ≡ product mod 3329 and reduced small. reduced = (product + correction·3329)>>16 where correction = (product·3327) mod 2^16. Note 3327 ≡ -2 mod 3329? 3329-3327 = 2, so 3327 ≡ -2 (mod 3329). And mod 2^16: 2^16 = 65536; 3329·... hmm, is 65536 ≡ ? mod 3329: 3329·19 = 63251, 65536-63251 = 2285. Not obviously.
+
+Alternative interpretation: this is Montgomery? product·(2^16-1)/... Let's think: Let P = product (representing value·coef ≡ value·R·w mod Q). We want value·w mod Q = P·R^{-1} mod Q. So this is Montgomery reduction! Montgomery: given P < ... compute P·R^{-1} mod Q where R = 2^16, RInv such that Q·QInv ≡ ... Montgomery: m = (P mod R)·QInv mod R, t = (P + m·Q)/R. Here correction·Q = m·Q. correction = (P·3327) & (R-1). For Montgomery, QInv = -Q^{-1} mod R. Check: need Q·3327 ≡ ... m = (P mod R)·QInv mod R, and result t = (P + m Q)/R ≡ P·R^{-1} mod Q requires m ≡ -P·Q^{-1} mod R, i.e., m Q ≡ -P mod R, i.e., (P·3327 mod R)·Q ≡ -P mod R → need 3327·Q ≡ -1 mod 65536. Q=3329: 3327·3329 = ? 3327·3329 = 3327·3329 = (3328-1)(3328+1)=3328²-1 = 11075584-1 = 11075583. mod 65536: 11075583 / 65536 ≈ 169.0; 169·65536 = 11075584. So 3327·3329 = 169·65536 - 1 ≡ -1 mod 65536. ✓ So it's Montgomery reduction: correction = P·(-Q^{-1}) mod R since 3327 ≡ -3329^{-1} mod 2^16 (as verified by 3327·3329 ≡ -1).
+
+Then reduced = (P + correction·Q)/R, which ≡ P·R^{-1} mod Q = value·w mod Q ✓. Range: correction < 2^16, correction·Q < 2^16·3329 ≈ 2^18.03; P < 2^22 (value·coef ≤ 3328·3328≈2^22). Sum < 2^22 + 2^18.03 + ... < 2^23; /2^16 < 2^7 = 128. Hmm wait, reduced = sum >> 16 could be up to ~128·... let's bound: P ≤ 3328·3328 = 11075584 ≈ 2^23.4/2^16... 11075584 >> 16 = 169. Actually reduced ≈ (P + corr·Q)/2^16 ≤ (11075584 + 65535·3329)/65536 = (11075584 + 218096... 65535·3329 = 218,095,  compute: 65535·3329 = 65535·3000=196,605,000 + 65535·329=21,570,015 → 218,175,015. Sum ≈ 229,250,599 → /65536 ≈ 3497. Then tl.where(reduced >= 3329, reduced-3329, reduced): Montgomery guarantees result < 2Q when input < ... For P < Q·R? P ≤ 11075584 < 3329·65536 = 218,151,  yes P < Q·R·... Standard Montgomery: if P < Q·R (actually P < 2^{...}), result < 2Q when P < Q·R? result = (P + mQ)/R with m < R: result ≤ (P + (R-1)Q)/R < Q + P/R + Q... hmm, result < 2Q requires P < QR? P/R < Q, plus mQ/R < Q → result < 2Q. P ≤ 11075584 < Q·R = 3329·65536 ≈ 2.18e8 ✓. So reduced < 2Q = 6658, single conditional subtraction handles reduced in [Q, 2Q) ✓. But could reduced be ≥ 2Q? No. Could the where miss when reduced in [2Q,...]? bounded < 2Q ✓. Also can reduced be < Q but result wrong? Montgomery is exact: reduced ≡ P·R^{-1} mod Q and reduced ∈ [0, 2Q), after conditional sub it's canonical ✓.
+
+Wait, but is the product actually value·(R·w mod Q)? coefficient stored includes R factor, yes, so P = value·R·w mod-approx; Montgomery gives P·R^{-1} = value·w mod Q ✓. But P is the raw product, not reduced — fine, Montgomery works on raw product < Q·R ✓ (value < Q, coef < Q, product < Q² < Q·R since Q²=11,075,  3329² = 11,082,  compute 3329² = 11,082,241; Q·R = 218,151,  3329·65536 = 218,164,  218 million. Yes Q² < QR ✓.)
+
+Hmm wait one more check: coefficients for last stage: [R·omega^j for j in range(width//2)] ✓ used with Montgomery ✓.
+
+Coefficient dtype int32, loaded, multiplied via int64 ✓.
+
+Now the gather: tl.gather(value, base, axis=0) — Triton 3.4 has tl.gather. base computed as int32 tensor — fine.
+
+Bit reversal loop: source for lane in [0,N): standard ✓. Input load X + row*N + source — x contiguous; storage offset handled since X is the data pointer (tensor base includes offset) ✓.
+
+Output: fresh empty_like ✓ int32.
+
+One check: `value = (value + 2*3329) % 3329` — Triton % on nonnegative is fine. After last radix-2 stage, `value = (value + 3329) % 3329`: left+weighted ≤ 6656, left-weighted ≥ -6656; +3329: min -3327 <0! left - weighted: left ∈[0,3328], weighted ∈ [0,3328], difference ≥ -3328. +3329 ≥ 1 ✓. Max: 3328+3328+3329 = 9985, % fine.
+
+Wait for fused stage: lower_difference min = a + p - c_low - d_low ≥ 0+0-3328-3328 = -6656, +6658 = 2 ✓.
+
+Also LOG_N//2 for N=128: LOG_N=7, 3 fused stages (m=1,4,16 → blocks up to 64), then final stage with half = N//2 = 64 ✓. And start for last stage = 5·(4^3-1)/3 = 5·21/... (64-1)/3 = 21 → 105. Total fused coefficients: stages m=1(5), m=4(20), m=16(80) = 105 ✓, then 64 more = 169. _make_coefficients for width=128: loop range((8-1)//2 = 3): half=1,4,16 → 5+20+80=105; then (7)%2=1 → extend 64. ✓. For width=64: LOG_N=6, (6)//2? bit_length of 64 = 7, (7-1)//2 = 3 stages, (7-1)%2=0 no last stage. Stages half=1,4,16 → blocks 64=N ✓.
+
+Also the coefficient index arithmetic in kernel: start = 5*(half-1)//3 — for half=4^s, (half-1)/3 integer ✓. But kernel loads: first at start+local (local < half ✓ size half bank ✓), second at start+half+local, upper start+2half, cross_low 3half, cross_high 4half ✓ matches packing order first+second+upper+cross_low+cross_high ✓.
+
+tl.gather semantics: gather along axis 0 of a 1-D tensor with index tensor of same shape — indices base computed per-lane; all lanes gather — yes this is a full permutation pattern, valid.
+
+One subtle thing: in stage s>0, base = (lane//(4m))*4m + lane%m — the block index uses full lane; blocks tile [0,N) ✓ since 4m ≤ N... for N=64 last fused stage m=16, 4m=64 ✓.
+
+Everything checks. Also validate output canonical: stored value after % 3329 in [0,3328] ✓ int32 ✓.
+
+Confidence high. trust.
