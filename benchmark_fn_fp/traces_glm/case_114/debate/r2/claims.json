@@ -1,0 +1,91 @@
+[
+  {
+    "created_at": "2026-10-18T00:52:50Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T00:54:07Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+            }
+          ],
+          "case": {
+            "D": 64,
+            "Hkv": 1,
+            "Hq": 2,
+            "Q": 33,
+            "S": 16,
+            "length": 130,
+            "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+            "window": 50
+          },
+          "duration_s": 4.223644,
+          "exit_code": 0,
+          "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+          "json_parse_error": null,
+          "json_result": {
+            "max_abs_err": null,
+            "nan_or_inf_elements": 32,
+            "output_finite": false,
+            "tol_pass": false,
+            "tolerance_ratio": null
+          },
+          "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+          "nan_or_inf_rows": 32,
+          "output_finite": false,
+          "stderr": "",
+          "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+          "timed_out": false,
+          "timeout_s": 240,
+          "total_query_head_rows": 66
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+    "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T00:54:07Z"
+  }
+]

@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-fe8d601a",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive sweep over all legal N values (1–32) with multiple batches and seeds, comparing kernel output to the sequential reference exactly.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-afcda049108b2cd9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_159\\\")\\nimport torch\\nimport kernel\\n\\nresults = {}\\nmismatches = []\\ntotal_cases = 0\\nfor N in range(1, 33):\\n    bad = 0\\n    for seed in range(4):\\n        for B in (1, 3, 7, 64):\\n            m, b, i = kernel.make_inputs(device=\\\"cuda\\\", batch=B, length=N, seed=seed)\\n            out = kernel.run(m, b, i)\\n            ref = kernel.reference(m.cpu(), b.cpu(), i.cpu()).to(out.device)\\n            total_cases += 1\\n            if not torch.equal(out, ref):\\n                bad += 1\\n                if len(mismatches) < 5:\\n                    mismatches.append({\\\"N\\\": N, \\\"B\\\": B, \\\"seed\\\": seed,\\n                                       \\\"diff_count\\\": int((out != ref).sum()),\\n                                       \\\"max_abs\\\": int((out - ref).abs().max())})\\n    results[N] = bad\\n\\n# also adversarial: extreme bias/initial values, all-singular matrices\\nm = torch.zeros(1, 32, 2, 2, dtype=torch.int8, device=\\\"cuda\\\")\\nbi = torch.full((1, 32, 2), -32768, dtype=torch.int16, device=\\\"cuda\\\")\\nini = torch.full((1, 2), -32768, dtype=torch.int16, device=\\\"cuda\\\")\\nout = kernel.run(m, bi, ini)\\nref = kernel.reference(m.cpu(), bi.cpu(), ini.cpu()).to(out.device)\\nedge_zero_ok = bool(torch.equal(out, ref))\\ntotal_cases += 1\\n\\nm = torch.ones(1, 32, 2, 2, dtype=torch.int8, device=\\\"cuda\\\")\\nbi = torch.full((1, 32, 2), 32767, dtype=torch.int16, device=\\\"cuda\\\")\\nini = torch.full((1, 2), 32767, dtype=torch.int16, device=\\\"cuda\\\")\\nout = kernel.run(m, bi, ini)\\nref = kernel.reference(m.cpu(), bi.cpu(), ini.cpu()).to(out.device)\\nedge_one_ok = bool(torch.equal(out, ref))\\ntotal_cases += 1\\n\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"exact equality (torch.equal) run() vs reference()\\\",\\n    \\\"total_cases\\\": total_cases,\\n    \\\"per_N_fail_counts\\\": results,\\n    \\\"total_failures\\\": sum(results.values()),\\n    \\\"mismatch_examples\\\": mismatches,\\n    \\\"edge_zero_matrix_min_bias_ok\\\": edge_zero_ok,\\n    \\\"edge_one_matrix_max_bias_ok\\\": edge_one_ok,\\n}))\\n\", \"expected_signal\": \"zero exact mismatches across all N in 1..32 would rebut the claim; any nonzero mismatch confirms it\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309803,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 640,
+    "prompt_tokens": 13995,
+    "total_tokens": 14635,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 9019,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

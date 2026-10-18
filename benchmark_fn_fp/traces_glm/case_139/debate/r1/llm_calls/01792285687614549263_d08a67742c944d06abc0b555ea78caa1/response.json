@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-8463c864",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes: c1 sweeps the mid-band small-x FP16 values, c2 probes the |x|<0.011 quantization/snap-to-zero band, and c3 checks the extrema ±65504 and subnormals. All use the artifact's own `run()` and an FP64 rationalized reference with the contract tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-825f32846209b114",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_139/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n\\n# all positive FP16 values in mid-band magnitude [1e-3, 0.11], plus negatives\\nxs = []\\nv = torch.finfo(torch.float16).tiny  # 6.1e-5\\n# iterate all positive fp16 values via view of uint16 bits\\nbits = torch.arange(0, 0x7C01, dtype=torch.int32)\\nvals = bits.to(torch.uint16).view(torch.float16)  # all positive finite fp16\\nmask = (vals.float() >= 1e-3) & (vals.float() <= 0.11)\\nxs = vals[mask]\\nx = torch.cat([xs, -xs]).to(dev)\\nout = k.run(x)\\nu = x.to(torch.float64); u2 = u*u\\nref = u2 / (torch.sqrt(1.0+u2)+1.0)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-8 + 1e-5*ref.abs()\\nviol = err > tol\\ni = int(torch.argmax(err - tol))\\nprint(json.dumps({\\n  \\\"n_tested\\\": int(x.numel()),\\n  \\\"num_violations\\\": int(viol.sum()),\\n  \\\"worst_x\\\": float(x.flatten()[i]),\\n  \\\"worst_abs_err\\\": float(err.flatten()[i]),\\n  \\\"tolerance_at_worst\\\": float(tol.flatten()[i]),\\n  \\\"err_over_tol_worst\\\": float((err/tol).max()),\\n  \\\"rho_at_worst\\\": float(ref.flatten()[i]),\\n}))\\n\", \"expected_signal\": \"worst err/tol ratio over small-magnitude FP16 band; >1 means tolerance violation\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-94925b8c99bdae5c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_139/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n\\n# all positive fp16 with |x| < 0.011 (u=x*x < half-ulp(1.0)=5.96e-8)\\nbits = torch.arange(0, 0x7C01, dtype=torch.int32)\\nvals = bits.to(torch.uint16).view(torch.float16)\\nmask = vals.float() < 0.011\\nxs = vals[mask]\\nx = torch.cat([xs, -xs]).to(dev)\\nout = k.run(x)\\nu = x.to(torch.float64); u2 = u*u\\nref = u2 / (torch.sqrt(1.0+u2)+1.0)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-8 + 1e-5*ref.abs()\\nzero_out = (out == 0.0)\\nnonzero_ref = ref != 0\\nsnapped = (zero_out & nonzero_ref)\\nprint(json.dumps({\\n  \\\"n_tested\\\": int(x.numel()),\\n  \\\"num_snap_to_zero_nonzero_rho\\\": int(snapped.sum()),\\n  \\\"num_violations\\\": int((err>tol).sum()),\\n  \\\"worst_abs_err\\\": float(err.max()),\\n  \\\"tol_at_worst\\\": float(tol.max()),\\n  \\\"err_over_tol_worst\\\": float((err/tol).max()),\\n  \\\"all_within_1e-8_abs\\\": bool((err <= 1e-8).all().item()),\\n}))\\n\", \"expected_signal\": \"snap-to-zero counts and tolerance violations for |x|<0.011 band\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-9341572f24f3854a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_139/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n\\n# extrema and subnormals, plus large-x band sweep (|x|>=0.11 up to 65504)\\nbits = torch.arange(0, 0x7C01, dtype=torch.int32)\\nvals = bits.to(torch.uint16).view(torch.float16)\\nbig = vals[vals.float() >= 0.11]\\nsmall = vals[vals.float() < torch.finfo(torch.float16).tiny*0]  # empty\\n# subnormals: bits 1..255 (fp16)\\nsub_bits = torch.arange(1, 256, dtype=torch.int32).to(torch.uint16).view(torch.float16)\\nextra = torch.tensor([65504.0, -65504.0, 0.0, -0.0, 1.0, -1.0], dtype=torch.float16)\\nx = torch.cat([big, -big, sub_bits, -sub_bits, extra]).to(dev)\\nout = k.run(x)\\nu = x.to(torch.float64); u2 = u*u\\nref = u2 / (torch.sqrt(1.0+u2)+1.0)\\nerr = (out.to(torch.float64) - ref).abs()\\ntol = 1e-8 + 1e-5*ref.abs()\\nviol = err > tol\\nprint(json.dumps({\\n  \\\"n_tested\\\": int(x.numel()),\\n  \\\"num_violations\\\": int(viol.sum()),\\n  \\\"err_over_tol_worst\\\": float((err/tol).max()),\\n  \\\"output_finite_all\\\": bool(torch.isfinite(out).all().item()),\\n  \\\"max_abs_err_large_band\\\": float(err[ref > 1.0].max()) if bool((ref>1.0).any()) else None,\\n  \\\"subnormal_count\\\": int(sub_bits.numel()*2),\\n  \\\"subnormal_max_abs_err\\\": float(err[:sub_bits.numel()*2].max()),\\n}))\\n\", \"expected_signal\": \"no violations for extrema/subnormals/large band; all within tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (mid-band sweep), c2 (intermediate 1+u quantization / exact-zero outputs at |x|<0.011), c3 (extremes + subnormals). Each calls kernel run on CUDA with crafted FP16 tensors, compare against FP64 reference with tolerance.\n\nc1 and c2 overlap but testable separately. Write probes."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792285689,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1515,
+    "prompt_tokens": 20974,
+    "total_tokens": 22489,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 81,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

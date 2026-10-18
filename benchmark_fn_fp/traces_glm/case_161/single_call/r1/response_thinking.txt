@@ -1,0 +1,550 @@
+Check the transforms. This is Winograd F(4,3) with data transform matrix B^T and filter G, output A^T, using integer scaling where filter denominators moved to output scale (divide by 576 = 24²).
+
+Known Lavin matrices F(4,3):
+B^T = 
+[1 0 -5 0 4 0 -1 0 0]
+... actually the standard B^T for F(4x4,3x3):
+[[1,0,-5,0,4,0,-1,0,0],
+ [0,1,4,-5,-4,0,1,0,0],
+ [0,-1,4,5,-4,0,-1,0,0],
+ [0,0,-4,0,4,0,4,0,-1]? Hmm. Let me recall properly.
+
+Standard B^T (Lavin Gray):
+B^T =
+[1  0 -5  0  4  0 -1  0  0]
+[0  1  4 -5 -4  0  1  0  0]
+[0 -1  4  5 -4  0 -1  0  0]
+[0  0 -4  0  4  0  4  0 -1]  ... this doesn't fit; the input is 6 values for 1D F(4,3)? No, F(4,3) uses 6 input points, B^T is 6x6? Actually F(4,3): input length m+r-1 = 6. B^T is 6x6? No, B^T d: d has 6 entries, output 6 transformed values... Actually in Lavin's formulation the data transform produces r+m-1=6 values from 6 inputs? No: F(4,3) uses 6 input points (n=6), producing 4 outputs. Transformed domain size n=6. B^T is n×n = 6×6? Actually B^T is (m+r-1)×(m+r-1) = 6×6.
+
+Standard B^T for F(4,3) with denominators: rows involve /2, /4 etc. Here the kernel's data transform (with d6 values d0..d5):
+t0 = 4d0 -5d2 + d4
+t1 = -4(d1+d2) + d3 + d4
+t2 = 4(d1-d2) - d3 + d4
+t3 = 2(d3-d1) - d2 + d4  ... hmm
+t4 = 2(d1-d3) - d2 + d4
+t5 = 4d1 -5d3 + d5
+
+Hmm, wait — that's only 6 inputs, but F(4,3) needs 6 inputs, ok. But the standard B^T has more complex rows. Let me instead check against known integer-scaled version. Standard F(4,3) B^T (with /2, /4 denominators):
+
+B^T = 
+[1   0  -5/4  0   1   0  0]? Hmm, I don't remember exactly. Let me derive.
+
+Actually the standard B^T from Lavin's paper:
+B^T =
+⎡1  0  -5  0  4  0 -1  0  0⎤  -- that's for F(6,3) with 8 inputs.
+
+For F(4,3), 1D: input d0..d5, B^T is 6×6? No—B^T is n×n where n=m+r-1=6, but wait: in Lavin's paper, B^T has m+r-1 columns and m+r-1 rows? For F(2,3): B^T is 4×4. For F(4,3): 6×6. Hmm, but the standard Winograd F(4,3) B^T:
+
+B^T = 
+[1  0   -5  0  4  0   -1 0 0]? no.
+
+Let me just derive via polynomial interpolation. Winograd F(4,3) uses 6 points. Known integer F(4,3) (from Lavin Gray appendix):
+
+B^T = 
+[ 4  0 -20  0  20  0  -4  0  0 ]? That's 9 columns... 
+
+Actually F(4,3) B^T is 6×6? Hmm, m+r-1 = 6 columns, and rows = 6 (n=6 transform outputs). Wait n = m+r-1 = 6, so B^T is 6×6. Hmm no—B^T maps d (length 6) to transformed length 6. Yes 6×6.
+
+Known B^T for F(4,3) (scaled to integers by ×4):
+Row0: 4d0 - 5d2 + d4? Let's check: standard F(4,3) B^T rows (with fractions):
+b0 = d0? Hmm.
+
+Let me derive directly. F(4,3): outputs y0..y3 = sum g_i d_{k+i}, k=0..3. Winograd: choose 6 interpolation points, typically {0, ∞?}... Common integer F(4,3) uses points 0,1,-1,2,-2,∞.
+
+The transforms given:
+G (filter): rows
+g0
+-(g0+g1+g2)   [point 1]
+-g0+g1-g2     [point -1]
+g0-2g1+4g2    [point 2]
+g0+2g1+4g2    [point -2]
+g2            [∞]
+
+Check: filter polynomial G(x)=g0+g1 x+g2 x². Values at x=0: g0 ✓. x=1: g0+g1+g2, but the row is -(g0+g1+g2) — sign flips don't matter since output is squared? No—each element multiplied independently, sign flips in G row and B row for same point cancel? Actually m = G_row · B_row (inner product per point). The product for point 1: (-(g0+g1+g2)) * (d-value transform row for point 1). Data row t1 = -4(d1+d2)+d3+d4... For point 1, the data transform should give d·(1,x,x²,x³,x⁴,x⁵) evaluated at x=1 = d0+d1+d2+d3+d4+d5. Hmm, that's not what t1 is.
+
+Wait — data transform uses basis functions B(x) chosen so B(x)·d = combined polynomial. In Winograd, the data transform maps d to values of d-polynomial times correction. Actually U(x) = G(x)D(x) where D is degree-5 poly with coeff d, evaluated at points. The convolution theorem: y = IDFT of pointwise products. So m_j = G(x_j) * D(x_j), where D(x_j) = sum d_i x_j^i. Then output transform A^T reconstructs.
+
+Check point 1: D(1) = d0+d1+d2+d3+d4+d5. The kernel's t1 = -4(d1+d2)+d3+d4. Not equal to D(1). But Winograd B^T rows aren't simply evaluation; they include division by... Actually they are evaluation of D at points, possibly scaled: since scaling per point can be absorbed (G row scaled by α, B row by 1/α, or moved to output... but scaling must cancel). Here the comment says filter denominators moved to output transform: output divided by 576 total. So B rows may include arbitrary scale factors s_j, and the final division by 576 must account.
+
+Hmm, this is getting complicated. Let me instead verify the whole pipeline algebraically with a simple test. Easier: verify 1D F(4,3) first.
+
+Actually, the well-known integer F(4,3) transforms (from "Fast Algorithms for Convolutional Neural Networks", and various implementations):
+
+B^T (integer version):
+[ 4  0 -20  0  20  0 -4  0  0 ]  — 9 columns, that's for F(6,3).
+
+For F(4,3), 1D, 6 inputs, from e.g. NNCF/known code:
+
+B^T =
+[ 4  0 -5  0  1  0 ]? Hmm the kernel's t0 = 4d0 -5d2 + d4 — that's row [4,0,-5,0,1,0]. Actually I recall the F(4,3) B^T (with denominator handling) is:
+
+B^T = 
+[4   0  -5   0   1   0]... wait actually I recall the standard F(4,3):
+
+B^T =
+⎡ 1  0 -5/4  0  1/4  0 ⎤? 
+
+Hmm. Let me just do the algebra. Points: p0=0, p1=1, p2=-1, p3=2, p4=-2, p5=∞.
+
+We want y_k = sum_{i=0}^{2} g_i d_{k+i}, k=0..3. Define D(x) = d0 + d1 x + ... + d5 x^5? Hmm actually in Cook-Toom, with points including ∞, the product G(x)D(x) evaluated at points, then interpolated at 0,1,2,3 to get y. But y_k = (g * d)(k) requires D(x) = sum d_i x^i and the product polynomial evaluated... Actually convolution y_k = sum_i g_i d_{k-i} vs correlation sum g_i d_{k+i}. For correlation with degree-2 g and degree-5 d, product H(x)=G(x)D(x) has degree 7; coefficient of x^{k+2}... Let's use: correlation result c_k = sum_{i=0}^2 g_i d_{k+i}, k=0..3. Consider product P(x) = G(x)·D(x) where D uses reversed? Standard trick: c_k equals coefficient of x^? in G(x)D(x) where D(x)=sum d_i x^{5-i} (reversed). Then coeff of x^{5-... hmm.
+
+Alternative: just compute. Since the transform matrices are stated, I can verify numerically by hand on 1D with small values. Let's pick g=(1,0,0), d=(d0..d5) with d0=1 others 0: then y_k = d_k (k=0..3): y=(1,0,0,0).
+
+Compute data transform: 
+t0 = 4*1 = 4
+t1 = -4*(0+0)+0+0 = 0
+t2 = 4*(0-0)-0+0 = 0
+t3 = 2*(0-0)-0+0 = 0
+t4 = 0
+t5 = 4*0 -5*0 + 0 = 0
+So x = (4,0,0,0,0,0).
+
+Filter: g=(1,0,0): h = (1, -1, -1, 1, 1, 0). So w=(1,-1,-1,1,1,0).
+
+m = x*w elementwise = (4,0,0,0,0,0).
+
+Output transform: _output_transform(m0..m5) = (6m0 +4(m1+m2)+m3+m4, 4(m1-m2)+2(m3-m4), 4(m1+m2+m3+m4), 4(m1-m2)+8(m3-m4)+24m5) = (6*4,0,0,0) = (24,0,0,0).
+
+Then divided by 24 (1D) gives (1,0,0,0). ✓. In 2D they divide by 576 = 24². Good.
+
+Test 2: g=(0,1,0), d = (0,1,0,0,0,0): y_k = d_{k+1}: y=(1,0,0,0) for k=0: d1=1 ✓. So expected y=(1,0,0,0).
+
+Data: t0 = -5*0 + 0 = 0? t0 = 4d0 -5d2 + d4 = 0. t1 = -4(d1+d2)+d3+d4 = -4(1+0)+0+0 = -4. t2 = 4(d1-d2)-d3+d4 = 4. t3 = 2(d3-d1)-d2+d4 = -2. t4 = 2(d1-d3)-d2+d4 = 2. t5 = 4d1-5d3+d5 = 4.
+x = (0,-4,4,-2,2,4).
+
+Filter g=(0,1,0): h = (0, -1, 1, -2, 2, 0).
+
+m = (0, 4, 4, 4, 4, 0).
+
+Output: 
+t0 = 6*0 + 4*(4+4) + 4+4 = 32+8=40? Wait m3=4, m4=4: t0 = 0 + 4*8 + 4 + 4 = 40. Hmm expected 24 after ÷24 → 1. 40/24 not integer. Hmm. Let me recompute.
+
+m1 = x1*w1 = (-4)*(-1)=4. m2 = 4*1=4. m3 = (-2)*(-2)=4. m4 = 2*2=4. m0=0, m5=0.
+
+_output_transform:
+t0 = 6m0 + 4(m1+m2) + m3 + m4 = 0 + 4*8 + 4+4 = 40. Hmm.
+
+Hmm but wait — expected y0 = 1 so should be 24. 40 ≠ 24. Something wrong? Maybe my filter transform rows don't pair with data rows correctly (the pairing of points: which data row corresponds to which filter row). Data t1 corresponds to point 1 presumably; filter h1 = -(g0+g1+g2) also point 1. Let me recheck data t1 for d=(0,1,0,...): should equal (scaled) D(1) = 1. It's -4. Scale -4. Filter h1 for point 1 should be scaled by s.t. product scale... G(1) = 0+1+0 = 1, h1 = -1, so filter scale -1 and data scale... -4? Combined 4, but we need product overall consistent per point across all tests.
+
+Hmm wait maybe the data rows aren't simple evaluations. Let me recompute data transform rows as evaluations:
+
+D(x) = d0 + d1x + d2x² + d3x³ + d4x⁴ + d5x⁵.
+
+t0 = 4d0 -5d2 + d4: this is D evaluated... 4d0 -5d2 + d4 = ? At point 0, D(0)=d0. t0 = 4d0 -5d2+d4 is not proportional to d0. Hmm. But Winograd B^T rows aren't evaluations of D — they're evaluations of D times... Actually in Cook-Toom, B^T is constructed so that b_i^T d gives needed quantities. The rows are chosen from {evaluation at point, times x^k}. With 6 points and degree-5 D... The standard construction: m_j = G(p_j)·(D(p_j)·p_j^{something})? Hmm.
+
+Actually the standard F(4,3) 1D Winograd (from Lavin Gray appendix B):
+
+B^T =
+⎡4   0  -5   0   1   0 ⎤
+⎢0  -4  -4   1   1   0 ⎥? 
+
+Hmm let me recall the actual published F(4,3) matrices. From the paper's Appendix (F(4,3)):
+
+B^T =
+[ 4  0 -20  0  20  0 -4  0  0 ]  — no that's 9 wide.
+
+OK, actually let me just trust the construction and test more carefully. Maybe I made an arithmetic error. Recompute _data_transform with d=(0,1,0,0,0,0):
+
+t0 = 4*d0 -5*d2 + d4 = 0.
+t1 = -4*(d1+d2) + d3 + d4 = -4*1 = -4. ✓
+t2 = 4*(d1-d2) - d3 + d4 = 4. ✓
+t3 = 2*(d3-d1) - d2 + d4 = 2*(0-1) = -2. ✓
+t4 = 2*(d1-d3) - d2 + d4 = 2. ✓
+t5 = 4*d1 -5*d3 + d5 = 4. ✓
+
+Filter g=(0,1,0): 
+h0 = g0 = 0
+h1 = -(g0+g1+g2) = -1
+h2 = -g0+g1-g2 = 1
+h3 = g0-2g1+4g2 = -2
+h4 = g0+2g1+4g2 = 2
+h5 = g2 = 0.
+
+m = (0, 4, 4, 4, 4, 0). Output t0 = 6*0 + 4*(4+4) + 4 + 4 = 40.
+
+Expected 24. So either my expected y is wrong or transforms are wrong. y_k = sum g_i d_{k+i}: y0 = g0d0+g1d1+g2d2 = 0+1+0 = 1. Yes expected 1, so output transform should give 24. Got 40. Hmm — but wait, maybe the kernel's output transform includes corrections making t0 = 24·y0 only when combined... no, it must be exact.
+
+Hold on — maybe the data transform rows include extra x^k factors that break the naive test? The pipeline is fixed; if with g=(0,1,0), d=e1 the result is 40/24 ≠ 1, the kernel is wrong. But maybe I misread _output_transform: t0 = 6*m0 + 4*(m1+m2) + m3 + m4. Yes.
+
+Hmm, let me double check the true F(4,3) transforms to compare. Lavin Gray F(4,3) (from paper appendix / widely reproduced):
+
+B^T = 
+⎡ 4   0  -5   0   1   0 ⎤
+⎢ 0  -4  -4   1   1   0 ⎥? 
+
+Hmm. Let me actually derive the correct matrices myself. Winograd minimal F(4,3): n = m+r-1 = 6. Use points {0, 1, -1, 2, -2, ∞}.
+
+We want y(x) = correlation output. Represent: y_k = sum_{i=0}^{2} g_i d_{k+i}. Consider product of polynomials: let G(x) = g0 + g1 x + g2 x², and D̃(x) = d0 x^5 + d1 x^4 + ... hmm. Alternative cleaner: y_k is coefficient... 
+
+Let's use the transposition: Winograd computes y = A^T [G (B^T d) ⊙ U], where B^T d gives values needed. The theory: y_k = sum g_i d_{k+i}. Write d(x) = sum d_i x^i. Then define e(x) = d(x) evaluated... The result y(x) = sum_k y_k x^k has degree 3, and y_k = coeff of x^{k} in ... Consider G(1/x)·d(x)? G(1/x)·d(x) = sum_{i,j} g_i d_j x^{j-i}; coefficient of x^{-k}? y_k = sum_i g_i d_{k+i} = coeff of x^{-k} in G(1/x) d(x)? G(1/x) = g0 + g1/x + g2/x². Product coeff of x^{j-i} is g_i d_j. We want j-i = k, i.e. coeff of x^k where j = i+k. Yes y_k = coeff of x^k in G(1/x)·d(x), for k=0..3.
+
+Set H(x) = G(1/x)·d(x), degree 7 (from g0 d5 x^5 ... plus negative powers down to x^{-2}). y = coefficients x^0..x^3 of H. Multiply by x²: P(x) = x² H(x) is degree 9? Hmm, negative: lowest term g2 d0 x^{-2} → x^0. So P(x) degree 9, and y_k = coeff of x^{k+2} of P.
+
+To use interpolation with 6 points, we need P to have effectively ≤... degree 9 needs 10 points. That's too many. Hmm, that's wrong. Minimal Winograd F(4,3) uses 6 mults, meaning the underlying object has degree ≤5. Right approach: y(x) (degree 3) is determined by 4 values... The 6 mults come from degree-5 polynomial = G(x)·d'(x) where d' has degree 3? No.
+
+Standard: F(4,3): the "polynomial product" being computed is of two polys of degree r-1=2 and ... Actually Winograd short convolution: computing convolution of length-4 output with 3-tap filter over 4 data? Hmm, F(4,3) computes 4 outputs from 4 inputs with 3-tap filter: input n = m+r-1 = 6. The linear convolution y = g * d where d length 4? No: F(m,r): output m, filter r, input m+r-1.
+
+The algorithm: it's the convolution of g (len 3) with d (len 4), giving output length 6, and we keep first 4? No—correlation y_k = sum g_i d_{k+i}, k=0..3, d has length 6. This equals convolution c_j = sum_i g_i d_{j-i} with... c_j for j=...? Actually y_k = sum_i g_i d_{k+i} = reversed-convolution. It's the convolution of g with reversed... Let d^R = (d5,...,d0). Then convolution (g * d^R)_j = sum_i g_i d^R_{j-i} = sum_i g_i d_{5-(j-i)} = sum g_i d_{5-j+i}. We want d_{k+i}: 5-j+i = k+i → j = 5-k. So y_k = (g*d^R)_{5-k}, k=0..3 → j=5..2.
+
+Convolution of degree-2 poly G(x)=g0+g1x+g2x² and degree-5 poly D^R(x)=d5+d4x+...+d0x^5. Product degree 7, coefficients c_2..c_5 are y_3..y_0. So we need 4 middle coefficients of an 8-coefficient product — that's the polynomial multiplication modulo... Cook-Toom: we only need 4 outputs, and the product mod suitable polynomial of degree 4? Winograd: compute product mod nothing—instead, y(x) treated as: since we need only c_2..c_5, compute P(x)=G(x)D^R(x) mod (x^4 - something)? Standard Winograd F(4,3) computes via CRT with modulus of degree 4? Hmm, but 6 points → degree 6? Hmm, 6 multiplications with points {0,1,-1,2,-2,∞}: that's a degree-6 CRT? Product degree 7 reduced mod degree-6 poly... 
+
+Actually: to get 4 outputs (degree-3 result poly), we need P mod Q where deg Q = 4 (P deg 7, mod deg-4 leaves deg 3, need Q deg 4 → 4 points → but F(4,3) uses 6 mults because G has degree 2: total mults = deg(Q') ... The standard: number of mults n = m+r-1 = 6: CRT with 6 linear factors of modulus of degree 6? P mod Q, deg Q = 6? Then result has degree ≤5 but y has degree 3... Hmm, in Winograd the computation is: y = A^T M where M are products at points; we need 6 points because the "input polynomial" in transposed view: F(4,3) transposed is F(3,4)... I'm going down a rabbit hole.
+
+Let me just trust the known published matrices. From Lavin & Gray appendix (F(4,3)):
+
+B^T = 
+⎡1   0  -5   0   4   0 -1  0  0⎤? no that's 9 columns — that's F(6,3).
+
+Hmm. Actually I recall the F(4,3) B^T is 6×8? No: input is 6 values.
+
+Let me find from memory of implementations (e.g., "wino_f4x3" in NNPACK-like code):
+
+B^T (F(4,3), 1D, input 6, output 6):
+row0: 4  0 -5  0  1  0
+row1: 0 -4 -4  1  1  0
+row2: 0  4 -4 -1  1  0
+row3: 0 -2 -1  2  1  0
+row4: 0  2 -1 -2  1  0
+row5: 0  4  0 -5  0  1
+
+Compare kernel:
+t0 = 4d0 -5d2 + d4 ✓ row0.
+t1 = -4(d1+d2)+d3+d4 = -4d1 -4d2 + d3 + d4 ✓ row1.
+t2 = 4(d1-d2) - d3 + d4 = 4d1 -4d2 -d3 + d4 ✓ row2.
+t3 = 2(d3-d1) - d2 + d4 = -2d1 - d2 + 2d3 + d4 ✓ row3.
+t4 = 2(d1-d3) - d2 + d4 = 2d1 - d2 - 2d3 + d4 ✓ row4.
+t5 = 4d1 -5d3 + d5 ✓ row5.
+
+Data transform matches known F(4,3) B^T. G (filter): known:
+row0: g0
+row1: -(g0+g1+g2)/2? The published G has /2, /4 etc.:
+G (F(4,3)):
+[g0]
+[(g0+g1+g2)/2]
+[(g0-g1+g2)/... 
+
+Known published G:
+⎡   1      0     0  ⎤
+⎢  1/2   1/2   1/2 ⎥? Hmm. Let me recall: 
+
+G = 
+[ 1    0    0 ]
+[ 1/2  1/2  1/2 ]
+[ 1/2 -1/2  1/2 ]
+[ 1/4  1/2   1 ]
+[ 1/4 -1/2   1 ]
+[ 0    0    1 ]
+
+Check kernel: h1 = -(g0+g1+g2) → -2×(1/2,1/2,1/2)? scale -2. h2 = -g0+g1-g2 → -2×(1/2,-1/2,1/2)? = -g0+g1-g2 ✓ scale -2. h3 = g0-2g1+4g2 → 4×(1/4,1/2,1)? = g0+2g1+4g2 ✗ sign of g1 differs. Hmm. Published G row4 might be (1/4,-1/2,1): 4× = g0-2g1+4g2 ✓. And h4 = g0+2g1+4g2 = 4×(1/4,1/2,1) ✓. So kernel's rows 3,4 are swapped relative to my recalled order, but pairing with data rows matters: data row3 (t3) vs row4. As long as G row j pairs with B^T row j at the same interpolation point.
+
+Points: row1 ↔ x=1, row2 ↔ x=-1, row3 ↔ x=2, row4 ↔ x=-2. Data t3 = -2d1 - d2 + 2d3 + d4: which point? Data rows correspond to same points. If G row for x=2 is g0-2g1+4g2 = G(2)? G(2) = g0+2g1+4g2. Hmm: kernel's h3 = g0-2g1+4g2 = G(-2)! and h4 = g0+2g1+4g2 = G(2). So kernel has rows for points 2 and -2 swapped in G relative to data? Need to check data: t3 should be D-related at point... 
+
+Hmm, but scaling: also signs (h1 = -G(1), h2 = -G(-1)? G(-1) = g0-g1+g2; -G(-1) = -g0+g1-g2 = h2 ✓, h1 = -G(1) ✓). Since data t1, t2 also may carry signs, products m_j must equal G(p_j)·something.
+
+Rather than reason about which point each row corresponds to (data rows aren't plain evaluations anyway — B^T rows include x^j weighting / derivatives for the ∞ point etc.), let me redo the numeric test with the known correct pairing. My test gave 40 vs 24 expected. Let me redo the full 1D pipeline test with another case to see if it's consistently wrong, since one wrong case suffices.
+
+Test: g=(0,1,0), d=e1 gave output t0 = 40, expected 24. Let me double check filter transform of g=(0,1,0): h0=0, h1=-(0+1+0)=-1, h2=-0+1-0=1, h3=0-2+0=-2, h4=0+2+0=2, h5=0. m = x⊙w = (0, (-4)(-1), 4*1, (-2)(-2), 2*2, 0) = (0,4,4,4,4,0). Output t0 = 0 + 4*(4+4) + 4 + 4 = 40. Yes 40.
+
+Hmm. But wait — is the known output transform A^T? Published A^T for F(4,3) (with the /24 or similar):
+
+A^T =
+[4 0 -6 0 4 0 -1 0]? no.
+
+Published A^T (F(4,3)):
+[ 4   0  -6   0   4   0  -1 ]? That's 7 wide — that's F(4,3)? Input to A^T is 6 values. Hmm, published:
+
+A^T =
+⎡4  0  -6  0  4  0 -1⎤ — no, 6 columns:
+Actually Lavin's F(4,3) A^T is 4×6? Let me recall:
+
+A^T = 
+[ 4   0   0   0  -4   0 ]
+[ 4  -4  -4   2   2   4 ]? 
+
+Hmm. Kernel's _output_transform: t0 = 6m0 + 4(m1+m2) + m3+m4; t1 = 4(m1-m2)+2(m3-m4); t2 = 4(m1+m2+m3+m4); t3 = 4(m1-m2)+8(m3-m4)+24m5.
+
+Let me test with first test again (g=(1,0,0), d=e0): x=(4,0,0,0,0,0), w=(1,-1,-1,1,1,0), m=(4,0,0,0,0,0). Output = (24,0,0,0) → y=(1,0,0,0) ✓.
+
+Test 3: g=(0,0,1), d=e2 (d2=1): y_k = d_{k+2}: y = (1,0,0,0).
+Data: t0 = -5, t1 = -4, t2 = -4, t3 = -1, t4 = -1, t5 = 0.
+Filter g=(0,0,1): h = (0, -1, -1, 4, 4, 1).
+m = (0, 4, 4, -4, -4, 0).
+Output t0 = 0 + 4*8 + (-4) + (-4) = 24 ✓! 
+
+So test 3 works but test 2 fails? Let me recheck test 2 by recomputing... maybe I made sign error. Test 2: g=(0,1,0), d=e1. y0 = g0d0+g1d1+g2d2 = 1.
+
+Data transform d=e1: t0 = 0. t1 = -4(d1+d2)+d3+d4 = -4. t2 = 4(d1-d2)-d3+d4 = 4. t3 = 2(d3-d1)-d2+d4 = -2. t4 = 2(d1-d3)-d2+d4 = 2. t5 = 4d1-5d3+d5 = 4.
+Filter (0,1,0): (0,-1,1,-2,2,0).
+m1 = (-4)(-1) = 4; m2 = 4; m3 = (-2)(-2) = 4; m4 = 4.
+t0 = 6*0 + 4*(4+4) + 4+4 = 40.
+
+Hmm 40. But test 3 worked. Let me also test g=(1,0,0), d=e1: y0 = 0 (y=(0,0,0,0)? y_k = d_k: y=(0,1,0,0)... wait g=(1,0,0): y_k = d_k. d=e1 → y=(0,1,0,0).
+
+Data x = (0,-4,4,-2,2,4). w = (1,-1,-1,1,1,0). m = (0, 4, -4, -2, 2, 0).
+Output: t0 = 0 + 4*(4-4) + (-2) + 2 = 0 ✓. t1 = 4*(4-(-4)) + 2*(-2-2) = 32 - 8 = 24 ✓ (y1=1). t2 = 4*(4-4-2+2) = 0 ✓. t3 = 4*8 + 8*(-4) + 0 = 0 ✓. Good.
+
+So g=(0,1,0) case gives 40 where 24 expected. Suspicious—maybe the kernel's filter transform rows 3&4 are swapped (the point-2/-2 rows), which is a real bug candidate. Let's check whether swapping h3/h4 fixes test 2: h3' = g0+2g1+4g2 = 2, h4' = g0-2g1+4g2 = -2. Then m3 = (-2)*2 = -4, m4 = 2*(-2) = -4. t0 = 4*(4+4) + (-4) + (-4) = 24 ✓! And check test 3 with swap: g=(0,0,1): h3' = 4, h4' = 4 (same) ✓ unchanged. Test with g=(0,1,0), d=e0: y = (0,0,0,0) since y_k = d_{k+1} = 0. Data x = (4,0,0,0,0,0). m = (0,0,0,0,0,0). Fine either way.
+
+But also t3 output uses m3, m4 asymmetrically (8(m3-m4)) so swapping affects other outputs. Let me test g=(0,1,0), d=e3: y_k = d_{k+1} → y=(0,0,0,0)? d=e3: d_{k+1} = e3_{k+1}: y0 = d1=0, y1=d2=0, y2=d3=1, y3=d4=0. y=(0,0,1,0).
+
+Data d=e3: t0 = 0 (d4=0, d2=0): 0. t1 = -4(0)+1+0 = 1. t2 = -1. t3 = 2(1-0) = 2. t4 = 2(0-1) = -2. t5 = -5.
+Kernel as written: w=(0,-1,1,-2,2,0): m = (0, -1, -1, -4, -4, 0).
+t0 = 4*(-2) + (-8) = -16 → /24 wrong (expected 0). t1 = 4*(-1-(-1)) + 2*(-4-(-4)) = 0 ✓. t2 = 4*(-1-1-4-4) = -40 wrong. So kernel as written fails here too.
+
+With swapped h3/h4: w=(0,-1,1,2,-2,0): m = (0,-1,-1,4,4,0).
+t0 = 4*(-2)+8 = 0 ✓. t1 = 4*0 + 2*(4-4) = 0 ✓. t2 = 4*(-1-1+4+4) = 24 ✓ (/24 = 1). t3 = 4*(-1+1) + 8*(4-4) = 0 ✓. All correct with swap!
+
+So the kernel's filter transform rows 3 and 4 are swapped relative to what's needed → wrong results. But wait — maybe instead the data transform rows 3/4 are the swapped ones and filter matches data... The data transform matches the published B^T I recalled, but my recalled G row order might be wrong; what matters is internal consistency. The tests show: with the kernel as written, g=(0,1,0) tests fail. Unless... let me also verify test 2's failure isn't due to my misreading output transform. Also verify a fuller test: 2D would be similar since 1D fails.
+
+Actually wait — maybe the issue is in data transform rows t3/t4 instead, and filter is right. Check: which pairing is "correct" per known matrices? Published B^T row3 = (0,-2,-1,2,1,0) — matches kernel t3 = -2d1 - d2 + 2d3 + d4 ✓. Published G (from Lavin appendix, F(4,3)):
+
+G = 
+[1     0    0]
+[1/2  1/2  1/2]
+[1/2 -1/2  1/2]
+[1/4 -1/2   1 ]
+[1/4  1/2   1 ]
+[0     0    1]
+
+So published row3 (point 2?) = (1/4, -1/2, 1) → ×4 = (1,-2,4) = kernel h3 = g0-2g1+4g2 ✓!! And kernel h4 = g0+2g1+4g2 = 4×(1/4,1/2,1) = published row4 ✓. So the kernel matches published matrices for both B^T and G! Then why do my tests fail?
+
+Hmm, then maybe the published pairing is different: the data rows and filter rows must correspond to the same points. Published B^T:
+row1 = (0,-4,-4,1,1,0)? Hmm wait, is that right? Let me re-derive the published B^T more carefully. Points {0, 1, -1, 2, -2, ∞}. 
+
+The data transform values m_j must be G(p_j)·D'(p_j) where D' is the degree-5 data poly (suitably reversed). B^T row j should be (evaluation functional at p_j) times scaling. Evaluation at p=1: (1,1,1,1,1,1). Kernel t1 ∝ (-4,-4,1,1,0)? Not proportional to (1,1,1,1,1,1). So B^T rows are NOT plain evaluations — right, because in Winograd convolution (not pure interpolation), B^T includes the reversal and the x² shift etc. Actually for the convolution formulation: m_j = G(p_j) · D(p_j) where D(x) = d0 x^5 + d1 x^4 + ... reversed! Then evaluation at p: (p^5, p^4, p^3, p^2, p, 1)·d. Check t1 at p=1: (1,1,1,1,1,1)·d, times scale. Kernel t1 = (-4,-4,1,1,0)·d — no. Hmm not that either.
+
+Alternatively, B^T rows can include any factor per point as long as the filter transform compensates... but rows can't be arbitrary — they must be evaluation functionals (possibly scaled), since the CRT reconstruction requires pointwise products.
+
+Wait, no! That's true for pure polynomial multiplication via CRT. But the kernel's B^T rows aren't evaluations. Hmm. Actually in Winograd's F(4,3), the algorithm computes y_k = sum g_i d_{k+i} using the Toom-Cook approach where the "polynomial" being interpolated is y(x) of degree 3, built from... The intermediate values are m_j = (a^T_j g)(b^T_j d) where the pairs (a_j, b_j) are constructed such that A^T M = y. The a_j, b_j need not be evaluation vectors; they come from the Winograd convolution algorithm structure (nested F(2,3)-like building blocks). Indeed, F(4,3) in Lavin is built via nesting? No, Lavin gives explicit matrices.
+
+Let me verify the published triple (B^T, G, A^T) is consistent by checking my test 2 numerically with published matrices including the fractional scalings.
+
+Published (Lavin Gray, F(4,3)):
+B^T =
+⎡ 4   0  -5   0   1   0 ⎤
+⎢ 0  -4  -4   1   1   0 ⎥
+⎢ 0   4  -4  -1   1   0 ⎥
+⎢ 0  -2  -1   2   1   0 ⎥
+⎢ 0   2  -1  -2   1   0 ⎥
+⎣ 0   4   0  -5   0   1 ⎦
+
+G =
+⎡ 1     0    0 ⎤
+⎢ 1/2  1/2  1/2 ⎥
+⎢ 1/2 -1/2  1/2 ⎥
+⎢ 1/4 -1/2   1 ⎥
+⎢ 1/4  1/2   1 ⎥
+⎣ 0     0    1 ⎦
+
+Hmm wait, but then the kernel's h1 = -(g0+g1+g2) = -2 × published row1 ✓ (scale -2), h2 = -g0+g1-g2 = -2×(1/2,-1/2,1/2)? -2×that = (-1,1,-1) ✓ matches h2 = -g0+g1-g2 ✓. So kernel = published×(-2) for rows 1,2; ×4 for rows 3,4; ×1 rows 0,5. If published is correct, the per-point scale differences must be compensated in B^T or A^T... but they're not (kernel B^T = published B^T exactly, and kernel A^T = published A^T × something?). Hmm, that's a problem: kernel's G rows differ from published by point-dependent factors (-2,-2,4,4) which the published B^T doesn't have. Unless kernel A^T compensates... A^T compensation is impossible for point-dependent factors unless they're uniform (since A^T is a fixed linear map, but the factor multiplies m_j, so A^T entries in column j could absorb it! Yes! A^T column j can absorb factor c_j). So kernel A^T should be published A^T with column j scaled by c_j = (-2,-2,4,4,1... wait rows: c = (1,-2,-2,4,4,1)).
+
+Published A^T (F(4,3)):
+⎡ 4   0  -6   0   4   0 ⎤? no that's... Let me recall published A^T for F(4,3):
+
+A^T =
+⎡ 4   0   0  -2   2   0 ⎤? I genuinely don't remember. Let me instead derive A^T from the kernel and check consistency with a full test of all 9 (g,d) basis pairs. That's the decisive approach: test all basis combinations for 1D. y is linear in g and d; I've tested several. Failures found: (g=e1, d=e1) gave 40 vs 24; (g=e1, d=e3) gave wrong t0,t2. These are genuine failures of the kernel as written, unless my arithmetic is wrong. Let me recheck (g=e1, d=e1) once more very carefully.
+
+g = (0,1,0), d = (0,1,0,0,0,0).
+Expected y_k = sum_{i=0..2} g_i d_{k+i} = d_{k+1}. y = (d1,d2,d3,d4) = (1,0,0,0).
+
+_data_transform(d0..d5) = (d0,d1,d2,d3,d4,d5) = (0,1,0,0,0,0):
+t0 = 4*0 -5*0 + 0 = 0
+t1 = -4*(1+0) + 0 + 0 = -4
+t2 = 4*(1-0) - 0 + 0 = 4
+t3 = 2*(0-1) - 0 + 0 = -2
+t4 = 2*(1-0) - 0 + 0 = 2
+t5 = 4*1 -5*0 + 0 = 4
+x = (0,-4,4,-2,2,4).
+
+_filter_transform(0,1,0):
+h0 = 0
+h1 = -(0+1+0) = -1
+h2 = -0+1-0 = 1
+h3 = 0 -2*1 + 4*0 = -2
+h4 = 0 + 2*1 + 0 = 2
+h5 = 0
+w = (0,-1,1,-2,2,0).
+
+m = (0, 4, 4, 4, 4, 0).
+
+_output_transform(m):
+t0 = 6*0 + 4*(4+4) + 4 + 4 = 40.
+Expected 24. So y0 = 40/24 ≠ 1. Definitely wrong — 40 not divisible by 24 even.
+
+Unless... the 2D path is different? No, 1D failure implies 2D failure (e.g., separable input). Unless the 2D composition is arranged such that... no, output[b,0,0] = row0 of data transform ⊗ ... with g affecting only one row: set filter g only in row i=0 direction? In 2D, take filter F with F[0,·] = g, F[1,·]=F[2,·]=0, and tile with row0 = d, other rows 0. Then output[0,0] should equal the 1D result (sum over i,j: only i=0 contributes; over j of F[0,j]*tile[0, 0+j]... wait 2D: output[b,r,c] = sum_{i,j} F[i,j] tile[r+i, c+j]. With F[0,j] = g_j and tile[0, c] = d_c, output[0,0] = sum_j g_j d_j — same as 1D y0. And the Winograd 2D = 1D applied row-wise then column-wise; a failure in 1D at (e1,e1) propagates. So the kernel produces 40/24 → int division of 40//576 in 2D... anyway wrong.
+
+Hmm, but wait — maybe I should double check that published G vs kernel pairing: kernel's A^T may be consistent with its own G scaling. The empirical test already shows inconsistency regardless of publication. Let me also test (g=e1, d=e0): y = (0,0,0,0)? y_k = d_{k+1} = 0 ✓ expected all zero. x for d=e0: (4,0,0,0,0,0). m = (0,0,0,0,0,0). Zero ✓.
+
+And test (g=(1,1,0), d=e1): y_k = d_k + d_{k+1} = (1,1,0,0). By linearity = test1 + test2 results: kernel gives (24+40, ...)/24 = wrong for y0.
+
+So the kernel is incorrect — filter transform rows for points 2/-2 (t3,t4 of _filter_transform) are inconsistent with the data transform and output transform (appears rows 3 and 4 are swapped, since swapping fixes the failing tests). Let me confirm the swap hypothesis on a couple more cases to be confident it's a bug rather than my arithmetic.
+
+Swap hypothesis: correct h3 = g0+2g1+4g2, h4 = g0-2g1+4g2.
+
+Test A: g=e1, d=e1 → computed above: m3 = -2*2 = -4, m4 = 2*(-2) = -4. t0 = 4*8 + (-8) = 24 ✓. t1 = 4*(4-4) + 2*(-4+4) = 0 ✓. t2 = 4*(4+4-4-4) = 0 ✓. t3 = 4*(0) + 8*0 + 0 = 0 ✓. 
+
+Test B: g=e2 (0,0,1), d=e1: expected y_k = d_{k+2} = (0,0,0,0) (d1 only, k+2 ≥ 2 > indices... d_{k+2} for k=0..3: d2,d3,d4,d5 = 0). x = (0,-4,4,-2,2,4). w (corrected) = (0,-1,-1,4,4,1). m = (0,4,-4,-8,8,4). t0 = 0 + 4*(4-4) + (-8+8) = 0 ✓. t1 = 4*(4+4) + 2*(-8-8) = 32-32 = 0 ✓. t2 = 4*(4-4-8+8) = 0 ✓. t3 = 4*8 + 8*(-16) + 24*4 = 32-128+96 = 0 ✓. 
+
+Test C: g=(1,1,1), d=(1,2,3,4,5,6): y_k = d_k+d_{k+1}+d_{k+2} = (6,9,12,15).
+Kernel-with-swap: 
+x: t0 = 4*1 -5*3 + 5 = -6. t1 = -4*(2+3)+4+5 = -11. t2 = 4*(2-3)-4+5 = -3. t3 = 2*(4-2)-3+5 = 6. t4 = 2*(2-4)-3+5 = 1. t5 = 4*2 -5*4 + 6 = -6.
+w: h0=1, h1=-3, h2=-1, h3=1+2+4=7, h4=1-2+4=3, h5=1.
+m = (-6, 33, 3, 42, 3, -6).
+Output: t0 = 6*(-6) + 4*(36) + 42+3 = -36+144+45 = 153. Hmm 153/24 = 6.375. Not 6! 
+
+Uh oh. So swap hypothesis fails test C. Let me recheck. Hmm. So maybe kernel as-written passes test C? Kernel as written: w3 = 1-2+4 = 3, w4 = 1+2+4 = 7. m = (-6, 33, 3, 3*6=18, 7, -6). t0 = -36 + 4*36 + 18 + 7 = -36+144+25 = 133. 133/24 ≠ 6. Also wrong!
+
+Hmm. So both fail test C — meaning something else is wrong (or my expected x/w is wrong, or output transform). Let me recheck test C arithmetic.
+
+d = (1,2,3,4,5,6):
+t0 = 4*1 - 5*3 + 5 = 4 - 15 + 5 = -6 ✓.
+t1 = -4*(2+3) + 4 + 5 = -20 + 9 = -11. I wrote -11 ✓ (then used 33 = (-11)(-3) ✓).
+t2 = 4*(2-3) - 4 + 5 = -4 + 1 = -3 ✓.
+t3 = 2*(4-2) - 3 + 5 = 4 + 2 = 6 ✓.
+t4 = 2*(2-4) - 3 + 5 = -4 + 2 = -2. I made an error before (wrote 1). Recompute: 2*(d1-d3) = 2*(2-4) = -4; -d2 = -3; +d4 = +5 → -2 ✓.
+t5 = 4*2 - 5*4 + 6 = 8-20+6 = -6 ✓.
+So x = (-6,-11,-3,6,-2,-6). I had t4 = 1 wrong; it's -2.
+
+Kernel as written: w = (1,-3,-1,3,7,1). m = (-6, 33, 3, 18, -14, -6).
+t0 = 6*(-6) + 4*(33+3) + 18 + (-14) = -36 + 144 + 4 = 112? 144+18-14-36 = 112. 112/24 ≠ 6. Wrong.
+
+Swap: w = (1,-3,-1,7,3,1): m = (-6, 33, 3, 42, -6, -6).
+t0 = -36 + 4*36 + 42 - 6 = -36 + 144 + 36 = 144. 144/24 = 6 ✓!!
+
+Continue swap: t1 = 4*(m1-m2) + 2*(m3-m4) = 4*30 + 2*48 = 120+96 = 216 → /24 = 9 ✓ (y1=9).
+t2 = 4*(m1+m2+m3+m4) = 4*(33+3+42-6) = 4*72 = 288 → 12 ✓.
+t3 = 4*(m1-m2) + 8*(m3-m4) + 24*m5 = 120 + 8*48 + (-144) = 120+384-144 = 360 → 15 ✓.
+
+Swap passes test C! I just made an arithmetic slip earlier (t4 = -2 not 1). Let me recheck test B and A with corrected arithmetic — those used explicit values, fine.
+
+Recheck test with kernel as written on test C: fails (112). And earlier tests 1 and 3 (g=e0 and g=e2 with various d) passed because for g with g1=0, h3 = h4 (g0±0+4g2 ... no: g1=0 → h3 = g0+4g2 = h4). Right, that's why they coincidentally passed.
+
+Also recheck swap on test (g=e1, d=e3): done above ✓, and (g=e1, d=e1) ✓.
+
+One more: g=(0,1,1), d=(1,1,1,1,1,1): y_k = 1*1*3 = 3 for all k? y_k = d_k+d_{k+1}+d_{k+2} = 3.
+Swap: w: h0=0, h1=-(0+1+1)=-2, h2=-0+1-1=0, h3=0+2+4=6, h4=0-2+4=2, h5=1.
+x for all-ones d: t0 = 4-5+1 = 0. t1 = -4*2+2 = -6. t2 = 0-1+1 = 0. t3 = 0-1+1 = 0. t4 = 0-1+1 = 0. t5 = 4-5+1 = 0.
+m = (0, 12, 0, 0, 0, 0).
+t0 = 0 + 4*12 + 0 + 0 = 48 → 2? Expected 3! Uh oh.
+
+Hmm. 48/24 = 2 ≠ 3. So swap fails here?! Let me recheck. g=(0,1,1): g0=0,g1=1,g2=1.
+h1 = -(0+1+1) = -2. m1 = x1*w1 = (-6)*(-2) = 12.
+t0 = 6*0 + 4*(12+0) + 0 + 0 = 48. Expected y0 = 3 → 72.
+
+Hmm. So neither ordering works?? Let me recompute x for d=ones: 
+t0 = 4*1 - 5*1 + 1 = 0 ✓. t1 = -4*(1+1) + 1 + 1 = -6 ✓. t2 = 4*(1-1) -1 + 1 = 0 ✓. t3 = 2*(1-1) -1 + 1 = 0 ✓. t4 = 2*(1-1) -1+1 = 0 ✓. t5 = 4*1 -5*1 + 1 = 0 ✓.
+
+w: h0 = 0. h5 = g2 = 1. m = (0, 12, 0, 0, 0, 0). t0 = 48 → 2. Expected 3.
+
+So the data transform row1 gives -6 for all-ones d; paired m1 = G-ish value. Hmm, expected: y = (3,3,3,3). Kernel output: t0=48→2, t1 = 4*12 = 48→2, t2 = 4*12 = 48 → 2, t3 = 4*12 + 0 = 48 → 2. So kernel (either G ordering, since m3=m4=0 here) gives (2,2,2,2) instead of (3,3,3,3) for g=(0,1,1), d=ones!
+
+That's a failure independent of the row3/4 ordering. So the output transform or data transform is also wrong. Hmm wait — but earlier tests passed... Let me sanity check with g=(1,1,1), d=ones: y = 3 everywhere. x = (0,-6,0,0,0,0) (same x). w = (1,-3,-1,7,3,1) (swap). m = (0,18,0,0,0,0). t0 = 4*18 = 72 → 3 ✓. t1 = 4*18=72 →3 ✓ t2 = 72 ✓ t3 = 72 ✓. Good.
+
+g=(0,1,1): w1 = -(g0+g1+g2) = -2. For all-ones d, D-ish at point 1 should be 6·(something). m1 = 12 = (-6)(-2). If correct, m1 should be s.t. contributions give 3. With g=(1,1,1): m1 = (-6)(-3) = 18 → y=3. So per unit of G(1)-ish, m1 scales... For g=(0,1,1): G(1) = 2; for (1,1,1): G(1) = 3. If m1 ∝ G(1)·D(1): 12 vs 18 → ratio 2/3 ✓ consistent (G(1)=2 vs 3, D(1)=6 both). So m1 is consistent as G(1)·D(1)·scale. Then failure must be in output transform handling... but output transform is same for both. m = (0,12,0,0,0,0) vs (0,18,0,0,0,0): output linear in m1: 4*m1 → 48 vs 72 → 2 vs 3. Expected 3 vs 3. So for g=(0,1,1) expected 3 but formula gives 2; for (1,1,1) gives 3 expected 3. So the true y is not linear in m in this way... meaning m doesn't capture enough: y depends on more than m1; but here other m's are zero in both cases. Contradiction?! Unless x for d=ones has nonzero other entries I miscomputed.
+
+Recompute t3 for d=ones: t3 = 2*(d3-d1) - d2 + d4 = 2*(1-1) - 1 + 1 = 0 ✓. t4 similar 0 ✓.
+
+But wait — for g=(0,1,1), h3 = 6, h4 = 2 (swap): m3 = 0*6 = 0, m4 = 0. And h5 = 1, m5 = 0. So indeed m = (0,12,0,0,0,0) → y0 = 2 by the given output transform. But true y0 = 3. So the pipeline as given (with any row ordering of h3/h4) cannot produce 3. Therefore the bug is deeper — data or output transform is wrong too.
+
+Hmm, wait. Maybe I should reconsider: perhaps the correct pairing is not "swap h3/h4" but something else, and my test C passing under swap was luck. Let's find the mathematically correct triple.
+
+Let me derive the correct F(4,3) integer transforms from scratch. Use CRT approach: We want y_k = sum_{i=0}^{2} g_i d_{k+i}, k=0..3.
+
+Consider d(x) = sum_{j=0}^{5} d_j x^j? and the product G(x)·d(x)? coeff of x^{k}: sum_{i+j=k} — no.
+
+Use the transposed view: y^T = ... Standard Winograd: compute the linear convolution of g (len 3) with reversed... Let's use: define D(x) = d5 x^? ... 
+
+Cleaner: y_k = sum_i g_i d_{k+i}. Define g(x) = g2 + g1 x + g0 x² (reversed filter) and d(x) = d0 x^5 + ... hmm.
+
+Try: P(x) = G(x)·D(x) with G(x) = g0 + g1 x + g2 x², D(x) = d0 x^5 + d1 x^4 + d2 x^3 + d3 x² + d4 x + d5. Then coeff of x^{5-... }: coeff of x^n in P = sum_{i + (5-j) = n} g_i d_j = sum g_i d_j with i - j = n - 5. We want j = k + i → i - j = -k → n = 5 - k. So y_k = coeff of x^{5-k} of P, k=0..3 → coefficients x^5..x^2? Wait 5-k for k=0..3: 5,4,3,2 → y0 = c5, y1 = c4, y2 = c3, y3 = c2.
+
+P has degree 7. We need c2..c5. CRT: P mod Q where Q = prod of 6 linear factors (degree 6)? That gives degree-5 residue, losing info? P deg 7; to recover c2..c5 we need... Actually Winograd trick: we only need 4 coefficients; P mod (x^4 · something)? The known result: F(4,3) needs 6 mults. The trick: y(x) = sum y_k x^k (deg 3) satisfies: P(x) ≡ y-something... Consider P(x) - (stuff) — the standard construction: y(x)·x^? Hmm.
+
+Known construction (Lavin): the three matrices for F(4,3) are as I recalled:
+B^T = 
+[ 4  0 -5  0  1  0 ]
+[ 0 -4 -4  1  1  0 ]
+[ 0  4 -4 -1  1  0 ]
+[ 0 -2 -1  2  1  0 ]
+[ 0  2 -1 -2  1  0 ]
+[ 0  4  0 -5  0  1 ]
+
+Wait — is that actually the published B^T? Hmm, I might be conflating. The rows with pattern (0, -2, -1, 2, 1, 0) — hmm.
+
+G = 
+[ 1    0    0 ]
+[ 1/2  1/2  1/2 ]
+[ 1/2 -1/2  1/2 ]
+[ 1/4 -1/2   1 ]
+[ 1/4  1/2   1 ]
+[ 0    0     1 ]
+
+A^T = 
+[ 1  1  1  1  1  0 ]? no...
+
+Hmm. Honestly, rather than reconstruct the "correct published" matrices, the decisive evidence: the kernel as written fails on legal inputs (demonstrated by explicit 1D computation: g=(0,1,1), d=ones → kernel yields 2 where truth is 3; and g=(0,1,0), d=e1 → 40/24 non-integer). But wait — I should double check the failing test once more very carefully, because if the kernel is actually a known-good construction maybe I'm misreading the 2D composition (e.g., the 2D pipeline isn't separable row-then-column of the 1D op — it is: data transform applied to columns then rows, filter transform applied to columns (g rows) then rows — consistent).
+
+Actually hold on. In 2D, _filter_transform is applied first along the i-axis (rows: g00,g10,g20 → h..), then along j. In 1D terms, the "filter" for the row direction is (g_{·,0}, g_{·,1}, g_{·,2}) columns... consistent separability. The 1D analysis holds: 2D kernel = 1D kernel applied in both axes. If 1D fails, 2D fails.
+
+Let me nail down one clean 1D failure with full recomputation of every step, using g=(0,1,1), d=(1,1,1,1,1,1), and simulate the kernel EXACTLY as written (no swap):
+
+x (data transform of d):
+d0..d5 all 1.
+t0 = 4 - 5 + 1 = 0
+t1 = -4*(1+1) + 1 + 1 = -6
+t2 = 4*(1-1) - 1 + 1 = 0
+t3 = 2*(1-1) - 1 + 1 = 0
+t4 = 2*(1-1) - 1 + 1 = 0
+t5 = 4 - 5 + 1 = 0
+x = (0,-6,0,0,0,0).
+
+w (filter transform of g=(0,1,1)):
+h0 = 0
+h1 = -(0+1+1) = -2
+h2 = -0+1-1 = 0
+h3 = 0 - 2*1 + 4*1 = 2
+h4 = 0 + 2*1 + 4*1 = 6
+h5 = 1
+w = (0,-2,0,2,6,1).
+
+m = (0, 12, 0, 0, 0, 0).
+
+output transform:
+t0 = 6*0 + 4*(12+0) + 0 + 0 = 48
+t1 = 4*(12-0) + 2*(0-0) = 48
+t2 = 4*(12+0+0+0) = 48
+t3 = 4*12 + 8*0 + 24*0 = 48
+y = 48/24 = 2 each. True y = 3 each. WRONG.
+
+Verify true y: y_k = sum_{i=0..2} g_i d_{k+i} with g=(0,1,1), d all ones: = 1+1 = 2? Wait! g_i: g0=0, g1=1, g2=1. y_k = g0 d_k + g1 d_{k+1} + g2 d_{k+2} = 0 + 1 + 1 = 2!!
+
+I made an error — true y = 2, kernel gives 2 ✓!! Let me recheck: earlier I claimed y=3 for g=(0,1,1) — that's wrong, g0=0. OK good, that test passes.
+
+Now recheck the other "failure": g=(0,1,0), d=e1: true y = (d1, d2, d3, d4) = (1,0,0,0), y0=1 → need 24. Kernel as written gave 40. Recheck filter transform g=(0,1,0): h3 = g0 - 2g1 + 4g2 = -2, h4 = g0 + 2g1 + 4g2 = 2. m3 = x3*w3 = (-2)*(-2) = 4, m4 = 2*2 = 4. m1 = (-4)*(-1) = 4, m2 = 4*1 = 4.
+t0 = 6*0 + 4*(4+4) + 4 + 4 = 40. True 24. Fails as written.
+
+And swap gives 24 ✓. And test C (g=(1,1,1), d=(1..6)): as-written gives 112 (≠144), swap gives 144 ✓. And test (g=e1, d=e3): as-written fails, swap ✓.
+
+But then check swap against a test where g1 ≠ 0 AND both h3,h4 matter with d making x3,x4 nonzero and asymmetric output. Test: g=(0,1,0), d=(0,1,0,1,0,0): true y_k = d_{k+1} = (1,0,1,0).
+x: t0 = 4*0 -5*0 + 0 = 0. t1 = -4*(1+0) + 1 + 0 = -3. t2 = 4*(1-0) - 1 + 0 = 3. t3 = 2*(1-1) - 0 + 0 = 0. t4 = 2*(1-1) - 0 + 0 = 0. t5 = 4*1 -5*1 + 0 = -1.
+Swap w = (0,-1,1,2,-2,0). m = (0, 3, 3, 0, 0, 0).
+t0 = 0 + 4*6 = 24 ✓ (y0=1). t1 = 4*(3-3) + 0 = 0 ✓. t2 = 4*(3+3) = 24 ✓ (y2=1). t3 = 0 ✓. 
+
+Another: g=(1,0,1), d=(1,0,1,0,1,0): y_k = d_k + d_{k+2} = (2,0,2,0)? y0 = 1+1=2, y1 = 0+0=0, y2 = 1+1 = 2, y3 = 0. 
+x: t0 = 4 - 5*1 + 1 = 0. t1 = -4*(0+1) + 0 + 1 = -3. t2 = 4*(0-1) - 0 + 1 = -3. t3 = 2*(0-0) - 1 + 1 = 0. t4 = 2*(0-0) -1 + 1 = 0. t5 = 0 - 0 + 0 = 0.
+w (g1=0 so order irrelevant): h0=1, h1=-(1+0+1)=-2, h2=-1+0-1=-2, h3=1+4=5, h4=5, h5=1.
+m = (0, 6, 6, 0, 0, 0).
+t0 = 4*12 = 48 → 2 ✓. t1 = 4*(6-6) = 0 ✓. t2 = 4*12 = 48 → 2 ✓. t3 = 0 ✓.
+
+Test with g1≠0 and asymmetric x3,x4 and output t3 (which uses 8(m3-m4)): g=(0,1,0), d=(0,0,0,1,0,0) (d=e3): true y = (0,0,0,0)? y_k = d_{k+1}: (d1,d2,d3,d4) = (0,0,1,0).
+x for d=e3: computed before: t0=0, t1 = -4*0 + 1 + 0 = 1, t2 = -1, t3 = 2*(1-0) = 2, t4 = 2*(0-1) = -2, t5 = -5.
+Swap w = (0,-1,1,2,-2,0). m = (0, -1, -1, 4, 4, 0).
+t0 = 4*(-2) + 8 = 0 ✓. t1 = 4*(-1+1) + 2*(4-4) = 0 ✓. t2 = 4*(-1-1+4+4) = 24 ✓. t3 = 4*0 + 8*0 = 0 ✓. All ✓ with swap.
+
+So all evidence: kernel-as-written fails whenever g1 ≠ 0 (with suitable d), because h3/h4 are swapped. That is a genuine bug: e.g., filter row (0,1,0) with tile row (0,1,0,0,0,0) yields 40 instead of 24 → 40//576 wrong.
+
+But wait — I should double check by considering whether maybe the correct pairing requires swapping the DATA rows t3/t4 instead... either way, the kernel as written is internally inconsistent → incorrect. Also check the div: with corrected transforms results are exact multiples of 576 in 2D (24 per axis). Also int64 usage prevents overflow. Also masking fine, output fresh tensor, contiguity checked.
+
+Also confirm 40 case would actually manifest in 2D: choose 2D filter F = [[0,1,0],[0,0,0],[0,0,0]], tile with row 0 = (0,1,0,0,0,0), other rows zero. Then output[0,0] = F[0,1]*tile[0,1] = 1. Kernel: row-wise this is exactly the 1D failing case in the column direction... output value would be 40 (from column transform) then combined with zero rows → y = 40 → 40//576 = 0 ≠ 1. Fail.
+
+Verdict: reject.

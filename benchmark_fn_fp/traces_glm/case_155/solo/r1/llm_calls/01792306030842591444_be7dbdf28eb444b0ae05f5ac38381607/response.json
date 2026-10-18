@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-3caffe20",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the adversarial probe for claim c1: large FP16 components with cancellation in one output component.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-90fd4559369e5b36",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_155\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ncases = {}\\n\\n# Case A: extreme magnitudes with true real ~0 (a*c + b*d cancellation) but imag large\\nnum = torch.tensor([[65504.0, 65504.0],[1000.0, 3000.0]], dtype=torch.float16)\\nden = torch.tensor([[3.0, -3.0],[7.0, 21.0]], dtype=torch.float16)\\nnum, den = num.to(dev), den.to(dev)\\nout = K.run(num, den)\\nref = K.reference(num.cpu(), den.cpu()).to(dev)\\nerr = (out - ref).abs()\\ntol = 1e-7 + 5e-7 * ref.abs()\\ncases[\\\"A\\\"] = {\\\"err\\\": err.max().item(), \\\"tol_min\\\": tol.min().item(), \\\"worst_ratio\\\": (err/tol).max().item()}\\n\\n# Case B: ratio rounding: real_numerator = fma(b, ratio, a) with b*ratio ~ a -> real ~ 0\\nnum = torch.tensor([[65504.0, -65504.0]], dtype=torch.float16).to(dev)\\nden = torch.tensor([[65504.0, 65504.0]], dtype=torch.float16).to(dev)\\nout = K.run(num, den)\\nref = K.reference(num.cpu(), den.cpu()).to(dev)\\nerr = (out - ref).abs(); tol = 1e-7 + 5e-7*ref.abs()\\ncases[\\\"B\\\"] = {\\\"err\\\": err.max().item(), \\\"tol_min\\\": tol.min().item(), \\\"ratio\\\": (err/tol).max().item(), \\\"out\\\": out.tolist(), \\\"ref\\\": ref.tolist()}\\n\\n# Case C: ratio near 1, cancellation: a*c+b*d small vs terms huge, denominator small components\\nnum = torch.tensor([[60000.0, 60000.0]], dtype=torch.float16).to(dev)\\nden = torch.tensor([[1.0, -1.0]], dtype=torch.float16).to(dev)\\nout = K.run(num, den); ref = K.reference(num.cpu(), den.cpu()).to(dev)\\nerr = (out - ref).abs(); tol = 1e-7 + 5e-7*ref.abs()\\ncases[\\\"C\\\"] = {\\\"err\\\": err.max().item(), \\\"ratio\\\": (err/tol).max().item()}\\n\\n# Case D: random sweep of large-magnitude fp16 values, exhaustive-ish grid on a,b with ratio rounding\\nimport itertools\\nvals = [65504.0, 1000.0, -65504.0, -1000.0, 60000.0, -60000.0]\\nworst = 0.0; worst_info=None\\nN_num=[]; N_den=[]; Ns=[]\\nfor c_ in [65504.0, 100.0, 1.0, 60000.0, -65504.0, -100.0]:\\n    for d_ in [65504.0, 100.0, 1.0, 60000.0, -65504.0, -100.0]:\\n        if c_==0 and d_==0: continue\\n        for a_ in vals:\\n            for b_ in vals:\\n                N_num.append([a_,b_]); N_den.append([c_,d_]); Ns.append(True)\\nnum = torch.tensor(N_num, dtype=torch.float16).to(dev)\\nden = torch.tensor(N_den, dtype=torch.float16).to(dev)\\nout = K.run(num, den)\\nref = K.reference(num.cpu(), den.cpu()).to(dev)\\nerr = (out - ref).abs(); tol = 1e-7 + 5e-7*ref.abs()\\nratio = (err/tol)\\ni = (ratio.max(dim=1).values.argmax()).item()\\ncases[\\\"D\\\"] = {\\\"max_ratio\\\": ratio.max().item(), \\\"worst_row\\\": {\\\"num\\\": N_num[i], \\\"den\\\": N_den[i], \\\"out\\\": out[i].tolist(), \\\"ref\\\": ref[i].tolist(), \\\"err\\\": err[i].tolist()}}\\n\\n# Case E: subnormals / tiny denominator, ratio-based\\nnum = torch.tensor([[5.96e-8, -5.96e-8],[1.0,2.0]], dtype=torch.float16).to(dev)  # subnormal\\nden = torch.tensor([[5.96e-8, 5.96e-8],[3.0,4.0]], dtype=torch.float16).to(dev)\\nout = K.run(num, den); ref = K.reference(num.cpu(), den.cpu()).to(dev)\\nerr = (out - ref).abs(); tol = 1e-7 + 5e-7*ref.abs()\\ncases[\\\"E\\\"] = {\\\"max_ratio\\\": (err/tol).max().item()}\\n\\nprint(json.dumps(cases, indent=2))\\n\", \"expected_signal\": \"err/tol ratio > 1 on cancellation rows\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run probe with adversarial inputs: large a,b,c,d with near-cancellation."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306031,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1158,
+    "prompt_tokens": 11795,
+    "total_tokens": 12953,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 17,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6604,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

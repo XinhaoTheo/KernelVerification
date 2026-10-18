@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-a0035960",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes: c1 exhaustively sweeps all finite FP16 values against the FP64 reference; c2 tests signed zeros and subnormals; c3 tests the underflow/extrema region.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a8875c6b1ff3615c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch, numpy as np, json\\nsys.path.insert(0, \\\"/root/cases/case_136\\\")\\nimport kernel\\n\\n# all finite FP16 values (65536 minus NaN/Inf), N <= 131072 fits\\nbits = np.arange(65536, dtype=np.uint16)\\nfinite = bits[np.isfinite(np.frombuffer(bits.tobytes(), dtype=np.float16)).astype(bool)]\\nallv = torch.from_numpy(np.frombuffer(finite.tobytes(), dtype=np.float16).copy()).to(torch.float16).cuda()\\nn = allv.numel()\\nout = kernel.run(allv)\\nref = kernel.reference(allv.cpu()).cuda()\\nerr = (out.double() - ref.double()).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"max abs error over exhaustive FP16 domain vs FP64 reference\\\",\\n    \\\"n_values\\\": int(n),\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"n_violations\\\": int((err > 1e-6).sum()),\\n    \\\"worst_x\\\": float(allv[err.argmax()].item()),\\n    \\\"worst_out\\\": float(out[err.argmax()].item()),\\n    \\\"worst_ref\\\": float(ref[err.argmax()].item()),\\n    \\\"max_err_near_zero_1e-3\\\": float(err[(allv.abs() < 1e-3)].max()) if (allv.abs() < 1e-3).any() else 0.0,\\n    \\\"max_err_x8_32\\\": float(err[(allv.abs() >= 8) & (allv.abs() < 32)].max()),\\n}))\", \"expected_signal\": \"max abs error over all finite FP16 values vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9b12b78ff7ca99b5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, torch, json, numpy as np\\nsys.path.insert(0, \\\"/root/cases/case_136\\\")\\nimport kernel\\n\\nvals = [0.0, -0.0, 5.96e-08, -5.96e-08, 2.98e-08, -2.98e-08, 6.1e-05, -6.1e-05, 1.19e-07]\\nxs = torch.tensor(vals, dtype=torch.float32).to(torch.float16).cuda()\\nout = kernel.run(xs)\\nref = kernel.reference(xs.cpu()).cuda()\\nerr = (out.double() - ref.double()).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"abs error at signed zeros and subnormals vs FP64 reference\\\",\\n    \\\"values\\\": [float(v) for v in xs.double().cpu()],\\n    \\\"outputs\\\": [float(v) for v in out.double().cpu()],\\n    \\\"refs\\\": [float(v) for v in ref.double().cpu()],\\n    \\\"errs\\\": [float(v) for v in err.cpu()],\\n    \\\"max_err\\\": float(err.max()),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"neg_zero_err_vs_ln2\\\": float((out[1].double() - float(np.log(2))).abs()),\\n    \\\"n_violations\\\": int((err > 1e-6).sum()),\\n}))\", \"expected_signal\": \"signed zero/subnormal error vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-af98e7151374eda5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, torch, json, numpy as np\\nsys.path.insert(0, \\\"/root/cases/case_136\\\")\\nimport kernel\\n\\n# underflow region |x| >= 88 including extrema\\nvals = [65504.0, -65504.0, 100.0, -100.0, 88.0, -88.0, 89.0, -89.0, 90.0, -90.0, 2048.0, -2048.0, 4096.0, 10000.0, -10000.0]\\nxs = torch.tensor(vals, dtype=torch.float32).to(torch.float16).cuda()\\nout = kernel.run(xs)\\nref = kernel.reference(xs.cpu()).cuda()\\nerr = (out.double() - ref.double()).abs()\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"abs error in underflow/extrema region vs FP64 reference\\\",\\n    \\\"values\\\": [float(v) for v in xs.double().cpu()],\\n    \\\"outputs\\\": [float(v) for v in out.double().cpu()],\\n    \\\"errs\\\": [float(v) for v in err.cpu()],\\n    \\\"max_err\\\": float(err.max()),\\n    \\\"tolerance\\\": 1e-6,\\n    \\\"n_violations\\\": int((err > 1e-6).sum()),\\n    \\\"pos_65504_out\\\": float(out[0].item()),\\n    \\\"neg_65504_out\\\": float(out[1].item()),\\n}))\", \"expected_signal\": \"underflow/extrema error vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three independent probes: c1 exhaustive FP16 sweep (all 65536 finite fp16 values, N limit 131072 — fits), c2 zeros/subnormals, c3 extrema/underflow. Can batch all three."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792285599,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1168,
+    "prompt_tokens": 22423,
+    "total_tokens": 23591,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 51,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

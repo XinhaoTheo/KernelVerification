@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_160\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Integer Winograd F(4x4,3x3) tile cross-correlation.\\n2: \\n3: Synthetic adaptation of the F(4,3) transforms in Lavin and Gray (CVPR2016).\\n4: Filter-transform denominators are moved to the output transform. This is\\n5: not an upstream kernel or a reproduction of an upstream historical bug.\\n6: \\\"\\\"\\\"\\n7: import torch\\n8: import triton\\n9: import triton.language as tl\\n10: \\n11: \\n12: @triton.jit\\n13: def _data_transform(d0, d1, d2, d3, d4, d5):\\n14:     t0 = 4 * d0 - 5 * d2 + d4\\n15:     t1 = -4 * (d1 + d2) + d3 + d4\\n16:     t2 = 4 * (d1 - d2) - d3 + d4\\n17:     t3 = 2 * (d3 - d1) - d2 + d4\\n18:     t4 = 2 * (d1 - d3) - d2 + d4\\n19:     t5 = 4 * d1 - 5 * d3 + d5\\n20:     return t0, t1, t2, t3, t4, t5\\n21: \\n22: \\n23: @triton.jit\\n24: def _filter_transform(g0, g1, g2):\\n25:     t0 = g0\\n26:     t1 = -(g0 + g1 + g2)\\n27:     t2 = -g0 + g1 - g2\\n28:     t3 = g0 + 2 * g1 + 4 * g2\\n29:     t4 = g0 - 2 * g1 + 4 * g2\\n30:     t5 = g2\\n31:     return t0, t1, t2, t3, t4, t5\\n32: \\n33: \\n34: @triton.jit\\n35: def _output_transform(m0, m1, m2, m3, m4, m5):\\n36:     t0 = 6 * m0 + 4 * (m1 + m2) + m3 + m4\\n37:     t1 = 4 * (m1 - m2) + 2 * (m3 - m4)\\n38:     t2 = 4 * (m1 + m2 + m3 + m4)\\n39:     t3 = 4 * (m1 - m2) + 8 * (m3 - m4) + 24 * m5\\n40:     return t0, t1, t2, t3\\n41: \\n42: \\n43: @triton.jit\\n44: def _tiles(INPUT, FILTER, OUTPUT, BATCH: tl.constexpr, BLOCK: tl.constexpr):\\n45:     tile = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n46:     active = tile < BATCH\\n47:     d00 = tl.load(INPUT + tile * 36 + 0, mask=active, other=0).to(tl.int32)\\n48:     d01 = tl.load(INPUT + tile * 36 + 1, mask=active, other=0).to(tl.int32)\\n49:     d02 = tl.load(INPUT + tile * 36 + 2, mask=active, other=0).to(tl.int32)\\n50:     d03 = tl.load(INPUT + tile * 36 + 3, mask=active, other=0).to(tl.int32)\\n51:     d04 = tl.load(INPUT + tile * 36 + 4, mask=active, other=0).to(tl.int32)\\n52:     d05 = tl.load(INPUT + tile * 36 + 5, mask=active, other=0).to(tl.int32)\\n53:     d10 = tl.load(INPUT + tile * 36 + 6, mask=active, other=0).to(tl.int32)\\n54:     d11 = tl.load(INPUT + tile * 36 + 7, mask=active, other=0).to(tl.int32)\\n55:     d12 = tl.load(INPUT + tile * 36 + 8, mask=active, other=0).to(tl.int32)\\n56:     d13 = tl.load(INPUT + tile * 36 + 9, mask=active, other=0).to(tl.int32)\\n57:     d14 = tl.load(INPUT + tile * 36 + 10, mask=active, other=0).to(tl.int32)\\n58:     d15 = tl.load(INPUT + tile * 36 + 11, mask=active, other=0).to(tl.int32)\\n59:     d20 = tl.load(INPUT + tile * 36 + 12, mask=active, other=0).to(tl.int32)\\n60:     d21 = tl.load(INPUT + tile * 36 + 13, mask=active, other=0).to(tl.int32)\\n61:     d22 = tl.load(INPUT + tile * 36 + 14, mask=active, other=0).to(tl.int32)\\n62:     d23 = tl.load(INPUT + tile * 36 + 15, mask=active, other=0).to(tl.int32)\\n63:     d24 = tl.load(INPUT + tile * 36 + 16, mask=active, other=0).to(tl.int32)\\n64:     d25 = tl.load(INPUT + tile * 36 + 17, mask=active, other=0).to(tl.int32)\\n65:     d30 = tl.load(INPUT + tile * 36 + 18, mask=active, other=0).to(tl.int32)\\n66:     d31 = tl.load(INPUT + tile * 36 + 19, mask=active, other=0).to(tl.int32)\\n67:     d32 = tl.load(INPUT + tile * 36 + 20, mask=active, other=0).to(tl.int32)\\n68:     d33 = tl.load(INPUT + tile * 36 + 21, mask=active, other=0).to(tl.int32)\\n69:     d34 = tl.load(INPUT + tile * 36 + 22, mask=active, other=0).to(tl.int32)\\n70:     d35 = tl.load(INPUT + tile * 36 + 23, mask=active, other=0).to(tl.int32)\\n71:     d40 = tl.load(INPUT + tile * 36 + 24, mask=active, other=0).to(tl.int32)\\n72:     d41 = tl.load(INPUT + tile * 36 + 25, mask=active, other=0).to(tl.int32)\\n73:     d42 = tl.load(INPUT + tile * 36 + 26, mask=active, other=0).to(tl.int32)\\n74:     d43 = tl.load(INPUT + tile * 36 + 27, mask=active, other=0).to(tl.int32)\\n75:     d44 = tl.load(INPUT + tile * 36 + 28, mask=active, other=0).to(tl.int32)\\n76:     d45 = tl.load(INPUT + tile * 36 + 29, mask=active, other=0).to(tl.int32)\\n77:     d50 = tl.load(INPUT + tile * 36 + 30, mask=active, other=0).to(tl.int32)\\n78:     d51 = tl.load(INPUT + tile * 36 + 31, mask=active, other=0).to(tl.int32)\\n79:     d52 = tl.load(INPUT + tile * 36 + 32, mask=active, other=0).to(tl.int32)\\n80:     d53 = tl.load(INPUT + tile * 36 + 33, mask=active, other=0).to(tl.int32)\\n81:     d54 = tl.load(INPUT + tile * 36 + 34, mask=active, other=0).to(tl.int32)\\n82:     d55 = tl.load(INPUT + tile * 36 + 35, mask=active, other=0).to(tl.int32)\\n83:     g00 = tl.load(FILTER + tile * 9 + 0, mask=active, other=0).to(tl.int32)\\n84:     g01 = tl.load(FILTER + tile * 9 + 1, mask=active, other=0).to(tl.int32)\\n85:     g02 = tl.load(FILTER + tile * 9 + 2, mask=active, other=0).to(tl.int32)\\n86:     g10 = tl.load(FILTER + tile * 9 + 3, mask=active, other=0).to(tl.int32)\\n87:     g11 = tl.load(FILTER + tile * 9 + 4, mask=active, other=0).to(tl.int32)\\n88:     g12 = tl.load(FILTER + tile * 9 + 5, mask=active, other=0).to(tl.int32)\\n89:     g20 = tl.load(FILTER + tile * 9 + 6, mask=active, other=0).to(tl.int32)\\n90:     g21 = tl.load(FILTER + tile * 9 + 7, mask=active, other=0).to(tl.int32)\\n91:     g22 = tl.load(FILTER + tile * 9 + 8, mask=active, other=0).to(tl.int32)\\n92: \\n93:     # Transform columns, then rows. Each vector lane is one independent tile.\\n94:     v00, v10, v20, v30, v40, v50 = _data_transform(d00, d10, d20, d30, d40, d50)\\n95:     v01, v11, v21, v31, v41, v51 = _data_transform(d01, d11, d21, d31, d41, d51)\\n96:     v02, v12, v22, v32, v42, v52 = _data_transform(d02, d12, d22, d32, d42, d52)\\n97:     v03, v13, v23, v33, v43, v53 = _data_transform(d03, d13, d23, d33, d43, d53)\\n98:     v04, v14, v24, v34, v44, v54 = _data_transform(d04, d14, d24, d34, d44, d54)\\n99:     v05, v15, v25, v35, v45, v55 = _data_transform(d05, d15, d25, d35, d45, d55)\\n100:     x00, x01, x02, x03, x04, x05 = _data_transform(v00, v01, v02, v03, v04, v05)\\n101:     x10, x11, x12, x13, x14, x15 = _data_transform(v10, v11, v12, v13, v14, v15)\\n102:     x20, x21, x22, x23, x24, x25 = _data_transform(v20, v21, v22, v23, v24, v25)\\n103:     x30, x31, x32, x33, x34, x35 = _data_transform(v30, v31, v32, v33, v34, v35)\\n104:     x40, x41, x42, x43, x44, x45 = _data_transform(v40, v41, v42, v43, v44, v45)\\n105:     x50, x51, x52, x53, x54, x55 = _data_transform(v50, v51, v52, v53, v54, v55)\\n106:     h00, h10, h20, h30, h40, h50 = _filter_transform(g00, g10, g20)\\n107:     h01, h11, h21, h31, h41, h51 = _filter_transform(g01, g11, g21)\\n108:     h02, h12, h22, h32, h42, h52 = _filter_transform(g02, g12, g22)\\n109:     w00, w01, w02, w03, w04, w05 = _filter_transform(h00, h01, h02)\\n110:     w10, w11, w12, w13, w14, w15 = _filter_transform(h10, h11, h12)\\n111:     w20, w21, w22, w23, w24, w25 = _filter_transform(h20, h21, h22)\\n112:     w30, w31, w32, w33, w34, w35 = _filter_transform(h30, h31, h32)\\n113:     w40, w41, w42, w43, w44, w45 = _filter_transform(h40, h41, h42)\\n114:     w50, w51, w52, w53, w54, w55 = _filter_transform(h50, h51, h52)\\n115: \\n116:     # INT64 retains exact sums in the inverse transform.\\n117:     m00 = x00.to(tl.int64) * w00.to(tl.int64)\\n118:     m01 = x01.to(tl.int64) * w01.to(tl.int64)\\n119:     m02 = x02.to(tl.int64) * w02.to(tl.int64)\\n120:     m03 = x03.to(tl.int64) * w03.to(tl.int64)\\n121:     m04 = x04.to(tl.int64) * w04.to(tl.int64)\\n122:     m05 = x05.to(tl.int64) * w05.to(tl.int64)\\n123:     m10 = x10.to(tl.int64) * w10.to(tl.int64)\\n124:     m11 = x11.to(tl.int64) * w11.to(tl.int64)\\n125:     m12 = x12.to(tl.int64) * w12.to(tl.int64)\\n126:     m13 = x13.to(tl.int64) * w13.to(tl.int64)\\n127:     m14 = x14.to(tl.int64) * w14.to(tl.int64)\\n128:     m15 = x15.to(tl.int64) * w15.to(tl.int64)\\n129:     m20 = x20.to(tl.int64) * w20.to(tl.int64)\\n130:     m21 = x21.to(tl.int64) * w21.to(tl.int64)\\n131:     m22 = x22.to(tl.int64) * w22.to(tl.int64)\\n132:     m23 = x23.to(tl.int64) * w23.to(tl.int64)\\n133:     m24 = x24.to(tl.int64) * w24.to(tl.int64)\\n134:     m25 = x25.to(tl.int64) * w25.to(tl.int64)\\n135:     m30 = x30.to(tl.int64) * w30.to(tl.int64)\\n136:     m31 = x31.to(tl.int64) * w31.to(tl.int64)\\n137:     m32 = x32.to(tl.int64) * w32.to(tl.int64)\\n138:     m33 = x33.to(tl.int64) * w33.to(tl.int64)\\n139:     m34 = x34.to(tl.int64) * w34.to(tl.int64)\\n140:     m35 = x35.to(tl.int64) * w35.to(tl.int64)\\n141:     m40 = x40.to(tl.int64) * w40.to(tl.int64)\\n142:     m41 = x41.to(tl.int64) * w41.to(tl.int64)\\n143:     m42 = x42.to(tl.int64) * w42.to(tl.int64)\\n144:     m43 = x43.to(tl.int64) * w43.to(tl.int64)\\n145:     m44 = x44.to(tl.int64) * w44.to(tl.int64)\\n146:     m45 = x45.to(tl.int64) * w45.to(tl.int64)\\n147:     m50 = x50.to(tl.int64) * w50.to(tl.int64)\\n148:     m51 = x51.to(tl.int64) * w51.to(tl.int64)\\n149:     m52 = x52.to(tl.int64) * w52.to(tl.int64)\\n150:     m53 = x53.to(tl.int64) * w53.to(tl.int64)\\n151:     m54 = x54.to(tl.int64) * w54.to(tl.int64)\\n152:     m55 = x55.to(tl.int64) * w55.to(tl.int64)\\n153:     u00, u10, u20, u30 = _output_transform(m00, m10, m20, m30, m40, m50)\\n154:     u01, u11, u21, u31 = _output_transform(m01, m11, m21, m31, m41, m51)\\n155:     u02, u12, u22, u32 = _output_transform(m02, m12, m22, m32, m42, m52)\\n156:     u03, u13, u23, u33 = _output_transform(m03, m13, m23, m33, m43, m53)\\n157:     u04, u14, u24, u34 = _output_transform(m04, m14, m24, m34, m44, m54)\\n158:     u05, u15, u25, u35 = _output_transform(m05, m15, m25, m35, m45, m55)\\n159:     y00, y01, y02, y03 = _output_transform(u00, u01, u02, u03, u04, u05)\\n160:     y10, y11, y12, y13 = _output_transform(u10, u11, u12, u13, u14, u15)\\n161:     y20, y21, y22, y23 = _output_transform(u20, u21, u22, u23, u24, u25)\\n162:     y30, y31, y32, y33 = _output_transform(u30, u31, u32, u33, u34, u35)\\n163: \\n164:     # One factor of24 per spatial axis restores the output scale.\\n165:     tl.store(OUTPUT + tile * 16 + 0, (y00 // 576).to(tl.int32), mask=active)\\n166:     tl.store(OUTPUT + tile * 16 + 1, (y01 // 576).to(tl.int32), mask=active)\\n167:     tl.store(OUTPUT + tile * 16 + 2, (y02 // 576).to(tl.int32), mask=active)\\n168:     tl.store(OUTPUT + tile * 16 + 3, (y03 // 576).to(tl.int32), mask=active)\\n169:     tl.store(OUTPUT + tile * 16 + 4, (y10 // 576).to(tl.int32), mask=active)\\n170:     tl.store(OUTPUT + tile * 16 + 5, (y11 // 576).to(tl.int32), mask=active)\\n171:     tl.store(OUTPUT + tile * 16 + 6, (y12 // 576).to(tl.int32), mask=active)\\n172:     tl.store(OUTPUT + tile * 16 + 7, (y13 // 576).to(tl.int32), mask=active)\\n173:     tl.store(OUTPUT + tile * 16 + 8, (y20 // 576).to(tl.int32), mask=active)\\n174:     tl.store(OUTPUT + tile * 16 + 9, (y21 // 576).to(tl.int32), mask=active)\\n175:     tl.store(OUTPUT + tile * 16 + 10, (y22 // 576).to(tl.int32), mask=active)\\n176:     tl.store(OUTPUT + tile * 16 + 11, (y23 // 576).to(tl.int32), mask=active)\\n177:     tl.store(OUTPUT + tile * 16 + 12, (y30 // 576).to(tl.int32), mask=active)\\n178:     tl.store(OUTPUT + tile * 16 + 13, (y31 // 576).to(tl.int32), mask=active)\\n179:     tl.store(OUTPUT + tile * 16 + 14, (y32 // 576).to(tl.int32), mask=active)\\n180:     tl.store(OUTPUT + tile * 16 + 15, (y33 // 576).to(tl.int32), mask=active)\\n181: \\n182: \\n183: def validate_inputs(tiles, filters, require_cuda=True):\\n184:     def require(condition, message):\\n185:         if not condition:\\n186:             raise ValueError(message)\\n187:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n188:     for value in (tiles, filters):\\n189:         require(type(value) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n190:         require(value.layout == torch.strided and value.is_contiguous(), \\\"contiguous strided tensors required\\\")\\n191:         require(value.dtype == torch.int8, \\\"INT8 inputs required\\\")\\n192:         require(not value.requires_grad and not value.is_inference(), \\\"ordinary non-gradient buffers required\\\")\\n193:         require(not value.is_neg() and not value.is_conj(), \\\"logical view flags excluded\\\")\\n194:         require(not require_cuda or value.is_cuda, \\\"CUDA inputs required by run\\\")\\n195:     require(tiles.device == filters.device, \\\"same device required\\\")\\n196:     require(tiles.ndim == 3 and tuple(tiles.shape[1:]) == (6, 6), \\\"tiles must have shape [B,6,6]\\\")\\n197:     batch = tiles.shape[0]\\n198:     require(1 <= batch <= 2048, \\\"B must be 1..2048\\\")\\n199:     require(tuple(filters.shape) == (batch, 3, 3), \\\"filters must have shape [B,3,3]\\\")\\n200:     return {\\\"valid\\\": True, \\\"batch\\\": batch}\\n201: \\n202: \\n203: def run(tiles, filters):\\n204:     validate_inputs(tiles, filters)\\n205:     batch = tiles.shape[0]\\n206:     with torch.cuda.device(tiles.device):\\n207:         output = torch.empty((batch, 4, 4), dtype=torch.int32, device=tiles.device)\\n208:         _tiles[(triton.cdiv(batch, 16),)](tiles, filters, output, BATCH=batch, BLOCK=16, num_warps=4)\\n209:     return output\\n210: \\n211: \\n212: def reference(tiles, filters):\\n213:     \\\"\\\"\\\"Direct nine-term cross-correlation, without Winograd transforms.\\\"\\\"\\\"\\n214:     validate_inputs(tiles, filters, require_cuda=False)\\n215:     x, w = tiles.to(torch.int64), filters.to(torch.int64)\\n216:     batch = tiles.shape[0]\\n217:     output = torch.zeros((batch, 4, 4), dtype=torch.int64, device=tiles.device)\\n218:     for r in range(3):\\n219:         for c in range(3):\\n220:             output += x[:, r:r+4, c:c+4] * w[:, r, c, None, None]\\n221:     return output.to(torch.int32)\\n222: \\n223: \\n224: def make_inputs(device=\\\"cuda\\\", batch=37, seed=0):\\n225:     \\\"\\\"\\\"Example inputs; the domain includes every INT8 tile and filter.\\\"\\\"\\\"\\n226:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n227:     tiles = torch.randint(-128, 128, (batch, 6, 6), generator=generator, dtype=torch.int8)\\n228:     filters = torch.randint(-128, 128, (batch, 3, 3), generator=generator, dtype=torch.int8)\\n229:     return tiles.to(device), filters.to(device)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute a batch of valid 3x3 INT8 cross-correlations. Each tile has its own filter. For b in0..B-1 and r,c in0..3, return the exact mathematical integer:\\n\\n  output[b,r,c] = sum(tiles[b,r+i,c+j] * filters[b,i,j] for i,j in0..2)\\n\\nDo not reverse the filter. There is no padding, bias, channel reduction or output quantization. The transform method is an implementation choice, not part of the required result.\\n\\nComplete public input domain:\\n- tiles: INT8 [B,6,6], 1<=B<=2048. Every INT8 value at every position is legal.\\n- filters: INT8 [B,3,3], with the same B. Every INT8 value at every position is legal.\\n- Inputs are ordinary dense, strided, contiguous torch.Tensor objects on the same CUDA device. Contiguous views with nonzero storage offsets and inputs that share storage are legal.\\n- All inputs have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Use ordinary non-inference mode with no concurrent external writes. This forward operation does not provide autograd.\\n\\nReturn a fresh INT32 CUDA tensor [B,4,4] on tiles.device. Preserve all input values. Require exact integer equality at every output position: atol=0 and rtol=0.\\n\\nThe implementation has one fixed accept/reject verdict over the complete public domain. A failing legal input is evidence about this implementation, not a new label for that input. validate_inputs() enforces the domain. reference() also accepts CPU tensors. make_inputs() supplies examples and does not restrict the domain.\\n\\nThis is a synthetic integer adaptation of Winograd F(4x4,3x3) tile filtering. It follows the F(4,3) construction described by Lavin and Gray, CVPR2016. It is not an upstream kernel or a historical bug reproduction. The task is a tile operation, not a complete convolution layer or a performance benchmark.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_160\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_160\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_160\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_160\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_160\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_160\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_160\"\n      },\n      \"created_at\": \"2026-10-18T07:39:30Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_160\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Integer Winograd F(4x4,3x3) tile cross-correlation.\\n\\nSynthetic adaptation of the F(4,3) transforms in Lavin and Gray (CVPR2016).\\nFilter-transform denominators are moved to the output transform. This is\\nnot an upstream kernel or a reproduction of an upstream historical bug.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _data_transform(d0, d1, d2, d3, d4, d5):\\n    t0 = 4 * d0 - 5 * d2 + d4\\n    t1 = -4 * (d1 + d2) + d3 + d4\\n    t2 = 4 * (d1 - d2) - d3 + d4\\n    t3 = 2 * (d3 - d1) - d2 + d4\\n    t4 = 2 * (d1 - d3) - d2 + d4\\n    t5 = 4 * d1 - 5 * d3 + d5\\n    return t0, t1, t2, t3, t4, t5\\n\\n\\n@triton.jit\\ndef _filter_transform(g0, g1, g2):\\n    t0 = g0\\n    t1 = -(g0 + g1 + g2)\\n    t2 = -g0 + g1 - g2\\n    t3 = g0 + 2 * g1 + 4 * g2\\n    t4 = g0 - 2 * g1 + 4 * g2\\n    t5 = g2\\n    return t0, t1, t2, t3, t4, t5\\n\\n\\n@triton.jit\\ndef _output_transform(m0, m1, m2, m3, m4, m5):\\n    t0 = 6 * m0 + 4 * (m1 + m2) + m3 + m4\\n    t1 = 4 * (m1 - m2) + 2 * (m3 - m4)\\n    t2 = 4 * (m1 + m2 + m3 + m4)\\n    t3 = 4 * (m1 - m2) + 8 * (m3 - m4) + 24 * m5\\n    return t0, t1, t2, t3\\n\\n\\n@triton.jit\\ndef _tiles(INPUT, FILTER, OUTPUT, BATCH: tl.constexpr, BLOCK: tl.constexpr):\\n    tile = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    active = tile < BATCH\\n    d00 = tl.load(INPUT + tile * 36 + 0, mask=active, other=0).to(tl.int32)\\n    d01 = tl.load(INPUT + tile * 36 + 1, mask=active, other=0).to(tl.int32)\\n    d02 = tl.load(INPUT + tile * 36 + 2, mask=active, other=0).to(tl.int32)\\n    d03 = tl.load(INPUT + tile * 36 + 3, mask=active, other=0).to(tl.int32)\\n    d04 = tl.load(INPUT + tile * 36 + 4, mask=active, other=0).to(tl.int32)\\n    d05 = tl.load(INPUT + tile * 36 + 5, mask=active, other=0).to(tl.int32)\\n    d10 = tl.load(INPUT + tile * 36 + 6, mask=active, other=0).to(tl.int32)\\n    d11 = tl.load(INPUT + tile * 36 + 7, mask=active, other=0).to(tl.int32)\\n    d12 = tl.load(INPUT + tile * 36 + 8, mask=active, other=0).to(tl.int32)\\n    d13 = tl.load(INPUT + tile * 36 + 9, mask=active, other=0).to(tl.int32)\\n    d14 = tl.load(INPUT + tile * 36 + 10, mask=active, other=0).to(tl.int32)\\n    d15 = tl.load(INPUT + tile * 36 + 11, mask=active, other=0).to(tl.int32)\\n    d20 = tl.load(INPUT + tile * 36 + 12, mask=active, other=0).to(tl.int32)\\n    d21 = tl.load(INPUT + tile * 36 + 13, mask=active, other=0).to(tl.int32)\\n    d22 = tl.load(INPUT + tile * 36 + 14, mask=active, other=0).to(tl.int32)\\n    d23 = tl.load(INPUT + tile * 36 + 15, mask=active, other=0).to(tl.int32)\\n    d24 = tl.load(INPUT + tile * 36 + 16, mask=active, other=0).to(tl.int32)\\n    d25 = tl.load(INPUT + tile * 36 + 17, mask=active, other=0).to(tl.int32)\\n    d30 = tl.load(INPUT + tile * 36 + 18, mask=active, other=0).to(tl.int32)\\n    d31 = tl.load(INPUT + tile * 36 + 19, mask=active, other=0).to(tl.int32)\\n    d32 = tl.load(INPUT + tile * 36 + 20, mask=active, other=0).to(tl.int32)\\n    d33 = tl.load(INPUT + tile * 36 + 21, mask=active, other=0).to(tl.int32)\\n    d34 = tl.load(INPUT + tile * 36 + 22, mask=active, other=0).to(tl.int32)\\n    d35 = tl.load(INPUT + tile * 36 + 23, mask=active, other=0).to(tl.int32)\\n    d40 = tl.load(INPUT + tile * 36 + 24, mask=active, other=0).to(tl.int32)\\n    d41 = tl.load(INPUT + tile * 36 + 25, mask=active, other=0).to(tl.int32)\\n    d42 = tl.load(INPUT + tile * 36 + 26, mask=active, other=0).to(tl.int32)\\n    d43 = tl.load(INPUT + tile * 36 + 27, mask=active, other=0).to(tl.int32)\\n    d44 = tl.load(INPUT + tile * 36 + 28, mask=active, other=0).to(tl.int32)\\n    d45 = tl.load(INPUT + tile * 36 + 29, mask=active, other=0).to(tl.int32)\\n    d50 = tl.load(INPUT + tile * 36 + 30, mask=active, other=0).to(tl.int32)\\n    d51 = tl.load(INPUT + tile * 36 + 31, mask=active, other=0).to(tl.int32)\\n    d52 = tl.load(INPUT + tile * 36 + 32, mask=active, other=0).to(tl.int32)\\n    d53 = tl.load(INPUT + tile * 36 + 33, mask=active, other=0).to(tl.int32)\\n    d54 = tl.load(INPUT + tile * 36 + 34, mask=active, other=0).to(tl.int32)\\n...[truncated, 8611 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute a batch of valid 3x3 INT8 cross-correlations. Each tile has its own filter. For b in0..B-1 and r,c in0..3, return the exact mathematical integer:\\n\\n  output[b,r,c] = sum(tiles[b,r+i,c+j] * filters[b,i,j] for i,j in0..2)\\n\\nDo not reverse the filter. There is no padding, bias, channel reduction or output quantization. The transform method is an implementation choice, not part of the required result.\\n\\nComplete public input domain:\\n- tiles: INT8 [B,6,6], 1<=B<=2048. Every INT8 value at every position is legal.\\n- filters: INT8 [B,3,3], with the same B. Every INT8 value at every position is legal.\\n- Inputs are ordinary dense, strided, contiguous torch.Tensor objects on the same CUDA device. Contiguous views with nonzero storage offsets and inputs that share storage are legal.\\n- All inputs have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Use ordinary non-inference mode with no concurrent external writes. This forward operation does not provide autograd.\\n\\nReturn a fresh INT32 CUDA tensor [B,4,4] on tiles.device. Preserve all input values. Require exact integer equality at every output position: atol=0 and rtol=0.\\n\\nThe implementation has one fixed accept/reject verdict over the complete public domain. A failing legal input is evidence about this implementation, not a new label for that input. validate_inputs() enforces the domain. reference() also accepts CPU tensors. make_inputs() supplies examples and does not restrict the domain.\\n\\nThis is a synthetic integer adaptation of Winograd F(4x4,3x3) tile filtering. It follows the F(4,3) construction described by Lavin and Gray, CVPR2016. It is not an upstream kernel or a historical bug reproduction. The task is a tile operation, not a complete convolution layer or a performance benchmark.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_160\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_160\"\n      },\n      \"created_at\": \"2026-10-18T07:39:30Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute a batch of valid 3x3 INT8 cross-correlations. Each tile has its own filter. For b in0..B-1 and r,c in0..3, return the exact mathematical integer:\\n\\n  output[b,r,c] = sum(tiles[b,r+i,c+j] * filters[b,i,j] for i,j in0..2)\\n\\nDo not reverse the filter. There is no padding, bias, channel reduction or output quantization. The transform method is an implementation choice, not part of the required result.\\n\\nComplete public input domain:\\n- tiles: INT8 [B,6,6], 1<=B<=2048. Every INT8 value at every position is legal.\\n- filters: INT8 [B,3,3], with the same B. Every INT8 value at every position is legal.\\n- Inputs are ordinary dense, strided, contiguous torch.Tensor objects on the same CUDA device. Contiguous views with nonzero storage offsets and inputs that share storage are legal.\\n- All inputs have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Use ordinary non-inference mode with no concurrent external writes. This forward operation does not provide autograd.\\n\\nReturn a fresh INT32 CUDA tensor [B,4,4] on tiles.device. Preserve all input values. Require exact integer equality at every output position: atol=0 and rtol=0.\\n\\nThe implementation has one fixed accept/reject verdict over the complete public domain. A failing legal input is evidence about this implementation, not a new label for that input. validate_inputs() enforces the domain. reference() also accepts CPU tensors. make_inputs() supplies examples and does not restrict the domain.\\n\\nThis is a synthetic integer adaptation of Winograd F(4x4,3x3) tile filtering. It follows the F(4,3) construction described by Lavin and Gray, CVPR2016. It is not an upstream kernel or a historical bug reproduction. The task is a tile operation, not a complete convolution layer or a performance benchmark.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_160\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_160\"\n      },\n      \"created_at\": \"2026-10-18T07:39:30Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_160\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 12558\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1849\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_160\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T07:39:30Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_160\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

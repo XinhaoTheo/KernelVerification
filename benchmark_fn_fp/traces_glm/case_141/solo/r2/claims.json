@@ -1,0 +1,124 @@
+[
+  {
+    "created_at": "2026-10-18T01:33:28Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:34:07Z",
+        "data": {
+          "all_exact": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "80143bcbd19dd14549c9bc888090fd247ea369243cf9b12ee97175d32d1c2897"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "f80f7e7a3dc65082feed40a7da5b2b994c53a788d0a3fc51829e7a7f00a9943e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "db7d9375415f0c08d2eaff10697a6f94001f2a79b0e34d38016de57b624cb52d"
+            }
+          ],
+          "bad_indices": [
+            4294967284,
+            4294967291
+          ],
+          "bad_kernel_out": [
+            [
+              613566755,
+              4294967295
+            ],
+            [
+              613566756,
+              4294967295
+            ]
+          ],
+          "duration_s": 3.858694,
+          "exactness_violation_count": 2,
+          "exit_code": 0,
+          "expected_signal": null,
+          "json_parse_error": null,
+          "json_result": {
+            "all_exact": false,
+            "exactness_violation_count": 2,
+            "first_bad_indices": [
+              4294967284,
+              4294967291
+            ],
+            "first_bad_out": [
+              [
+                613566755,
+                4294967295
+              ],
+              [
+                613566756,
+                4294967295
+              ]
+            ],
+            "first_bad_ref": [
+              [
+                613566754,
+                6
+              ],
+              [
+                613566755,
+                6
+              ]
+            ],
+            "mismatch_vs_ref_count": 2,
+            "num": 62
+          },
+          "mismatch_vs_ref_count": 2,
+          "num_tested": 62,
+          "reference_out": [
+            [
+              613566754,
+              6
+            ],
+            [
+              613566755,
+              6
+            ]
+          ],
+          "stderr": "",
+          "stdout": "{\"num\": 62, \"mismatch_vs_ref_count\": 2, \"exactness_violation_count\": 2, \"all_exact\": false, \"first_bad_indices\": [4294967284, 4294967291], \"first_bad_out\": [[613566755, 4294967295], [613566756, 4294967295]], \"first_bad_ref\": [[613566754, 6], [613566755, 6]]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Real-GPU probe of the kernel on 62 adversarial legal uint32 indices (near 2^34/35 threshold, uint32 extremes, mod-7==6 cases) found 2 exactness violations: for indices 4294967284 and 4294967291 the kernel outputs row/col = (613566755, 4294967295) and (613566756, 4294967295), i.e. quotient overshoots by 1 and the uint32 remainder wraps to -1, while the contract reference gives (613566754, 6) and (613566755, 6). col is not in [0,6] and 7*row+col != index, directly violating the exact-decomposition requirement for legal uint32 values.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "With SHIFT=31+3=34 and MULTIPLIER=floor((2^34+6)/7)=2454267027=(2^34+5)/7 exactly, the kernel computes q=floor(n/7 + 5n/2^34). The additive error 5n/2^34 reaches 1/7 when n \u2248 2^34/35 \u2248 4.91e8, so for n mod 7 = 6 and n above that threshold the quotient overshoots by 1, making the remainder wrap negative in uint32 (col far from [0,6]) and 7*row+col != index. This violates the exact-decomposition requirement for legal uint32 values.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive\" and \"Every coordinate must equal the integer mathematical target EXACTLY ... every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.\""
+      }
+    ],
+    "scope_rationale": "The contract requires exact row=floor(index/7), col=index-7*row for every uint32 value 0..4294967295; any off-by-one quotient on a legal index violates the exactness requirement.",
+    "statement": "The kernel's precomputed reciprocal multiplier with SHIFT=34 is not accurate for all uint32 indices; for indices around 4.9e8 and above with index mod 7 == 6, the quotient is off by one, so col is not in [0,6] and 7*row+col != index.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:34:07Z"
+  }
+]

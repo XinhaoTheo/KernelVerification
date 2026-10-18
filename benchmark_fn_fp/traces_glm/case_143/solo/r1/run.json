@@ -1,0 +1,1884 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_143",
+    "has_error": null,
+    "kernel_code": "\"\"\"Sequency-ordered integer Walsh-Hadamard transform.\n\nOriginal synthetic Triton implementation of a standard signal transform.\nThis is not an upstream implementation or a claimed historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    value = tl.load(X + row * N + lane).to(tl.int32)\n    for stage in tl.static_range(0, LOG_N):\n        step = 1 << stage\n        peer = tl.gather(value, lane ^ step, axis=0)\n        value = tl.where((lane & step) == 0, value + peer, peer - value)\n\n    # Convert the coefficient index to the butterfly's natural row index.\n    reversed_lane = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        reversed_lane = reversed_lane | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\n    source_lane = reversed_lane ^ (reversed_lane >> 1)\n\n    result = tl.gather(value, source_lane, axis=0)\n    tl.store(OUT + row * N + lane, result)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {32,64,128}\")\n    require(x.dtype == torch.int16, \"int16 input required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    \"\"\"Return the unnormalized transform with coefficients in sequency order.\"\"\"\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)\n        _transform_kernel[(batch,)](\n            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Build the mathematical basis independently, then multiply in int64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)\n    while hadamard.shape[0] < width:\n        top = torch.cat((hadamard, hadamard), dim=1)\n        bottom = torch.cat((hadamard, -hadamard), dim=1)\n        hadamard = torch.cat((top, bottom), dim=0)\n    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)\n    sequency_rows = hadamard[torch.argsort(changes)]\n    # int64 products and sums are exact throughout the complete int16 domain.\n    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)\n    return result.to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; all stored int16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device=device, dtype=torch.int16),)\n",
+    "passed": null,
+    "problem_text": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_143",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:31:50Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:32:11Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5c3531297aefc9ecc872a5a88e451443c6999cd7d7441bd90388c9fddf6e1397"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9462f6fe1e2d17201abcf77c8e37aa41d4db71a4fc20266e80dd8b99b0215dd5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "71e4304f988a685bdbb605f31c5bc468a2a7cce3e6628bda67f5f7e0008f80f8"
+              }
+            ],
+            "duration_s": 5.345018,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "mismatches": 14,
+              "results": [
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -51292,
+                    -82698,
+                    58864,
+                    38878,
+                    -219348
+                  ],
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -60384,
+                    37144,
+                    -26072,
+                    72704,
+                    45728
+                  ],
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    36692,
+                    -92706,
+                    54246,
+                    -7414,
+                    103558
+                  ],
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    345096,
+                    -154430,
+                    192236,
+                    -209332,
+                    -42834
+                  ],
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -89074,
+                    -237444,
+                    18680,
+                    -91812,
+                    41848
+                  ],
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -28076,
+                    -22882,
+                    -65294,
+                    -142860,
+                    228156
+                  ],
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -70816,
+                    223632,
+                    -269504,
+                    -133392,
+                    87532
+                  ],
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -40907,
+                    -24941,
+                    -330901,
+                    -113915,
+                    -95531
+                  ],
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -248356,
+                    -18120,
+                    -217208,
+                    -4776,
+                    24736
+                  ],
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 128
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 1048560,
+                  "width": 32
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 2097120,
+                  "width": 64
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 4194240,
+                  "width": 128
+                },
+                {
+                  "case": "storage_offset",
+                  "equal": false,
+                  "offset": 5
+                },
+                {
+                  "case": "batch128",
+                  "equal": false
+                },
+                {
+                  "case": "input_preserved",
+                  "equal": true
+                }
+              ]
+            },
+            "mismatching_cases": 14,
+            "random_mismatches": "9/9 across widths 32,64,128 x seeds 0-2",
+            "stderr": "",
+            "stdout": "{\"mismatches\": 14, \"results\": [{\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false, \"first_diff\": [-51292, -82698, 58864, 38878, -219348]}, {\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false, \"first_diff\": [-60384, 37144, -26072, 72704, 45728]}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false, \"first_diff\": [36692, -92706, 54246, -7414, 103558]}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false, \"first_diff\": [345096, -154430, 192236, -209332, -42834]}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false, \"first_diff\": [-89074, -237444, 18680, -91812, 41848]}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false, \"first_diff\": [-28076, -22882, -65294, -142860, 228156]}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false, \"first_diff\": [-70816, 223632, -269504, -133392, 87532]}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false, \"first_diff\": [-40907, -24941, -330901, -113915, -95531]}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false, \"first_diff\": [-248356, -18120, -217208, -4776, 24736]}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false}, {\"case\": \"extreme\", \"width\": 32, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 32, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": 32767, \"equal\": true}, {\"case\": \"alternating\", \"width\": 32, \"equal\": false, \"max_abs\": 1048560}, {\"case\": \"alternating\", \"width\": 64, \"equal\": false, \"max_abs\": 2097120}, {\"case\": \"alternating\", \"width\": 128, \"equal\": false, \"max_abs\": 4194240}, {\"case\": \"storage_offset\", \"equal\": false, \"offset\": 5}, {\"case\": \"batch128\", \"equal\": false}, {\"case\": \"input_preserved\", \"equal\": true}]}\n",
+            "summary": {
+              "batch128": false,
+              "constant_extremes": true,
+              "random_inputs": false,
+              "storage_offset_view": false
+            },
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Runtime comparison of kernel.run vs contract reference over all legal widths (32/64/128), random full-int16-range inputs (3 seeds each), alternating extreme patterns, nonzero-storage-offset contiguous view, and B=128: every non-constant case mismatches exactly (torch.equal false), including max-abs values ~4.19M showing real coefficient disagreements, not noise. Constant fills match trivially. Metric: exact equality, matching the contract's tolerance 0.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel computes a natural-order fast Hadamard transform and then permutes rows via source_lane = bitreverse(lane) ^ (bitreverse(lane)>>1). If this Gray-code permutation is wrong or off (e.g. should be plain bit-reversal or a different Gray direction), output rows will be permuted versus the contract's W_N, which requires exact equality (tolerance 0) and output order as part of correctness.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "out[b,k] = sum_j W_N[k,j]*x[b,j] with W_N rows sorted by ascending sign-change count; 'output order is part of correctness'; 'absolute tolerance = 0'."
+        }
+      ],
+      "scope_rationale": "Contract requires every element to equal the mathematical target exactly (tol=0) with coefficients in increasing sequency order, so a wrong row permutation or any numeric deviation over the legal domain (all int16 values, N in {32,64,128}, B in [1,128]) is a defect.",
+      "statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference().",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T01:32:11Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_143",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_143"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_143"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_143"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_143",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 6.2319396120000015,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel's correctness hinges on the butterfly plus the Gray-code reorder permutation matching the contract's sequency-ordered W_N exactly. I'll record that hypothesis and test it directly against the provided reference across all legal widths, extreme values, and nonzero storage offsets.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel computes a natural-order fast Hadamard transform and then permutes rows via source_lane = bitreverse(lane) ^ (bitreverse(lane)>>1). If this Gray-code permutation is wrong or off (e.g. should be plain bit-reversal or a different Gray direction), output rows will be permuted versus the contract's W_N, which requires exact equality (tolerance 0) and output order as part of correctness.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "out[b,k] = sum_j W_N[k,j]*x[b,j] with W_N rows sorted by ascending sign-change count; 'output order is part of correctness'; 'absolute tolerance = 0'."
+              }
+            ],
+            "scope_rationale": "Contract requires every element to equal the mathematical target exactly (tol=0) with coefficients in increasing sequency order, so a wrong row permutation or any numeric deviation over the legal domain (all int16 values, N in {32,64,128}, B in [1,128]) is a defect.",
+            "statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference()."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.232,
+        "input_tokens": 9823,
+        "output_tokens": 509
+      }
+    },
+    {
+      "duration_s": 8.317405941,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll test the kernel against the reference across all legal widths, batches, extreme values, and nonzero storage offsets.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, torch, sys\nsys.path.insert(0, \"/root/cases/case_143\")\nimport kernel\n\nresults = []\nmismatches = 0\nfor width in (32, 64, 128):\n    for seed in range(3):\n        x = kernel.make_inputs(batch=7, width=width, seed=seed)[0]\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        if not eq:\n            mismatches += 1\n            results.append({\"case\": \"random\", \"width\": width, \"seed\": seed, \"equal\": eq,\n                            \"first_diff\": (out[0][out[0] != ref[0]]).tolist()[:5]})\n        results.append({\"case\": \"random\", \"width\": width, \"seed\": seed, \"equal\": eq})\n\n# extremes\nfor width in (32, 64, 128):\n    for fill in (-32768, 32767):\n        x = torch.full((3, width), fill, dtype=torch.int16, device=\"cuda\")\n        out = kernel.run(x); ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        mismatches += (not eq)\n        results.append({\"case\": \"extreme\", \"width\": width, \"fill\": fill, \"equal\": eq})\n\n# max magnitude stress (alternating signs)\nfor width in (32, 64, 128):\n    vals = torch.tensor([(-32768 if (i % 2 == 0) else 32767) for i in range(width)], dtype=torch.int16, device=\"cuda\").unsqueeze(0).repeat(2, 1)\n    out = kernel.run(vals); ref = kernel.reference(vals)\n    eq = torch.equal(out, ref); mismatches += (not eq)\n    results.append({\"case\": \"alternating\", \"width\": width, \"equal\": eq, \"max_abs\": int(out.abs().max())})\n\n# nonzero storage offset contiguous view\nbase = torch.randint(-32768, 32768, (70,), dtype=torch.int16, device=\"cuda\")\nx = base[5:5+64].contiguous().view(1, 64)\nout = kernel.run(x); ref = kernel.reference(x)\neq = torch.equal(out, ref); mismatches += (not eq)\nresults.append({\"case\": \"storage_offset\", \"equal\": eq, \"offset\": x.storage_offset()})\n\n# batch boundary B=128\nx = torch.randint(-32768, 32768, (128, 64), dtype=torch.int16, device=\"cuda\")\nout = kernel.run(x); ref = kernel.reference(x)\neq = torch.equal(out, ref); mismatches += (not eq)\nresults.append({\"case\": \"batch128\", \"equal\": eq})\n\n# input preserved?\nx0 = kernel.make_inputs()[0]; xc = x0.clone()\nkernel.run(x0)\nresults.append({\"case\": \"input_preserved\", \"equal\": torch.equal(x0, xc)})\nprint(json.dumps({\"mismatches\": mismatches, \"results\": results}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.317,
+        "input_tokens": 11328,
+        "output_tokens": 704
+      }
+    },
+    {
+      "duration_s": 7.100790034000003,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe decisively shows the kernel's output diverges from the contract's reference on every random legal input across all widths (14/14 mismatching cases), while constant fills trivially match because every row of H_N sums identically. This confirms the permutation/butterfly does not implement W_N.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "mismatching_cases": 14,
+              "random_mismatches": "9/9 across widths 32,64,128 x seeds 0-2",
+              "summary": {
+                "batch128": false,
+                "constant_extremes": true,
+                "random_inputs": false,
+                "storage_offset_view": false
+              }
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Runtime comparison of kernel.run vs contract reference over all legal widths (32/64/128), random full-int16-range inputs (3 seeds each), alternating extreme patterns, nonzero-storage-offset contiguous view, and B=128: every non-constant case mismatches exactly (torch.equal false), including max-abs values ~4.19M showing real coefficient disagreements, not noise. Constant fills match trivially. Metric: exact equality, matching the contract's tolerance 0.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.101,
+        "input_tokens": 18516,
+        "output_tokens": 332
+      }
+    },
+    {
+      "duration_s": 6.572528300999998,
+      "role": "solo",
+      "round": 5,
+      "text": "The single claim (c1) is confirmed and in-scope: the kernel's output diverges from the contract's reference on every non-constant legal input across all widths, batches and views, violating the exact (tol=0) sequency-ordered W_N target. No further inquiry would change the outcome.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 compared kernel.run against the contract reference (Sylvester H_N rows sorted by ascending sign-change count, int64 products/sums) using exact torch.equal across the full legal domain: all widths 32/64/128 with 3 random full-int16-range seeds each, alternating extreme patterns, a nonzero-storage-offset contiguous view, and B=128. 14/14 non-constant cases mismatched with large absolute differences (up to ~4.19M), including all 9 random-input cases, showing the butterfly+Gray-code reorder does not reproduce W_N or its sequency ordering; only constant fills matched trivially. Contract requires every element to equal the mathematical target exactly (abs/rel tolerance 0) with output order part of correctness, so this in-scope violation (claim c1, confirmed) mandates rejection.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.573,
+        "input_tokens": 28259,
+        "output_tokens": 288
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_143"
+      },
+      "created_at": "2026-10-18T01:31:43Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_143",
+        "has_error": null,
+        "kernel_code": "\"\"\"Sequency-ordered integer Walsh-Hadamard transform.\n\nOriginal synthetic Triton implementation of a standard signal transform.\nThis is not an upstream implementation or a claimed historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    value = tl.load(X + row * N + lane).to(tl.int32)\n    for stage in tl.static_range(0, LOG_N):\n        step = 1 << stage\n        peer = tl.gather(value, lane ^ step, axis=0)\n        value = tl.where((lane & step) == 0, value + peer, peer - value)\n\n    # Convert the coefficient index to the butterfly's natural row index.\n    reversed_lane = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        reversed_lane = reversed_lane | (((lane >> bit) & 1) << (LOG_N - 1 - bit))\n    source_lane = reversed_lane ^ (reversed_lane >> 1)\n\n    result = tl.gather(value, source_lane, axis=0)\n    tl.store(OUT + row * N + lane, result)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {32,64,128}\")\n    require(x.dtype == torch.int16, \"int16 input required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    \"\"\"Return the unnormalized transform with coefficients in sequency order.\"\"\"\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)\n        _transform_kernel[(batch,)](\n            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Build the mathematical basis independently, then multiply in int64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)\n    while hadamard.shape[0] < width:\n        top = torch.cat((hadamard, hadamard), dim=1)\n        bottom = torch.cat((hadamard, -hadamard), dim=1)\n        hadamard = torch.cat((top, bottom), dim=0)\n    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)\n    sequency_rows = hadamard[torch.argsort(changes)]\n    # int64 products and sums are exact throughout the complete int16 domain.\n    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)\n    return result.to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; all stored int16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device=device, dtype=torch.int16),)\n",
+        "passed": null,
+        "problem_text": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_143",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_143"
+      },
+      "created_at": "2026-10-18T01:31:43Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_143",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_143"
+      },
+      "created_at": "2026-10-18T01:31:43Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_143",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3569
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2547
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_143",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:31:43Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_143",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel computes a natural-order fast Hadamard transform and then permutes rows via source_lane = bitreverse(lane) ^ (bitreverse(lane)>>1). If this Gray-code permutation is wrong or off (e.g. should be plain bit-reversal or a different Gray direction), output rows will be permuted versus the contract's W_N, which requires exact equality (tolerance 0) and output order as part of correctness.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "out[b,k] = sum_j W_N[k,j]*x[b,j] with W_N rows sorted by ascending sign-change count; 'output order is part of correctness'; 'absolute tolerance = 0'."
+          }
+        ],
+        "scope_rationale": "Contract requires every element to equal the mathematical target exactly (tol=0) with coefficients in increasing sequency order, so a wrong row permutation or any numeric deviation over the legal domain (all int16 values, N in {32,64,128}, B in [1,128]) is a defect.",
+        "statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference()."
+      },
+      "created_at": "2026-10-18T01:31:50Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T01:31:50Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel computes a natural-order fast Hadamard transform and then permutes rows via source_lane = bitreverse(lane) ^ (bitreverse(lane)>>1). If this Gray-code permutation is wrong or off (e.g. should be plain bit-reversal or a different Gray direction), output rows will be permuted versus the contract's W_N, which requires exact equality (tolerance 0) and output order as part of correctness.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "out[b,k] = sum_j W_N[k,j]*x[b,j] with W_N rows sorted by ascending sign-change count; 'output order is part of correctness'; 'absolute tolerance = 0'."
+          }
+        ],
+        "scope_rationale": "Contract requires every element to equal the mathematical target exactly (tol=0) with coefficients in increasing sequency order, so a wrong row permutation or any numeric deviation over the legal domain (all int16 values, N in {32,64,128}, B in [1,128]) is a defect.",
+        "statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference().",
+        "status": "open",
+        "updated_at": "2026-10-18T01:31:50Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, torch, sys\nsys.path.insert(0, \"/root/cases/case_143\")\nimport kernel\n\nresults = []\nmismatches = 0\nfor width in (32, 64, 128):\n    for seed in range(3):\n        x = kernel.make_inputs(batch=7, width=width, seed=seed)[0]\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        if not eq:\n            mismatches += 1\n            results.append({\"case\": \"random\", \"width\": width, \"seed\": seed, \"equal\": eq,\n                            \"first_diff\": (out[0][out[0] != ref[0]]).tolist()[:5]})\n        results.append({\"case\": \"random\", \"width\": width, \"seed\": seed, \"equal\": eq})\n\n# extremes\nfor width in (32, 64, 128):\n    for fill in (-32768, 32767):\n        x = torch.full((3, width), fill, dtype=torch.int16, device=\"cuda\")\n        out = kernel.run(x); ref = kernel.reference(x)\n        eq = torch.equal(out, ref)\n        mismatches += (not eq)\n        results.append({\"case\": \"extreme\", \"width\": width, \"fill\": fill, \"equal\": eq})\n\n# max magnitude stress (alternating signs)\nfor width in (32, 64, 128):\n    vals = torch.tensor([(-32768 if (i % 2 == 0) else 32767) for i in range(width)], dtype=torch.int16, device=\"cuda\").unsqueeze(0).repeat(2, 1)\n    out = kernel.run(vals); ref = kernel.reference(vals)\n    eq = torch.equal(out, ref); mismatches += (not eq)\n    results.append({\"case\": \"alternating\", \"width\": width, \"equal\": eq, \"max_abs\": int(out.abs().max())})\n\n# nonzero storage offset contiguous view\nbase = torch.randint(-32768, 32768, (70,), dtype=torch.int16, device=\"cuda\")\nx = base[5:5+64].contiguous().view(1, 64)\nout = kernel.run(x); ref = kernel.reference(x)\neq = torch.equal(out, ref); mismatches += (not eq)\nresults.append({\"case\": \"storage_offset\", \"equal\": eq, \"offset\": x.storage_offset()})\n\n# batch boundary B=128\nx = torch.randint(-32768, 32768, (128, 64), dtype=torch.int16, device=\"cuda\")\nout = kernel.run(x); ref = kernel.reference(x)\neq = torch.equal(out, ref); mismatches += (not eq)\nresults.append({\"case\": \"batch128\", \"equal\": eq})\n\n# input preserved?\nx0 = kernel.make_inputs()[0]; xc = x0.clone()\nkernel.run(x0)\nresults.append({\"case\": \"input_preserved\", \"equal\": torch.equal(x0, xc)})\nprint(json.dumps({\"mismatches\": mismatches, \"results\": results}))\n"
+      },
+      "created_at": "2026-10-18T01:32:04Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "5c3531297aefc9ecc872a5a88e451443c6999cd7d7441bd90388c9fddf6e1397"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "9462f6fe1e2d17201abcf77c8e37aa41d4db71a4fc20266e80dd8b99b0215dd5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "71e4304f988a685bdbb605f31c5bc468a2a7cce3e6628bda67f5f7e0008f80f8"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference().",
+        "cwd": "/root/cases/case_143",
+        "duration_s": 5.345018,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5c3531297aefc9ecc872a5a88e451443c6999cd7d7441bd90388c9fddf6e1397"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9462f6fe1e2d17201abcf77c8e37aa41d4db71a4fc20266e80dd8b99b0215dd5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "71e4304f988a685bdbb605f31c5bc468a2a7cce3e6628bda67f5f7e0008f80f8"
+              }
+            ],
+            "duration_s": 5.345018,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "mismatches": 14,
+              "results": [
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -51292,
+                    -82698,
+                    58864,
+                    38878,
+                    -219348
+                  ],
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -60384,
+                    37144,
+                    -26072,
+                    72704,
+                    45728
+                  ],
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    36692,
+                    -92706,
+                    54246,
+                    -7414,
+                    103558
+                  ],
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    345096,
+                    -154430,
+                    192236,
+                    -209332,
+                    -42834
+                  ],
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -89074,
+                    -237444,
+                    18680,
+                    -91812,
+                    41848
+                  ],
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -28076,
+                    -22882,
+                    -65294,
+                    -142860,
+                    228156
+                  ],
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -70816,
+                    223632,
+                    -269504,
+                    -133392,
+                    87532
+                  ],
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -40907,
+                    -24941,
+                    -330901,
+                    -113915,
+                    -95531
+                  ],
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -248356,
+                    -18120,
+                    -217208,
+                    -4776,
+                    24736
+                  ],
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 128
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 1048560,
+                  "width": 32
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 2097120,
+                  "width": 64
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 4194240,
+                  "width": 128
+                },
+                {
+                  "case": "storage_offset",
+                  "equal": false,
+                  "offset": 5
+                },
+                {
+                  "case": "batch128",
+                  "equal": false
+                },
+                {
+                  "case": "input_preserved",
+                  "equal": true
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"mismatches\": 14, \"results\": [{\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false, \"first_diff\": [-51292, -82698, 58864, 38878, -219348]}, {\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false, \"first_diff\": [-60384, 37144, -26072, 72704, 45728]}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false, \"first_diff\": [36692, -92706, 54246, -7414, 103558]}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false, \"first_diff\": [345096, -154430, 192236, -209332, -42834]}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false, \"first_diff\": [-89074, -237444, 18680, -91812, 41848]}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false, \"first_diff\": [-28076, -22882, -65294, -142860, 228156]}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false, \"first_diff\": [-70816, 223632, -269504, -133392, 87532]}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false, \"first_diff\": [-40907, -24941, -330901, -113915, -95531]}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false, \"first_diff\": [-248356, -18120, -217208, -4776, 24736]}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false}, {\"case\": \"extreme\", \"width\": 32, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 32, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": 32767, \"equal\": true}, {\"case\": \"alternating\", \"width\": 32, \"equal\": false, \"max_abs\": 1048560}, {\"case\": \"alternating\", \"width\": 64, \"equal\": false, \"max_abs\": 2097120}, {\"case\": \"alternating\", \"width\": 128, \"equal\": false, \"max_abs\": 4194240}, {\"case\": \"storage_offset\", \"equal\": false, \"offset\": 5}, {\"case\": \"batch128\", \"equal\": false}, {\"case\": \"input_preserved\", \"equal\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "mismatches": 14,
+          "results": [
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -51292,
+                -82698,
+                58864,
+                38878,
+                -219348
+              ],
+              "seed": 0,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 0,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -60384,
+                37144,
+                -26072,
+                72704,
+                45728
+              ],
+              "seed": 1,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 1,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                36692,
+                -92706,
+                54246,
+                -7414,
+                103558
+              ],
+              "seed": 2,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 2,
+              "width": 32
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                345096,
+                -154430,
+                192236,
+                -209332,
+                -42834
+              ],
+              "seed": 0,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 0,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -89074,
+                -237444,
+                18680,
+                -91812,
+                41848
+              ],
+              "seed": 1,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 1,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -28076,
+                -22882,
+                -65294,
+                -142860,
+                228156
+              ],
+              "seed": 2,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 2,
+              "width": 64
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -70816,
+                223632,
+                -269504,
+                -133392,
+                87532
+              ],
+              "seed": 0,
+              "width": 128
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 0,
+              "width": 128
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -40907,
+                -24941,
+                -330901,
+                -113915,
+                -95531
+              ],
+              "seed": 1,
+              "width": 128
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 1,
+              "width": 128
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "first_diff": [
+                -248356,
+                -18120,
+                -217208,
+                -4776,
+                24736
+              ],
+              "seed": 2,
+              "width": 128
+            },
+            {
+              "case": "random",
+              "equal": false,
+              "seed": 2,
+              "width": 128
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": -32768,
+              "width": 32
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": 32767,
+              "width": 32
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": -32768,
+              "width": 64
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": 32767,
+              "width": 64
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": -32768,
+              "width": 128
+            },
+            {
+              "case": "extreme",
+              "equal": true,
+              "fill": 32767,
+              "width": 128
+            },
+            {
+              "case": "alternating",
+              "equal": false,
+              "max_abs": 1048560,
+              "width": 32
+            },
+            {
+              "case": "alternating",
+              "equal": false,
+              "max_abs": 2097120,
+              "width": 64
+            },
+            {
+              "case": "alternating",
+              "equal": false,
+              "max_abs": 4194240,
+              "width": 128
+            },
+            {
+              "case": "storage_offset",
+              "equal": false,
+              "offset": 5
+            },
+            {
+              "case": "batch128",
+              "equal": false
+            },
+            {
+              "case": "input_preserved",
+              "equal": true
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"mismatches\": 14, \"results\": [{\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false, \"first_diff\": [-51292, -82698, 58864, 38878, -219348]}, {\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false, \"first_diff\": [-60384, 37144, -26072, 72704, 45728]}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false, \"first_diff\": [36692, -92706, 54246, -7414, 103558]}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false, \"first_diff\": [345096, -154430, 192236, -209332, -42834]}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false, \"first_diff\": [-89074, -237444, 18680, -91812, 41848]}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false, \"first_diff\": [-28076, -22882, -65294, -142860, 228156]}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false, \"first_diff\": [-70816, 223632, -269504, -133392, 87532]}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false, \"first_diff\": [-40907, -24941, -330901, -113915, -95531]}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false, \"first_diff\": [-248356, -18120, -217208, -4776, 24736]}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false}, {\"case\": \"extreme\", \"width\": 32, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 32, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": 32767, \"equal\": true}, {\"case\": \"alternating\", \"width\": 32, \"equal\": false, \"max_abs\": 1048560}, {\"case\": \"alternating\", \"width\": 64, \"equal\": false, \"max_abs\": 2097120}, {\"case\": \"alternating\", \"width\": 128, \"equal\": false, \"max_abs\": 4194240}, {\"case\": \"storage_offset\", \"equal\": false, \"offset\": 5}, {\"case\": \"batch128\", \"equal\": false}, {\"case\": \"input_preserved\", \"equal\": true}]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "mismatching_cases": 14,
+          "random_mismatches": "9/9 across widths 32,64,128 x seeds 0-2",
+          "summary": {
+            "batch128": false,
+            "constant_extremes": true,
+            "random_inputs": false,
+            "storage_offset_view": false
+          }
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Runtime comparison of kernel.run vs contract reference over all legal widths (32/64/128), random full-int16-range inputs (3 seeds each), alternating extreme patterns, nonzero-storage-offset contiguous view, and B=128: every non-constant case mismatches exactly (torch.equal false), including max-abs values ~4.19M showing real coefficient disagreements, not noise. Constant fills match trivially. Metric: exact equality, matching the contract's tolerance 0.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T01:32:11Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:31:50Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:32:11Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "5c3531297aefc9ecc872a5a88e451443c6999cd7d7441bd90388c9fddf6e1397"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "9462f6fe1e2d17201abcf77c8e37aa41d4db71a4fc20266e80dd8b99b0215dd5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "71e4304f988a685bdbb605f31c5bc468a2a7cce3e6628bda67f5f7e0008f80f8"
+                  }
+                ],
+                "duration_s": 5.345018,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "mismatches": 14,
+                  "results": [
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -51292,
+                        -82698,
+                        58864,
+                        38878,
+                        -219348
+                      ],
+                      "seed": 0,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 0,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -60384,
+                        37144,
+                        -26072,
+                        72704,
+                        45728
+                      ],
+                      "seed": 1,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 1,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        36692,
+                        -92706,
+                        54246,
+                        -7414,
+                        103558
+                      ],
+                      "seed": 2,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 2,
+                      "width": 32
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        345096,
+                        -154430,
+                        192236,
+                        -209332,
+                        -42834
+                      ],
+                      "seed": 0,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 0,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -89074,
+                        -237444,
+                        18680,
+                        -91812,
+                        41848
+                      ],
+                      "seed": 1,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 1,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -28076,
+                        -22882,
+                        -65294,
+                        -142860,
+                        228156
+                      ],
+                      "seed": 2,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 2,
+                      "width": 64
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -70816,
+                        223632,
+                        -269504,
+                        -133392,
+                        87532
+                      ],
+                      "seed": 0,
+                      "width": 128
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 0,
+                      "width": 128
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -40907,
+                        -24941,
+                        -330901,
+                        -113915,
+                        -95531
+                      ],
+                      "seed": 1,
+                      "width": 128
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 1,
+                      "width": 128
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "first_diff": [
+                        -248356,
+                        -18120,
+                        -217208,
+                        -4776,
+                        24736
+                      ],
+                      "seed": 2,
+                      "width": 128
+                    },
+                    {
+                      "case": "random",
+                      "equal": false,
+                      "seed": 2,
+                      "width": 128
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": -32768,
+                      "width": 32
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": 32767,
+                      "width": 32
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": -32768,
+                      "width": 64
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": 32767,
+                      "width": 64
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": -32768,
+                      "width": 128
+                    },
+                    {
+                      "case": "extreme",
+                      "equal": true,
+                      "fill": 32767,
+                      "width": 128
+                    },
+                    {
+                      "case": "alternating",
+                      "equal": false,
+                      "max_abs": 1048560,
+                      "width": 32
+                    },
+                    {
+                      "case": "alternating",
+                      "equal": false,
+                      "max_abs": 2097120,
+                      "width": 64
+                    },
+                    {
+                      "case": "alternating",
+                      "equal": false,
+                      "max_abs": 4194240,
+                      "width": 128
+                    },
+                    {
+                      "case": "storage_offset",
+                      "equal": false,
+                      "offset": 5
+                    },
+                    {
+                      "case": "batch128",
+                      "equal": false
+                    },
+                    {
+                      "case": "input_preserved",
+                      "equal": true
+                    }
+                  ]
+                },
+                "mismatching_cases": 14,
+                "random_mismatches": "9/9 across widths 32,64,128 x seeds 0-2",
+                "stderr": "",
+                "stdout": "{\"mismatches\": 14, \"results\": [{\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false, \"first_diff\": [-51292, -82698, 58864, 38878, -219348]}, {\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false, \"first_diff\": [-60384, 37144, -26072, 72704, 45728]}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false, \"first_diff\": [36692, -92706, 54246, -7414, 103558]}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false, \"first_diff\": [345096, -154430, 192236, -209332, -42834]}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false, \"first_diff\": [-89074, -237444, 18680, -91812, 41848]}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false, \"first_diff\": [-28076, -22882, -65294, -142860, 228156]}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false, \"first_diff\": [-70816, 223632, -269504, -133392, 87532]}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false, \"first_diff\": [-40907, -24941, -330901, -113915, -95531]}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false, \"first_diff\": [-248356, -18120, -217208, -4776, 24736]}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false}, {\"case\": \"extreme\", \"width\": 32, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 32, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": 32767, \"equal\": true}, {\"case\": \"alternating\", \"width\": 32, \"equal\": false, \"max_abs\": 1048560}, {\"case\": \"alternating\", \"width\": 64, \"equal\": false, \"max_abs\": 2097120}, {\"case\": \"alternating\", \"width\": 128, \"equal\": false, \"max_abs\": 4194240}, {\"case\": \"storage_offset\", \"equal\": false, \"offset\": 5}, {\"case\": \"batch128\", \"equal\": false}, {\"case\": \"input_preserved\", \"equal\": true}]}\n",
+                "summary": {
+                  "batch128": false,
+                  "constant_extremes": true,
+                  "random_inputs": false,
+                  "storage_offset_view": false
+                },
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Runtime comparison of kernel.run vs contract reference over all legal widths (32/64/128), random full-int16-range inputs (3 seeds each), alternating extreme patterns, nonzero-storage-offset contiguous view, and B=128: every non-constant case mismatches exactly (torch.equal false), including max-abs values ~4.19M showing real coefficient disagreements, not noise. Constant fills match trivially. Metric: exact equality, matching the contract's tolerance 0.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel computes a natural-order fast Hadamard transform and then permutes rows via source_lane = bitreverse(lane) ^ (bitreverse(lane)>>1). If this Gray-code permutation is wrong or off (e.g. should be plain bit-reversal or a different Gray direction), output rows will be permuted versus the contract's W_N, which requires exact equality (tolerance 0) and output order as part of correctness.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "out[b,k] = sum_j W_N[k,j]*x[b,j] with W_N rows sorted by ascending sign-change count; 'output order is part of correctness'; 'absolute tolerance = 0'."
+            }
+          ],
+          "scope_rationale": "Contract requires every element to equal the mathematical target exactly (tol=0) with coefficients in increasing sequency order, so a wrong row permutation or any numeric deviation over the legal domain (all int16 values, N in {32,64,128}, B in [1,128]) is a defect.",
+          "statement": "The kernel's sequency permutation and butterfly do not reproduce the contract's W_N rows exactly for all legal inputs (N in {32,64,128}, full int16 range), causing mismatched or misordered coefficients versus reference().",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T01:32:11Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:32:11Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "5c3531297aefc9ecc872a5a88e451443c6999cd7d7441bd90388c9fddf6e1397"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9462f6fe1e2d17201abcf77c8e37aa41d4db71a4fc20266e80dd8b99b0215dd5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "71e4304f988a685bdbb605f31c5bc468a2a7cce3e6628bda67f5f7e0008f80f8"
+              }
+            ],
+            "duration_s": 5.345018,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "mismatches": 14,
+              "results": [
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -51292,
+                    -82698,
+                    58864,
+                    38878,
+                    -219348
+                  ],
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -60384,
+                    37144,
+                    -26072,
+                    72704,
+                    45728
+                  ],
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    36692,
+                    -92706,
+                    54246,
+                    -7414,
+                    103558
+                  ],
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 32
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    345096,
+                    -154430,
+                    192236,
+                    -209332,
+                    -42834
+                  ],
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -89074,
+                    -237444,
+                    18680,
+                    -91812,
+                    41848
+                  ],
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -28076,
+                    -22882,
+                    -65294,
+                    -142860,
+                    228156
+                  ],
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 64
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -70816,
+                    223632,
+                    -269504,
+                    -133392,
+                    87532
+                  ],
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 0,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -40907,
+                    -24941,
+                    -330901,
+                    -113915,
+                    -95531
+                  ],
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 1,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "first_diff": [
+                    -248356,
+                    -18120,
+                    -217208,
+                    -4776,
+                    24736
+                  ],
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "random",
+                  "equal": false,
+                  "seed": 2,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 32
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 64
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": -32768,
+                  "width": 128
+                },
+                {
+                  "case": "extreme",
+                  "equal": true,
+                  "fill": 32767,
+                  "width": 128
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 1048560,
+                  "width": 32
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 2097120,
+                  "width": 64
+                },
+                {
+                  "case": "alternating",
+                  "equal": false,
+                  "max_abs": 4194240,
+                  "width": 128
+                },
+                {
+                  "case": "storage_offset",
+                  "equal": false,
+                  "offset": 5
+                },
+                {
+                  "case": "batch128",
+                  "equal": false
+                },
+                {
+                  "case": "input_preserved",
+                  "equal": true
+                }
+              ]
+            },
+            "mismatching_cases": 14,
+            "random_mismatches": "9/9 across widths 32,64,128 x seeds 0-2",
+            "stderr": "",
+            "stdout": "{\"mismatches\": 14, \"results\": [{\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false, \"first_diff\": [-51292, -82698, 58864, 38878, -219348]}, {\"case\": \"random\", \"width\": 32, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false, \"first_diff\": [-60384, 37144, -26072, 72704, 45728]}, {\"case\": \"random\", \"width\": 32, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false, \"first_diff\": [36692, -92706, 54246, -7414, 103558]}, {\"case\": \"random\", \"width\": 32, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false, \"first_diff\": [345096, -154430, 192236, -209332, -42834]}, {\"case\": \"random\", \"width\": 64, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false, \"first_diff\": [-89074, -237444, 18680, -91812, 41848]}, {\"case\": \"random\", \"width\": 64, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false, \"first_diff\": [-28076, -22882, -65294, -142860, 228156]}, {\"case\": \"random\", \"width\": 64, \"seed\": 2, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false, \"first_diff\": [-70816, 223632, -269504, -133392, 87532]}, {\"case\": \"random\", \"width\": 128, \"seed\": 0, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false, \"first_diff\": [-40907, -24941, -330901, -113915, -95531]}, {\"case\": \"random\", \"width\": 128, \"seed\": 1, \"equal\": false}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false, \"first_diff\": [-248356, -18120, -217208, -4776, 24736]}, {\"case\": \"random\", \"width\": 128, \"seed\": 2, \"equal\": false}, {\"case\": \"extreme\", \"width\": 32, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 32, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 64, \"fill\": 32767, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": -32768, \"equal\": true}, {\"case\": \"extreme\", \"width\": 128, \"fill\": 32767, \"equal\": true}, {\"case\": \"alternating\", \"width\": 32, \"equal\": false, \"max_abs\": 1048560}, {\"case\": \"alternating\", \"width\": 64, \"equal\": false, \"max_abs\": 2097120}, {\"case\": \"alternating\", \"width\": 128, \"equal\": false, \"max_abs\": 4194240}, {\"case\": \"storage_offset\", \"equal\": false, \"offset\": 5}, {\"case\": \"batch128\", \"equal\": false}, {\"case\": \"input_preserved\", \"equal\": true}]}\n",
+            "summary": {
+              "batch128": false,
+              "constant_extremes": true,
+              "random_inputs": false,
+              "storage_offset_view": false
+            },
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Runtime comparison of kernel.run vs contract reference over all legal widths (32/64/128), random full-int16-range inputs (3 seeds each), alternating extreme patterns, nonzero-storage-offset contiguous view, and B=128: every non-constant case mismatches exactly (torch.equal false), including max-abs values ~4.19M showing real coefficient disagreements, not noise. Constant fills match trivially. Metric: exact equality, matching the contract's tolerance 0.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run against the contract reference (Sylvester H_N rows sorted by ascending sign-change count, int64 products/sums) using exact torch.equal across the full legal domain: all widths 32/64/128 with 3 random full-int16-range seeds each, alternating extreme patterns, a nonzero-storage-offset contiguous view, and B=128. 14/14 non-constant cases mismatched with large absolute differences (up to ~4.19M), including all 9 random-input cases, showing the butterfly+Gray-code reorder does not reproduce W_N or its sequency ordering; only constant fills matched trivially. Contract requires every element to equal the mathematical target exactly (abs/rel tolerance 0) with output order part of correctness, so this in-scope violation (claim c1, confirmed) mandates rejection.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T01:32:18Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-18T01:32:18Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run against the contract reference (Sylvester H_N rows sorted by ascending sign-change count, int64 products/sums) using exact torch.equal across the full legal domain: all widths 32/64/128 with 3 random full-int16-range seeds each, alternating extreme patterns, a nonzero-storage-offset contiguous view, and B=128. 14/14 non-constant cases mismatched with large absolute differences (up to ~4.19M), including all 9 random-input cases, showing the butterfly+Gray-code reorder does not reproduce W_N or its sequency ordering; only constant fills matched trivially. Contract requires every element to equal the mathematical target exactly (abs/rel tolerance 0) with output order part of correctness, so this in-scope violation (claim c1, confirmed) mandates rejection.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-18T01:32:18Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 compared kernel.run against the contract reference (Sylvester H_N rows sorted by ascending sign-change count, int64 products/sums) using exact torch.equal across the full legal domain: all widths 32/64/128 with 3 random full-int16-range seeds each, alternating extreme patterns, a nonzero-storage-offset contiguous view, and B=128. 14/14 non-constant cases mismatched with large absolute differences (up to ~4.19M), including all 9 random-input cases, showing the butterfly+Gray-code reorder does not reproduce W_N or its sequency ordering; only constant fills matched trivially. Contract requires every element to equal the mathematical target exactly (abs/rel tolerance 0) with output order part of correctness, so this in-scope violation (claim c1, confirmed) mandates rejection.",
+    "verdict": "reject"
+  }
+}

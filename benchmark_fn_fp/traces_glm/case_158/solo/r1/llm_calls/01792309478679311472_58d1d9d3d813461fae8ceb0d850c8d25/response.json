@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-4c6f4db1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a broad probe comparing the kernel against its sequential reference across many shapes, seeds, and value distributions (including extreme int16 values and singular matrices).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8e1a798d28af627c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json\\nfrom kernel import run, reference, make_inputs, validate_inputs\\n\\ndev = \\\"cuda\\\"\\nfails = []\\ntested = 0\\n\\n# 1) default make_inputs style, many seeds, all N 1..32\\nfor seed in range(8):\\n    for B in (1, 3, 7, 16, 64):\\n        for N in range(1, 33):\\n            g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed*1000 + B*100 + N)\\n            m = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8).to(dev)\\n            b = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16).to(dev)\\n            i = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16).to(dev)\\n            out = run(m, b, i)\\n            ref = reference(m.cpu(), b.cpu(), i.cpu()).to(dev)\\n            tested += 1\\n            if not torch.equal(out, ref):\\n                bad = (out != ref).any(dim=-1).nonzero()[:5]\\n                fails.append(dict(kind=\\\"rand\\\", seed=seed, B=B, N=N, bad=bad.tolist()))\\n\\n# 2) extreme values: all bias/initial at int16 extremes, matrices at extremes\\nfor B in (2, 64):\\n    for N in (1, 8, 9, 15, 16, 17, 23, 31, 32):\\n        for mv in (-1, 0, 1):\\n            for bv, iv in ((-32768, -32768), (32767, 32767), (-32768, 32767)):\\n                m = torch.full((B, N, 2, 2), mv, dtype=torch.int8).to(dev)\\n                b = torch.full((B, N, 2), bv, dtype=torch.int16).to(dev)\\n                i = torch.full((B, 2), iv, dtype=torch.int16).to(dev)\\n                out = run(m, b, i)\\n                ref = reference(m.cpu(), b.cpu(), i.cpu()).to(dev)\\n                tested += 1\\n                if not torch.equal(out, ref):\\n                    fails.append(dict(kind=\\\"extreme\\\", B=B, N=N, mv=mv, bv=bv, iv=iv))\\n\\n# 3) singular matrices / identity / zero mixes, random bias\\ng = torch.Generator().manual_seed(123)\\nfor trial in range(20):\\n    for N in (1, 7, 8, 12, 16, 25, 32):\\n        B = 5\\n        m = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8)\\n        # make half singular (rows equal)\\n        if trial % 2 == 0:\\n            m[:, :, 1] = m[:, :, 0]\\n        b = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16)\\n        i = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16)\\n        m, b, i = m.to(dev), b.to(dev), i.to(dev)\\n        out = run(m, b, i)\\n        ref = reference(m.cpu(), b.cpu(), i.cpu()).to(dev)\\n        tested += 1\\n        if not torch.equal(out, ref):\\n            fails.append(dict(kind=\\\"singular\\\", trial=trial, N=N))\\n\\nprint(json.dumps({\\\"tested\\\": tested, \\\"fails\\\": fails[:10], \\\"n_fails\\\": len(fails)}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run probe: exhaustive-ish random testing across N=1..32, B up to 64, compare run vs reference."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309480,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 905,
+    "prompt_tokens": 13963,
+    "total_tokens": 14868,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 25,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 346,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

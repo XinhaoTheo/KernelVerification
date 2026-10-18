@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-ecc50aea",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run two independent probes: an exhaustive FP16-domain sweep for c1 (kernel vs exact erf, with the truncated-coefficient FP64 formula error decomposed out), and for c2 the kernel vs the same truncated-coefficient formula evaluated in FP64 (isolating the FP32 evaluation-chain contribution). Both are independent, so I launch them together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8a4159e52506fafa",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport torch\\nimport kernel as K\\n\\n# all finite FP16 values except +-inf/nan: keep those 65536 with finite bit patterns\\nvals = torch.arange(65536, dtype=torch.int32)\\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\\nfinite = torch.isfinite(bits)\\nxs = bits[finite]  # includes signed zeros, subnormals, +/-65504\\nx_gpu = xs.to(torch.float16).to(\\\"cuda\\\")\\nprint(\\\"n =\\\", x_gpu.numel(), file=sys.stderr)\\n\\nout = K.run(x_gpu)\\nout64 = out.to(torch.float64).cpu()\\n\\nimport math\\nref = torch.erf(xs)  # FP64 exact erf of the FP64 value of the stored FP16 number\\n\\n# truncated-coefficient formula evaluated in FP64 (isolates coefficient truncation)\\nm = xs.abs()\\nt = 1.0/(1.0+0.3275911*m)\\np = 1.06141*t - 1.45315\\np = p*t + 1.42141\\np = p*t - 0.28450\\np = p*t + 0.25483\\np = p*t\\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\\n\\nerr_total = (out64 - ref).abs()\\nerr_coeff = (formula64 - ref).abs()\\nmax_total, i1 = err_total.max(0)\\nmax_coeff, i2 = err_coeff.max(0)\\nviol = (err_total > 1e-6)\\nviol_coeff = (err_coeff > 1e-6)\\nprint(json.dumps({\\n  \\\"n_values\\\": int(x_gpu.numel()),\\n  \\\"max_abs_err_kernel_vs_exact_erf\\\": float(max_total),\\n  \\\"argmax_x_kernel\\\": float(xs[i1]),\\n  \\\"count_violating_1e-6_kernel\\\": int(viol.sum()),\\n  \\\"max_abs_err_truncated_formula_fp64_vs_exact\\\": float(max_coeff),\\n  \\\"argmax_x_formula\\\": float(xs[i2]),\\n  \\\"count_violating_1e-6_truncated_formula\\\": int(viol_coeff.sum()),\\n  \\\"midrange_violating_kernel_0.3_3\\\": int((viol & (m > 0.3) & (m < 3)).sum()),\\n  \\\"tolerance\\\": 1e-6,\\n}))\\n\", \"expected_signal\": \"max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-8f97ad18a9e57d95",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport torch\\nimport kernel as K\\n\\nvals = torch.arange(65536, dtype=torch.int32)\\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\\nxs = bits[torch.isfinite(bits)]\\nx_gpu = xs.to(torch.float16).to(\\\"cuda\\\")\\n\\nout = K.run(x_gpu)\\nout64 = out.to(torch.float64).cpu()\\n\\n# same formula, same truncated coefficients, evaluated in FP64:\\n# difference kernel vs this isolates the FP32 evaluation chain (div_rn, tl.exp, Horner, fusion off)\\nm = xs.abs()\\nt = 1.0/(1.0+0.3275911*m)\\np = 1.06141*t - 1.45315\\np = p*t + 1.42141\\np = p*t - 0.28450\\np = p*t + 0.25483\\np = p*t\\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\\n\\nerr_eval = (out64 - formula64).abs()\\nerr_total = (out64 - torch.erf(xs)).abs()\\nmax_eval, ie = err_eval.max(0)\\nprint(json.dumps({\\n  \\\"n_values\\\": int(x_gpu.numel()),\\n  \\\"max_abs_err_kernel_vs_fp64_formula\\\": float(max_eval),\\n  \\\"argmax_x\\\": float(xs[ie]),\\n  \\\"count_eval_err_gt_1e-6\\\": int((err_eval > 1e-6).sum()),\\n  \\\"count_eval_err_gt_1e-7\\\": int((err_eval > 1e-7).sum()),\\n  \\\"count_eval_err_gt_5e-7\\\": int((err_eval > 5e-7).sum()),\\n  \\\"max_abs_err_kernel_vs_exact_erf\\\": float(err_total.max()),\\n  \\\"tolerance\\\": 1e-6,\\n}))\\n\", \"expected_signal\": \"isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Exhaustive sweep over all 65536 finite FP16 values: kernel run() limits N<=131072, 65536 fits. Compute error vs FP64 erf. One probe decides c1 (coefficient truncation: also compare with full-precision-coefficient FP64 evaluation? To isolate coefficient effect, also compute kernel output vs FP64-evaluated truncated formula). Launch two probes: c1 exhaustive sweep with error decomposition (formula error using full A&S in FP64 vs exact erf, and kernel vs exact), c2 comparing kernel vs FP64-truncated-formula (evaluation-chain error)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284756,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1254,
+    "prompt_tokens": 18901,
+    "total_tokens": 20155,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 125,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

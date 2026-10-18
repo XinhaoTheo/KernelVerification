@@ -1,0 +1,1039 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_142",
+    "has_error": null,
+    "kernel_code": "\"\"\"Sequency-ordered integer Walsh-Hadamard transform.\n\nOriginal synthetic Triton implementation of a standard signal transform.\nThis is not an upstream implementation or a claimed historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    value = tl.load(X + row * N + lane).to(tl.int32)\n    for stage in tl.static_range(0, LOG_N):\n        step = 1 << stage\n        peer = tl.gather(value, lane ^ step, axis=0)\n        value = tl.where((lane & step) == 0, value + peer, peer - value)\n\n    # Convert the coefficient index to the butterfly's natural row index.\n    gray = lane ^ (lane >> 1)\n    source_lane = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        source_lane = source_lane | (((gray >> bit) & 1) << (LOG_N - 1 - bit))\n\n    result = tl.gather(value, source_lane, axis=0)\n    tl.store(OUT + row * N + lane, result)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {32,64,128}\")\n    require(x.dtype == torch.int16, \"int16 input required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    \"\"\"Return the unnormalized transform with coefficients in sequency order.\"\"\"\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)\n        _transform_kernel[(batch,)](\n            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Build the mathematical basis independently, then multiply in int64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)\n    while hadamard.shape[0] < width:\n        top = torch.cat((hadamard, hadamard), dim=1)\n        bottom = torch.cat((hadamard, -hadamard), dim=1)\n        hadamard = torch.cat((top, bottom), dim=0)\n    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)\n    sequency_rows = hadamard[torch.argsort(changes)]\n    # int64 products and sums are exact throughout the complete int16 domain.\n    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)\n    return result.to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; all stored int16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device=device, dtype=torch.int16),)\n",
+    "passed": null,
+    "problem_text": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_142",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:31:47Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:32:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b99c05c4bef19b79437cbfdb9dc79830f9abf245302423462fac75b97a640903"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "2bee5e93f08fd8d33ba3633e738edf8ad4934ec3badfcc5323983153d626257d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5a5fe349815b84a1a69e6cf0d1759f567cecd072479650c0b7466ae047ffaafe"
+              }
+            ],
+            "cases": [
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 32
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 32
+              },
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 64
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 64
+              },
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 128
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 128
+              }
+            ],
+            "duration_s": 5.244706,
+            "exit_code": 0,
+            "expected_signal": null,
+            "input_preserved": true,
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "output_props_ok": true,
+              "results": [
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                }
+              ]
+            },
+            "output_props_ok": true,
+            "stderr": "",
+            "stdout": "{\"results\": [{\"width\": 32, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 32, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}], \"input_preserved\": true, \"output_props_ok\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output equals the independent int64 reference exactly (torch.equal, mismatches=0) for widths 32/64/128 with random full-range int16 rows plus extreme rows (all 32767, all -32768, alternating \u00b132767). Output is fresh int32 on device, input preserved. The Gray-code reordering matches the required increasing-sequency ordering and butterfly arithmetic is exact.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The butterfly gives natural (Sylvester) Hadamard order; converting to sequency order requires the right Gray-code/bit-reversal permutation. If the permutation is wrong, outputs will be a permuted but otherwise exact transform, which violates the contract's explicit ordering requirement.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"output order is part of correctness\" \u2014 coefficient k must use the basis row with exactly k sign changes; approximate orderings do not satisfy the task. Absolute/relative tolerance = 0."
+        }
+      ],
+      "scope_rationale": "The contract requires out[b,k] to use the basis row with exactly k sign changes, ascending, with tolerance 0. A wrong permutation or wrong arithmetic fails this.",
+      "statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T01:32:03Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_142",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_142"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_142"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_142"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_142",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 6.259092186,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel computes a natural-order Hadamard butterfly then reorders via a Gray-code/bit-reversal permutation. The risk is that the reordering does not produce the exact sequency (sign-change-count) order the contract requires. I'll record that claim and test the kernel against its own independent reference across all widths and edge values.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The butterfly gives natural (Sylvester) Hadamard order; converting to sequency order requires the right Gray-code/bit-reversal permutation. If the permutation is wrong, outputs will be a permuted but otherwise exact transform, which violates the contract's explicit ordering requirement.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"output order is part of correctness\" \u2014 coefficient k must use the basis row with exactly k sign changes; approximate orderings do not satisfy the task. Absolute/relative tolerance = 0."
+              }
+            ],
+            "scope_rationale": "The contract requires out[b,k] to use the basis row with exactly k sign changes, ascending, with tolerance 0. A wrong permutation or wrong arithmetic fails this.",
+            "statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.259,
+        "input_tokens": 9815,
+        "output_tokens": 362
+      }
+    },
+    {
+      "duration_s": 6.351939903,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll test the kernel against its own reference implementation across all three widths, with edge-case values (min/max int16, all values legal) to verify the exact sequency ordering and arithmetic.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_142\")\nimport torch\nimport kernel\n\ndev = \"cuda\"\nresults = []\nfor width in (32, 64, 128):\n    for batch in (1, 5):\n        gen = torch.Generator(device=\"cpu\").manual_seed(width * 100 + batch)\n        x = torch.randint(-32768, 32768, (batch, width), generator=gen, dtype=torch.int32).to(device=dev, dtype=torch.int16)\n        # also extreme rows: all min, alternating extremes\n        ext = torch.tensor([[32767]*width, [-32768]*width, [(-1)**i * 32767 for i in range(width)]], dtype=torch.int32).to(device=dev, dtype=torch.int16)\n        if batch > 1:\n            x = torch.cat([x, ext], dim=0)\n        else:\n            x = ext\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        exact = torch.equal(out, ref)\n        mismatches = (out != ref).sum().item() if not exact else 0\n        # first mismatch detail\n        detail = None\n        if not exact:\n            idx = (out != ref).nonzero()[0].tolist()\n            detail = {\"first_mismatch\": idx, \"out\": out[tuple(idx)].item(), \"ref\": ref[tuple(idx)].item()}\n        results.append({\"width\": width, \"batch\": x.shape[0], \"exact\": exact, \"mismatches\": mismatches, \"detail\": detail})\n# also check input preserved and output properties on one case\nx = kernel.make_inputs()[0]\nxc = x.clone()\nout = kernel.run(x)\npres = torch.equal(x, xc)\nok_props = out.dtype == torch.int32 and out.shape == x.shape and out.is_cuda\nprint(json.dumps({\"results\": results, \"input_preserved\": pres, \"output_props_ok\": ok_props}))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.352,
+        "input_tokens": 11008,
+        "output_tokens": 485
+      }
+    },
+    {
+      "duration_s": 4.157197526000001,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe shows exact agreement across all widths and edge cases, so the claim is rebutted. I'll finalize the evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "cases": [
+                {
+                  "batch": 3,
+                  "exact": true,
+                  "width": 32
+                },
+                {
+                  "batch": 8,
+                  "exact": true,
+                  "width": 32
+                },
+                {
+                  "batch": 3,
+                  "exact": true,
+                  "width": 64
+                },
+                {
+                  "batch": 8,
+                  "exact": true,
+                  "width": 64
+                },
+                {
+                  "batch": 3,
+                  "exact": true,
+                  "width": 128
+                },
+                {
+                  "batch": 8,
+                  "exact": true,
+                  "width": 128
+                }
+              ],
+              "input_preserved": true,
+              "output_props_ok": true
+            },
+            "event_id": "t6",
+            "status": "rebutted",
+            "summary": "Kernel output equals the independent int64 reference exactly (torch.equal, mismatches=0) for widths 32/64/128 with random full-range int16 rows plus extreme rows (all 32767, all -32768, alternating \u00b132767). Output is fresh int32 on device, input preserved. The Gray-code reordering matches the required increasing-sequency ordering and butterfly arithmetic is exact.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.157,
+        "input_tokens": 14072,
+        "output_tokens": 275
+      }
+    },
+    {
+      "duration_s": 5.526100809000003,
+      "role": "solo",
+      "round": 5,
+      "text": "The single claim was tested across all widths (32/64/128) with full-range random and extreme int16 values, and the kernel matched the independent int64 reference exactly (mismatches=0, input preserved, correct int32 output). No open claims remain; I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 compared kernel.run against kernel.reference (which independently builds the Sylvester Hadamard matrix, sorts rows by sign-change count, and computes in int64) on all contract widths 32/64/128 with random full-range int16 inputs plus extreme rows (all 32767, all -32768, alternating \u00b132767). All cases matched exactly (torch.equal, mismatches=0), with the output being a fresh int32 tensor on the input device and the input preserved. This rebuts claim c1: the Gray-code reordering produces the required increasing-sequency ordering and the integer butterfly arithmetic is exact, satisfying the contract's zero-tolerance requirement.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.526,
+        "input_tokens": 18580,
+        "output_tokens": 319
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_142"
+      },
+      "created_at": "2026-10-18T01:31:40Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_142",
+        "has_error": null,
+        "kernel_code": "\"\"\"Sequency-ordered integer Walsh-Hadamard transform.\n\nOriginal synthetic Triton implementation of a standard signal transform.\nThis is not an upstream implementation or a claimed historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):\n    row = tl.program_id(0)\n    lane = tl.arange(0, N)\n    value = tl.load(X + row * N + lane).to(tl.int32)\n    for stage in tl.static_range(0, LOG_N):\n        step = 1 << stage\n        peer = tl.gather(value, lane ^ step, axis=0)\n        value = tl.where((lane & step) == 0, value + peer, peer - value)\n\n    # Convert the coefficient index to the butterfly's natural row index.\n    gray = lane ^ (lane >> 1)\n    source_lane = tl.full((N,), 0, tl.int32)\n    for bit in tl.static_range(0, LOG_N):\n        source_lane = source_lane | (((gray >> bit) & 1) << (LOG_N - 1 - bit))\n\n    result = tl.gather(value, source_lane, axis=0)\n    tl.store(OUT + row * N + lane, result)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),\n            \"x must have shape [B,N], B in [1,128] and N in {32,64,128}\")\n    require(x.dtype == torch.int16, \"int16 input required\")\n    return {\"valid\": True, \"batch\": x.shape[0], \"width\": x.shape[1]}\n\n\ndef run(x):\n    \"\"\"Return the unnormalized transform with coefficients in sequency order.\"\"\"\n    validate_inputs(x)\n    batch, width = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)\n        _transform_kernel[(batch,)](\n            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"Build the mathematical basis independently, then multiply in int64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    width = x.shape[1]\n    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)\n    while hadamard.shape[0] < width:\n        top = torch.cat((hadamard, hadamard), dim=1)\n        bottom = torch.cat((hadamard, -hadamard), dim=1)\n        hadamard = torch.cat((top, bottom), dim=0)\n    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)\n    sequency_rows = hadamard[torch.argsort(changes)]\n    # int64 products and sums are exact throughout the complete int16 domain.\n    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)\n    return result.to(torch.int32)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=64, seed=0):\n    \"\"\"Examples only; all stored int16 values are legal.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)\n    return (x.to(device=device, dtype=torch.int16),)\n",
+        "passed": null,
+        "problem_text": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_142",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_142"
+      },
+      "created_at": "2026-10-18T01:31:40Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute an unnormalized Walsh-Hadamard transform for each row of an int16\ninput tensor, returning int32 coefficients in increasing sequency order.\n\nThe mathematical target is defined independently of any fast algorithm:\n1. Start with H_1 = [[1]] and recursively construct\n       H_(2n) = [[H_n, H_n],\n                 [H_n, -H_n]].\n2. For each row of H_N, count how many adjacent entries have different\n   signs. These counts are all distinct and range from 0 to N-1.\n3. Sort the rows by that count, in ascending order, to obtain W_N.\n4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].\n\nThus output coefficient k uses a basis row with exactly k sign changes.\nNo normalization factor is applied, and output order is part of correctness.\n\nInputs and complete public domain:\n- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and\n  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.\n- EVERY stored int16 value is legal: the full range [-32768,32767].\n- x is dense, strided, contiguous and on a CUDA device. Contiguous views\n  with nonzero storage offsets are legal.\n- x has requires_grad=False, is_inference=False, is_neg=False and\n  is_conj=False. Calls run in ordinary non-inference mode, without\n  concurrent external writes to the input. No autograd is provided.\n\nReturn a fresh int32 tensor of shape [B,N] on x.device, preserving x.\nEvery element must equal the mathematical integer target exactly:\nabsolute tolerance = 0 and relative tolerance = 0.\nThe largest possible absolute result is at most N*32768<=4194304, which\nfits in int32. Approximate transforms, other coefficient orderings and\nnormalized transforms do not satisfy this task. Implementations may use\nany algorithm that satisfies the same target over the whole legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nbuilds the Sylvester matrix, sorts its rows by sign-change count and uses\nint64 products and sums before exact int32 conversion; it also accepts\nCPU inputs. make_inputs() supplies examples only.\n\nWalsh-Hadamard transforms are used for discrete signals and their sequency\nordering arranges coefficients by the sign-change rate of the basis.\nThis is an original synthetic Triton implementation with integer\nbutterflies and coefficient reordering, not a claimed upstream historical\ndefect. The input/output convention is explicitly unnormalized.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_142",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_142"
+      },
+      "created_at": "2026-10-18T01:31:40Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_142",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3538
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2547
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_142",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:31:40Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_142",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The butterfly gives natural (Sylvester) Hadamard order; converting to sequency order requires the right Gray-code/bit-reversal permutation. If the permutation is wrong, outputs will be a permuted but otherwise exact transform, which violates the contract's explicit ordering requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"output order is part of correctness\" \u2014 coefficient k must use the basis row with exactly k sign changes; approximate orderings do not satisfy the task. Absolute/relative tolerance = 0."
+          }
+        ],
+        "scope_rationale": "The contract requires out[b,k] to use the basis row with exactly k sign changes, ascending, with tolerance 0. A wrong permutation or wrong arithmetic fails this.",
+        "statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs."
+      },
+      "created_at": "2026-10-18T01:31:47Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T01:31:47Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The butterfly gives natural (Sylvester) Hadamard order; converting to sequency order requires the right Gray-code/bit-reversal permutation. If the permutation is wrong, outputs will be a permuted but otherwise exact transform, which violates the contract's explicit ordering requirement.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"output order is part of correctness\" \u2014 coefficient k must use the basis row with exactly k sign changes; approximate orderings do not satisfy the task. Absolute/relative tolerance = 0."
+          }
+        ],
+        "scope_rationale": "The contract requires out[b,k] to use the basis row with exactly k sign changes, ascending, with tolerance 0. A wrong permutation or wrong arithmetic fails this.",
+        "statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs.",
+        "status": "open",
+        "updated_at": "2026-10-18T01:31:47Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_142\")\nimport torch\nimport kernel\n\ndev = \"cuda\"\nresults = []\nfor width in (32, 64, 128):\n    for batch in (1, 5):\n        gen = torch.Generator(device=\"cpu\").manual_seed(width * 100 + batch)\n        x = torch.randint(-32768, 32768, (batch, width), generator=gen, dtype=torch.int32).to(device=dev, dtype=torch.int16)\n        # also extreme rows: all min, alternating extremes\n        ext = torch.tensor([[32767]*width, [-32768]*width, [(-1)**i * 32767 for i in range(width)]], dtype=torch.int32).to(device=dev, dtype=torch.int16)\n        if batch > 1:\n            x = torch.cat([x, ext], dim=0)\n        else:\n            x = ext\n        out = kernel.run(x)\n        ref = kernel.reference(x)\n        exact = torch.equal(out, ref)\n        mismatches = (out != ref).sum().item() if not exact else 0\n        # first mismatch detail\n        detail = None\n        if not exact:\n            idx = (out != ref).nonzero()[0].tolist()\n            detail = {\"first_mismatch\": idx, \"out\": out[tuple(idx)].item(), \"ref\": ref[tuple(idx)].item()}\n        results.append({\"width\": width, \"batch\": x.shape[0], \"exact\": exact, \"mismatches\": mismatches, \"detail\": detail})\n# also check input preserved and output properties on one case\nx = kernel.make_inputs()[0]\nxc = x.clone()\nout = kernel.run(x)\npres = torch.equal(x, xc)\nok_props = out.dtype == torch.int32 and out.shape == x.shape and out.is_cuda\nprint(json.dumps({\"results\": results, \"input_preserved\": pres, \"output_props_ok\": ok_props}))\n"
+      },
+      "created_at": "2026-10-18T01:31:59Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "b99c05c4bef19b79437cbfdb9dc79830f9abf245302423462fac75b97a640903"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "2bee5e93f08fd8d33ba3633e738edf8ad4934ec3badfcc5323983153d626257d"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "5a5fe349815b84a1a69e6cf0d1759f567cecd072479650c0b7466ae047ffaafe"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs.",
+        "cwd": "/root/cases/case_142",
+        "duration_s": 5.244706,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b99c05c4bef19b79437cbfdb9dc79830f9abf245302423462fac75b97a640903"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "2bee5e93f08fd8d33ba3633e738edf8ad4934ec3badfcc5323983153d626257d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5a5fe349815b84a1a69e6cf0d1759f567cecd072479650c0b7466ae047ffaafe"
+              }
+            ],
+            "duration_s": 5.244706,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "output_props_ok": true,
+              "results": [
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"results\": [{\"width\": 32, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 32, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}], \"input_preserved\": true, \"output_props_ok\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "input_preserved": true,
+          "output_props_ok": true,
+          "results": [
+            {
+              "batch": 3,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 32
+            },
+            {
+              "batch": 8,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 32
+            },
+            {
+              "batch": 3,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 64
+            },
+            {
+              "batch": 8,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 64
+            },
+            {
+              "batch": 3,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 128
+            },
+            {
+              "batch": 8,
+              "detail": null,
+              "exact": true,
+              "mismatches": 0,
+              "width": 128
+            }
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"results\": [{\"width\": 32, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 32, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}], \"input_preserved\": true, \"output_props_ok\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "cases": [
+            {
+              "batch": 3,
+              "exact": true,
+              "width": 32
+            },
+            {
+              "batch": 8,
+              "exact": true,
+              "width": 32
+            },
+            {
+              "batch": 3,
+              "exact": true,
+              "width": 64
+            },
+            {
+              "batch": 8,
+              "exact": true,
+              "width": 64
+            },
+            {
+              "batch": 3,
+              "exact": true,
+              "width": 128
+            },
+            {
+              "batch": 8,
+              "exact": true,
+              "width": 128
+            }
+          ],
+          "input_preserved": true,
+          "output_props_ok": true
+        },
+        "event_id": "t6",
+        "status": "rebutted",
+        "summary": "Kernel output equals the independent int64 reference exactly (torch.equal, mismatches=0) for widths 32/64/128 with random full-range int16 rows plus extreme rows (all 32767, all -32768, alternating \u00b132767). Output is fresh int32 on device, input preserved. The Gray-code reordering matches the required increasing-sequency ordering and butterfly arithmetic is exact.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T01:32:03Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:31:47Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:32:03Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "b99c05c4bef19b79437cbfdb9dc79830f9abf245302423462fac75b97a640903"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "2bee5e93f08fd8d33ba3633e738edf8ad4934ec3badfcc5323983153d626257d"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "5a5fe349815b84a1a69e6cf0d1759f567cecd072479650c0b7466ae047ffaafe"
+                  }
+                ],
+                "cases": [
+                  {
+                    "batch": 3,
+                    "exact": true,
+                    "width": 32
+                  },
+                  {
+                    "batch": 8,
+                    "exact": true,
+                    "width": 32
+                  },
+                  {
+                    "batch": 3,
+                    "exact": true,
+                    "width": 64
+                  },
+                  {
+                    "batch": 8,
+                    "exact": true,
+                    "width": 64
+                  },
+                  {
+                    "batch": 3,
+                    "exact": true,
+                    "width": 128
+                  },
+                  {
+                    "batch": 8,
+                    "exact": true,
+                    "width": 128
+                  }
+                ],
+                "duration_s": 5.244706,
+                "exit_code": 0,
+                "expected_signal": null,
+                "input_preserved": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "input_preserved": true,
+                  "output_props_ok": true,
+                  "results": [
+                    {
+                      "batch": 3,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 32
+                    },
+                    {
+                      "batch": 8,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 32
+                    },
+                    {
+                      "batch": 3,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 64
+                    },
+                    {
+                      "batch": 8,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 64
+                    },
+                    {
+                      "batch": 3,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 128
+                    },
+                    {
+                      "batch": 8,
+                      "detail": null,
+                      "exact": true,
+                      "mismatches": 0,
+                      "width": 128
+                    }
+                  ]
+                },
+                "output_props_ok": true,
+                "stderr": "",
+                "stdout": "{\"results\": [{\"width\": 32, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 32, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}], \"input_preserved\": true, \"output_props_ok\": true}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Kernel output equals the independent int64 reference exactly (torch.equal, mismatches=0) for widths 32/64/128 with random full-range int16 rows plus extreme rows (all 32767, all -32768, alternating \u00b132767). Output is fresh int32 on device, input preserved. The Gray-code reordering matches the required increasing-sequency ordering and butterfly arithmetic is exact.",
+              "supports": "rebutted",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The butterfly gives natural (Sylvester) Hadamard order; converting to sequency order requires the right Gray-code/bit-reversal permutation. If the permutation is wrong, outputs will be a permuted but otherwise exact transform, which violates the contract's explicit ordering requirement.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"output order is part of correctness\" \u2014 coefficient k must use the basis row with exactly k sign changes; approximate orderings do not satisfy the task. Absolute/relative tolerance = 0."
+            }
+          ],
+          "scope_rationale": "The contract requires out[b,k] to use the basis row with exactly k sign changes, ascending, with tolerance 0. A wrong permutation or wrong arithmetic fails this.",
+          "statement": "The kernel's Gray-code reordering does not match the required increasing-sequency coefficient ordering (or the butterfly arithmetic is otherwise inexact) for legal inputs.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T01:32:03Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:32:03Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "b99c05c4bef19b79437cbfdb9dc79830f9abf245302423462fac75b97a640903"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "2bee5e93f08fd8d33ba3633e738edf8ad4934ec3badfcc5323983153d626257d"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "5a5fe349815b84a1a69e6cf0d1759f567cecd072479650c0b7466ae047ffaafe"
+              }
+            ],
+            "cases": [
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 32
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 32
+              },
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 64
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 64
+              },
+              {
+                "batch": 3,
+                "exact": true,
+                "width": 128
+              },
+              {
+                "batch": 8,
+                "exact": true,
+                "width": 128
+              }
+            ],
+            "duration_s": 5.244706,
+            "exit_code": 0,
+            "expected_signal": null,
+            "input_preserved": true,
+            "json_parse_error": null,
+            "json_result": {
+              "input_preserved": true,
+              "output_props_ok": true,
+              "results": [
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 32
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 64
+                },
+                {
+                  "batch": 3,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                },
+                {
+                  "batch": 8,
+                  "detail": null,
+                  "exact": true,
+                  "mismatches": 0,
+                  "width": 128
+                }
+              ]
+            },
+            "output_props_ok": true,
+            "stderr": "",
+            "stdout": "{\"results\": [{\"width\": 32, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 32, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 64, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 3, \"exact\": true, \"mismatches\": 0, \"detail\": null}, {\"width\": 128, \"batch\": 8, \"exact\": true, \"mismatches\": 0, \"detail\": null}], \"input_preserved\": true, \"output_props_ok\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Kernel output equals the independent int64 reference exactly (torch.equal, mismatches=0) for widths 32/64/128 with random full-range int16 rows plus extreme rows (all 32767, all -32768, alternating \u00b132767). Output is fresh int32 on device, input preserved. The Gray-code reordering matches the required increasing-sequency ordering and butterfly arithmetic is exact.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run against kernel.reference (which independently builds the Sylvester Hadamard matrix, sorts rows by sign-change count, and computes in int64) on all contract widths 32/64/128 with random full-range int16 inputs plus extreme rows (all 32767, all -32768, alternating \u00b132767). All cases matched exactly (torch.equal, mismatches=0), with the output being a fresh int32 tensor on the input device and the input preserved. This rebuts claim c1: the Gray-code reordering produces the required increasing-sequency ordering and the integer butterfly arithmetic is exact, satisfying the contract's zero-tolerance requirement.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-18T01:32:08Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-10-18T01:32:08Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 compared kernel.run against kernel.reference (which independently builds the Sylvester Hadamard matrix, sorts rows by sign-change count, and computes in int64) on all contract widths 32/64/128 with random full-range int16 inputs plus extreme rows (all 32767, all -32768, alternating \u00b132767). All cases matched exactly (torch.equal, mismatches=0), with the output being a fresh int32 tensor on the input device and the input preserved. This rebuts claim c1: the Gray-code reordering produces the required increasing-sequency ordering and the integer butterfly arithmetic is exact, satisfying the contract's zero-tolerance requirement.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-10-18T01:32:08Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 compared kernel.run against kernel.reference (which independently builds the Sylvester Hadamard matrix, sorts rows by sign-change count, and computes in int64) on all contract widths 32/64/128 with random full-range int16 inputs plus extreme rows (all 32767, all -32768, alternating \u00b132767). All cases matched exactly (torch.equal, mismatches=0), with the output being a fresh int32 tensor on the input device and the input preserved. This rebuts claim c1: the Gray-code reordering produces the required increasing-sequency ordering and the integer butterfly arithmetic is exact, satisfying the contract's zero-tolerance requirement.",
+    "verdict": "trust"
+  }
+}

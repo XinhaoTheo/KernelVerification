@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-f75f165f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an adversarial probe for claim c1: large-magnitude FP16 components with near-cancelling numerator products, compared against the FP64 reference under the contract's componentwise tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8dc00ae8384f6285",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, os\\nsys.path.insert(0, os.environ.get(\\\"CASE_DIR\\\", \\\"/root/cases/case_154\\\"))\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\ndef check(num, den, label):\\n    out = k.run(num.clone(), den.clone())\\n    ref = k.reference(num.cpu(), den.cpu()).to(dev)\\n    err = (out - ref).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    bad = (err > tol) & ~(torch.isclose(out, ref) & (ref == 0))  # signed zeros equal handled by err==0 anyway\\n    viol = (err > tol)\\n    n = viol.sum().item()\\n    worst = (err / tol).max().item()\\n    idx = (err / tol).argmax().item() if viol.any() else -1\\n    detail = {}\\n    if viol.any():\\n        i = (err / tol).argmax().item()\\n        r, cidx = divmod(i, 2)\\n        detail = {\\\"row\\\": r, \\\"comp\\\": cidx, \\\"num\\\": num[r].tolist(), \\\"den\\\": den[r].tolist(),\\n                  \\\"out\\\": out[r].tolist(), \\\"ref\\\": ref[r].tolist(),\\n                  \\\"err\\\": err.flatten()[i].item(), \\\"tol\\\": tol.flatten()[i].item()}\\n    print(label, {\\\"violations\\\": n, \\\"size\\\": num.numel(), \\\"worst_err_over_tol\\\": worst, \\\"detail\\\": detail})\\n    return n\\n\\n# 1) structured cancellation: a*c ≈ -b*d with large magnitudes (products non-representable in fp32)\\ng = torch.Generator().manual_seed(0)\\ndef build(size, scale_hi):\\n    num = torch.empty((size,2)); den = torch.empty((size,2))\\n    for i in range(size):\\n        c = float(torch.empty((), dtype=torch.float16).uniform_(-scale_hi, scale_hi, generator=g))\\n        d = float(torch.empty((), dtype=torch.float16).uniform_(-scale_hi, scale_hi, generator=g))\\n        if c == 0 and d == 0: c = 1.0\\n        # choose a,b large with a*c + b*d ≈ 0 but not exactly equal products\\n        a = float(torch.empty((), dtype=torch.float16).uniform_(-scale_hi, scale_hi, generator=g))\\n        # solve b = -a*c/d rounded to fp16\\n        b = float(torch.tensor(-a*c/d, dtype=torch.float16))\\n        if a == 0: a = 1.0\\n        num[i] = torch.tensor([a, b]); den[i] = torch.tensor([c, d])\\n    return num.to(torch.float16), den.to(torch.float16)\\n\\ntotal = 0\\nfor scale in (65504.0, 1024.0, 1.0, 6.1e-5):  # include subnormal-scale denominators\\n    num, den = build(20000, scale if scale <= 65504 else 65504.0)\\n    if scale < 1.0:\\n        # small denominators: c,d tiny subnormals\\n        den = (torch.randn(20000,2, generator=g) * 6e-5).to(torch.float16)\\n        z = (den == 0).all(dim=1); den[z,0] = 6.1e-5\\n        num = (torch.randn(20000,2, generator=g) * scale).to(torch.float16)\\n    total += check(num.to(dev), den.to(dev), f\\\"structured_scale_{scale}\\\")\\n\\n# 2) full random sweep at extreme magnitudes\\nfor scale in (65504.0, 30000.0, 1.0):\\n    num = (torch.randn(200000, 2, generator=g) * scale).to(torch.float16).to(dev)\\n    den = (torch.randn(200000, 2, generator=g) * scale).to(torch.float16).to(dev)\\n    z = (den == 0).all(dim=1); den[z, 0] = 1\\n    total += check(num, den, f\\\"random_scale_{scale}\\\")\\n\\n# 3) extreme quotient: numerator max, denominator smallest subnormal (target huge, relative tolerance)\\nnum = torch.full((1000, 2), 65504.0, dtype=torch.float16).to(dev)\\nden = torch.full((1000, 2), 6.1e-5, dtype=torch.float16)\\nden[:, 1] = 5.96e-8  # smallest subnormal\\nden = den.to(dev)\\ntotal += check(num, den, \\\"extreme_magnitude\\\")\\n\\n# 4) all-bit patterns brute force on a grid (sampled full fp16 range)\\nvals = torch.tensor([0.0, -0.0, 6.1e-5, -6.1e-5, 6.104e-5, 1e-4, 0.001, -0.001, 1.0, -1.0, 1.5, -2.25,\\n                     100.0, -100.0, 1000.0, -1000.0, 30000.0, -30000.0, 65504.0, -65504.0, 65504.0/3],\\n                   dtype=torch.float16)\\nA, B = torch.meshgrid(vals, vals, indexing=\\\"ij\\\")\\nrows = torch.stack([A.flatten(), B.flatten()], dim=1)\\n# combine numerator set with a few denominator rows\\ndens = torch.tensor([[65504.0, -65504.0], [1.0, 6.1e-5], [30000.0, 30000.0], [-1000.0, 0.5],\\n                     [6.1e-5, 6.1e-5], [65504.0, 65504.0/3], [1.0, 1.0], [1.0, -1.0]], dtype=torch.float16)\\nallnum = rows.repeat(len(dens), 1)\\nallden = dens.repeat(len(rows), 1)\\ntotal += check(allnum.to(dev), allden.to(dev), \\\"grid_patterns\\\")\\n\\nprint(\\\"TOTAL_VIOLATIONS\\\", total)\\n\", \"expected_signal\": \"componentwise tolerance violations > 0 on some adversarial input\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe: construct adversarial inputs where ac+bd cancels, e.g. large FP16 values. Products of FP16 max ~65504*65504 ≈ 4.3e9 > 2^24, rounding error in FP32 product ~512, sum error ~1024; divide by scale ~4e9 → ~2.4e-7 error, target ~0 → tolerance 1e-7. Could exceed. Better: cancellation with target ~0. Let's build numerator = denominator * i? Take a=65504,b=... Let's just probe with random large values plus exact cancellation cases (numerator proportional to denominator rotated 90°).\n\nDesign: c,d random large; numerator a=d, b=-c gives real numerator = d*c + (-c)*d = 0 exactly? In FP32: fl(dc) + fl(-cd) = exact cancellation since both same product rounded → real = 0. Hmm that gives exact zero. Need products not identical: choose a,b such that a*c ≈ -b*d but products differ slightly. E.g. a=65504, c=65504, b=65504, d=-65504: exact 0 again. Use different magnitudes: a=65504, c=60000 (product exact? 3.93e9, not representable exactly), b=65504, d=-60000 → a*c = 65504*60000, b*d = -same → fl equal magnitude → sum zero. Need products like a*c=65504*60000 and b*d = 65504*59999.x — but d discrete FP16.\n\nInstead rely on random search: sample large random FP16 components, compare kernel output with FP64 reference, count violations of 1e-7+5e-7|t|. Run probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306471,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1893,
+    "prompt_tokens": 11647,
+    "total_tokens": 13540,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 399,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6534,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

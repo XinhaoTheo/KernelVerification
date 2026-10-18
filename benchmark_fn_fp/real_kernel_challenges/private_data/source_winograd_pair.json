@@ -1,0 +1,1417 @@
+{
+  "experiment": "integer_winograd_transform_composition_2026-10-18",
+  "status": "completed",
+  "family": "winograd_pair",
+  "cases": [
+    "case_160",
+    "case_161"
+  ],
+  "expected_labels": {
+    "case_160": "trust",
+    "case_161": "reject"
+  },
+  "expected_label_status": "Fixed before GPU qualification or model calls. Complete source-bound bilinear basis and integer range proof support case_160; exact legal failing input supports case_161. Actual T4 qualification is pending.",
+  "declared_at_utc": "2026-10-18T07:37:06.405252+00:00",
+  "fixed_contract": {
+    "input_dtype": "int8",
+    "tiles_shape": "[B,6,6]",
+    "filters_shape": "[B,3,3]",
+    "batch_range": [
+      1,
+      2048
+    ],
+    "domain": "Every INT8 value at every tile and filter position. Contiguous nonzero-offset and overlapping input views are legal.",
+    "output_dtype": "int32",
+    "output_shape": "[B,4,4]",
+    "operation": "Valid nine-term 3x3 cross-correlation for each tile; no filter reversal.",
+    "atol": 0,
+    "rtol": 0
+  },
+  "source_provenance": [
+    {
+      "title": "Fast Algorithms for Convolutional Neural Networks",
+      "authors": [
+        "Andrew Lavin",
+        "Scott Gray"
+      ],
+      "revision": "CVPR 2016, pp.4013-4021",
+      "url": "https://openaccess.thecvf.com/content_cvpr_2016/html/Lavin_Fast_Algorithms_for_CVPR_2016_paper.html",
+      "relevance": "Primary paper for Winograd small-tile convolution. Our INT8 exact tile implementation is synthetic and is not a historical upstream bug."
+    },
+    {
+      "project": "andravin/wincnn",
+      "revision": "README F(4,3) example accessed 2026-10-18",
+      "url": "https://github.com/andravin/wincnn#example-f43",
+      "relevance": "Primary author implementation and symbolic verification of the F(4,3) transforms at interpolation points0,1,-1,2,-2. The coefficient matrices used by our source are recorded in cpu_audit.source_binding."
+    }
+  ],
+  "construction": "Both kernels implement two-dimensional Winograd transforms. Move the filter matrix row denominators [4,6,6,24,24,1] into a scaled inverse transform, which uses a final division by576. Case_160 keeps one transform-coordinate order across all stages. Case_161 swaps the +2 and -2 coordinates in the shared filter-transform helper; data and output transforms keep the original order. The mismatch affects both spatial axes. No distribution or selected input determines either label.",
+  "selection_rule": "Retain both fixed variants and every model result. Do not change code, public domain, expected labels or tests after observing model verdicts.",
+  "whole_domain_accept_method": "Execute the actual source arithmetic with an integer AST adapter on all36*9 input/filter basis pairs. Check that every pre-division output numerator equals576 times a direct Python-integer convolution. Source helpers are linear, the products are bilinear, and no-overflow bounds establish exact integer arithmetic for all legal inputs. Actual GPU testing remains necessary for lowering and tensor behavior.",
+  "limitations": [
+    "The kernel is a tile-level integer adaptation, not a complete convolution layer or a performance claim.",
+    "The wrong variant is a synthetic representation mismatch, not a reproduced upstream incident.",
+    "GPU tests include every bilinear basis pair but do not enumerate every INT8 tensor; the basis proof and bounds establish the arithmetic identity.",
+    "No claim that a no-tool model must miss the mismatch."
+  ],
+  "candidate_history": {
+    "public_source_revisions_before_first_model_call": 1,
+    "discarded_candidates": [],
+    "qualification_adapter_fixes": [
+      "AST constant check initially rejected unary negative constants such as -4; accepted signed numeric literals.",
+      "AST cast adaptation initially applied to torch public-reference casts; narrowed it to tl casts.",
+      "Signed integer division in the CPU adapter explicitly truncates toward zero."
+    ],
+    "model_feedback_used": false
+  },
+  "cpu_audit": {
+    "passed": true,
+    "cases": {
+      "case_160": {
+        "source_binding": {
+          "kernel_sha256": "c54e9dc6140d69347a5198c5118e2365753f2af0d73861013ed4da9209bd15a8",
+          "data_matrix": [
+            [
+              4,
+              0,
+              -5,
+              0,
+              1,
+              0
+            ],
+            [
+              0,
+              -4,
+              -4,
+              1,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              -1,
+              1,
+              0
+            ],
+            [
+              0,
+              -2,
+              -1,
+              2,
+              1,
+              0
+            ],
+            [
+              0,
+              2,
+              -1,
+              -2,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              0,
+              -5,
+              0,
+              1
+            ]
+          ],
+          "filter_matrix": [
+            [
+              1,
+              0,
+              0
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ],
+            [
+              -1,
+              1,
+              -1
+            ],
+            [
+              1,
+              2,
+              4
+            ],
+            [
+              1,
+              -2,
+              4
+            ],
+            [
+              0,
+              0,
+              1
+            ]
+          ],
+          "scaled_output_matrix": [
+            [
+              6,
+              4,
+              4,
+              1,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              2,
+              -2,
+              0
+            ],
+            [
+              0,
+              4,
+              4,
+              4,
+              4,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              8,
+              -8,
+              24
+            ]
+          ],
+          "source_helpers_are_integer_linear": true,
+          "products_cast_to_int64": true,
+          "indexing": "Lane j of program p reads tile16*p+j. Loads use36*tile+[0,35] and9*tile+[0,8]. Stores use16*tile+[0,15]. All use tile<B masks. B<=2048 makes every offset INT32-safe. There are no cross-lane dependencies. Tensor pointers include any storage offset."
+        },
+        "bilinear_basis_pairs": 324,
+        "basis_output_coefficients": 5184,
+        "basis_numerator_identity_failures": 0,
+        "basis_output_mismatches": 0,
+        "public_reference_matches_python_integer_oracle": true,
+        "sample_checks": [
+          {
+            "style": "random",
+            "batch": 1,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 2,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 3,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 15,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 16,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 17,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 31,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 32,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 33,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 127,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 128,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 129,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 1023,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 1024,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 1025,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 2047,
+            "different_outputs": 0
+          },
+          {
+            "style": "random",
+            "batch": 2048,
+            "different_outputs": 0
+          },
+          {
+            "style": "basis",
+            "batch": 324,
+            "different_outputs": 0
+          },
+          {
+            "style": "witness",
+            "batch": 1,
+            "different_outputs": 0
+          },
+          {
+            "style": "extremes",
+            "batch": 81,
+            "different_outputs": 0
+          },
+          {
+            "style": "alias",
+            "batch": 65,
+            "different_outputs": 0
+          }
+        ],
+        "cpu_witness": {
+          "tiles": [
+            [
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                72,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "filters": [
+            [
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                72,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "actual_cpu_model": [
+            [
+              [
+                5184,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "reference": [
+            [
+              [
+                5184,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "all_numerators_divisible_by576": true,
+          "actual_gpu_evidence": false
+        }
+      },
+      "case_161": {
+        "source_binding": {
+          "kernel_sha256": "0c6b78bc78e6286e209e733035f36629d3f16f842a87a5b846414d2d6726b8bc",
+          "data_matrix": [
+            [
+              4,
+              0,
+              -5,
+              0,
+              1,
+              0
+            ],
+            [
+              0,
+              -4,
+              -4,
+              1,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              -1,
+              1,
+              0
+            ],
+            [
+              0,
+              -2,
+              -1,
+              2,
+              1,
+              0
+            ],
+            [
+              0,
+              2,
+              -1,
+              -2,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              0,
+              -5,
+              0,
+              1
+            ]
+          ],
+          "filter_matrix": [
+            [
+              1,
+              0,
+              0
+            ],
+            [
+              -1,
+              -1,
+              -1
+            ],
+            [
+              -1,
+              1,
+              -1
+            ],
+            [
+              1,
+              -2,
+              4
+            ],
+            [
+              1,
+              2,
+              4
+            ],
+            [
+              0,
+              0,
+              1
+            ]
+          ],
+          "scaled_output_matrix": [
+            [
+              6,
+              4,
+              4,
+              1,
+              1,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              2,
+              -2,
+              0
+            ],
+            [
+              0,
+              4,
+              4,
+              4,
+              4,
+              0
+            ],
+            [
+              0,
+              4,
+              -4,
+              8,
+              -8,
+              24
+            ]
+          ],
+          "source_helpers_are_integer_linear": true,
+          "products_cast_to_int64": true,
+          "indexing": "Lane j of program p reads tile16*p+j. Loads use36*tile+[0,35] and9*tile+[0,8]. Stores use16*tile+[0,15]. All use tile<B masks. B<=2048 makes every offset INT32-safe. There are no cross-lane dependencies. Tensor pointers include any storage offset."
+        },
+        "bilinear_basis_pairs": 324,
+        "basis_output_coefficients": 5184,
+        "basis_numerator_identity_failures": 192,
+        "basis_output_mismatches": 124,
+        "public_reference_matches_python_integer_oracle": true,
+        "sample_checks": [
+          {
+            "style": "random",
+            "batch": 1,
+            "different_outputs": 16
+          },
+          {
+            "style": "random",
+            "batch": 2,
+            "different_outputs": 32
+          },
+          {
+            "style": "random",
+            "batch": 3,
+            "different_outputs": 48
+          },
+          {
+            "style": "random",
+            "batch": 15,
+            "different_outputs": 240
+          },
+          {
+            "style": "random",
+            "batch": 16,
+            "different_outputs": 256
+          },
+          {
+            "style": "random",
+            "batch": 17,
+            "different_outputs": 272
+          },
+          {
+            "style": "random",
+            "batch": 31,
+            "different_outputs": 496
+          },
+          {
+            "style": "random",
+            "batch": 32,
+            "different_outputs": 512
+          },
+          {
+            "style": "random",
+            "batch": 33,
+            "different_outputs": 528
+          },
+          {
+            "style": "random",
+            "batch": 127,
+            "different_outputs": 2032
+          },
+          {
+            "style": "random",
+            "batch": 128,
+            "different_outputs": 2048
+          },
+          {
+            "style": "random",
+            "batch": 129,
+            "different_outputs": 2064
+          },
+          {
+            "style": "random",
+            "batch": 1023,
+            "different_outputs": 16368
+          },
+          {
+            "style": "random",
+            "batch": 1024,
+            "different_outputs": 16383
+          },
+          {
+            "style": "random",
+            "batch": 1025,
+            "different_outputs": 16399
+          },
+          {
+            "style": "random",
+            "batch": 2047,
+            "different_outputs": 32752
+          },
+          {
+            "style": "random",
+            "batch": 2048,
+            "different_outputs": 32767
+          },
+          {
+            "style": "basis",
+            "batch": 324,
+            "different_outputs": 124
+          },
+          {
+            "style": "witness",
+            "batch": 1,
+            "different_outputs": 4
+          },
+          {
+            "style": "extremes",
+            "batch": 81,
+            "different_outputs": 1242
+          },
+          {
+            "style": "alias",
+            "batch": 65,
+            "different_outputs": 1040
+          }
+        ],
+        "cpu_witness": {
+          "tiles": [
+            [
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                72,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "filters": [
+            [
+              [
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                72,
+                0
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "actual_cpu_model": [
+            [
+              [
+                14400,
+                0,
+                23040,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                23040,
+                0,
+                36864,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "reference": [
+            [
+              [
+                5184,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "all_numerators_divisible_by576": true,
+          "actual_gpu_evidence": false
+        }
+      }
+    },
+    "arithmetic": {
+      "passed": true,
+      "data_transform_abs_bound": 12800,
+      "filter_transform_abs_bound": 6272,
+      "product_abs_bound": 80281600,
+      "inverse_intermediate_abs_bound": 184968806400,
+      "output_abs_bound": 147456,
+      "proof": [
+        "Both input transforms are integer linear maps. The largest row absolute coefficient sum is10 for data and7 for filters. Two spatial axes give bounds128*10^2 and128*7^2. All INT32 transform intermediates are safe.",
+        "The kernel casts both transformed operands to INT64 before their elementwise product. The product is bounded by80281600. Each inverse-transform row has absolute coefficient sum at most48; both axes give184968806400<2^63. These bounds also cover every partial sum.",
+        "Before final division, the actual-source arithmetic is bilinear in36 tile values and9 filter values. Exact checking of all324 input/filter basis pairs proves its coefficient tensor. For the control, every basis numerator is576 times direct cross-correlation. Therefore the identity and divisibility hold for every integer input pair, including the whole INT8 domain.",
+        "The exact final result is a sum of9 products and has absolute value at most147456. It fits INT32. Source binding, bounds and complete bilinear basis checks support the control label. GPU tests check compilation and tensor behavior separately."
+      ]
+    },
+    "oracle": "Direct nine-term cross-correlation with Python arbitrary-precision integers. It uses none of the candidate's transforms.",
+    "cpu_execution_limit": "AST adapter executes the actual kernel arithmetic and pointer expressions with NumPy integers. Signed division is adapted to truncation toward zero. The Accept basis proves exact divisibility, and the recorded reject witness is also divisible. Only actual GPU results qualify compiler behavior.",
+    "oracle_dependency_hashes": {
+      "winograd_pair.py": "1f88b7d2cbb316094deddc1aba8c594820f6428209fd7d423d04297f1fd38a73"
+    }
+  },
+  "public_source_hashes": {
+    "case_160": {
+      "kernel.py": "c54e9dc6140d69347a5198c5118e2365753f2af0d73861013ed4da9209bd15a8",
+      "problem.txt": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_161": {
+      "kernel.py": "0c6b78bc78e6286e209e733035f36629d3f16f842a87a5b846414d2d6726b8bc",
+      "problem.txt": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "model_calls_performed": 23,
+  "gpu_calls_performed": false,
+  "model_evaluation_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "wave": "20261018_scan_winograd_realfft",
+    "first_pass_cases": [
+      "case_158",
+      "case_159",
+      "case_160",
+      "case_161",
+      "case_162",
+      "case_163"
+    ],
+    "first_pass_trials_per_case_arm": 1,
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "trial": "r1",
+    "model": "accounts/fireworks/models/glm-5p3",
+    "provider": "fireworks",
+    "reasoning_effort": "low",
+    "total_output_token_budget_per_case_arm": 32768,
+    "tool_turn_output_cap": 8192,
+    "solo_max_rounds": 10,
+    "debate_max_rounds": 4,
+    "debate_closeout_reserve": 8192,
+    "require_claim_scope_fields": true,
+    "frozen_environment": "NVIDIA T4; PyTorch2.8.0; Triton3.4.0; NumPy1.26.4",
+    "public_input_files": [
+      "kernel.py",
+      "problem.txt"
+    ],
+    "private_oracles_or_other_cases_visible": false,
+    "pre_evaluation_hashes": {
+      "case_160": {
+        "kernel.py": "c54e9dc6140d69347a5198c5118e2365753f2af0d73861013ed4da9209bd15a8",
+        "problem.txt": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      },
+      "case_161": {
+        "kernel.py": "0c6b78bc78e6286e209e733035f36629d3f16f842a87a5b846414d2d6726b8bc",
+        "problem.txt": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      }
+    },
+    "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+    "qualification_gate": "Actual GPU independent qualification must freeze each case before any paid model call.",
+    "retention": "Retain every result and all raw requests, responses, reasoning, usage, tool code, stdout/stderr and verdicts; never replace wrong answers.",
+    "pricing_checked_at": "2026-10-18",
+    "pricing_source": "https://fireworks.ai/models/fireworks/glm-5p3",
+    "input_usd_per_million": 1.4,
+    "output_usd_per_million": 4.4
+  },
+  "conditional_replication_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "trigger": "A valid wrong no-tools verdict in r1 and correct Solo and Debate verdicts with valid actual GPU evidence on permitted inputs. Audit evidence before selection.",
+    "selection": "Select at most three qualifying cases in increasing numeric case order; report every other case and every first-pass result separately.",
+    "fresh_trials": [
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "stop_rule": "Run all five fresh trials for every selected case, even if the separation disappears early. Do not edit source, contract, prompts, runtime or budget.",
+    "strict_success": "All five fresh trials must give a wrong no-tools verdict and correct tool verdicts with valid actual GPU evidence. Missing answers and abstentions do not count as correct.",
+    "scope": "Selected-case repeatability in this model and environment, not a population success rate or evidence that Debate outperforms Solo."
+  },
+  "gpu_qualification": {
+    "status": "passed",
+    "evidence_file": "qualification/r27.json",
+    "cases": {
+      "case_160": {
+        "ground_truth": "trust",
+        "qualification_passed": true,
+        "kernel_sha256": "c54e9dc6140d69347a5198c5118e2365753f2af0d73861013ed4da9209bd15a8",
+        "problem_sha256": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+        "oracle_source_sha256": "1f88b7d2cbb316094deddc1aba8c594820f6428209fd7d423d04297f1fd38a73",
+        "family": "winograd_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r27.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      },
+      "case_161": {
+        "ground_truth": "reject",
+        "qualification_passed": true,
+        "kernel_sha256": "0c6b78bc78e6286e209e733035f36629d3f16f842a87a5b846414d2d6726b8bc",
+        "problem_sha256": "f002e86ef6d2136272f18c28c24dbb0c0fc0f4afd3f6ba7f4bd5d30aa58c18bb",
+        "oracle_source_sha256": "1f88b7d2cbb316094deddc1aba8c594820f6428209fd7d423d04297f1fd38a73",
+        "family": "winograd_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r27.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      }
+    }
+  },
+  "conditional_replication_selection": {
+    "selected_at_utc": "2026-10-18T07:49:38.022855+00:00",
+    "wave_selected_cases": [
+      "case_159",
+      "case_163"
+    ],
+    "selected_this_family": [],
+    "first_pass_decisions": [
+      {
+        "case": "case_158",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_159",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_160",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_161",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_162",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_163",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      }
+    ],
+    "reason": "Apply the frozen first-pass rule to all six cases after semantic review of actual GPU evidence. All five fresh repetitions will run for every selected case."
+  },
+  "model_workflow_trials": 6,
+  "model_evaluation": {
+    "totals": {
+      "attempts": 6,
+      "outcomes": {
+        "correct": 6
+      },
+      "audited_correct": 6,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 0.965466,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 9
+    },
+    "arms": {
+      "single_call": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.119374,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "solo": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.212585,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 2
+      },
+      "debate": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.633507,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 7
+      }
+    },
+    "runs": [
+      {
+        "case": "case_160",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.032253,
+        "probes": 0,
+        "link": "traces_glm/case_160/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 5689,
+        "output_tokens": 5520,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_160",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.108457,
+        "probes": 1,
+        "link": "traces_glm/case_160/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 71023,
+        "output_tokens": 2051,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_160",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.357524,
+        "probes": 4,
+        "link": "traces_glm/case_160/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 232120,
+        "output_tokens": 7399,
+        "llm_api_calls": 7
+      },
+      {
+        "case": "case_161",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.087121,
+        "probes": 0,
+        "link": "traces_glm/case_161/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 5689,
+        "output_tokens": 17990,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_161",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.104128,
+        "probes": 1,
+        "link": "traces_glm/case_161/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 68142,
+        "output_tokens": 1984,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_161",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.275983,
+        "probes": 3,
+        "link": "traces_glm/case_161/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 177661,
+        "output_tokens": 6195,
+        "llm_api_calls": 6
+      }
+    ]
+  },
+  "semantic_evidence_audit": [
+    {
+      "case": "case_160",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "reasoning_valid": true,
+      "summary": "Correct Accept. Early recollections of Winograd matrices and scaling are wrong, but the model discards them and derives the actual one-dimensional transform for each of the three filter basis vectors with arbitrary input values. The resulting outputs are exactly24 times the correct shifted inputs. Tensor-product composition then justifies the two-dimensional /576. It also checks integer ranges, exact divisibility, masks and storage. No execution occurred.",
+      "evidence": [
+        "traces_glm/case_160/single_call/r1/response_thinking.txt",
+        "traces_glm/case_160/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_160",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with actual GPU comparison: t6 checks228288 output positions, all equal to the public direct nine-term reference. Public reference implements the contract. It tests12 seeds at10 batch sizes up to512, repeated constant extremes and60 additional random batches, plus input preservation for one call. The so-called random-extreme batches actually sample ordinary full-range INT8 values; an earlier random binary tensor is overwritten before execution. Claim c1 overstates finite checks as confirmation for all inputs. No explicit offset, overlap, fresh-output or B=2048 execution; source reasoning addresses offsets and size extension. The arm gives no complete bilinear identity proof; private qualification supplies that full-domain basis separately.",
+      "evidence": [
+        "traces_glm/case_160/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_160/solo/r1/probes/t6_stdout.txt",
+        "traces_glm/case_160/solo/r1/claims.json",
+        "traces_glm/case_160/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_160",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with three actual GPU probes and16624 output comparisons, all exact:8192 full-range random outputs (t9),240 structured impulse/constant outputs (t10), and8192 constant/random extreme outputs (t11). A separate INT64 reimplementation of the transforms matches the direct reference and has zero residues modulo576 for the same512 random tiles. That reimplementation mirrors the candidate and is not a separate mathematical oracle, but the direct reference is valid. Finite sampling does not prove the asserted universal transform identity or rule out all overflow; no complete basis or symbolic proof was executed. It acknowledges residual untested-input risk in its verdict. No offsets, overlapping inputs, fresh-output checks or preservation probe. A proposed further random probe in reasoning was not executed.",
+      "evidence": [
+        "traces_glm/case_160/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_160/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_160/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_160/debate/r1/probes/t10_stdout.txt",
+        "traces_glm/case_160/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_160/debate/r1/probes/t11_stdout.txt",
+        "traces_glm/case_160/debate/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_161",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "reasoning_valid": "partly",
+      "summary": "Correct Reject and correct identification of the swapped +2/-2 filter-transform coordinates. It derives a real one-dimensional mismatch (40 instead of24 before normalization), despite many intermediate recalled-matrix and arithmetic errors that it later corrects. The final two-dimensional witness calculation drops the factor24 from the other axis: for its legal one-hot tile/filter at[0,1], output[0,0] is1, not the claimed0; the pre-division numerator is960, not40. The same input still fails at output[0,2], where the actual-source CPU adapter gives2 versus reference0. Thus the defect mechanism is right but its reported counterexample component and arithmetic are wrong. Its statement that swapping rows makes all basis tests exact exceeds the small set of manual cases it checked. No GPU execution occurred.",
+      "evidence": [
+        "traces_glm/case_161/single_call/r1/response_thinking.txt",
+        "traces_glm/case_161/single_call/r1/verdict.json",
+        "eval_scripts/real_kernel_challenges/winograd_pair.py"
+      ],
+      "independent_cpu_witness_review": {
+        "actual_gpu_evidence": false,
+        "tile_nonzero": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "filter_nonzero": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "claimed_index": [
+          0,
+          0,
+          0
+        ],
+        "actual_source_numerator": 960,
+        "actual_source_output": 1,
+        "reference": 1,
+        "different_output_index": [
+          0,
+          0,
+          2
+        ],
+        "different_actual": 2,
+        "different_reference": 0
+      }
+    },
+    {
+      "case": "case_161",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal GPU counterexamples. t6 compares30 seeded full-range INT8 batches with the direct reference:109008 mismatched outputs, including seed0,B=1,output[0,0,0]=23179 versus1110. The separate324 one-hot pairs and one37-tile extreme batch produce700 combined mismatches. Final verdict incorrectly attributes all700 to the5184 basis outputs; the basis contribution is124 and the extreme batch contributes576. This count error does not invalidate the legal mismatch evidence. Probe stdout uses Python dict syntax, so JSON parsing fails, but the process exits0 and captured code/stdout support the finding. The arm identifies a transform-composition error without locating the swapped+2/-2 coordinates.",
+      "evidence": [
+        "traces_glm/case_161/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_161/solo/r1/probes/t6_stdout.txt",
+        "traces_glm/case_161/solo/r1/claims.json",
+        "traces_glm/case_161/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_161",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with three legal actual GPU comparisons to a separately written direct INT64 cross-correlation oracle: t9 gives40192/40704 mismatches, t10 gives9468/10560, t11 gives91150/91152. Final explanation misattributes t9 random-case examples3810vs3675 and-21262vs2367 to constant inputs. In fact all512 constant-case outputs pass; all40192 random-case outputs fail. It also overstates basis and batch coverage: only5 of9 one-hot filter positions fail (the4 corners pass), and12 specific batch sizes were tested, not every B from1to2048. It confirms a filter-reversal claim without distinguishing reversal from another transform error; it considers a disambiguation probe but does not execute it. These reasoning/count errors do not invalidate multiple legal numeric counterexamples.",
+      "evidence": [
+        "traces_glm/case_161/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_161/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_161/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_161/debate/r1/probes/t10_stdout.txt",
+        "traces_glm/case_161/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_161/debate/r1/probes/t11_stdout.txt",
+        "traces_glm/case_161/debate/r1/verdict.json"
+      ]
+    }
+  ],
+  "conditional_replication": {
+    "status": "not_selected",
+    "completed_at_utc": "2026-10-18T08:04:47.461593+00:00",
+    "selected_cases": [],
+    "results": {
+      "totals": {
+        "attempts": 0,
+        "outcomes": {},
+        "audited_correct": 0,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": null,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 0,
+          "outcomes": {},
+          "audited_correct": 0,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": null,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 0,
+          "outcomes": {},
+          "audited_correct": 0,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": null,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "debate": {
+          "attempts": 0,
+          "outcomes": {},
+          "audited_correct": 0,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": null,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        }
+      },
+      "runs": []
+    },
+    "per_case": {},
+    "protocol_audit": [],
+    "cost_scope": "Conservative model API estimate from captured usage; excludes Modal GPU charges. This is not an invoice.",
+    "interpretation": "Selected follow-ups are reported separately. Correct verdicts do not validate all explanations or coverage claims. These workflows do not isolate tool access from additional reasoning."
+  }
+}

@@ -1,0 +1,1342 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "LICENSE",
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_114",
+    "has_error": null,
+    "kernel_code": "# SPDX-License-Identifier: Apache-2.0\n# SPDX-FileCopyrightText: Copyright contributors to the vLLM project\n# Adapted 2026: standalone FP16 paged-attention interface and bounded domain.\n# See LICENSE for upstream attribution and the license text.\nimport math\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _paged_attention(Q_PTR, K_PTR, V_PTR, TABLE, LENGTHS, OUT,\n                     QT: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,\n                     D: tl.constexpr, PAGE: tl.constexpr, TABLE_WIDTH: tl.constexpr,\n                     GROUP: tl.constexpr, WINDOW: tl.constexpr,\n                     SCALE: tl.constexpr, BQ: tl.constexpr,\n                     BM: tl.constexpr = 16, TILE: tl.constexpr = 64):\n    qb = tl.program_id(0)\n    kv_head = tl.program_id(1)\n    batch = tl.program_id(2)\n    rows = tl.arange(0, BM)\n    dims = tl.arange(0, D)\n    tokens = tl.arange(0, TILE)\n    qpos = qb * BQ + rows // GROUP\n    head = kv_head * GROUP + rows % GROUP\n    qo = ((batch * QT + qpos[:, None]) * HQ + head[:, None]) * D + dims[None, :]\n    q = tl.load(Q_PTR + qo, mask=qpos[:, None] < QT, other=0.0)\n    length = tl.load(LENGTHS + batch)\n    context = length - QT\n    max_prefix = tl.minimum(context + qb * BQ + BQ, length)\n    num_tiles = tl.cdiv(max_prefix, TILE)\n    tile_start = 0\n    tile_end = num_tiles\n    if WINDOW > 0:\n        first_key = context + qb * BQ - WINDOW + 1\n        last_key = context + tl.minimum(qb * BQ + BQ - 1, QT - 1)\n        tile_start = tl.maximum(0, first_key // TILE)\n        tile_end = tl.minimum(last_key // TILE + 1, num_tiles)\n\n    maximum = tl.full((BM,), float(\"-inf\"), tl.float32)\n    denominator = tl.full((BM,), 1.0, tl.float32)\n    accumulator = tl.zeros((BM, D), tl.float32)\n    for tile in range(tile_start, tile_end):\n        logical = tile * TILE + tokens\n        tile_mask = logical < max_prefix\n        physical = tl.load(TABLE + batch * TABLE_WIDTH + logical // PAGE,\n                           mask=tile_mask, other=0).to(tl.int64)\n        base = ((physical * PAGE + logical % PAGE) * HK + kv_head) * D\n        k = tl.load(K_PTR + base[None, :] + dims[:, None],\n                    mask=tile_mask[None, :], other=0.0)\n        v = tl.load(V_PTR + base[:, None] + dims[None, :],\n                    mask=tile_mask[:, None], other=0.0)\n        absolute_q = context + qpos[:, None]\n        allowed = logical[None, :] <= absolute_q\n        if WINDOW > 0:\n            allowed = allowed & ((absolute_q - logical[None, :]) < WINDOW)\n        scores = SCALE * tl.dot(q, k)\n        scores = tl.where((qpos[:, None] < QT) & allowed & tile_mask[None, :],\n                          scores, float(\"-inf\"))\n        updated_maximum = tl.maximum(maximum, tl.max(scores, 1))\n        updated_maximum = tl.where(updated_maximum > float(\"-inf\"), updated_maximum, 0.0)\n        probabilities = tl.exp(scores - updated_maximum[:, None])\n        alpha = tl.exp(maximum - updated_maximum)\n        accumulator = accumulator * alpha[:, None]\n        denominator = denominator * alpha + tl.sum(probabilities, 1)\n        maximum = updated_maximum\n        accumulator += tl.dot(probabilities.to(v.dtype), v)\n    result = accumulator / denominator[:, None]\n    tl.store(OUT + qo, result, mask=qpos[:, None] < QT)\n\n\ndef validate_inputs(q, k, v, block_table, lengths, window, *, require_cuda=True):\n    \"\"\"Check the complete public input domain; also usable on CPU by oracles.\"\"\"\n    values = (q, k, v, block_table, lengths)\n    assert all(type(t) is torch.Tensor for t in values)\n    assert all(t.layout == torch.strided and t.is_contiguous() for t in values)\n    assert all(not t.requires_grad and not t.is_inference() and\n               not t.is_neg() and not t.is_conj() for t in values)\n    assert all(t.device == q.device for t in values)\n    if require_cuda:\n        assert q.is_cuda\n    assert q.dtype == k.dtype == v.dtype == torch.float16\n    assert block_table.dtype == lengths.dtype == torch.int32\n    assert q.ndim == k.ndim == v.ndim == 4 and block_table.ndim == 2 and lengths.ndim == 1\n    b, qt, hq, d = q.shape\n    pages, page, hk, kd = k.shape\n    assert 1 <= b <= 4 and 1 <= qt <= 33 and d in (32, 64, 128)\n    assert 1 <= hk <= 4 and hq % hk == 0 and hq // hk in (1, 2, 4, 8) and hq <= 16\n    assert 1 <= pages <= 256 and page in (16, 32, 64) and kd == d and v.shape == k.shape\n    assert lengths.shape == (b,) and block_table.shape[0] == b\n    assert 1 <= block_table.shape[1] <= 512 // page\n    assert type(window) is int and 0 <= window <= 256\n    # Inputs own disjoint storage. No alias or framework metadata semantics are part of this interface.\n    pointers = [t.untyped_storage().data_ptr() for t in values]\n    assert len(set(pointers)) == len(pointers)\n    assert bool(torch.isfinite(q).all()) and float(q.abs().max()) <= 1.0\n    for batch in range(b):\n        length = int(lengths[batch])\n        assert qt <= length <= 512 and triton.cdiv(length, page) <= block_table.shape[1]\n        entries = block_table[batch, :triton.cdiv(length, page)]\n        assert bool(((entries >= 0) & (entries < pages)).all())\n        lo = max(0, length - qt - window + 1) if window else 0\n        positions = torch.arange(lo, length, device=q.device)\n        mapped = block_table[batch, positions // page].long()\n        for cache in (k, v):\n            live = cache[mapped, positions % page]\n            assert bool(torch.isfinite(live).all()) and float(live.abs().max()) <= 1.0\n    return True\n\n\ndef run(q, k, v, block_table, lengths, window):\n    \"\"\"Return FP16[B,Q,Hq,D] paged causal attention; preserve every input.\"\"\"\n    validate_inputs(q, k, v, block_table, lengths, window)\n    b, qt, hq, d = q.shape\n    page, hk = k.shape[1:3]\n    group = hq // hk\n    bq = 16 // group\n    output = torch.empty_like(q)\n    _paged_attention[(triton.cdiv(qt, bq), hk, b)](\n        q, k, v, block_table, lengths, output,\n        QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=block_table.shape[1],\n        GROUP=group, WINDOW=window, SCALE=1.0 / math.sqrt(d), BQ=bq,\n        num_warps=4, enable_fp_fusion=False,\n    )\n    return output\n\n\ndef reference(q, k, v, block_table, lengths, window):\n    \"\"\"FP64 logical-position reference, independent of tile processing.\"\"\"\n    validate_inputs(q, k, v, block_table, lengths, window, require_cuda=False)\n    b, qt, hq, d = q.shape\n    page, hk = k.shape[1:3]\n    output = torch.empty(q.shape, dtype=torch.float64, device=q.device)\n    head_map = torch.arange(hq, device=q.device) // (hq // hk)\n    for batch in range(b):\n        context = int(lengths[batch]) - qt\n        for row in range(qt):\n            end = context + row + 1\n            begin = max(0, end - window) if window else 0\n            positions = torch.arange(begin, end, device=q.device)\n            mapped = block_table[batch, positions // page].long()\n            keys = k[mapped, positions % page][:, head_map].double()\n            vals = v[mapped, positions % page][:, head_map].double()\n            scores = (keys * q[batch, row].double()[None]).sum(-1) / math.sqrt(d)\n            probabilities = torch.softmax(scores, dim=0)\n            output[batch, row] = (probabilities[:, :, None] * vals).sum(0)\n    return output\n\n\ndef error_ratio(output, inputs):\n    target = reference(*inputs)\n    return float(((output.double() - target).abs() / (0.003 + 0.003 * target.abs())).max())\n\n\ndef make_inputs(device=\"cuda\", seed=0):\n    \"\"\"An ordinary example, not a restriction of the supported input domain.\"\"\"\n    generator = torch.Generator().manual_seed(seed)\n    q = (2 * torch.rand((2, 9, 4, 64), generator=generator) - 1).half()\n    k = (2 * torch.rand((16, 16, 2, 64), generator=generator) - 1).half()\n    v = (2 * torch.rand(k.shape, generator=generator) - 1).half()\n    table = torch.randperm(16, generator=generator).reshape(2, 8).to(torch.int32)\n    lengths = torch.tensor([97, 113], dtype=torch.int32)\n    return tuple(t.to(device) for t in (q, k, v, table, lengths)) + (41,)\n",
+    "passed": null,
+    "problem_text": "Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\n\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\n\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\n\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\n\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\n\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\n\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_114",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T00:52:50Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:54:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+              }
+            ],
+            "case": {
+              "D": 64,
+              "Hkv": 1,
+              "Hq": 2,
+              "Q": 33,
+              "S": 16,
+              "length": 130,
+              "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+              "window": 50
+            },
+            "duration_s": 4.223644,
+            "exit_code": 0,
+            "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": null,
+              "nan_or_inf_elements": 32,
+              "output_finite": false,
+              "tol_pass": false,
+              "tolerance_ratio": null
+            },
+            "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+            "nan_or_inf_rows": 32,
+            "output_finite": false,
+            "stderr": "",
+            "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+            "timed_out": false,
+            "timeout_s": 240,
+            "total_query_head_rows": 66
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+        },
+        {
+          "source": "problem.txt",
+          "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+        }
+      ],
+      "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+      "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T00:54:07Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+      "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+      "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+      "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+      "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+      "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+    ],
+    "kernel_model": [
+      "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+      "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+      "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+      "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+      "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+      "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+      "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+    ],
+    "open_questions": [
+      "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+      "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+      "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+      "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+    ],
+    "risk_map": [
+      "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+      "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+      "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+      "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+      "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+      "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+      "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+    ],
+    "scope_notes": [
+      "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+      "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+      "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+      "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+        "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+        "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+        "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+        "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+        "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+      ],
+      "created_at": "2026-10-18T00:52:29Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+        "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+        "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+        "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+        "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+        "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+        "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+      ],
+      "open_questions": [
+        "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+        "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+        "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+        "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+      ],
+      "risk_map": [
+        "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+        "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+        "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+        "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+        "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+        "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+        "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+      ],
+      "scope_notes": [
+        "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+        "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+        "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+        "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+      ],
+      "summary": "Described case_114: Triton FP16 paged causal attention with GQA and optional sliding window; identified masking of garbage cache slots, window tile-skip arithmetic, and FP16 probability quantization as the main risk surfaces.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_114",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_114"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_114"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_114"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_114",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 47.437829844999996,
+      "role": "describer",
+      "round": 2,
+      "text": "I've read the full contract and kernel source from the run state. The kernel is a Triton paged-attention implementation with sliding-window tile skipping, an online (streaming) softmax, and grouped query heads. I'll now record a structured description of the contract, the kernel's implementation choices, and the specific risk surfaces the Skeptic should probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+              "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+              "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+              "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+              "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+              "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+            ],
+            "kernel_model": [
+              "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+              "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+              "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+              "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+              "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+              "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+              "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+            ],
+            "open_questions": [
+              "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+              "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+              "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+              "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+            ],
+            "risk_map": [
+              "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+              "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+              "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+              "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+              "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+              "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+              "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+            ],
+            "scope_notes": [
+              "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+              "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+              "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+              "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+            ],
+            "summary": "Described case_114: Triton FP16 paged causal attention with GQA and optional sliding window; identified masking of garbage cache slots, window tile-skip arithmetic, and FP16 probability quantization as the main risk surfaces."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 47.438,
+        "input_tokens": 9157,
+        "output_tokens": 3130
+      }
+    },
+    {
+      "duration_s": 21.065048668999992,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description gives me a clear attack surface. The highest-risk hypothesis: the kernel loads V (and K) for positions masked only by `logical < max_prefix`, not by the per-query `allowed` mask \u2014 the contract explicitly permits NaN/Inf in *expired window positions* within `[0, lengths[b])`, and `0 * NaN = NaN` in the `tl.dot(probabilities, v)` accumulator would poison output even though the probability is zero. I'll record that, plus the window tile-skip arithmetic and the FP16 probability-quantization precision as the other two testable claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+              },
+              {
+                "source": "problem.txt",
+                "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+              }
+            ],
+            "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+            "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 21.065,
+        "input_tokens": 21527,
+        "output_tokens": 1347
+      }
+    },
+    {
+      "duration_s": 33.649907888,
+      "role": "experimenter",
+      "round": 4,
+      "text": "The open claim c1 concerns NaN contamination from expired-window V positions inside scanned tiles. I'll build a domain-admitted case (B=1, Q=33, length=130, window=50 \u2192 lo=48, non-tile-aligned so positions 0\u201347 are scanned by the qb=0 program but disallowed for every query), poison pages 0\u20132 of K/V with NaN, invoke the Triton kernel directly, and compare against a manual FP64 reference that ignores garbage slots.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, math, sys, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\nimport triton\n\ndev = \"cuda\"\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\nC = math.ceil(length / PAGE)  # 9\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half()\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32).reshape(1, P)  # identity mapping, C=9 <= P\nlengths = torch.tensor([length], dtype=torch.int32)\n\nlo = length - QT - window + 1  # 48\n# Fill allowed positions [lo, length) with finite values; poison all earlier slots with NaN.\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")   # pages covering positions 0..47 -> NaN\nfor t in (q, k, v, table, lengths): t = t.to(dev)\n\n# Direct kernel launch, bypassing validate_inputs (garbage slots violate its finite check\n# but are contractually admitted by problem.txt).\nb, qt, hq, d = q.shape\npage, hk = k.shape[1:3]\ngroup = hq // hk\nbq = 16 // group\nout = torch.empty_like(q)\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n    q, k, v, table, lengths, out,\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\n    num_warps=4, enable_fp_fusion=False,\n)\ntorch.cuda.synchronize()\n\n# Independent FP64 reference over exactly the allowed positions (ignore garbage slots).\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\nfor bb in range(b):\n    ctx = int(lengths[bb]) - qt\n    for r in range(qt):\n        a = ctx + r\n        end = a + 1\n        begin = max(0, end - window)\n        pos = torch.arange(begin, end, device=dev)\n        mapped = table[bb, pos // page].long()\n        kk = k[mapped, pos % page].double()\n        vv = v[mapped, pos % page].double()\n        for h in range(hq):\n            kh = h // group\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\n            p_ = torch.softmax(s, dim=0)\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\n\nfinite = bool(torch.isfinite(out).all())\ndiff = (out.double() - ref).abs()\ntol = 0.003 + 0.003 * ref.abs()\nmax_err = float(diff.max()) if finite else float(\"nan\")\nratio = float((diff / tol).max()) if finite else float(\"nan\")\nnan_rows = torch.isnan(out).any(dim=-1)[:, :, 0].sum().item() if not finite else 0\nprint(json.dumps({\n    \"case\": {\"B\":B,\"Q\":QT,\"Hq\":HQ,\"Hkv\":HK,\"D\":D,\"S\":PAGE,\"length\":length,\"window\":window,\"lo\":lo,\n             \"poisoned_positions\":\"[0,48) via NaN pages 0-2\"},\n    \"metric\": \"output finiteness + per-element abs err vs FP64 reference (tolerance 0.003+0.003|target|)\",\n    \"output_finite\": finite, \"nan_query_rows\": int(nan_rows),\n    \"max_abs_err\": max_err, \"tolerance_ratio\": ratio, \"tol_pass\": bool(finite and (diff <= tol).all().item()),\n}))\n",
+            "expected_signal": "If contamination occurs, output rows contain NaN (infinite/NaN outputs) while the FP64 reference on the same allowed positions is finite; otherwise output is finite and within the 0.003 tolerance.",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 33.65,
+        "input_tokens": 23585,
+        "output_tokens": 2432
+      }
+    },
+    {
+      "duration_s": 9.967885852999999,
+      "role": "experimenter",
+      "round": 5,
+      "text": "The prior probe failed due to a Python bug: the `.to(dev)` reassignment inside a tuple loop didn't take effect, so the kernel launched on CPU tensors. I'll rerun with tensors properly created on CUDA.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, math, importlib.util\nimport torch\nimport triton\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\n\ndev = \"cuda\"\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half().to(dev)\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16, device=dev)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32, device=dev).reshape(1, P)\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\n\nlo = length - QT - window + 1  # 48\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")  # positions 0..47 NaN, expired for all queries\n\nb, qt, hq, d = q.shape\npage, hk = k.shape[1:3]\ngroup = hq // hk\nbq = 16 // group\nout = torch.empty_like(q)\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n    q, k, v, table, lengths, out,\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\n    num_warps=4, enable_fp_fusion=False,\n)\ntorch.cuda.synchronize()\n\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\nfor bb in range(b):\n    ctx = int(lengths[bb]) - qt\n    for r in range(qt):\n        end = ctx + r + 1\n        begin = max(0, end - window)\n        pos = torch.arange(begin, end, device=dev)\n        mapped = table[bb, pos // page].long()\n        kk = k[mapped, pos % page].double()\n        vv = v[mapped, pos % page].double()\n        for h in range(hq):\n            kh = h // group\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\n            p_ = torch.softmax(s, dim=0)\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\n\nfinite = bool(torch.isfinite(out).all())\nnan_rows = int(torch.isnan(out).any(dim=-1).sum().item())\ndiff = (out.double() - ref).abs()\ntol = 0.003 + 0.003 * ref.abs()\nresult = {\"output_finite\": finite, \"nan_or_inf_elements\": nan_rows,\n          \"max_abs_err\": float(diff.max()) if finite else None,\n          \"tolerance_ratio\": float((diff / tol).max()) if finite else None,\n          \"tol_pass\": bool(finite and (diff <= tol).all().item())}\nprint(json.dumps(result))\n",
+            "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.968,
+        "input_tokens": 27271,
+        "output_tokens": 941
+      }
+    },
+    {
+      "duration_s": 22.622471482999998,
+      "role": "experimenter",
+      "round": 6,
+      "text": "The t8 probe directly tested c1's hypothesis: with window=50, Q=33, length=130, positions [0,48) are expired for every query but fall inside scanned tiles; the V (and K) pages covering them were poisoned with NaN. The kernel output has 32 query-head rows containing NaN while the FP64 reference over exactly the allowed (finite) positions is finite by construction \u2014 exactly the contamination c1 predicted.\n\nOne caveat worth closing: the probe launched the Triton kernel directly. I'll finalize c1 as confirmed on this evidence, and simultaneously run a control through the public `run()` path on the same input \u2014 notably, `validate_inputs` only checks finiteness of live positions `[lo, length)`, so it should admit this poisoned input, making the failure contractually decisive.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "case": {
+                "D": 64,
+                "Hkv": 1,
+                "Hq": 2,
+                "Q": 33,
+                "S": 16,
+                "length": 130,
+                "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+                "window": 50
+              },
+              "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+              "nan_or_inf_rows": 32,
+              "output_finite": false,
+              "total_query_head_rows": 66
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, math, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\n\ndev = \"cuda\"\nQT, HQ, HK, D, PAGE = 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((1, QT, HQ, D), generator=g)-1).half().to(dev)\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16, device=dev)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32, device=dev).reshape(1, P)\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\n\nlo = length - QT - window + 1  # 48\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")\n\n# Public path: run() calls validate_inputs first.\ntry:\n    validation_passed = bool(k114.validate_inputs(q, k, v, table, lengths, window))\nexcept AssertionError as e:\n    validation_passed = False\n    print(\"validate_inputs raised:\", e)\n\ninputs_before = [t.clone() for t in (q, k, v, table, lengths)]\nout = k114.run(q, k, v, table, lengths, window)\ntorch.cuda.synchronize()\nunchanged = all(torch.equal(a, b) for a, b in zip((q, k, v, table, lengths), inputs_before))\n\nfinite = bool(torch.isfinite(out).all())\nnan_rows = int(torch.isnan(out).any(dim=-1).sum().item())\nprint(json.dumps({\"validation_passed\": validation_passed,\n                  \"public_run_output_finite\": finite,\n                  \"nan_or_inf_rows\": nan_rows,\n                  \"total_rows\": out.shape[1]*out.shape[2],\n                  \"inputs_bit_for_bit_unchanged\": bool(unchanged)}))",
+            "expected_signal": "validate_inputs accepts the poisoned input (live positions [48,130) are finite); run() returns a tensor with NaN rows, confirming the public path also fails on a contract-admitted input.",
+            "timeout_s": 240
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 22.622,
+        "input_tokens": 30402,
+        "output_tokens": 1759
+      }
+    },
+    {
+      "duration_s": 7.626923986000008,
+      "role": "skeptic",
+      "round": 7,
+      "text": "This is the final review turn. Claim c1 is already confirmed with decisive in-scope evidence: the contractually permitted NaN garbage in expired-window V slots poisons the output through `tl.dot(probabilities, v)` despite zero probabilities, both via direct kernel launch and via the public `run()` path (validate_inputs accepts the input; output has NaN in 32 of 66 rows).\n\nThe t10 `inputs_bit_for_bit_unchanged: false` field is not a new bug signal: the probe compared tensors containing NaN with `torch.equal`, which is false for equal NaN bit patterns, so it is a probe-metric artifact rather than evidence of input mutation. It does not expose a material, testable, in-scope problem beyond what c1 already covers.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the only confirmed in-scope defect (NaN contamination from expired-window V slots, c1) already has decisive runtime evidence on both the direct kernel launch and the public run() path. The t10 'inputs_bit_for_bit_unchanged: false' flag is a probe-metric artifact (torch.equal on NaN-containing inputs), not evidence of a new defect. No additional material, testable, in-scope claim is needed.",
+            "reviewed_claims": [
+              "c1: NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.627,
+        "input_tokens": 37138,
+        "output_tokens": 422
+      }
+    },
+    {
+      "duration_s": 7.845039555999989,
+      "role": "judge",
+      "round": 8,
+      "text": "The single claim c1 is confirmed, in-scope, and backed by decisive runtime evidence on both the direct kernel launch and the public run() path. All open claims have evidence and the Skeptic signed off with no new claims. I'm recording the final verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.95,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 is confirmed with in-scope, contract-cited runtime evidence. The contract (problem.txt) explicitly states that expired-window and unreachable cache slots \"may contain NaN or infinity\" and that their contents \"must not change the output,\" and requires a finite output within abs(output-target)<=0.003+0.003*abs(target). The kernel's V load (kernel.py line 52) is masked only by tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window NaN slots inside scanned tiles are loaded; their probability is 0 but tl.dot(probabilities, v) at line 68 computes 0*NaN=NaN, poisoning the FP32 accumulator. Probe t8 (B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50; allowed positions [48,130) finite, positions [0,48) poisoned with NaN) shows the output contains NaN in 32 of 66 query-head rows while an independent FP64 reference over exactly the allowed positions is finite. Probe t10 confirms the public run() path: validate_inputs accepts this contract-admitted input (it only checks finiteness of live positions), and run() returns 32/66 NaN rows. This is a domain-admitted input (window=50 within [0,256], length=130 with Q<=length<=512, all domain bounds respected) violating an explicit contractual requirement, so the kernel is rejected. The t10 `inputs_bit_for_bit_unchanged: false` flag is a probe-metric artifact (torch.equal on NaN-containing tensors) and does not affect this verdict.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.845,
+        "input_tokens": 37952,
+        "output_tokens": 466
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T00:54:19Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the only confirmed in-scope defect (NaN contamination from expired-window V slots, c1) already has decisive runtime evidence on both the direct kernel launch and the public run() path. The t10 'inputs_bit_for_bit_unchanged: false' flag is a probe-metric artifact (torch.equal on NaN-containing inputs), not evidence of a new defect. No additional material, testable, in-scope claim is needed.",
+    "reviewed_claims": [
+      "c1: NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+    ],
+    "reviewed_tool_event_count": 10,
+    "tool_event_id": "t11",
+    "turn": 7
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_114"
+      },
+      "created_at": "2026-10-18T00:51:41Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "LICENSE",
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_114",
+        "has_error": null,
+        "kernel_code": "# SPDX-License-Identifier: Apache-2.0\n# SPDX-FileCopyrightText: Copyright contributors to the vLLM project\n# Adapted 2026: standalone FP16 paged-attention interface and bounded domain.\n# See LICENSE for upstream attribution and the license text.\nimport math\n\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _paged_attention(Q_PTR, K_PTR, V_PTR, TABLE, LENGTHS, OUT,\n                     QT: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,\n                     D: tl.constexpr, PAGE: tl.constexpr, TABLE_WIDTH: tl.constexpr,\n                     GROUP: tl.constexpr, WINDOW: tl.constexpr,\n                     SCALE: tl.constexpr, BQ: tl.constexpr,\n                     BM: tl.constexpr = 16, TILE: tl.constexpr = 64):\n    qb = tl.program_id(0)\n    kv_head = tl.program_id(1)\n    batch = tl.program_id(2)\n    rows = tl.arange(0, BM)\n    dims = tl.arange(0, D)\n    tokens = tl.arange(0, TILE)\n    qpos = qb * BQ + rows // GROUP\n    head = kv_head * GROUP + rows % GROUP\n    qo = ((batch * QT + qpos[:, None]) * HQ + head[:, None]) * D + dims[None, :]\n    q = tl.load(Q_PTR + qo, mask=qpos[:, None] < QT, other=0.0)\n    length = tl.load(LENGTHS + batch)\n    context = length - QT\n    max_prefix = tl.minimum(context + qb * BQ + BQ, length)\n    num_tiles = tl.cdiv(max_prefix, TILE)\n    tile_start = 0\n    tile_end = num_tiles\n    if WINDOW > 0:\n        first_key = context + qb * BQ - WINDOW + 1\n        last_key = context + tl.minimum(qb * BQ + BQ - 1, QT - 1)\n        tile_start = tl.maximum(0, first_key // TILE)\n        tile_end = tl.minimum(last_key // TILE + 1, num_tiles)\n\n    maximum = tl.full((BM,), float(\"-inf\"), tl.float32)\n    denominator = tl.full((BM,), 1.0, tl.float32)\n    accumulator = tl.zeros((BM, D), tl.float32)\n    for tile in range(tile_start, tile_end):\n        logical = tile * TILE + tokens\n        tile_mask = logical < max_prefix\n        physical = tl.load(TABLE + batch * TABLE_WIDTH + logical // PAGE,\n                           mask=tile_mask, other=0).to(tl.int64)\n        base = ((physical * PAGE + logical % PAGE) * HK + kv_head) * D\n        k = tl.load(K_PTR + base[None, :] + dims[:, None],\n                    mask=tile_mask[None, :], other=0.0)\n        v = tl.load(V_PTR + base[:, None] + dims[None, :],\n                    mask=tile_mask[:, None], other=0.0)\n        absolute_q = context + qpos[:, None]\n        allowed = logical[None, :] <= absolute_q\n        if WINDOW > 0:\n            allowed = allowed & ((absolute_q - logical[None, :]) < WINDOW)\n        scores = SCALE * tl.dot(q, k)\n        scores = tl.where((qpos[:, None] < QT) & allowed & tile_mask[None, :],\n                          scores, float(\"-inf\"))\n        updated_maximum = tl.maximum(maximum, tl.max(scores, 1))\n        updated_maximum = tl.where(updated_maximum > float(\"-inf\"), updated_maximum, 0.0)\n        probabilities = tl.exp(scores - updated_maximum[:, None])\n        alpha = tl.exp(maximum - updated_maximum)\n        accumulator = accumulator * alpha[:, None]\n        denominator = denominator * alpha + tl.sum(probabilities, 1)\n        maximum = updated_maximum\n        accumulator += tl.dot(probabilities.to(v.dtype), v)\n    result = accumulator / denominator[:, None]\n    tl.store(OUT + qo, result, mask=qpos[:, None] < QT)\n\n\ndef validate_inputs(q, k, v, block_table, lengths, window, *, require_cuda=True):\n    \"\"\"Check the complete public input domain; also usable on CPU by oracles.\"\"\"\n    values = (q, k, v, block_table, lengths)\n    assert all(type(t) is torch.Tensor for t in values)\n    assert all(t.layout == torch.strided and t.is_contiguous() for t in values)\n    assert all(not t.requires_grad and not t.is_inference() and\n               not t.is_neg() and not t.is_conj() for t in values)\n    assert all(t.device == q.device for t in values)\n    if require_cuda:\n        assert q.is_cuda\n    assert q.dtype == k.dtype == v.dtype == torch.float16\n    assert block_table.dtype == lengths.dtype == torch.int32\n    assert q.ndim == k.ndim == v.ndim == 4 and block_table.ndim == 2 and lengths.ndim == 1\n    b, qt, hq, d = q.shape\n    pages, page, hk, kd = k.shape\n    assert 1 <= b <= 4 and 1 <= qt <= 33 and d in (32, 64, 128)\n    assert 1 <= hk <= 4 and hq % hk == 0 and hq // hk in (1, 2, 4, 8) and hq <= 16\n    assert 1 <= pages <= 256 and page in (16, 32, 64) and kd == d and v.shape == k.shape\n    assert lengths.shape == (b,) and block_table.shape[0] == b\n    assert 1 <= block_table.shape[1] <= 512 // page\n    assert type(window) is int and 0 <= window <= 256\n    # Inputs own disjoint storage. No alias or framework metadata semantics are part of this interface.\n    pointers = [t.untyped_storage().data_ptr() for t in values]\n    assert len(set(pointers)) == len(pointers)\n    assert bool(torch.isfinite(q).all()) and float(q.abs().max()) <= 1.0\n    for batch in range(b):\n        length = int(lengths[batch])\n        assert qt <= length <= 512 and triton.cdiv(length, page) <= block_table.shape[1]\n        entries = block_table[batch, :triton.cdiv(length, page)]\n        assert bool(((entries >= 0) & (entries < pages)).all())\n        lo = max(0, length - qt - window + 1) if window else 0\n        positions = torch.arange(lo, length, device=q.device)\n        mapped = block_table[batch, positions // page].long()\n        for cache in (k, v):\n            live = cache[mapped, positions % page]\n            assert bool(torch.isfinite(live).all()) and float(live.abs().max()) <= 1.0\n    return True\n\n\ndef run(q, k, v, block_table, lengths, window):\n    \"\"\"Return FP16[B,Q,Hq,D] paged causal attention; preserve every input.\"\"\"\n    validate_inputs(q, k, v, block_table, lengths, window)\n    b, qt, hq, d = q.shape\n    page, hk = k.shape[1:3]\n    group = hq // hk\n    bq = 16 // group\n    output = torch.empty_like(q)\n    _paged_attention[(triton.cdiv(qt, bq), hk, b)](\n        q, k, v, block_table, lengths, output,\n        QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=block_table.shape[1],\n        GROUP=group, WINDOW=window, SCALE=1.0 / math.sqrt(d), BQ=bq,\n        num_warps=4, enable_fp_fusion=False,\n    )\n    return output\n\n\ndef reference(q, k, v, block_table, lengths, window):\n    \"\"\"FP64 logical-position reference, independent of tile processing.\"\"\"\n    validate_inputs(q, k, v, block_table, lengths, window, require_cuda=False)\n    b, qt, hq, d = q.shape\n    page, hk = k.shape[1:3]\n    output = torch.empty(q.shape, dtype=torch.float64, device=q.device)\n    head_map = torch.arange(hq, device=q.device) // (hq // hk)\n    for batch in range(b):\n        context = int(lengths[batch]) - qt\n        for row in range(qt):\n            end = context + row + 1\n            begin = max(0, end - window) if window else 0\n            positions = torch.arange(begin, end, device=q.device)\n            mapped = block_table[batch, positions // page].long()\n            keys = k[mapped, positions % page][:, head_map].double()\n            vals = v[mapped, positions % page][:, head_map].double()\n            scores = (keys * q[batch, row].double()[None]).sum(-1) / math.sqrt(d)\n            probabilities = torch.softmax(scores, dim=0)\n            output[batch, row] = (probabilities[:, :, None] * vals).sum(0)\n    return output\n\n\ndef error_ratio(output, inputs):\n    target = reference(*inputs)\n    return float(((output.double() - target).abs() / (0.003 + 0.003 * target.abs())).max())\n\n\ndef make_inputs(device=\"cuda\", seed=0):\n    \"\"\"An ordinary example, not a restriction of the supported input domain.\"\"\"\n    generator = torch.Generator().manual_seed(seed)\n    q = (2 * torch.rand((2, 9, 4, 64), generator=generator) - 1).half()\n    k = (2 * torch.rand((16, 16, 2, 64), generator=generator) - 1).half()\n    v = (2 * torch.rand(k.shape, generator=generator) - 1).half()\n    table = torch.randperm(16, generator=generator).reshape(2, 8).to(torch.int32)\n    lengths = torch.tensor([97, 113], dtype=torch.int32)\n    return tuple(t.to(device) for t in (q, k, v, table, lengths)) + (41,)\n",
+        "passed": null,
+        "problem_text": "Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\n\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\n\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\n\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\n\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\n\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\n\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_114",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_114"
+      },
+      "created_at": "2026-10-18T00:51:41Z",
+      "id": "t2",
+      "output": {
+        "content": "Verify run(q, k, v, block_table, lengths, window), a paged causal attention forward operator with grouped query heads and an optional sliding window.\n\nThis is a CUDA forward-only interface. All five tensors are ordinary, fully materialized, contiguous torch.Tensor objects with disjoint underlying storage on one CUDA device. They have strided layout, require no gradients, are not inference tensors, and have neither a lazy negative nor conjugate flag. Autograd behavior, tensor subclasses, asynchronous changes to the inputs, and aliasing among inputs are outside this interface.\n\nq has FP16 shape [B,Q,Hq,D]; k and v have FP16 shape [P,S,Hkv,D]. Their last two axes are KV head and head dimension. block_table has INT32 shape [B,C]; lengths has INT32 shape [B]. Domains: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, Hq/Hkv in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, 1<=C<=512/S. For each batch item, Q<=lengths[b]<=512 and ceil(lengths[b]/S)<=C. window is a Python int in [0,256]; zero means full causal attention.\n\nFor logical position t in [0,lengths[b]), its physical cache position is k[block_table[b,t//S], t%S, ...], and similarly for v. All referenced page IDs are in [0,P); page order is arbitrary, and repeated page IDs are allowed. Entries of block_table beyond ceil(lengths[b]/S) are not part of the mapping and may contain arbitrary INT32 values. No assumption may be made that adjacent logical pages are adjacent physically.\n\nThe Q query rows are the final Q positions of that sequence. Query row r has absolute position a=lengths[b]-Q+r. It attends only to positions t satisfying 0<=t<=a and, if window>0, a-window+1<=t. Query head h uses KV head floor(h/(Hq/Hkv)). Compute s[t]=sum_d(q[b,r,h,d]*k_at(t,kv_head,d))/sqrt(D), p=softmax(s) over exactly those allowed positions, and output[b,r,h,:]=sum_t p[t]*v_at(t,kv_head,:). These equations use real arithmetic on the represented FP16 input values.\n\nEvery q element is finite with abs(value)<=1. Cache locations reachable by at least one allowed position of at least one query in this call are finite with abs(value)<=1. All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output. Valid input values are not restricted to the make_inputs example or a random seed.\n\nReturn one contiguous FP16 tensor of shape [B,Q,Hq,D] on the same CUDA device, with finite values. For every element, abs(output-target)<=0.003+0.003*abs(target). Inputs, including block_table and lengths, must be bit-for-bit unchanged. This contract applies to every admitted shape, page mapping, window length and value assignment. reference() gives an FP64 implementation of the target; validate_inputs() checks the full input domain, with an optional CPU mode for independent validation.\n",
+        "entry": "case_114",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_114"
+      },
+      "created_at": "2026-10-18T00:51:41Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_114",
+        "files": [
+          {
+            "kind": "other",
+            "path": "LICENSE",
+            "size_bytes": 11695
+          },
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 7950
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2913
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_114",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T00:51:41Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_114",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+          "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+          "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+          "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+          "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+          "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+        ],
+        "kernel_model": [
+          "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+          "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+          "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+          "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+          "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+          "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+          "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+        ],
+        "open_questions": [
+          "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+          "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+          "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+          "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+        ],
+        "risk_map": [
+          "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+          "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+          "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+          "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+          "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+          "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+          "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+        ],
+        "scope_notes": [
+          "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+          "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+          "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+          "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+        ],
+        "summary": "Described case_114: Triton FP16 paged causal attention with GQA and optional sliding window; identified masking of garbage cache slots, window tile-skip arithmetic, and FP16 probability quantization as the main risk surfaces."
+      },
+      "created_at": "2026-10-18T00:52:29Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+            "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+            "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+            "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+            "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+            "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+          ],
+          "kernel_model": [
+            "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+            "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+            "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+            "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+            "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+            "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+            "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+          ],
+          "open_questions": [
+            "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+            "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+            "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+            "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+          ],
+          "risk_map": [
+            "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+            "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+            "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+            "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+            "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+            "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+            "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+          ],
+          "scope_notes": [
+            "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+            "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+            "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+            "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Paged causal attention forward: query row r of batch b has absolute position a = lengths[b]-Q+r and attends to positions t with t<=a and (if window>0) t>=a-window+1; scores scaled by 1/sqrt(D); softmax over exactly the allowed positions; output is the probability-weighted sum of V rows at mapped physical positions.",
+            "Physical mapping: t maps to k/v[block_table[b, t//S], t%S, kv_head] with kv_head = floor(h/(Hq/Hkv)); block_table entries beyond ceil(lengths[b]/S) are arbitrary and irrelevant; page order arbitrary and repeats allowed.",
+            "Domain: 1<=B<=4, 1<=Q<=33, D in {32,64,128}, 1<=Hkv<=4, group in {1,2,4,8}, Hq<=16, 1<=P<=256, S in {16,32,64}, C<=512/S, Q<=lengths[b]<=512, window int in [0,256].",
+            "Value guarantees: all q finite |q|<=1; cache slots reachable by at least one allowed position are finite |x|<=1; ALL other cache slots (expired window positions, unallocated pages, tail slots) hold arbitrary bit patterns incl. NaN/Inf and must not affect output.",
+            "Output: contiguous FP16 [B,Q,Hq,D] on same device, finite, per-element abs(output-target) <= 0.003 + 0.003*abs(target) against the FP64 reference(); inputs bit-for-bit unchanged.",
+            "FP16 arithmetic is used by the kernel but the target equations are defined on real arithmetic over the represented FP16 input values; reference() is the FP64 oracle and error_ratio() the tolerance formula."
+          ],
+          "created_at": "2026-10-18T00:52:29Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Single Triton kernel _paged_attention with grid (ceil(Q/BQ), Hkv, B); BQ = 16//group so the 16 program rows (BM=16) cover BQ query positions x group query heads; head = kv_head*GROUP + row%GROUP.",
+            "Tile range: full causal case scans tiles [0, ceil(max_prefix/TILE)) with TILE=64, max_prefix = min(context + qb*BQ + BQ, length); window case skips early tiles via first_key//TILE and cuts at last_key//TILE+1.",
+            "Online softmax: per tile, scores = SCALE*tl.dot(q,k) in FP16 inputs; disallowed entries (qpos>=QT, logical>absolute_q, window violation, logical>=max_prefix) are replaced with -inf before the running max; running max rescale via alpha; accumulator in FP32; probabilities are cast to v.dtype (FP16) before the V dot.",
+            "Denominator initialized to 1.0 and maximum to -inf; first alpha = exp(-inf - m) = 0 wipes the initial 1.0, so the accumulator/denominator start values are neutralized; a fully -inf tile gets max replaced by 0.0 so exp(-inf)=0.",
+            "K/V/table loads are masked only by logical < max_prefix; positions inside a scanned tile that are disallowed for a query row (e.g. expired window positions or future positions) are still loaded but their scores are set to -inf via tl.where, relying on where() to discard any NaN/Inf contamination from garbage slots.",
+            "run() validates via validate_inputs (full domain checks incl. finiteness of reachable slots, disjoint storage) and launches with num_warps=4, enable_fp_fusion=False; SCALE, WINDOW, GROUP, BQ, PAGE etc. are constexpr.",
+            "reference() is an independent FP64 per-row implementation; validate_inputs(require_cuda=False) supports CPU oracle use; error_ratio implements the 0.003+0.003*|target| tolerance."
+          ],
+          "open_questions": [
+            "Does tl.where reliably discard NaN produced by tl.dot on garbage K rows across all Triton versions/compilations in the harness, or is a runtime probe needed on a garbage-laden cache?",
+            "Is the score FP16 dot path within the 0.003 tolerance for worst-case D=128, |q|,|k|=1, and adversarial (non-random) value distributions?",
+            "Does any (window, length, Q, S) combination within the domain produce an empty or wrong tile range (e.g. window=1 with extreme lengths, or Q=33 non-divisible BQ)?",
+            "Are repeated page IDs or a fully permuted block_table handled identically to sequential mappings (no hidden contiguity assumption in the index arithmetic)?"
+          ],
+          "risk_map": [
+            "Garbage-slot contamination: K/V loads use only tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window and other loaded-but-disallowed positions may be NaN/Inf; correctness depends on tl.where replacing those scores with -inf AFTER the dot. NaN propagation through tl.dot/tl.where and through tl.max on the row needs verification (e.g. NaN in an allowed-adjacent lane, or where implementation not guaranteed NaN-safe).",
+            "Sliding-window tile-boundary arithmetic: first_key = context + qb*BQ - WINDOW + 1 can be negative; first_key//TILE uses floor division (negative -1//64 = -1) which the max(0,..) clamps; verify no (length, Q, window, BQ) combination yields a tile range that misses allowed keys or includes wrong tiles.",
+            "Precision: probabilities are quantized to FP16 (probabilities.to(v.dtype)) before the V dot while the denominator sums FP32 probabilities, an inconsistency vs the FP64 reference; check against the 0.003+0.003*|target| tolerance especially for large numbers of allowed positions (up to 512) and D=128.",
+            "tl.dot with q loaded via mask other=0.0 for qpos>=QT padding rows: padding rows compute garbage rows that are never stored, but they share the same `maximum` bookkeeping; check the -inf handling makes padded rows benign and that their stores are correctly masked.",
+            "Grid/tiling shapes: BM=16, TILE=64, D>=32 satisfy tl.dot minimum-dimension constraints, but D=32 with BM=16 and 64-token tiles should be probed; also Q up to 33 with BQ not dividing Q relies entirely on the qpos<QT mask.",
+            "FP16 accumulation of scores: tl.dot(q,k) on FP16 inputs accumulates in FP32 (typical), but with |q|,|k|<=1 and D=128 error in exp arguments could be amplified by dominant-logit separation; consider dominant vs tail-entry probes.",
+            "Bit-for-bit input preservation and output finiteness (output written only under qpos<QT mask, no uninitialized OUT writes since OUT = torch.empty_like(q))."
+          ],
+          "scope_notes": [
+            "In scope: every admitted shape, page mapping (arbitrary order, repeated IDs, garbage entries beyond ceil(length/S)), window 0..256, and garbage (NaN/Inf) in unreachable cache slots \u2014 the contract explicitly requires these to be irrelevant.",
+            "Out of scope: autograd, tensor subclasses, input aliasing, asynchronous input mutation, non-strided layouts, non-FP16 dtypes, shapes outside the stated bounds.",
+            "make_inputs is only an example; verification must cover the full domain (e.g. Q=33, D=128, group=8, P=256, window=1, lengths near 512, permuted/repeated tables, NaN-poisoned unreachable slots).",
+            "No test code or metadata exists (meta.json is empty, test_code empty); reference() and error_ratio() in kernel.py are the operative oracle and metric."
+          ],
+          "summary": "Described case_114: Triton FP16 paged causal attention with GQA and optional sliding window; identified masking of garbage cache slots, window tile-skip arithmetic, and FP16 probability quantization as the main risk surfaces.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+        "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+      },
+      "created_at": "2026-10-18T00:52:50Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T00:52:50Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+          }
+        ],
+        "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+        "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+        "status": "open",
+        "updated_at": "2026-10-18T00:52:50Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, math, sys, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\nimport triton\n\ndev = \"cuda\"\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\nC = math.ceil(length / PAGE)  # 9\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half()\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32).reshape(1, P)  # identity mapping, C=9 <= P\nlengths = torch.tensor([length], dtype=torch.int32)\n\nlo = length - QT - window + 1  # 48\n# Fill allowed positions [lo, length) with finite values; poison all earlier slots with NaN.\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")   # pages covering positions 0..47 -> NaN\nfor t in (q, k, v, table, lengths): t = t.to(dev)\n\n# Direct kernel launch, bypassing validate_inputs (garbage slots violate its finite check\n# but are contractually admitted by problem.txt).\nb, qt, hq, d = q.shape\npage, hk = k.shape[1:3]\ngroup = hq // hk\nbq = 16 // group\nout = torch.empty_like(q)\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n    q, k, v, table, lengths, out,\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\n    num_warps=4, enable_fp_fusion=False,\n)\ntorch.cuda.synchronize()\n\n# Independent FP64 reference over exactly the allowed positions (ignore garbage slots).\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\nfor bb in range(b):\n    ctx = int(lengths[bb]) - qt\n    for r in range(qt):\n        a = ctx + r\n        end = a + 1\n        begin = max(0, end - window)\n        pos = torch.arange(begin, end, device=dev)\n        mapped = table[bb, pos // page].long()\n        kk = k[mapped, pos % page].double()\n        vv = v[mapped, pos % page].double()\n        for h in range(hq):\n            kh = h // group\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\n            p_ = torch.softmax(s, dim=0)\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\n\nfinite = bool(torch.isfinite(out).all())\ndiff = (out.double() - ref).abs()\ntol = 0.003 + 0.003 * ref.abs()\nmax_err = float(diff.max()) if finite else float(\"nan\")\nratio = float((diff / tol).max()) if finite else float(\"nan\")\nnan_rows = torch.isnan(out).any(dim=-1)[:, :, 0].sum().item() if not finite else 0\nprint(json.dumps({\n    \"case\": {\"B\":B,\"Q\":QT,\"Hq\":HQ,\"Hkv\":HK,\"D\":D,\"S\":PAGE,\"length\":length,\"window\":window,\"lo\":lo,\n             \"poisoned_positions\":\"[0,48) via NaN pages 0-2\"},\n    \"metric\": \"output finiteness + per-element abs err vs FP64 reference (tolerance 0.003+0.003|target|)\",\n    \"output_finite\": finite, \"nan_query_rows\": int(nan_rows),\n    \"max_abs_err\": max_err, \"tolerance_ratio\": ratio, \"tol_pass\": bool(finite and (diff <= tol).all().item()),\n}))\n",
+        "expected_signal": "If contamination occurs, output rows contain NaN (infinite/NaN outputs) while the FP64 reference on the same allowed positions is finite; otherwise output is finite and within the 0.003 tolerance.",
+        "timeout_s": 240
+      },
+      "created_at": "2026-10-18T00:53:31Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "e8bc2357e83c12ee9c78981cd1ef94650ffc4227ef02a11c9973d0460c1beb1e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "761f2613461bdbd2572bc6735968e8a60a98da11dfcc6501284d1b985e665d10"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+        "cwd": "/root/cases/case_114",
+        "duration_s": 6.459514,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "e8bc2357e83c12ee9c78981cd1ef94650ffc4227ef02a11c9973d0460c1beb1e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "761f2613461bdbd2572bc6735968e8a60a98da11dfcc6501284d1b985e665d10"
+              }
+            ],
+            "duration_s": 6.459514,
+            "exit_code": 1,
+            "expected_signal": "If contamination occurs, output rows contain NaN (infinite/NaN outputs) while the FP64 reference on the same allowed positions is finite; otherwise output is finite and within the 0.003 tolerance.",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_114/debate/probes/t7_probe.py\", line 36, in <module>\n    k114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 390, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 617, in run\n    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,\n  File \"/usr/local/lib/python3.11/site-packages/triton/backends/nvidia/driver.py\", line 708, in __call__\n    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,\nValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": "If contamination occurs, output rows contain NaN (infinite/NaN outputs) while the FP64 reference on the same allowed positions is finite; otherwise output is finite and within the 0.003 tolerance.",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_114/debate/probes/t7_probe.py\", line 36, in <module>\n    k114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 390, in <lambda>\n    return lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)\n                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/site-packages/triton/runtime/jit.py\", line 617, in run\n    kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,\n  File \"/usr/local/lib/python3.11/site-packages/triton/backends/nvidia/driver.py\", line 708, in __call__\n    self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, self.launch_pdl,\nValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, math, importlib.util\nimport torch\nimport triton\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\n\ndev = \"cuda\"\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half().to(dev)\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16, device=dev)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32, device=dev).reshape(1, P)\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\n\nlo = length - QT - window + 1  # 48\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")  # positions 0..47 NaN, expired for all queries\n\nb, qt, hq, d = q.shape\npage, hk = k.shape[1:3]\ngroup = hq // hk\nbq = 16 // group\nout = torch.empty_like(q)\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\n    q, k, v, table, lengths, out,\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\n    num_warps=4, enable_fp_fusion=False,\n)\ntorch.cuda.synchronize()\n\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\nfor bb in range(b):\n    ctx = int(lengths[bb]) - qt\n    for r in range(qt):\n        end = ctx + r + 1\n        begin = max(0, end - window)\n        pos = torch.arange(begin, end, device=dev)\n        mapped = table[bb, pos // page].long()\n        kk = k[mapped, pos % page].double()\n        vv = v[mapped, pos % page].double()\n        for h in range(hq):\n            kh = h // group\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\n            p_ = torch.softmax(s, dim=0)\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\n\nfinite = bool(torch.isfinite(out).all())\nnan_rows = int(torch.isnan(out).any(dim=-1).sum().item())\ndiff = (out.double() - ref).abs()\ntol = 0.003 + 0.003 * ref.abs()\nresult = {\"output_finite\": finite, \"nan_or_inf_elements\": nan_rows,\n          \"max_abs_err\": float(diff.max()) if finite else None,\n          \"tolerance_ratio\": float((diff / tol).max()) if finite else None,\n          \"tol_pass\": bool(finite and (diff <= tol).all().item())}\nprint(json.dumps(result))\n",
+        "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+        "timeout_s": 240
+      },
+      "created_at": "2026-10-18T00:53:45Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+        "cwd": "/root/cases/case_114",
+        "duration_s": 4.223644,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+              }
+            ],
+            "duration_s": 4.223644,
+            "exit_code": 0,
+            "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": null,
+              "nan_or_inf_elements": 32,
+              "output_finite": false,
+              "tol_pass": false,
+              "tolerance_ratio": null
+            },
+            "stderr": "",
+            "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err": null,
+          "nan_or_inf_elements": 32,
+          "output_finite": false,
+          "tol_pass": false,
+          "tolerance_ratio": null
+        },
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "case": {
+            "D": 64,
+            "Hkv": 1,
+            "Hq": 2,
+            "Q": 33,
+            "S": 16,
+            "length": 130,
+            "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+            "window": 50
+          },
+          "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+          "nan_or_inf_rows": 32,
+          "output_finite": false,
+          "total_query_head_rows": 66
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T00:54:07Z",
+      "id": "t9",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T00:52:50Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T00:54:07Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+                  }
+                ],
+                "case": {
+                  "D": 64,
+                  "Hkv": 1,
+                  "Hq": 2,
+                  "Q": 33,
+                  "S": 16,
+                  "length": 130,
+                  "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+                  "window": 50
+                },
+                "duration_s": 4.223644,
+                "exit_code": 0,
+                "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err": null,
+                  "nan_or_inf_elements": 32,
+                  "output_finite": false,
+                  "tol_pass": false,
+                  "tolerance_ratio": null
+                },
+                "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+                "nan_or_inf_rows": 32,
+                "output_finite": false,
+                "stderr": "",
+                "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+                "timed_out": false,
+                "timeout_s": 240,
+                "total_query_head_rows": 66
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Line 52 loads v with mask only tile_mask (logical<max_prefix); expired window positions within [0,length) are contractually allowed to hold NaN, they fall inside scanned tiles (tile_end bound by max_prefix, not by the allowed mask), their probability is exp(-inf)=0, and 0*NaN=NaN inside tl.dot(probabilities.to(v.dtype), v) at line 68 contaminates the accumulator for every query row in the program, violating the finite-output and 0.003 tolerance requirements.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"All other cache slots, including expired window positions, unallocated pages and unwritten tail slots, have arbitrary bit patterns and may contain NaN or infinity. Their contents are semantically irrelevant and must not change the output.\""
+            },
+            {
+              "source": "problem.txt",
+              "summary": "Output must be \"finite\" with abs(output-target)<=0.003+0.003*abs(target)."
+            }
+          ],
+          "scope_rationale": "The contract explicitly requires that garbage in expired-window and unreachable cache slots must not change the output and that outputs are finite; a window>0 case where the K/V cache holds NaN at positions outside every query's window but inside a scanned tile is squarely admitted by the domain.",
+          "statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T00:54:07Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:54:07Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "bd872b7682891daf057b9beb4d31eb10ea4407a596c8fbf86925bf4546eb01a1"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "59153fb11e8fb2d7fe9e58a55add71c023f9b78d0fcf80023a8c803fd04bb3be"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "330017dabb1784553f122b969b52870fb4b12e8605518214cc45028f8e6b56d6"
+              }
+            ],
+            "case": {
+              "D": 64,
+              "Hkv": 1,
+              "Hq": 2,
+              "Q": 33,
+              "S": 16,
+              "length": 130,
+              "poisoned_positions": "[0,48) via NaN in K/V pages 0-2",
+              "window": 50
+            },
+            "duration_s": 4.223644,
+            "exit_code": 0,
+            "expected_signal": "If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": null,
+              "nan_or_inf_elements": 32,
+              "output_finite": false,
+              "tol_pass": false,
+              "tolerance_ratio": null
+            },
+            "metric": "output finiteness + per-element abs err vs FP64 reference over allowed positions",
+            "nan_or_inf_rows": 32,
+            "output_finite": false,
+            "stderr": "",
+            "stdout": "{\"output_finite\": false, \"nan_or_inf_elements\": 32, \"max_abs_err\": null, \"tolerance_ratio\": null, \"tol_pass\": false}\n",
+            "timed_out": false,
+            "timeout_s": 240,
+            "total_query_head_rows": 66
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Confirmed c1: with B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50, the allowed window for all queries starts at position 48; positions 0-47 (pages 0-2 of K/V) were filled with NaN. The Triton kernel output contains NaN in 32 of 66 query-head rows (output_finite=false), while the FP64 reference computed over exactly the allowed positions [48,130) \u2014 which hold only finite values \u2014 is finite. This matches the predicted mechanism: V loads are masked only by tile_mask (logical<max_prefix), so expired-window NaN slots are loaded into scanned tiles, their score is set to -inf (probability 0), but tl.dot(probabilities.to(fp16), v) computes 0*NaN=NaN and poisons the FP32 accumulator, violating the contract's finite-output requirement for a domain-admitted input.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, math, importlib.util\nimport torch\n\nspec = importlib.util.spec_from_file_location(\"k114\", \"/root/cases/case_114/kernel.py\")\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\n\ndev = \"cuda\"\nQT, HQ, HK, D, PAGE = 33, 2, 1, 64, 16\nlength, window, P = 130, 50, 16\n\ng = torch.Generator().manual_seed(7)\nq = (2*torch.rand((1, QT, HQ, D), generator=g)-1).half().to(dev)\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16, device=dev)\nv = torch.zeros_like(k)\ntable = torch.arange(P, dtype=torch.int32, device=dev).reshape(1, P)\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\n\nlo = length - QT - window + 1  # 48\nfor t in range(lo, length):\n    p, s = t // PAGE, t % PAGE\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\nk[:3] = float(\"nan\"); v[:3] = float(\"nan\")\n\n# Public path: run() calls validate_inputs first.\ntry:\n    validation_passed = bool(k114.validate_inputs(q, k, v, table, lengths, window))\nexcept AssertionError as e:\n    validation_passed = False\n    print(\"validate_inputs raised:\", e)\n\ninputs_before = [t.clone() for t in (q, k, v, table, lengths)]\nout = k114.run(q, k, v, table, lengths, window)\ntorch.cuda.synchronize()\nunchanged = all(torch.equal(a, b) for a, b in zip((q, k, v, table, lengths), inputs_before))\n\nfinite = bool(torch.isfinite(out).all())\nnan_rows = int(torch.isnan(out).any(dim=-1).sum().item())\nprint(json.dumps({\"validation_passed\": validation_passed,\n                  \"public_run_output_finite\": finite,\n                  \"nan_or_inf_rows\": nan_rows,\n                  \"total_rows\": out.shape[1]*out.shape[2],\n                  \"inputs_bit_for_bit_unchanged\": bool(unchanged)}))",
+        "expected_signal": "validate_inputs accepts the poisoned input (live positions [48,130) are finite); run() returns a tensor with NaN rows, confirming the public path also fails on a contract-admitted input.",
+        "timeout_s": 240
+      },
+      "created_at": "2026-10-18T00:54:11Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t10_probe.py",
+            "sha256": "109a911c46d265af0d09ff13ed1b20356004e7e13226b249b3c6c272c888a45d"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t10_stdout.txt",
+            "sha256": "e8164cb1335cf7200a768860701f1d014ab885534e002c5f5df6f38a19cc97d0"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t10_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t10_json_result.json",
+            "sha256": "ed77d9bda9e94705a41c751ef21ef6032492d9f077a697620597c71dd9d87dd6"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN.",
+        "cwd": "/root/cases/case_114",
+        "duration_s": 3.967219,
+        "event_id": "t10",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t10_probe.py",
+                "sha256": "109a911c46d265af0d09ff13ed1b20356004e7e13226b249b3c6c272c888a45d"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t10_stdout.txt",
+                "sha256": "e8164cb1335cf7200a768860701f1d014ab885534e002c5f5df6f38a19cc97d0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t10_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t10_json_result.json",
+                "sha256": "ed77d9bda9e94705a41c751ef21ef6032492d9f077a697620597c71dd9d87dd6"
+              }
+            ],
+            "duration_s": 3.967219,
+            "exit_code": 0,
+            "expected_signal": "validate_inputs accepts the poisoned input (live positions [48,130) are finite); run() returns a tensor with NaN rows, confirming the public path also fails on a contract-admitted input.",
+            "json_parse_error": null,
+            "json_result": {
+              "inputs_bit_for_bit_unchanged": false,
+              "nan_or_inf_rows": 32,
+              "public_run_output_finite": false,
+              "total_rows": 66,
+              "validation_passed": true
+            },
+            "stderr": "",
+            "stdout": "{\"validation_passed\": true, \"public_run_output_finite\": false, \"nan_or_inf_rows\": 32, \"total_rows\": 66, \"inputs_bit_for_bit_unchanged\": false}\n",
+            "timed_out": false,
+            "timeout_s": 240
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t10"
+        },
+        "exit_code": 0,
+        "expected_signal": "validate_inputs accepts the poisoned input (live positions [48,130) are finite); run() returns a tensor with NaN rows, confirming the public path also fails on a contract-admitted input.",
+        "json_parse_error": null,
+        "json_result": {
+          "inputs_bit_for_bit_unchanged": false,
+          "nan_or_inf_rows": 32,
+          "public_run_output_finite": false,
+          "total_rows": 66,
+          "validation_passed": true
+        },
+        "sandbox": {
+          "cpu_limit_s": 270,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"validation_passed\": true, \"public_run_output_finite\": false, \"nan_or_inf_rows\": 32, \"total_rows\": 66, \"inputs_bit_for_bit_unchanged\": false}\n",
+        "timed_out": false,
+        "timeout_s": 240,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "reason": "Final review: the only confirmed in-scope defect (NaN contamination from expired-window V slots, c1) already has decisive runtime evidence on both the direct kernel launch and the public run() path. The t10 'inputs_bit_for_bit_unchanged: false' flag is a probe-metric artifact (torch.equal on NaN-containing inputs), not evidence of a new defect. No additional material, testable, in-scope claim is needed.",
+        "reviewed_claims": [
+          "c1: NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+        ]
+      },
+      "created_at": "2026-10-18T00:54:19Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-10-18T00:54:19Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the only confirmed in-scope defect (NaN contamination from expired-window V slots, c1) already has decisive runtime evidence on both the direct kernel launch and the public run() path. The t10 'inputs_bit_for_bit_unchanged: false' flag is a probe-metric artifact (torch.equal on NaN-containing inputs), not evidence of a new defect. No additional material, testable, in-scope claim is needed.",
+        "reviewed_claims": [
+          "c1: NaN/Inf values in V cache slots at loaded-but-disallowed positions (e.g. expired sliding-window positions inside a scanned tile) contaminate the output, because the V load uses only tile_mask while the accumulator adds tl.dot(probabilities, v) with zero probabilities times NaN producing NaN."
+        ],
+        "reviewed_tool_event_count": 10,
+        "tool_event_id": "t11",
+        "turn": 7
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.95,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed with in-scope, contract-cited runtime evidence. The contract (problem.txt) explicitly states that expired-window and unreachable cache slots \"may contain NaN or infinity\" and that their contents \"must not change the output,\" and requires a finite output within abs(output-target)<=0.003+0.003*abs(target). The kernel's V load (kernel.py line 52) is masked only by tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window NaN slots inside scanned tiles are loaded; their probability is 0 but tl.dot(probabilities, v) at line 68 computes 0*NaN=NaN, poisoning the FP32 accumulator. Probe t8 (B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50; allowed positions [48,130) finite, positions [0,48) poisoned with NaN) shows the output contains NaN in 32 of 66 query-head rows while an independent FP64 reference over exactly the allowed positions is finite. Probe t10 confirms the public run() path: validate_inputs accepts this contract-admitted input (it only checks finiteness of live positions), and run() returns 32/66 NaN rows. This is a domain-admitted input (window=50 within [0,256], length=130 with Q<=length<=512, all domain bounds respected) violating an explicit contractual requirement, so the kernel is rejected. The t10 `inputs_bit_for_bit_unchanged: false` flag is a probe-metric artifact (torch.equal on NaN-containing tensors) and does not affect this verdict.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T00:54:27Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.95,
+        "created_at": "2026-10-18T00:54:27Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 is confirmed with in-scope, contract-cited runtime evidence. The contract (problem.txt) explicitly states that expired-window and unreachable cache slots \"may contain NaN or infinity\" and that their contents \"must not change the output,\" and requires a finite output within abs(output-target)<=0.003+0.003*abs(target). The kernel's V load (kernel.py line 52) is masked only by tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window NaN slots inside scanned tiles are loaded; their probability is 0 but tl.dot(probabilities, v) at line 68 computes 0*NaN=NaN, poisoning the FP32 accumulator. Probe t8 (B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50; allowed positions [48,130) finite, positions [0,48) poisoned with NaN) shows the output contains NaN in 32 of 66 query-head rows while an independent FP64 reference over exactly the allowed positions is finite. Probe t10 confirms the public run() path: validate_inputs accepts this contract-admitted input (it only checks finiteness of live positions), and run() returns 32/66 NaN rows. This is a domain-admitted input (window=50 within [0,256], length=130 with Q<=length<=512, all domain bounds respected) violating an explicit contractual requirement, so the kernel is rejected. The t10 `inputs_bit_for_bit_unchanged: false` flag is a probe-metric artifact (torch.equal on NaN-containing tensors) and does not affect this verdict.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.95,
+    "created_at": "2026-10-18T00:54:27Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 is confirmed with in-scope, contract-cited runtime evidence. The contract (problem.txt) explicitly states that expired-window and unreachable cache slots \"may contain NaN or infinity\" and that their contents \"must not change the output,\" and requires a finite output within abs(output-target)<=0.003+0.003*abs(target). The kernel's V load (kernel.py line 52) is masked only by tile_mask (logical<max_prefix), not the per-query `allowed` mask, so expired-window NaN slots inside scanned tiles are loaded; their probability is 0 but tl.dot(probabilities, v) at line 68 computes 0*NaN=NaN, poisoning the FP32 accumulator. Probe t8 (B=1, Q=33, Hq=2, Hkv=1, D=64, S=16, length=130, window=50; allowed positions [48,130) finite, positions [0,48) poisoned with NaN) shows the output contains NaN in 32 of 66 query-head rows while an independent FP64 reference over exactly the allowed positions is finite. Probe t10 confirms the public run() path: validate_inputs accepts this contract-admitted input (it only checks finiteness of live positions), and run() returns 32/66 NaN rows. This is a domain-admitted input (window=50 within [0,256], length=130 with Q<=length<=512, all domain bounds respected) violating an explicit contractual requirement, so the kernel is rejected. The t10 `inputs_bit_for_bit_unchanged: false` flag is a probe-metric artifact (torch.equal on NaN-containing tensors) and does not affect this verdict.",
+    "verdict": "reject"
+  }
+}

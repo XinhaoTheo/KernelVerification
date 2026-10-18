@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-850c8118",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first probe crashed because my \"bigrand\" input overflowed FP16 to infinity — a probe bug, not a kernel result. I'll rerun with values clamped to the finite FP16 range.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ee0b81395d819c2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_162\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ntol_a, tol_r = 1e-4, 1e-6\\nresults = []\\nworst = 0.0\\nworst_desc = \\\"\\\"\\n\\ndef check(desc, values):\\n    global worst, worst_desc\\n    before = values.clone()\\n    out = kernel.run(values)\\n    exact = kernel.reference(values.cpu()).to(dev)\\n    err = (out.double() - exact)\\n    tol = tol_a + tol_r * exact.abs()\\n    viol = (err.abs() > tol)\\n    maxratio = (err.abs() / tol).max().item()\\n    finite = bool(torch.isfinite(out).all())\\n    shape_ok = tuple(out.shape) == (values.shape[0], values.shape[1]//2 + 1, 2) and out.dtype == torch.float32 and out.is_contiguous()\\n    preserv = torch.equal(before, values)\\n    sep = out.data_ptr() != values.data_ptr()\\n    if maxratio > worst:\\n        worst, worst_desc = maxratio, desc\\n    results.append(dict(desc=desc, max_ratio=maxratio, violations=int(viol.sum()), finite=finite, shape_ok=shape_ok, input_preserved=preserv, separate_storage=sep))\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(0)\\nfor N in (64, 128, 256):\\n    for B in (1, 7, 256):\\n        v = torch.randn((B, N), generator=g).to(torch.float16).to(dev)\\n        check(f\\\"rand B={B} N={N}\\\", v)\\nfor N in (64, 128, 256):\\n    B = 8\\n    check(f\\\"ones N={N}\\\", torch.ones((B, N), dtype=torch.float16, device=dev))\\n    check(f\\\"fp16max N={N}\\\", torch.full((B, N), 65504.0, dtype=torch.float16, device=dev))\\n    check(f\\\"fp16min N={N}\\\", torch.full((B, N), -65504.0, dtype=torch.float16, device=dev))\\n    check(f\\\"negzero N={N}\\\", torch.full((B, N), -0.0, dtype=torch.float16, device=dev))\\n    check(f\\\"subnormal N={N}\\\", torch.full((B, N), 6e-8, dtype=torch.float16, device=dev))\\n    v = torch.zeros((B, N), dtype=torch.float16, device=dev)\\n    for i in range(B):\\n        v[i, i * 7 % N] = 1.0\\n    check(f\\\"impulse N={N}\\\", v)\\n    v = torch.tensor([[((-1.0)**j) * 1000.0 for j in range(N)]] * B, dtype=torch.float16, device=dev)\\n    check(f\\\"nyquist N={N}\\\", v)\\n    v = torch.randn((B, N), generator=g).to(torch.float16)\\n    v = (v * 1e4).to(torch.float16)  # stays finite\\n    assert torch.isfinite(v).all()\\n    check(f\\\"bigrand N={N}\\\", v.to(dev))\\n    v = (torch.randn((B, N), generator=g) * 1e-7).to(torch.float16)\\n    assert torch.isfinite(v).all()\\n    check(f\\\"tinyrand N={N}\\\", v.to(dev))\\n    # extreme mix: alternating +/- max\\n    v = torch.tensor([[((-1.0)**j) * 65504.0 for j in range(N)]] * B, dtype=torch.float16, device=dev)\\n    check(f\\\"altmax N={N}\\\", v)\\n\\nprint(json.dumps(dict(results=results, worst_ratio=worst, worst_case=worst_desc, any_violation=any(r[\\\"violations\\\"]>0 or not r[\\\"finite\\\"] or not r[\\\"shape_ok\\\"] or not r[\\\"input_preserved\\\"] or not r[\\\"separate_storage\\\"] for r in results)), indent=1))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe crashed because bigrand produced inf. Fix: clamp to finite FP16. Re-run probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309365,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 971,
+    "prompt_tokens": 16032,
+    "total_tokens": 17003,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 21,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8837,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

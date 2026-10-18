@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-df2d39ef",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes in one batch: c1 (full-spectrum comparison across all three widths), c2 (Nyquist-bin identity and store correctness), and c3 (FP16-extreme magnitude tolerance).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a1d5fa34166e76ea",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_162/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\nfor N in (64, 128, 256):\\n    worst = 0.0; worst_loc = None; any_fail = False; nonfinite = False\\n    for seed in range(3):\\n        vals = torch.randn(7, N, generator=torch.Generator(device=\\\"cpu\\\").manual_seed(seed)).to(torch.float16).cuda()\\n        out = k.run(vals)\\n        ref = torch.fft.rfft(vals.double().cpu(), dim=1).cuda()\\n        refc = torch.stack((ref.real, ref.imag), dim=-1)\\n        tol = 1e-4 + 1e-6*refc.abs()\\n        err = (out.double() - refc).abs()\\n        nonfinite |= bool((~torch.isfinite(out)).any())\\n        fail = err > tol\\n        any_fail |= bool(fail.any())\\n        m = err.max().item()\\n        if m > worst:\\n            worst = m; idx = (err == err.max()).nonzero()[0].tolist(); worst_loc = idx\\n    results[f\\\"N{N}\\\"] = {\\\"worst_abs_err\\\": worst, \\\"worst_loc\\\": worst_loc, \\\"tol_violation\\\": any_fail, \\\"nonfinite_output\\\": nonfinite}\\nprint(json.dumps(results))\", \"expected_signal\": \"per-frequency max abs error vs tolerance 1e-4+1e-6*|ref| across N in {64,128,256}\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9b17c71908e2b9fc",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_162/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\nfor N in (64, 128, 256):\\n    vals = torch.randn(5, N, generator=torch.Generator(device=\\\"cpu\\\").manual_seed(11)).to(torch.float16).cuda()\\n    out = k.run(vals)\\n    # exact Nyquist: sum_j (-1)^j x[j] computed in float64 on the exact fp16 values\\n    signs = torch.tensor([(-1.0)**j for j in range(N)], dtype=torch.float64)\\n    nyq = (vals.double().cpu() * signs).sum(dim=1)\\n    got = out[:, N//2, 0].double().cpu()\\n    imag_got = out[:, N//2, 1].double().cpu()\\n    tol = 1e-4 + 1e-6*nyq.abs()\\n    err = (got - nyq).abs()\\n    results[f\\\"N{N}\\\"] = {\\n        \\\"nyquist_real_max_err\\\": err.max().item(),\\n        \\\"tolerance\\\": tol.min().item(),\\n        \\\"violations\\\": int((err > tol).sum()),\\n        \\\"imag_max_abs\\\": imag_got.abs().max().item(),\\n        \\\"ref_nyquist\\\": nyq.tolist()[:3],\\n        \\\"got_nyquist\\\": got.tolist()[:3],\\n    }\\nprint(json.dumps(results))\", \"expected_signal\": \"Nyquist bin values vs exact sum (-1)^j x[j] and imaginary component zero\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b6300fdc6938deb3",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_162/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\n# extreme magnitude inputs, several patterns, N=256 and 128\\ncases = {\\n \\\"all65504_N256\\\": torch.full((4, 256), 65504.0, dtype=torch.float16),\\n \\\"alt_extreme_N256\\\": torch.tensor([65504.0, -65504.0]*(256*4), dtype=torch.float16).reshape(4, 256),\\n \\\"mix_extreme_N256\\\": (torch.randn(4, 256, generator=torch.Generator(device=\\\"cpu\\\").manual_seed(5)).to(torch.float16) * 65504.0).clamp(-65504, 65504).to(torch.float16),\\n \\\"alt_extreme_N128\\\": torch.tensor([65504.0, -65504.0]*(128*4), dtype=torch.float16).reshape(4, 128),\\n}\\nfor name, vals_cpu in cases.items():\\n    vals = vals_cpu.cuda()\\n    out = k.run(vals)\\n    ref = torch.fft.rfft(vals.double().cpu(), dim=1)\\n    refc = torch.stack((ref.real, ref.imag), dim=-1).cuda()\\n    tol = 1e-4 + 1e-6*refc.abs()\\n    err = (out.double() - refc).abs()\\n    rel = (err / refc.abs().clamp_min(1e-30)).max().item()\\n    results[name] = {\\n        \\\"max_abs_err\\\": err.max().item(),\\n        \\\"max_rel_err\\\": rel,\\n        \\\"tol_violations\\\": int((err > tol).sum()),\\n        \\\"nonfinite_out\\\": bool((~torch.isfinite(out)).any()),\\n        \\\"max_out_mag\\\": out.abs().max().item(),\\n    }\\nprint(json.dumps(results))\", \"expected_signal\": \"max relative error vs 1e-6 relative tolerance for FP16-extreme inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Three independent claims. Launch three probes in one response: c1 (randn all N), c2 (Nyquist bin check), c3 (extreme magnitudes)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309367,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1282,
+    "prompt_tokens": 26447,
+    "total_tokens": 27729,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 35,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

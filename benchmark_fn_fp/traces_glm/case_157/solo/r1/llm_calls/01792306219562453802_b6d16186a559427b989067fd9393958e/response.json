@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-f069f448",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first probe's mismatches were hidden by INT8 saturation. The decisive case needs a large right shift (r≈30-31) so the rounded value is small (unsaturated) while the fp64 product rounding error can flip a half-integer boundary. I'll run that targeted probe now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b3b84a32ff0851e7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_157\\\")\\nimport kernel\\n\\ndef kern_emul(a, m, r, z=0):\\n    pf = float(a) * float(m)\\n    scaled = pf / float(1 << (31 + r))\\n    rounded = math.floor(scaled + 0.5)\\n    bounded = max(-255, min(255, rounded))\\n    return max(-128, min(127, bounded + z))\\n\\ndef exact(a, m, r, z=0):\\n    P = a * m\\n    R = (P + (1 << (30 + r))) >> (31 + r)\\n    return max(-128, min(127, R + z))\\n\\nrng = torch.Generator().manual_seed(7)\\nfound = []\\nfor trial in range(300000):\\n    a = int(torch.randint(-(1<<31), 1<<31, (1,), generator=rng).item())\\n    m = int(torch.randint(1<<30, 1<<31, (1,), generator=rng).item())\\n    for r in (29, 30, 31):\\n        k, e = kern_emul(a, m, r), exact(a, m, r)\\n        if k != e:\\n            found.append((a, m, r, k, e))\\n            break\\n    if len(found) >= 8:\\n        break\\nprint(\\\"emulation mismatches found:\\\", len(found))\\nfor f in found[:8]: print(f)\\n\\nif found:\\n    vals = [f[0] for f in found]\\n    rs = [f[2] for f in found]\\n    ms = [f[1] for f in found]\\n    n = len(vals)\\n    acc = torch.tensor(vals, dtype=torch.int32, device=\\\"cuda\\\").view(n, 1)\\n    mult = torch.tensor(ms, dtype=torch.int32, device=\\\"cuda\\\")\\n    sh = torch.tensor(rs, dtype=torch.int32, device=\\\"cuda\\\")\\n    zp = torch.zeros(n, dtype=torch.int32, device=\\\"cuda\\\")\\n    out = kernel.run(acc, mult, sh, zp).cpu()\\n    ref = kernel.reference(acc, mult, sh, zp).cpu()\\n    print(\\\"kernel:\\\", out.flatten().tolist())\\n    print(\\\"ref   :\\\", ref.flatten().tolist())\\n    print(\\\"GPU mismatch:\\\", not torch.equal(out, ref))\\n    for i,(a,m,r,k,e) in enumerate(found):\\n        print(i, \\\"a=\\\",a,\\\"m=\\\",m,\\\"r=\\\",r,\\\"emul_k=\\\",k,\\\"exact=\\\",e,\\n              \\\"gpu_kernel=\\\",out[i,0].item(),\\\"gpu_ref=\\\",ref[i,0].item())\\nelse:\\n    g = torch.Generator().manual_seed(11)\\n    a = torch.randint(-(1<<31), 1<<31, (4096, 257), generator=g, dtype=torch.int64).to(torch.int32).cuda()\\n    mm = torch.randint(1<<30, 1<<31, (257,), generator=g, dtype=torch.int64).to(torch.int32).cuda()\\n    rr = torch.randint(24, 32, (257,), generator=g, dtype=torch.int32).cuda()\\n    zz = torch.randint(-128, 128, (257,), generator=g, dtype=torch.int32).cuda()\\n    o = kernel.run(a, mm, rr, zz); rf = kernel.reference(a, mm, rr, zz)\\n    mism = (o != rf)\\n    print(\\\"random large-r mismatch:\\\", mism.sum().item(), \\\"/\\\", mism.numel())\\n    if mism.any():\\n        idx = mism.nonzero()[:3]\\n        for i,c in idx.tolist():\\n            print(\\\"a=\\\",a[i,c].item(),\\\"m=\\\",mm[c].item(),\\\"r=\\\",rr[c].item(),\\\"z=\\\",zz[c].item(),\\n                  \\\"kernel=\\\",o[i,c].item(),\\\"ref=\\\",rf[i,c].item())\\n\", \"expected_signal\": \"kernel run() vs reference() exact-integer mismatch on legal inputs with large right shifts where the fp64 product rounding flips a half-integer boundary\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The claim c1 is inconclusive. Need targeted probe: large r (30, 31) where scaled value is small and near half-integer, error in fp64 product could flip floor(x+0.5) by 1 without saturation hiding it. Run probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306221,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1003,
+    "prompt_tokens": 20738,
+    "total_tokens": 21741,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 56,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7019,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

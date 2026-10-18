@@ -1,0 +1,105 @@
+Key concerns: local scan of padded lanes uses identity payloads for out-of-range steps, associative_scan includes those, summary stores last lane's value (total of the whole block including padded identities) — fine. But associative_scan on a tuple with a custom combine function — Triton supports it. Identity: for step >= N, loaded a=1,d=1,b=c=0,e=f=0 — identity payload. Good.
+
+Wait — in _local_scan, out-of-range load of A: mask step<N, other values 1,0,0,1. Fine. Summary store mask lane==BLOCK-1 — stores block total. Good.
+
+_block_carries: SUMMARY for lanes >= CHUNKS loads identity (1,0,0,1,0,0) with mask lane<CHUNKS. Then _exclusive_chunks computes exclusive prefix over chunk summaries. Let me check that algorithm.
+
+_exclusive_chunks: first phase — for each level, take lanes where (lane+1)%(2*stride)==0, compose left=lane-stride with current. That builds inclusive interval totals at right endpoints... Actually building the standard up-sweep: at lane = 2*stride-1, it composes the total of [lane-2*stride+1, lane]. Initially lane holds single-element payload (position lane). After level 0: lanes 1,3,5,... hold totals of pairs. After level 1: lanes 3,7,... hold totals of 4. Etc. That's a standard up-sweep. Then they set the last lane (C-1) to identity. Then down-sweep: for level from high to low, for each lane: right = ((lane//(2s))+1)*2s -1, left=right-s. pa = value at right, la = value at left. na = compose(la, pa). Then: lane==left gets pa (push right's prefix down), lane==right gets compose(la, pa)?? Wait — in Blelloch, at the down-sweep you set node left = right's value, node right = compose(left_old, right_old)... hmm actually standard down-sweep: parent (right index at this level) value is pushed: left child gets parent's value, right child gets compose(left child, parent). That's exactly what they do. But careful: na = compose(la, pa) is computed using values before update within the same level — but left and right lanes are distinct, and tl.gather reads pre-update... actually a, b, etc. are updated via tl.where at the end, so gathers read old values within the level. But wait — both reads and writes happen in same statement; the gather happens before the where assignment, so all lanes see pre-level values. Correct.
+
+But wait: identity at last lane set before down-sweep — in Blelloch after up-sweep you set root to identity then down-sweep giving exclusive prefixes. Here root is lane C-1 (C is power of 2). Correct.
+
+Exclusive prefix over chunk summaries, applied to identity-padding lanes: chunks beyond CHUNKS have identity payloads, so exclusive prefix at lane i gives composition of summaries 0..i-1 (real ones). For i >= CHUNKS, same value. Then CARRY = a*x+b*y+e, the state after chunks 0..i-1. _apply_prefix uses carry for chunk = prefix of that chunk. Correct: prefix[step] within chunk is inclusive composition of chunk's steps 0..lane; applying to carry (state before chunk) gives state at step. 
+
+Issue: CARRY stored for all lanes 0..C-1 including padded, but _apply_prefix only reads chunks < chunks. Fine.
+
+Potential problem: padded = next_power_of_2(chunks). If chunks==1, padded=1, LEVELS = 0. _exclusive_chunks with LEVELS=0: static_range(0,0) empty; lane==C-1 → identity; down-sweep static_range(-1,-1,-1)... levels from LEVELS-1=-1 down to... exclusive range(-1,-1) empty. So all lanes identity, exclusive prefix of one chunk = identity. Correct.
+
+Also, if chunks > 1: LEVELS = padded.bit_length()-1 = log2(padded). Correct.
+
+One concern: tl.gather on Triton 3.4 — available, yes (tl.gather added in 3.2+). Signature tl.gather(src, index, axis). Fine.
+
+_compose used in tl.associative_scan with tuple — supported in Triton 3.x. Compose is associative. Yes.
+
+Another: int8 loads with mask and "other" — a loaded as int8 then .to(int64). Fine.
+
+Potential overflow: int64 throughout, magnitudes < 2^48, fine.
+
+Edge: _local_scan grid (batch, chunks) with N < block: step<N mask handles. Summary lane==BLOCK-1 stores inclusive total of block; but out-of-range lanes are identity, so total = total of real steps in the chunk. Good.
+
+But wait: _block_carries loads SUMMARY at lanes < CHUNKS without .to(int64) — summary is already int64. Fine. carry stores int64.
+
+_apply_prefix loads PREFIX with mask step<N, other 0 — but unused stores masked. Fine.
+
+One subtle: the up-sweep take condition: (lane+1) % (2*stride) == 0. left = lane - stride, clamped max(lane-stride,0). For take lanes, lane>=2*stride-1>=stride so left>=lane-... fine.
+
+Down-sweep: right = ((lane // (2*stride)) + 1) * (2*stride) - 1. This may exceed C-1? lane <= C-1, lane//(2s) <= (C-1)/(2s), right <= ... For lane=C-1, s=1: right = ((C-1)//2+1)*2-1 = C-1 (since C even) — fine, ≤ C-1. For any lane, right <= C-1? lane < C, lane//(2s)+1 <= ceil; right = (lane//(2s)+1)*2s-1 < lane+2s <= ... if lane//(2s)=k, right = (k+1)*2s-1 and lane >= k*2s, so right-lane <= 2s-1. And right ≤ C-1 requires (k+1)*2s ≤ C. Hmm, if lane in [k*2s, (k+1)*2s-1], then right = (k+1)*2s-1. Is (k+1)*2s-1 ≤ C-1? Need (k+1)*2s ≤ C. Since lane ≤ C-1 and lane ≥ k*2s, k*2s ≤ C-1, so k ≤ (C-1)/(2s), k+1 could push (k+1)*2s > C? If C=8, s=4 (level 2): lane in [0,7], lane//8 = 0, right = 8-1=7 ≤ 7 fine. s=2 (level 1): lanes 0-3 → right=3; lanes 4-7 → right=7. Fine. Generally right ≤ C-1 since (k+1)*2s-1 and lane ≤ (k+1)*2s-1 ≤ C-1 because lane < (k+1)*2s and lane ≤ C-1 → (k+1)*2s could be C+something? If lane = C-2, C=8, s=1: lane//2=3, right=7 ≤7. If lane=C-1: right depends. Since (k+1)*2s > lane and lane ≤ C-1, and (k+1)*2s is a multiple... right = (k+1)*2s-1 ≥ lane. Could right > C-1? Only if (k+1)*2s > C. But right ≥ lane means lane < (k+1)*2s; if (k+1)*2s > C then right ≥ C, so right ≥ C > C-1 ≥ lane, meaning right > lane. But right-lane ≤ 2s-1... Example: C=8, s=4, lane=5: lane//8=0, right=7. OK. s=4 only for lanes 0-7 with k=0, right=7. In general, largest stride = C/2 (level LEVELS-1), k=0 for all lanes, right = C-1. Fine. For s ≤ C/2, (k+1)*2s ≤ C? lane//(2s) ≤ (C-1)//(2s) so (k+1)*2s ≤ ((C-1)//(2s)+1)*2s ≤ C when 2s divides... ((C-1)//m +1)*m ≤ C when m | C. Yes since C is a multiple of 2s (power of two ≤ C). So right ≤ C-1. Good.
+
+One more: tl.gather requires index tensor same shape — scalar lane indices are tensors of shape [C]. Gather along axis 0 — a has shape [C]. OK.
+
+Also loading matrix as int8 pointer arithmetic: A + pos*4 where pos = row*N+step with step up to chunk*BLOCK+lane which can exceed N; masked. Good.
+
+Down-sweep within a level: lanes left and right both update; but do different (left,right) pairs overlap within a level? Pairs are disjoint ([k*2s, k*2s+s-1] parent... wait pairs are (left, right) = (right-s, right) with right being odd multiples; distinct rights per pair. But lanes not equal to left or right in any pair remain unchanged. However, note that some lane could be "left" of one pair and also... pairs disjoint. Also could a lane be left in one pair and the gather at that level reads that lane's old value — yes reads are all old values. Fine.
+
+Hmm, one more subtlety: in down-sweep, lanes between left and right (there are none, left=right-s, adjacent at this level? No — left and right are s apart, with lanes in between belonging to subtrees below). Those middle lanes keep their values until lower levels handle them. Standard Blelloch down-sweep operates on the tree: at level with stride s, internal node at position right covers [right-2s+1, right], its children at left=right-s (covering lower half) and right (covering upper half). Standard algorithm: parent's exclusive-prefix value goes to left child; right child gets compose(left child's total, parent). Wait no — in Blelloch, after up-sweep and setting root identity, down-sweep: node.left = node.value, node.right = compose(node.left_old, node.value). Yes matches: pa (at right position = parent) — wait, in the tree the parent of positions left and right... Hmm, positions here are flattened: node at index i covers a range; children of node covering [l, r] with r-l+1=2s are nodes at left index and right index. The "parent" value stored at index right (after up-sweep index right holds total of [left-s... no.
+
+Let me recheck: In the flattened array version (like the CUDA scan), up-sweep stores at index i (odd multiples of stride) the sum of the block ending at i. Down-sweep: for d from top: node at right index holds total of [right-2s+1... wait in _exclusive_chunks level loop, right = (k+1)*2s-1 which was set at level log2(2s)... The value at index right holds the total of interval [right-2s+1, right] (from up-sweep). Hmm, but in the down phase here they treat index `right` as the parent's accumulated exclusive prefix and push it. Let me think again with standard Blelloch on array of size 8:
+
+Up-sweep (their phase 1): level 0: pairs (0,1),(2,3)...: index 1 gets combine(a0,a1). level 1: index 3 gets combine(total[0..1], total[2..3]). level 2: index 7 gets total[0..7]. Then set index 7 (last) to identity.
+
+Down-sweep standard: for level from top: stride s = C/2, then s/2...: for each right = ...: 
+- temp = a[right]
+- a[left] = temp... no, standard: left child gets parent's value; right child gets combine(left_old, parent). With parent stored at right index? In flattened Blelloch, the parent of children at indices... Actually the standard implementation: in down-sweep at stride s, for k odd multiples: 
+  left = right - s
+  t = a[right]  (this is parent's exclusive prefix)
+  a[right] = combine(a[left], a[right])  — hmm.
+
+Standard Harris/Blelloch shared-memory scan (from GPU Gems):
+down-sweep:
+  for d = C/2 down to 1:
+    for each element i with (i+1) % (2*d) == 0? ... 
+Actually GPU Gems version:
+```
+for d = n/2 .. 1:
+  for i in ...:
+    t = a[i]
+    a[i] = a[i-d]?? 
+```
+Let me recall precisely (GPU Gems 3 chapter 39, work-inefficient but classic):
+```
+// down-sweep
+for (d = 1; d < n; d *= 2):
+```
+Hmm the GPU Gems version:
+```
+int d = n>>1;
+while(d) {
+  for each thread: if (i >= d):
+    t = a[i-d]; a[i-d] = a[i]; a[i] = t + a[i]  -- no, that's the one for inclusive? 
+```
+Actually that's the Brent-Kung form: down-sweep: t = a[i-d]; a[i-d] = a[i]; a[i] = t + a[i], for i with (i+1)%(2d)==0? Hmm. Their version: at level with stride s, for right = odd multiple pairs: a[left] = a[right] (parent's value pushed to left child), a[right] = compose(a[left_old], a[right]). Note left child's value at this point (post up-sweep and previous down levels): hmm, after up-sweep, index left holds the total of its subtree of size s (interval [right-2s+1, right-s]). Parent index right holds total of [right-2s+1, right]... but then it got replaced during earlier down-sweep levels? The last index was set to identity and then top level of down-sweep runs first (LEVELS-1 down to 0). At the top level (s = C/2), left = C/2-1... wait right=C-1, left=C/2-1? No: right - stride with stride = C/2 → left = C/2-1. Hmm but that's not the leftmost. Hmm — right=C-1, stride=C/2, left = C-1-C/2 = C/2-1. Hmm, but the left child should cover [0, C/2-1], i.e., its total is stored at index C/2-1 (right endpoint of that range, set at up-sweep level log2(C/2)). Yes! The subtree totals are stored at the right endpoints of the subtree ranges. So parent's total for [0, C-1] at index C-1; left child's total for [0, C/2-1] at index C/2-1 = left. Right child's total for [C/2, C-1] at index C-1 = right (same slot as parent!). 
+
+Down-sweep at this level: exclusive prefix at parent (identity for root) — stored where? a[right] currently holds inclusive total [0..C-1]; but we need it to hold the exclusive prefix of the right subtree eventually. Standard step: 
+- a[left] = a[right]  (left child gets parent's exclusive prefix — identity)
+- a[right] = compose(a[left_old], a[right]) = exclusive-prefix-of-parent ∘ total-of-left... wait compose(l, r) means l then r: value = r.mat ∘ ... no: _compose(l, r) returns the composite acting as left interval followed by right? Comment: "The left interval precedes the right interval." compose(la.., ra..) with a = ra*la + rb*lc: new matrix = r.M @ l.M, new bias = r.M@l.e + l... e = ra*le + rb*lf + re: that's r.M applied to l.bias plus r.bias = correct for (r after l). So compose(l, r) = payload of applying l first then r. Exclusive prefix for right subtree = parent_prefix ∘ left_total = compose(left_payload, parent_prefix)? Applying to state: state after = prefix applied... The exclusive prefix payload P for position p acts as state_before_range ∘ P? P is the composition of steps in the range, so state_after = P applied to state_before. Exclusive prefix at right = composition(left_total, parent_exclusive) since left interval precedes parent_exclusive? No — order in time: [left subtree steps][right subtree steps]; parent exclusive prefix covers everything before parent's range, i.e., before [0..C-1], nothing. The value needed at right child = prefix covering [0..C/2-1] = compose(left_total, parent_prefix) with left_total applied first. Their code: na = compose(la,...,pa,...) = compose(left, parent) = left then parent. Correct.
+
+And a[left] = pa: left child's slot now holds parent's exclusive prefix (covering nothing before left child within... covering everything before left subtree, i.e., before parent's range = nothing at top). But left child slot previously held left subtree's inclusive total — needed for the compose, read before update. Yes, gathers before wheres. Good.
+
+Then at lower levels, within left subtree: values at right endpoints of sub-subtrees hold their inclusive totals (unchanged from up-sweep since down-sweep only touched indices that were left/right of higher levels... wait, down-sweep at level s touches indices `left` and `right`; right indices at level s are the same as up-sweep "take" indices at level s? Up-sweep take indices: (lane+1)%(2s)==0, same as right indices. So a[right] gets overwritten from inclusive total to exclusive prefix; a[left] gets parent prefix. Then next level down (s/2) operates on the subtree: right' indices are (lane+1)%(s)==0 within... the code computes for all lanes uniformly. Fine, this is a well-known pattern.
+
+But subtle: at level s, index left gets pa (parent's exclusive prefix). But that overwrites left's inclusive total. Does anything later need left's inclusive total? At lower level s', right'' = left index possibly? right'' indices at level s' = s/2 are (lane+1)%(s)==0. left = right-s = multiple of s minus 1... left indices are ≡ s-1 mod 2s, which satisfy (left+1)%s == 0, so left is a right''-type index at level s/2? (left+1) % (2*(s/2)) = (left+1)%s = 0. Yes, left will be a "right" index at level s/2. At that level, gather reads its current value — which by then should be... In down-sweep at level s/2, right''=left holds the exclusive prefix pushed down, and it serves as the parent for its subtree. Correct per Blelloch.
+
+This is the standard algorithm; I'm fairly convinced it's right.
+
+Also concern: the down-sweep overwrites index C-1's identity — fine.
+
+tl.associative_scan with multiple tensors tuple and jit combine fn — supported in Triton 3.4.
+
+One more: _local_scan stores summary only when lane==BLOCK-1, but the associative_scan is inclusive over BLOCK lanes including identity-padded. Good.
+
+But wait — potential issue: the local scan's per-lane prefix values stored to PREFIX for real steps represent composition from the chunk start (position chunk*BLOCK) — but lane 0's value is just step chunk*BLOCK's own payload (no inclusion of prior). Then _apply_prefix applies carry (state before chunk). state at step = chunk_payload ∘ ... ∘ step applied to carry. Correct since affine composition: prefix(state) with prefix including step. Yes.
+
+The scan is inclusive within chunk: PREFIX[step] = composition of steps chunk_start..step. Applied to carry = state before chunk_start. Correct.
+
+Everything checks out. Also validate input: contiguous views with nonzero storage offsets — kernel uses data_ptr offsets via Triton pointers (Triton handles tensor storage offset). Fine.
+
+Verdict: trust, confidence ~0.85.

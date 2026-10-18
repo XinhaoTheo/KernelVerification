@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-51d8793e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the decisive probe: compare the kernel against zlib.crc32 on both widths, multiple batches and seeds, plus adversarial byte patterns.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b552727b9894a99c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, zlib, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_153\\\")\\nimport kernel\\n\\nresults = {}\\ncases = []\\nfor width in (64, 128):\\n    for seed in range(5):\\n        cases.append((f\\\"rand_w{width}_s{seed}\\\", torch.randint(0,256,(128,width),dtype=torch.uint8).cuda()))\\n    cases.append((f\\\"zeros_w{width}\\\", torch.zeros((128,width),dtype=torch.uint8).cuda()))\\n    cases.append((f\\\"ff_w{width}\\\", torch.full((128,width),255,dtype=torch.uint8).cuda()))\\n    cases.append((f\\\"ramp_w{width}\\\", torch.arange(width,dtype=torch.uint8).repeat(128,1).cuda()))\\n    cases.append((f\\\"one_w{width}_b1\\\", torch.randint(0,256,(1,width),dtype=torch.uint8).cuda()))\\n\\nmism = 0; total = 0; first = None\\nfor name, x in cases:\\n    out = kernel.run(x)\\n    ref = torch.tensor([zlib.crc32(bytes(r)) for r in x.cpu().tolist()], dtype=torch.int64, device=x.device)\\n    ok = torch.equal(out, ref)\\n    total += x.shape[0]\\n    if not ok:\\n        mism += (out != ref).sum().item()\\n        idx = (out != ref).nonzero()[0].item()\\n        first = {\\\"case\\\": name, \\\"idx\\\": idx, \\\"kernel\\\": out[idx].item(), \\\"ref\\\": ref[idx].item(),\\n                 \\\"row_bytes\\\": x[idx].cpu().tolist()[:16]}\\n        print(f\\\"MISMATCH in {name} row {idx}: kernel={out[idx].item()} ref={ref[idx].item()}\\\")\\n    else:\\n        print(f\\\"OK {name} ({x.shape[0]} rows)\\\")\\nprint(json.dumps({\\\"mismatched_rows\\\": mism, \\\"total_rows\\\": total, \\\"first_mismatch\\\": first,\\n                  \\\"metric\\\": \\\"exact int64 equality vs zlib.crc32, abs/rel tol=0\\\"}))\\n\", \"expected_signal\": \"mismatched_rows == 0 if kernel correct; nonzero with first_mismatch details if the composition math is wrong\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe: test kernel vs zlib.crc32 across both widths, random bytes, plus edge cases (all zeros, all 0xFF, batch 1 and 128), multiple seeds."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306005,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 559,
+    "prompt_tokens": 11417,
+    "total_tokens": 11976,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 40,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6736,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

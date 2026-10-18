@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_154\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Elementwise complex division on finite binary16 components.\\n2: \\n3: Original synthetic Triton implementation of standard complex arithmetic.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: \\n10: @triton.jit\\n11: def _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n12:     index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n13:     active = index < N\\n14:     a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\\n15:     b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n16:     c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\\n17:     d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n18:     scale = c * c + d * d\\n19:     real_numerator = a * c + b * d\\n20:     imag_numerator = b * c - a * d\\n21:     real = tl.div_rn(real_numerator, scale)\\n22:     imag = tl.div_rn(imag_numerator, scale)\\n23:     tl.store(OUT + 2 * index, real, mask=active)\\n24:     tl.store(OUT + 2 * index + 1, imag, mask=active)\\n25: \\n26: \\n27: def validate_inputs(numerator, denominator, require_cuda=True):\\n28:     \\\"\\\"\\\"Enforce the complete public tensor and component domain.\\\"\\\"\\\"\\n29:     def require(condition, message):\\n30:         if not condition:\\n31:             raise ValueError(message)\\n32:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n33:     for value in (numerator, denominator):\\n34:         require(type(value) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n35:         require(value.layout == torch.strided and value.is_contiguous(), \\\"contiguous strided input required\\\")\\n36:         require(not value.requires_grad and not value.is_inference(), \\\"ordinary non-gradient input required\\\")\\n37:         require(not value.is_neg() and not value.is_conj(), \\\"logical view flags are outside this domain\\\")\\n38:         require(not require_cuda or value.is_cuda, \\\"CUDA input required by run\\\")\\n39:         require(value.dtype == torch.float16, \\\"float16 input required\\\")\\n40:         require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n41:         require(bool(torch.isfinite(value).all()), \\\"all input components must be finite\\\")\\n42:     require(numerator.shape == denominator.shape and numerator.device == denominator.device, \\\"inputs must have the same shape and device\\\")\\n43:     require(bool((denominator != 0).any(dim=1).all()), \\\"each complex denominator must be nonzero\\\")\\n44:     return {\\\"valid\\\": True, \\\"size\\\": numerator.shape[0]}\\n45: \\n46: \\n47: def run(numerator, denominator):\\n48:     \\\"\\\"\\\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\\\"\\\"\\\"\\n49:     validate_inputs(numerator, denominator)\\n50:     n = numerator.shape[0]\\n51:     with torch.cuda.device(numerator.device):\\n52:         output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\\n53:         _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\\n54:                                      N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n55:     return output\\n56: \\n57: \\n58: def reference(numerator, denominator):\\n59:     \\\"\\\"\\\"Direct real formulas in FP64; supports CPU tensors for comparison.\\\"\\\"\\\"\\n60:     validate_inputs(numerator, denominator, require_cuda=False)\\n61:     a, b = numerator.to(torch.float64).unbind(dim=1)\\n62:     c, d = denominator.to(torch.float64).unbind(dim=1)\\n63:     scale = c * c + d * d\\n64:     return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\\n65: \\n66: \\n67: def make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n68:     \\\"\\\"\\\"Convenience examples, not restrictions on the legal component values.\\\"\\\"\\\"\\n69:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n70:     numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n71:     denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n72:     zero = (denominator == 0).all(dim=1)\\n73:     denominator[zero, 0] = 1\\n74:     return numerator.to(device), denominator.to(device)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_154\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-18T06:51:41Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"Products of fp16 values are exact in fp32, but the sum/subtraction of two large products that nearly cancel rounds at ulp(large operand), so the absolute error in the numerator can be ~2^-24*|a*c|, which after division by a small c*c+d*d yields an error far exceeding 1e-7 + 5e-7*|target| when the true component is small (catastrophic cancellation), e.g. large-magnitude a,b with near-cancelling products.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"The contract declares 'EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema' and requires 'abs(actual - target) <= 1e-7 + 5e-7 * abs(target)' per component, with 'A small real component must meet its own tolerance even when the imaginary component is large'.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires every finite FP16 component combination to meet abs(actual-target) <= 1e-7+5e-7*|target| per component; an input with large a,b and near-cancelling products is explicitly legal, so an accuracy failure there violates the required tolerance.\",\n      \"statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T06:51:41Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_154\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I've reviewed the contract and kernel. The key risk: the kernel computes `a*c + b*d` and `b*c - a*d` in fp32. Since fp16\\u00d7fp16 products are exact in fp32, ordinary inputs round only once and stay within the 5e-7 relative tolerance \\u2014 but when the two products nearly cancel, the fp32 sum's rounding error is relative to the large operands, not the tiny true result, which can violate the per-component tolerance. Let me record this claim and test it.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"Products of fp16 values are exact in fp32, but the sum/subtraction of two large products that nearly cancel rounds at ulp(large operand), so the absolute error in the numerator can be ~2^-24*|a*c|, which after division by a small c*c+d*d yields an error far exceeding 1e-7 + 5e-7*|target| when the true component is small (catastrophic cancellation), e.g. large-magnitude a,b with near-cancelling products.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"The contract declares 'EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema' and requires 'abs(actual - target) <= 1e-7 + 5e-7 * abs(target)' per component, with 'A small real component must meet its own tolerance even when the imaginary component is large'.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires every finite FP16 component combination to meet abs(actual-target) <= 1e-7+5e-7*|target| per component; an input with large a,b and near-cancelling products is explicitly legal, so an accuracy failure there violates the required tolerance.\",\n            \"statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"I'll test claim c1 with adversarial and random inputs, measuring the componentwise tolerance ratio.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json, sys, os\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ndef check(num, den):\\n    out = kernel.run(num, den)\\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.double().abs()\\n    ratio = (err / tol)\\n    return out, ref, ratio\\n\\nresults = {}\\n\\n# Adversarial: near-cancelling products, large magnitudes\\nworst = {\\\"ratio\\\": 0.0, \\\"case\\\": None}\\nrows = []\\n# a*c ~ -b*d with large values: pick c,d large, a = b*t? Use a/b = -d/c ratios exact in fp16\\nimport itertools\\nfound = []\\nvals = [1024.0, 2048.0, 4096.0, 512.0, 8192.0, 1.0, 2.0, 4.0, 0.5, 3.0, 6.0]\\nfor a in vals:\\n    for b in vals:\\n        for c in vals:\\n            for d in vals:\\n                if c==0 and d==0: continue\\n                rn = a*c + b*d\\n                if rn == 0.0: continue\\n                if abs(rn) / (abs(a*c)+abs(b*c)+abs(a*d)+abs(b*d)) < 1e-5:\\n                    found.append((a,b,c,d))\\n# pick a few hundred worst-conditioned combos\\nfound.sort(key=lambda t: abs(t[0]*t[2]+t[1]*t[3])/(abs(t[0]*t[2])+abs(t[1]*t[3])))\\nN = min(len(found), 2000)\\nnum = torch.tensor([[f[0],f[1]] for f in found[:N]], dtype=torch.float16, device=dev)\\nden = torch.tensor([[f[2],f[3]] for f in found[:N]], dtype=torch.float16, device=dev)\\nout, ref, ratio = check(num, den)\\nresults[\\\"adversarial_n\\\"] = N\\nresults[\\\"adversarial_max_ratio\\\"] = float(ratio.max())\\nresults[\\\"adversarial_violations\\\"] = int((ratio > 1.0).sum())\\nif float(ratio.max()) > worst[\\\"ratio\\\"]:\\n    i = int(ratio.max().flatten().argmax())\\n    worst[\\\"ratio\\\"] = float(ratio.max())\\n    r, cc = divmod(i, 2)\\n    worst[\\\"case\\\"] = found[r] + (\\\"real\\\" if cc==0 else \\\"imag\\\")\\n\\n# Also large random fp16 values\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\nbig = torch.empty((20000,2), dtype=torch.float32).uniform_(-65504, 65504, generator=g)\\nnum2 = big.to(torch.float16).to(dev)\\n...[truncated, 600 more chars]\",\n            \"expected_signal\": \"componentwise error/tolerance ratio > 1 for some legal input\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 4,\n      \"text\": \"The previous probe crashed because the exhaustive combo list was empty (all near-cancelling combos there were exactly zero), producing a zero-size tensor. I'll redesign: generate many random FP16 rows in Python, keep the ones with severe (but nonzero) cancellation, and run the kernel on those.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(123)\\n\\n# Generate random fp16 rows, look for severe cancellation in the real or imag numerator\\nM = 4_000_000\\nA = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nB = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nC = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nD = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\n\\na,b,c,d = [t.double() for t in (A,B,C,D)]\\nrn = a*c + b*d\\ninum = b*c - a*d\\ndenom = rn.abs() / (a.abs()*c.abs() + b.abs()*d.abs())\\ndenim = inum.abs() / (b.abs()*c.abs() + a.abs()*d.abs())\\nscore = torch.minimum(denom, denim)\\nscore = torch.where((rn!=0) & (inum!=0), score, torch.full_like(score, 1e9))\\nidx = torch.argsort(score)[:100000]\\n\\nnum = torch.stack([A[idx], B[idx]], dim=1).to(dev)\\nden = torch.stack([C[idx], D[idx]], dim=1).to(dev)\\nout = kernel.run(num, den)\\nref = kernel.reference(num.cpu(), den.cpu()).to(dev).double()\\nerr = (out.double() - ref).abs()\\ntol = 1e-7 + 5e-7*ref.abs()\\nratio = err/tol\\nviol = ratio > 1.0\\nres = {\\n \\\"n\\\": num.shape[0],\\n \\\"min_cancellation_ratio\\\": float(score[idx].min()),\\n \\\"max_ratio\\\": float(ratio.max()),\\n \\\"violations\\\": int(viol.sum()),\\n \\\"output_finite\\\": bool(torch.isfinite(out).all()),\\n}\\nif int(viol.sum())>0:\\n    i = int(ratio.flatten().argmax())\\n    r,cc = divmod(i,2)\\n    res[\\\"worst_row\\\"] = [float(num[r,0]), float(num[r,1]), float(den[r,0]), float(den[r,1]), \\\"real\\\" if cc==0 else \\\"imag\\\"]\\n    res[\\\"worst_actual\\\"] = float(out[r,cc]); res[\\\"worst_target\\\"] = float(ref[r,cc])\\n# benign check\\nn3,d3 = kernel.make_inputs(dev, size=4093, seed=0)\\nout3 = kernel.run(n3,d3)\\nref3 = kernel.reference(n3.cpu(), d3.cpu()).to(dev).double()\\nr3 = ((out3.double()-ref3).abs()/(1e-7+5e-7*ref3.abs()))\\n...[truncated, 66 more chars]\",\n            \"expected_signal\": \"max_ratio > 1 (tolerance violation) on near-cancelling legal inputs\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:50:43Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_154\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Elementwise complex division on finite binary16 components.\\n\\nOriginal synthetic Triton implementation of standard complex arithmetic.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    active = index < N\\n    a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\\n    b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n    c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\\n    d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n    scale = c * c + d * d\\n    real_numerator = a * c + b * d\\n    imag_numerator = b * c - a * d\\n    real = tl.div_rn(real_numerator, scale)\\n    imag = tl.div_rn(imag_numerator, scale)\\n    tl.store(OUT + 2 * index, real, mask=active)\\n    tl.store(OUT + 2 * index + 1, imag, mask=active)\\n\\n\\ndef validate_inputs(numerator, denominator, require_cuda=True):\\n    \\\"\\\"\\\"Enforce the complete public tensor and component domain.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    for value in (numerator, denominator):\\n        require(type(value) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n        require(value.layout == torch.strided and value.is_contiguous(), \\\"contiguous strided input required\\\")\\n        require(not value.requires_grad and not value.is_inference(), \\\"ordinary non-gradient input required\\\")\\n        require(not value.is_neg() and not value.is_conj(), \\\"logical view flags are outside this domain\\\")\\n        require(not require_cuda or value.is_cuda, \\\"CUDA input required by run\\\")\\n        require(value.dtype == torch.float16, \\\"float16 input required\\\")\\n        require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n        require(bool(torch.isfinite(value).all()), \\\"all input components must be finite\\\")\\n    require(numerator.shape == denominator.shape and numerator.device == denominator.device, \\\"inputs must have the same shape and device\\\")\\n    require(bool((denominator != 0).any(dim=1).all()), \\\"each complex denominator must be nonzero\\\")\\n    return {\\\"valid\\\": True, \\\"size\\\": numerator.shape[0]}\\n\\n\\ndef run(numerator, denominator):\\n    \\\"\\\"\\\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\\\"\\\"\\\"\\n    validate_inputs(numerator, denominator)\\n    n = numerator.shape[0]\\n    with torch.cuda.device(numerator.device):\\n        output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\\n        _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\\n                                     N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef reference(numerator, denominator):\\n    \\\"\\\"\\\"Direct real formulas in FP64; supports CPU tensors for comparison.\\\"\\\"\\\"\\n    validate_inputs(numerator, denominator, require_cuda=False)\\n    a, b = numerator.to(torch.float64).unbind(dim=1)\\n    c, d = denominator.to(torch.float64).unbind(dim=1)\\n    scale = c * c + d * d\\n    return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n    \\\"\\\"\\\"Convenience examples, not restrictions on the legal component values.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n    denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n    zero = (denominator == 0).all(dim=1)\\n    denominator[zero, 0] = 1\\n    return numerator.to(device), denominator.to(device)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_154\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:50:43Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_154\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:50:43Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_154\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3728\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2482\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T06:50:43Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_154\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"Products of fp16 values are exact in fp32, but the sum/subtraction of two large products that nearly cancel rounds at ulp(large operand), so the absolute error in the numerator can be ~2^-24*|a*c|, which after division by a small c*c+d*d yields an error far exceeding 1e-7 + 5e-7*|target| when the true component is small (catastrophic cancellation), e.g. large-magnitude a,b with near-cancelling products.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"The contract declares 'EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema' and requires 'abs(actual - target) <= 1e-7 + 5e-7 * abs(target)' per component, with 'A small real component must meet its own tolerance even when the imaginary component is large'.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires every finite FP16 component combination to meet abs(actual-target) <= 1e-7+5e-7*|target| per component; an input with large a,b and near-cancelling products is explicitly legal, so an accuracy failure there violates the required tolerance.\",\n        \"statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\"\n      },\n      \"created_at\": \"2026-10-18T06:51:41Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T06:51:41Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"Products of fp16 values are exact in fp32, but the sum/subtraction of two large products that nearly cancel rounds at ulp(large operand), so the absolute error in the numerator can be ~2^-24*|a*c|, which after division by a small c*c+d*d yields an error far exceeding 1e-7 + 5e-7*|target| when the true component is small (catastrophic cancellation), e.g. large-magnitude a,b with near-cancelling products.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"The contract declares 'EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema' and requires 'abs(actual - target) <= 1e-7 + 5e-7 * abs(target)' per component, with 'A small real component must meet its own tolerance even when the imaginary component is large'.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires every finite FP16 component combination to meet abs(actual-target) <= 1e-7+5e-7*|target| per component; an input with large a,b and near-cancelling products is explicitly legal, so an accuracy failure there violates the required tolerance.\",\n        \"statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T06:51:41Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json, sys, os\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ndef check(num, den):\\n    out = kernel.run(num, den)\\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.double().abs()\\n    ratio = (err / tol)\\n    return out, ref, ratio\\n\\nresults = {}\\n\\n# Adversarial: near-cancelling products, large magnitudes\\nworst = {\\\"ratio\\\": 0.0, \\\"case\\\": None}\\nrows = []\\n# a*c ~ -b*d with large values: pick c,d large, a = b*t? Use a/b = -d/c ratios exact in fp16\\nimport itertools\\nfound = []\\nvals = [1024.0, 2048.0, 4096.0, 512.0, 8192.0, 1.0, 2.0, 4.0, 0.5, 3.0, 6.0]\\nfor a in vals:\\n    for b in vals:\\n        for c in vals:\\n            for d in vals:\\n                if c==0 and d==0: continue\\n                rn = a*c + b*d\\n                if rn == 0.0: continue\\n                if abs(rn) / (abs(a*c)+abs(b*c)+abs(a*d)+abs(b*d)) < 1e-5:\\n                    found.append((a,b,c,d))\\n# pick a few hundred worst-conditioned combos\\nfound.sort(key=lambda t: abs(t[0]*t[2]+t[1]*t[3])/(abs(t[0]*t[2])+abs(t[1]*t[3])))\\nN = min(len(found), 2000)\\nnum = torch.tensor([[f[0],f[1]] for f in found[:N]], dtype=torch.float16, device=dev)\\nden = torch.tensor([[f[2],f[3]] for f in found[:N]], dtype=torch.float16, device=dev)\\nout, ref, ratio = check(num, den)\\nresults[\\\"adversarial_n\\\"] = N\\nresults[\\\"adversarial_max_ratio\\\"] = float(ratio.max())\\nresults[\\\"adversarial_violations\\\"] = int((ratio > 1.0).sum())\\nif float(ratio.max()) > worst[\\\"ratio\\\"]:\\n    i = int(ratio.max().flatten().argmax())\\n    worst[\\\"ratio\\\"] = float(ratio.max())\\n    r, cc = divmod(i, 2)\\n    worst[\\\"case\\\"] = found[r] + (\\\"real\\\" if cc==0 else \\\"imag\\\")\\n\\n# Also large random fp16 values\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\nbig = torch.empty((20000,2), dtype=torch.float32).uniform_(-65504, 65504, generator=g)\\nnum2 = big.to(torch.float16).to(dev)\\nden2 = (torch.empty((20000,2), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16).to(dev)\\nz = (den2==0).all(dim=1); den2[z,0]=1\\nout2, ref2, ratio2 = check(num2, den2)\\nresults[\\\"random_large_max_ratio\\\"] = float(ratio2.max())\\nresults[\\\"random_large_violations\\\"] = int((ratio2>1.0).sum())\\n\\n# Benign random (make_inputs)\\nn3, d3 = kernel.make_inputs(dev, size=4093, seed=0)\\nout3, ref3, ratio3 = check(n3, d3)\\nresults[\\\"benign_max_ratio\\\"] = float(ratio3.max())\\nresults[\\\"benign_violations\\\"] = int((ratio3>1.0).sum())\\n\\nresults[\\\"worst_case\\\"] = worst[\\\"case\\\"]\\nprint(json.dumps(results))\\n\",\n        \"expected_signal\": \"componentwise error/tolerance ratio > 1 for some legal input\"\n      },\n      \"created_at\": \"2026-10-18T06:51:54Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"31d3bb4e996efb83c686b872d7cdafe66640a887e9799aed9fd76e0049e7c138\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"38edf3ed01b783843a7d23c4921d6c735ab31d5b05455f92ddb8ebfe27212904\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\",\n        \"cwd\": \"/root/cases/case_154\",\n        \"duration_s\": 4.500627,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"31d3bb4e996efb83c686b872d7cdafe66640a887e9799aed9fd76e0049e7c138\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"38edf3ed01b783843a7d23c4921d6c735ab31d5b05455f92ddb8ebfe27212904\"\n              }\n            ],\n            \"duration_s\": 4.500627,\n            \"exit_code\": 1,\n            \"expected_signal\": \"componentwise error/tolerance ratio > 1 for some legal input\",\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r3/real_kernel_challenges/case_154/solo/probes/t6_probe.py\\\", line 37, in <module>\\n    out, ref, ratio = check(num, den)\\n                      ^^^^^^^^^^^^^^^\\n  File \\\"/root/trace_runs/r3/real_kernel_challenges/case_154/solo/probes/t6_probe.py\\\", line 7, in check\\n    out = kernel.run(num, den)\\n          ^^^^^^^^^^^^^^^^^^^^\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 49, in run\\n    validate_inputs(numerator, denominator)\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 40, in validate_inputs\\n    require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 31, in require\\n    raise ValueError(message)\\nValueError: shape must be [N,2], 1<=N<=131072\\n\",\n            \"stdout\": \"\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe failed or produced nonzero exit and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 1,\n        \"expected_signal\": \"componentwise error/tolerance ratio > 1 for some legal input\",\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r3/real_kernel_challenges/case_154/solo/probes/t6_probe.py\\\", line 37, in <module>\\n    out, ref, ratio = check(num, den)\\n                      ^^^^^^^^^^^^^^^\\n  File \\\"/root/trace_runs/r3/real_kernel_challenges/case_154/solo/probes/t6_probe.py\\\", line 7, in check\\n    out = kernel.run(num, den)\\n          ^^^^^^^^^^^^^^^^^^^^\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 49, in run\\n    validate_inputs(numerator, denominator)\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 40, in validate_inputs\\n    require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n  File \\\"/root/cases/case_154/kernel.py\\\", line 31, in require\\n    raise ValueError(message)\\nValueError: shape must be [N,2], 1<=N<=131072\\n\",\n        \"stdout\": \"\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(123)\\n\\n# Generate random fp16 rows, look for severe cancellation in the real or imag numerator\\nM = 4_000_000\\nA = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nB = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nC = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\nD = (torch.empty((M,), dtype=torch.float32).uniform_(-65504, 65504, generator=g)).to(torch.float16)\\n\\na,b,c,d = [t.double() for t in (A,B,C,D)]\\nrn = a*c + b*d\\ninum = b*c - a*d\\ndenom = rn.abs() / (a.abs()*c.abs() + b.abs()*d.abs())\\ndenim = inum.abs() / (b.abs()*c.abs() + a.abs()*d.abs())\\nscore = torch.minimum(denom, denim)\\nscore = torch.where((rn!=0) & (inum!=0), score, torch.full_like(score, 1e9))\\nidx = torch.argsort(score)[:100000]\\n\\nnum = torch.stack([A[idx], B[idx]], dim=1).to(dev)\\nden = torch.stack([C[idx], D[idx]], dim=1).to(dev)\\nout = kernel.run(num, den)\\nref = kernel.reference(num.cpu(), den.cpu()).to(dev).double()\\nerr = (out.double() - ref).abs()\\ntol = 1e-7 + 5e-7*ref.abs()\\nratio = err/tol\\nviol = ratio > 1.0\\nres = {\\n \\\"n\\\": num.shape[0],\\n \\\"min_cancellation_ratio\\\": float(score[idx].min()),\\n \\\"max_ratio\\\": float(ratio.max()),\\n \\\"violations\\\": int(viol.sum()),\\n \\\"output_finite\\\": bool(torch.isfinite(out).all()),\\n}\\nif int(viol.sum())>0:\\n    i = int(ratio.flatten().argmax())\\n    r,cc = divmod(i,2)\\n    res[\\\"worst_row\\\"] = [float(num[r,0]), float(num[r,1]), float(den[r,0]), float(den[r,1]), \\\"real\\\" if cc==0 else \\\"imag\\\"]\\n    res[\\\"worst_actual\\\"] = float(out[r,cc]); res[\\\"worst_target\\\"] = float(ref[r,cc])\\n# benign check\\nn3,d3 = kernel.make_inputs(dev, size=4093, seed=0)\\nout3 = kernel.run(n3,d3)\\nref3 = kernel.reference(n3.cpu(), d3.cpu()).to(dev).double()\\nr3 = ((out3.double()-ref3).abs()/(1e-7+5e-7*ref3.abs()))\\nres[\\\"benign_max_ratio\\\"] = float(r3.max())\\nprint(json.dumps(res))\\n\",\n        \"expected_signal\": \"max_ratio > 1 (tolerance violation) on near-cancelling legal inputs\"\n      },\n      \"created_at\": \"2026-10-18T06:52:09Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t7_probe.py\",\n            \"sha256\": \"04a34a1b62d75abd58d8ab710be61bb365ccee07632793ea7b32611d4b4e1612\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t7_stdout.txt\",\n            \"sha256\": \"2a603ffbc842bbb1bd77f5b945a2cd82d399f89094a1a3e77c68b0d78cc161d2\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t7_stderr.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n            \"kind\": \"json_result\",\n            \"path\": \"probes/t7_json_result.json\",\n            \"sha256\": \"1e6d2a66cf2f64171e1157895bf808430119340de5f66be6dd79ad6f9363f36b\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's fp32 intermediate arithmetic (real_numerator = a*c + b*d, imag_numerator = b*c - a*d computed in float32) produces componentwise errors exceeding the contract tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the two products nearly cancel.\",\n        \"cwd\": \"/root/cases/case_154\",\n        \"duration_s\": 6.101332,\n        \"event_id\": \"t7\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t7_probe.py\",\n                \"sha256\": \"04a34a1b62d75abd58d8ab710be61bb365ccee07632793ea7b32611d4b4e1612\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t7_stdout.txt\",\n                \"sha256\": \"2a603ffbc842bbb1bd77f5b945a2cd82d399f89094a1a3e77c68b0d78cc161d2\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t7_stderr.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Parsed JSON object from the last non-empty stdout line.\",\n                \"kind\": \"json_result\",\n                \"path\": \"probes/t7_json_result.json\",\n                \"sha256\": \"1e6d2a66cf2f64171e1157895bf808430119340de5f66be6dd79ad6f9363f36b\"\n              }\n            ],\n            \"duration_s\": 6.101332,\n            \"exit_code\": 0,\n            \"expected_signal\": \"max_ratio > 1 (tolerance violation) on near-cancelling legal inputs\",\n            \"json_parse_error\": null,\n            \"json_result\": {\n              \"benign_max_ratio\": 0.2846909212969141,\n              \"max_ratio\": 0.29790218530445206,\n              \"min_cancellation_ratio\": 1.9976240259834951e-07,\n              \"n\": 100000,\n              \"output_finite\": true,\n              \"violations\": 0\n            },\n            \"stderr\": \"\",\n            \"stdout\": \"{\\\"n\\\": 100000, \\\"min_cancellation_ratio\\\": 1.9976240259834951e-07, \\\"max_ratio\\\": 0.29790218530445206, \\\"violations\\\": 0, \\\"output_finite\\\": true, \\\"benign_max_ratio\\\": 0.2846909212969141}\\n\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe produced a JSON result that needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t7\"\n        },\n        \"exit_code\": 0,\n        \"expected_signal\": \"max_ratio > 1 (tolerance violation) on near-cancelling legal inputs\",\n        \"json_parse_error\": null,\n        \"json_result\": {\n          \"benign_max_ratio\": 0.2846909212969141,\n          \"max_ratio\": 0.29790218530445206,\n          \"min_cancellation_ratio\": 1.9976240259834951e-07,\n          \"n\": 100000,\n          \"output_finite\": true,\n          \"violations\": 0\n        },\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"\",\n        \"stdout\": \"{\\\"n\\\": 100000, \\\"min_cancellation_ratio\\\": 1.9976240259834951e-07, \\\"max_ratio\\\": 0.29790218530445206, \\\"violations\\\": 0, \\\"output_finite\\\": true, \\\"benign_max_ratio\\\": 0.2846909212969141}\\n\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

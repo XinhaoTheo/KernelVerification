@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-aea22419",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch one probe per open claim. c1 tests tl.gather compile/runtime behavior on an ordinary input; c2 tests impulse and adversarial-spectrum correctness across all three N; c3 tests FP16 extreme magnitudes against a high-precision reference. All three are independent, so I'm launching them together.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b3555eee987326fb",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, traceback\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\ndev = \\\"cuda\\\"\\ntorch.manual_seed(0)\\nv = torch.randn(4, 128, device=dev, dtype=torch.float16)\\nres = {\\\"compiled\\\": False, \\\"exception\\\": None, \\\"max_abs_err\\\": None}\\ntry:\\n    out = kernel.run(v)\\n    torch.cuda.synchronize()\\n    res[\\\"compiled\\\"] = True\\n    ref = torch.fft.rfft(v.to(torch.float64), dim=1)\\n    refc = torch.stack((ref.real, ref.imag), dim=-1)\\n    err = (out.double() - refc).abs()\\n    res[\\\"max_abs_err\\\"] = err.max().item()\\n    res[\\\"shape\\\"] = list(out.shape)\\n    res[\\\"dtype\\\"] = str(out.dtype)\\n    res[\\\"finite\\\"] = bool(torch.isfinite(out).all())\\nexcept Exception as e:\\n    res[\\\"exception\\\"] = repr(e)[:800]\\nprint(res)\", \"expected_signal\": \"tl.gather on 1-D FP64 tensors compiles and behaves as plain indexing; run() returns correct spectrum\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-899cba9281d160a7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\ndev = \\\"cuda\\\"\\ndef exact_dft(x):\\n    # x: [B,N] float64 -> [B,N//2+1,2] high precision\\n    N = x.shape[1]\\n    j = torch.arange(N, dtype=torch.float64, device=x.device)\\n    k = torch.arange(N//2+1, dtype=torch.float64, device=x.device)\\n    ang = -2j * torch.pi * torch.outer(k, j) / N\\n    M = torch.exp(ang)  # [K,N]\\n    X = x @ M.T.conj().conj().T  # x [B,N] @ exp matrix [N,K]\\n    return torch.stack((X.real, X.imag), dim=-1)\\n\\nres = {\\\"per_N\\\": {}}\\noverall_ok = True\\nfor N in (64, 128, 256):\\n    rows = []\\n    B = 4\\n    x = torch.zeros(B, N, dtype=torch.float16, device=dev)\\n    # impulse at different positions\\n    for b in range(B):\\n        x[b, b*7 % N] = 1.0\\n    rows.append(x)\\n    # adversarial spectra: single-bin complex sinusoid rows\\n    xs = torch.zeros(B, N, dtype=torch.float16, device=dev)\\n    for b in range(B):\\n        j = torch.arange(N, device=dev, dtype=torch.float64)\\n        freq = (b*3+1)\\n        xs[b] = torch.cos(2*torch.pi*freq*j/N + b).to(torch.float16)\\n    rows.append(xs)\\n    # Nyquist / DC / alternating\\n    xn = torch.zeros(B, N, dtype=torch.float16, device=dev)\\n    xn[0] = 1.0; xn[1] = -1.0; xn[2,:] = (torch.arange(N,device=dev,dtype=torch.float16)%2*2-1)\\n    rows.append(xn)\\n    # random\\n    rows.append(torch.randn(B, N, device=dev, dtype=torch.float16))\\n    worst = 0.0; worst_rel_ok = True; bad = 0; worst_info = None\\n    for ti, x in enumerate(rows):\\n        out = kernel.run(x)\\n        ex = exact_dft(x.to(torch.float64))\\n        err = (out.double() - ex).abs()\\n        tol = 1e-4 + 1e-6*ex.abs()\\n        viol = (err > tol)\\n        if viol.any():\\n            bad += int(viol.sum())\\n            idx = (err - tol).argmax()\\n            worst_info = {\\\"test\\\": ti, \\\"idx\\\": idx.item(), \\\"err\\\": err.flatten()[idx].item(), \\\"tol\\\": tol.flatten()[idx].item()}\\n        r = (err / (tol)).max().item()\\n        worst = max(worst, r)\\n    res[\\\"per_N\\\"][N] = {\\\"worst_err_over_tol\\\": worst, \\\"violations\\\": bad, \\\"worst_case\\\": worst_info}\\n    overall_ok = overall_ok and bad == 0\\nres[\\\"all_pass\\\"] = overall_ok\\nprint(res)\", \"expected_signal\": \"All N in {64,128,256} and impulse/adversarial spectra match exact DFT within tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-bbf1c3779cb9b591",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\ndev = \\\"cuda\\\"\\ndef exact_dft(x):\\n    N = x.shape[1]\\n    j = torch.arange(N, dtype=torch.float64, device=x.device)\\n    k = torch.arange(N//2+1, dtype=torch.float64, device=x.device)\\n    M = torch.exp(-2j * torch.pi * torch.outer(k, j) / N)\\n    X = x @ M.T\\n    return torch.stack((X.real, X.imag), dim=-1)\\n\\n# verify cosine table literals at double precision\\nimport math\\ntab_ok = True; tab_maxdiff = 0.0\\nfrom kernel import _COSINE\\nfor i, v in enumerate(_COSINE):\\n    d = abs(v - math.cos(2*math.pi*i/256))\\n    tab_maxdiff = max(tab_maxdiff, d)\\n    tab_ok = tab_ok and d < 1e-17\\nres = {\\\"table_maxdiff\\\": tab_maxdiff, \\\"table_ok\\\": tab_ok, \\\"cases\\\": {}}\\nworst = 0.0; total_bad = 0\\nfor N in (64, 128, 256):\\n    B = 6\\n    x = torch.zeros(B, N, dtype=torch.float16, device=dev)\\n    big = torch.finfo(torch.float16).max\\n    x[0,:] = big\\n    x[1,:] = -big\\n    x[2,:] = big if N % 2 == 0 else 0\\n    x[2,:] = torch.where(torch.arange(N,device=dev)%2==0, torch.tensor(big,device=dev), torch.tensor(-big,device=dev))\\n    x[3,:] = torch.linspace(big, 1.0, N, device=dev).to(torch.float16)\\n    x[4] = (torch.randn(N, device=dev) * 20000).to(torch.float16)\\n    x[5,:] = 6e-8  # subnormal-ish small values (fp16 subnormal min ~6e-8)\\n    x[5,:] = 5.96e-8\\n    out = kernel.run(x)\\n    ex = exact_dft(x.to(torch.float64))\\n    err = (out.double() - ex).abs()\\n    tol = 1e-4 + 1e-6*ex.abs()\\n    viol = int((err > tol).sum())\\n    ratio = (err/tol).max().item()\\n    fin = bool(torch.isfinite(out).all())\\n    res[\\\"cases\\\"][N] = {\\\"violations\\\": viol, \\\"worst_err_over_tol\\\": ratio, \\\"finite\\\": fin, \\\"max_exact_mag\\\": ex.abs().max().item()}\\n    total_bad += viol\\n    worst = max(worst, ratio)\\nres[\\\"all_pass\\\"] = total_bad == 0\\nres[\\\"worst_ratio\\\"] = worst\\nprint(res)\", \"expected_signal\": \"Extreme FP16 rows stay within 1e-4+1e-6*|exact| of the exact DFT and are finite; table literals are true doubles\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three claim probes in parallel: c1 (basic run on random input, checks compile), c2 (impulse/spectrum across all N), c3 (extreme rows). All independent."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310545,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1778,
+    "prompt_tokens": 25854,
+    "total_tokens": 27632,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 40,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7120,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

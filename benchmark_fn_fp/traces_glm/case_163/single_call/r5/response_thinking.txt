@@ -1,0 +1,171 @@
+Let's analyze. N in {64,128,256}, M=N/2. Complex FFT of M points packed from real input. M in {32,64,128}, LOG_M = 5,6,7. Twiddle table is first quadrant of 256-point: 65 entries, indices 0..64.
+
+_twiddle(TABLE, phase): folded = min(phase, 128-phase); cosine = TABLE[folded]. TABLE has 65 entries; folded can go up to 64 (phase in 0..128). Fine. cosine = where(phase<=64, cosine, -cosine). sine = TABLE[|64-phase|]. Returns (cos, -sin). So wi = -sin(phase). e^{-2πi phase/256} = cos - i sin. So (wr, wi) = (cos(2π phase/256), -sin(...)) — that's W = e^{-iθ}. Good.
+
+Check table: TABLE[f] = cos(2π f/256)? _COSINE[1]=0.99969881... cos(2π/256)=cos(0.02454)=0.99969... yes. TABLE[64]=0.0 = cos(π/2). Good. sine = TABLE[|64-phase|] = cos(2π|64-phase|/256) = sin(2π phase/256)? cos(π/2 - θ)=sin θ for phase≤64: |64-phase|=64-phase, cos(2π(64-phase)/256)=cos(π/2 - 2π phase/256)=sin(θ). For phase>64: |64-phase|=phase-64, cos(θ-π/2)=sin θ. Good. So -sine = -sin(θ). Fine.
+
+But note phase in the butterfly: (k & (half-1)) * (256//width). width = M>>stage... For M=128, stage 0: width=128, half=64, phase = (k&63)*2, in 0..126. Twiddle with phase up to 128-ish: phase max = 63*2=126 ≤ 128. In final stage width=2, half=1, phase=0. For M=128, 256//width: fine. For N=64, M=32: 256//width with width=32 → phase = (k&15)*8 max 120. OK.
+
+But wait: twiddle indices: folded = min(phase,128-phase), ≤64, within table size 65. Good.
+
+Now the packed real FFT reconstruction. Standard: given Z[k] = FFT_M of x[2j]+i x[2j+1], then
+X[k] = Re(Z[k]) + Re(Z[M-k]) ... standard formulas:
+X[k] = 0.5*[ (Zr[k]+Zr[M-k]) + (Zi[k]-Zi[M-k])cos... hmm let me recall.
+
+Let Z[k] = FFT of z[j]=x[2j]+i x[2j+1], j=0..M-1, with FFT sign e^{-2πijk/M}.
+
+Then X[k] = E[k] + W^k O[k], where E = FFT of even, O = FFT of odd.
+E[k] = (Z[k] + conj(Z[M-k]))/2, O[k] = (Z[k] - conj(Z[M-k]))/(2i), W = e^{-2πi/N}.
+
+So X[k] = (Z[k]+conj Z[M-k])/2 + W^k (Z[k]-conj Z[M-k])/(2i).
+
+Let Z = ar + i ai, Z' = Z[M-k] = br + i bi. conj Z' = br - i bi.
+
+Term1 = ((ar+br) + i(ai-bi))/2.
+Term2 = W^k * ((ar-br) + i(ai+bi))/(2i) = W^k * (-i)(dr + i di)/2 where dr=ar-br, di=ai+bi.
+-i(dr + i di) = di - i dr.
+So Term2 = W (di - i dr)/2 = (wr + i wi)(di - i dr)/2 = (wr*di + wi*dr + i(wi*di - wr*dr))/2.
+
+So Xr = 0.5*(sr + wr*di + wi*dr), Xi = 0.5*(si + wi*di - wr*dr) where sr=ar+br, si=ai-bi.
+
+Kernel: xr = 0.5*(sr + (wr*di + wi*dr)) ✓. xi = 0.5*(si - (wr*dr - wi*di)) = 0.5*(si - wr*dr + wi*di) ✓. 
+
+W^k = e^{-2πik/N}: twiddle phase = k*(256//N) → angle 2π k*256/(256 N) = 2πk/N. ✓ (wi = -sin). Good.
+
+Now addressing: after DIF stages, the transform is in bit-reversed order. Standard DIF (decimation in frequency, Sande-Tukey) produces output in bit-reversed order when input is natural. Kernel gathers: address = bitreverse(k), so real[address] is... wait, they gather Z at bit-reversed index. If output after DIF is in bit-reversed order, then Z[natural k] = array[bitreverse(k)]. tl.gather(real, address) where address = reverse(k): yes gives natural-ordered Z[k]. Hmm wait, _reverse reverses bits of k over LOG_M bits. Good.
+
+Partner = (-address) & (M-1) — that's reverse? No — partner should be Z[M-k] in natural order. But they use partner = (-address)&(M-1), which in bit-reversed storage: index of natural M-k. Hmm, is (-a)&(M-1) the bit-reversed index of natural M-k where a = rev(k)? Natural index of M-k is M-k; storage index = rev(M-k). rev(M-k): M-k in LOG_M bits = (~k)+1 mod M... Actually rev(M-k) where M=2^L: M-k = (2^L - k). Hmm, rev(2^L - k mod 2^L) — is that equal to (2^L - rev(k)) mod 2^L? Reversal is a linear map over GF(2)^L (bit permutation), so rev(a - b) = rev(a) - rev(b)? No, arithmetic isn't preserved under bit reversal. But note: (-a)&(M-1) where a = rev(k): that's M - rev(k) mod M. Is rev(M-k) = M - rev(k)? rev(k) + rev(~k) = 2^L - 1 (all ones). So M - rev(k) = rev(~k)+1. And M - k = ~k + 1. Is rev(~k + 1) = rev(~k) + 1? Not generally (carry propagation). Hmm.
+
+But wait — partner is used to gather br = real[partner], intended to be Z[M-k] with natural index M-k. But the array is in bit-reversed storage: natural index n stored at rev(n). So Z[M-k] is at rev(M-k). partner = (-rev(k)) & (M-1) = (M - rev(k)) mod M = rev(~k) + 1. And rev(M-k) = rev(~k+1 mod M). For k=0: M-k=0, rev(0)=0. partner = (-rev(0))&mask = 0. ✓ (k=0, partner 0, Z[0] both — fine, gives X[0]=sum even + sum odd... check: with ar=br, ai=bi: sr=2ar, si=0, dr=0, di=2ai, wr=1,wi=0 (phase 0): xr = 0.5*2ar = ar... wait X[0] should = sum of all x = Re Z[0] + Re Z'[0]... E[0]+O[0] = Re Z[0] + Im Z[0]. Hmm with ar=br, ai=bi: xr=0.5*(2ar + 0 + 0)=ar? But formula: X[0] = 0.5*(sr + wr*di + wi*dr) = 0.5*(2ar + 1*2ai + 0) = ar+ai. Correct: X[0] = Re Z[0] + Im Z[0]. Good, wr=1 wr for phase 0: wr=cos=1, wi=-sin=0. xr=0.5(2ar + 2ai) = ar+ai ✓. xi=0.5*(si - (wr*dr - wi*di))=0.5*(0-0)=0 ✓.
+
+Now correctness of partner indexing. Hmm, but actually maybe the intended Z[M-k] in the bit-reversed array: since array index a = rev(k) corresponds to natural index k, partner in array should be rev(M-k). But they compute (-a)&(M-1). Claim: rev((M-k) mod M) = (M - rev(k)) mod M? Let's test with L=3, M=8. k=1: rev(1)=4. M-rev(k)=4. (-4)&7=4. rev(M-k)=rev(7)=7. 4≠7. Hmm so partner would be wrong!
+
+Wait wait — but let me reconsider. In many FFT implementations, the DIF output in bit-reversed order: element at array position i holds X[rev(i)]. So Z_natural[k] = arr[rev(k)]. Kernel gathers arr[address] with address=rev(k) → Z[k]. ✓. Partner: Z[M-k] = arr[rev(M-k)]. They compute partner = (-address)&mask = M - rev(k) mod M.
+
+Is rev(M-k mod M) = (M - rev(k)) mod M? With k=1, M=8: rev(1) = 4 (binary 001 → 100). M-k=7, rev(7)=7 (111→111). M-rev(k) = 8-4=4. Not equal. So bug?
+
+Hmm, but hold on: maybe the DIF butterfly ordering is different. Let me re-check the DIF loop carefully.
+
+k = arange(M). Stage: width = M>>stage, half = width>>1. left = k & ~half, right = k | half. So for each k, pair (left, right) where left and right differ in bit log2(half). Actually k ranges over all M; the where(lower) splits. Standard DIF: for each group of size width, top half combines a[j] and a[j+half].
+
+Butterfly: a = arr[left], b = arr[right]. lower = (k & half)==0. For lower k: new[k] = a+b. For upper k (k&half ≠ 0, and left = k&~half, right = k|half = left+half... wait if k&half≠0 then k|half = k, and k&~half = k-half. So for those k: a = arr[k-half], b = arr[k]. new[k] = (a-b)*W^{(k & (half-1)) * (256/width)}.
+
+Hmm — note that for k in lower half of the group, new[k] = arr[left]+arr[right] where left = k (since k&half==0... wait not necessarily: k&~half clears the half bit; if k&half==0 then left=k, right=k+half). Yes.
+
+This is standard DIF: after all stages, arr is X in bit-reversed order: arr[i] = X[rev(i)]. Wait, standard DIF with natural input gives bit-reversed output: X[rev(i)] = arr[i], i.e., arr[rev(k)] = X[k] → X[k] = arr[rev(k)]. Gather with address=rev(k) gives X[k]. ✓.
+
+So partner should be rev((M-k)%M), computed as (-address)&(M-1). Test M=8: k=1, address=rev(1)=4, partner=4. rev(M-1)=rev(7)=7. Z[M-1] stored at arr[7], but we read arr[4] which is Z[1]. That's wrong... unless — hmm, wait. Let me reconsider: maybe the DIF as coded with the pair indexing produces a different permutation. Let me actually trace a small example, M=4, LOG_M=2, N=8. Input z0..z3 (complex), packed as (x0+ix1, x2+ix3, x4+ix5, x6+ix7).
+
+Stage 0: width=4, half=2. k=0: left=0,right=2: arr0=z0,arr2=z2 → new0=z0+z2. k=1: left=1,right=3: new1=z1+z3. k=2: k&half≠0: left=0,right=2: new2=(z0-z2)*W^{(2&1)*64}=W^{0}=1 → z0-z2. k=3: left=1,right=3: new3=(z1-z3)*W^{1*64}=W^{64}=e^{-iπ/2}=-i... wait phase = (k & (half-1))*(256//width) = (k&1)*64. k=3: phase=64. W = e^{-2πi*64/256}=e^{-iπ/2}=-i. new3 = (z1-z3)*(-i).
+
+Stage 1: width=2, half=1. k=0: left=0,right=1: new0 = A0+A1 where A from previous. k=1: left=0,right=1: new1 = (A0-A1)*W^0 = A0-A1.
+
+Final arr: arr0 = (z0+z2)+(z1+z3) = sum = Z[0] ✓ (natural index 0, rev(0)=0).
+arr1 = A0-A1 = (z0+z2)-(z1+z3) = Z[2] (frequency 2). rev(1)=2 ✓ (arr[1]=Z[2], i.e., arr[i]=Z[rev(i)]... rev(1) in 2 bits: 1→2. yes).
+arr2 = A2 = (z0-z2) = Z[1]. rev(2)=1 ✓.
+arr3 = A3 = -i(z1-z3). Z[3] = sum z_j e^{-2πij*3/4} = z0 - i z1 - z2 + i z3 = (z0-z2) - i(z1-z3) ✓. rev(3)=3 ✓.
+
+So arr[i] = Z[rev(i)], Z[k] = arr[rev(k)]. Confirmed.
+
+Now reconstruction for k: needs Z[k] and Z[M-k]. With M=4: k=1: address=rev(1)=2. Z[1]=arr[2] ✓. partner should be Z[3]=arr[3]=arr[rev(3)=3]. Kernel: partner = (-2)&3 = 2. Wrong! It reads arr[2]=Z[1] again instead of Z[3].
+
+Hmm wait, that would be obviously broken; maybe I'm miscomputing. (-address) & (M-1): address=2, -2 & 3 = (4-2)=2. rev(M-k)=rev(3)=3. So indeed mismatch. Unless... maybe the intended partner uses address differently: partner = (-k) & (M-1) then rev? Let me re-read code:
+
+```
+address = _reverse(k, LOG_M)
+partner = (-address) & (M - 1)
+```
+
+Hmm. But maybe I should double-check the claim rev(M-k) vs M-rev(k) with more values. rev is a bijection; (M - a) mod M as a function of a vs rev applied to (M - rev^{-1}(a))... These coincide only for palindromic-ish structures. For k=1, M=8: rev(1)=4, need partner = rev(7)=7, but computed = 4. Definitely wrong.
+
+Hold on, maybe the DIF ordering here is reversed: maybe arr[rev(k)] isn't Z[k] but rather arr[k] = Z[rev(k)]? We verified with M=4 explicitly: arr[2]=Z[1], rev(2)=1, so arr[k]=Z[rev(k)]. Then Z[k] = arr[rev(k)] = gather(real, rev(k)) with address=rev(k). ✓ as kernel does.
+
+So partner index for Z[M-k]: arr index = rev(M-k mod M). Kernel uses (-rev(k)) & mask. These are equal iff rev is "negation-equivariant", i.e., rev(-k) = -rev(k). rev(-k mod M) = rev(M-k). Is rev(M-k) = M - rev(k)? Note M-1 = all ones; M-k = (~k)+1 mod M. rev(~k) = ~rev(k) (bitwise complement commutes with permutation). So rev(M-k) = rev(~k + 1). And M - rev(k) = ~rev(k) + 1 = rev(~k) + 1. So need rev(~k+1) = rev(~k)+1, i.e., rev commutes with +1 — only true if no carry, i.e., if ~k is even... Not generally.
+
+Hmm, but wait — maybe I should double check with actual trace M=4, k=1: kernel partner=2, reads arr[2]=Z[1]=br. So it uses Z[1] and Z[1] instead of Z[1] and Z[3]. For k=1 (N=8, frequency 1): X[1] should use Z[1], Z[3]. That's wrong. Unless... hmm, but let me double-check whether maybe the bit-reversal convention in DIF here results in arr[k]=Z[rev(k)] and rev of the code... we traced. It's solid.
+
+Hmm, but wait — maybe _reverse reverses differently. _reverse: for bit in 0..LOG_M-1: reversed = (reversed<<1)|((index>>bit)&1). So bit i of index goes to bit LOG_M-1-i. Standard. rev(1) with LOG=2: bit0=1 → reversed = 1 then shifted: bit0: rev=1; bit1: rev = (1<<1)|0 = 2. rev(1)=2 ✓ as I used.
+
+So there is a bug in partner index? But hold on — let me reconsider: is it possible that in bit-reversed storage, negation of the *natural* index corresponds to... The negation trick (-k)&(M-1) works for natural order. In bit-reversed order, the index for -k (natural) is rev(-k mod M). And there's a known identity: rev((-k) mod M) = ... no simple identity.
+
+Hmm, but wait. Let me reconsider: maybe the correct partner in bit-reversed storage IS (-address)&(M-1)? Consider: we want natural M-k. Storage index s such that rev(s) = M-k, i.e., s = rev(M-k). Alternatively, maybe the DIF here produces arr[i] = Z[rev(i)] as we verified... yes verified with explicit M=4 computation.
+
+M=4, k=1: partner computed = 2, correct = 3. Let me verify with a concrete numeric test mentally... Take z = [1,0,0,0] (real). Z = [1,1,1,1]. Input row x = [1,0,1,0,1,0,1,0]... wait z[j] = x[2j]+i x[2j+1]; z=[1,0,0,0] → x = [1,0,0,0,0,0,0,0]. X[k] = 1 for all k. N=8, output k=0..4.
+
+Compute kernel: arr = DIF result. Stage0: new0=z0+z2=1, new1=z1+z3=0, new2=z0-z2=1, new3=-i(z1-z3)=0. Stage1: arr0=new0+new1=1, arr1=new0-new1=1, arr2=new2+new3=1, arr3=new2-new3=1. arr=[1,1,1,1] (real). Z[k]=arr[rev(k)]: all 1 ✓.
+
+k=0: address=0, partner=0. ar=br=1, ai=bi=0. Twiddle phase = 0*(256/8)=0: wr=1,wi=0. sr=2,si=0,dr=0,di=0. xr=0.5*2=1 ✓ xi=0 ✓.
+
+k=1: address=rev(1)=2, partner=(-2)&3=2. ar=arr[2]=1, br=1, ai=bi=0. phase = 1*(256/8)=32: θ=2π*32/256=π/4. wr=cos π/4, wi=-sin π/4. sr=2, si=0, dr=0, di=0. xr = 0.5*2 = 1 ✓ (correct: X[1]=1). xi = 0 ✓. Coincidentally correct because dr,di=0.
+
+Hmm, this example doesn't expose. Let's take z = [0,1,0,0]: x=[0,1,0,0,0,0,0,0]. Z[k] = e^{-2πik/4} = [1,-i,-1,i]. X[k] = sum x_j e^{-2πijk/8} = e^{-2πi*1*k/8} = e^{-iπk/4}. X[1] = e^{-iπ/4} = (√2/2)(1-i).
+
+Kernel: Stage0: new0=z0+z2=0, new1=z1+z3=1, new2=z0-z2=0, new3=-i(z1-z3)=-i. Stage1: arr0=0+1=1, arr1=0-1=-1, arr2=0+(-i)=-i, arr3=0-(-i)=i. arr=[1,-1,-i,i] (Z[k]=arr[rev(k)]: Z0=arr0=1 ✓, Z1=arr2=-i ✓, Z2=arr1=-1 ✓, Z3=arr3=i ✓).
+
+k=1: address=2 → ar=0, ai=-1 (Z[1]=-i). partner=2 → br=0, bi=-1 (should be Z[3]=i: br=0, bi=1!). So kernel uses Z[1] as partner instead of Z[3].
+
+Compute: phase=32, wr=c, wi=-s (c=s=√2/2). sr = ar+br = 0. si = ai-bi = -1-(-1)=0. dr = 0. di = ai+bi = -2. xr = 0.5*(0 + c*(-2) + 0) = -c ≈ -0.707. Correct X[1] real = +0.707. WRONG. xi = 0.5*(0 - (0 - (-s)(-2))) = 0.5*(-( - s*... let's compute: wr*dr - wi*di = 0 - (-s)(-2) = -2s. xi = 0.5*(0 - (-2s)) = s ≈ 0.707. Correct imag = -0.707. So both wrong sign. Indeed bug!
+
+Hmm wait, unless... let me double check partner should be rev(M-k)=rev(3)=3, giving arr[3]=i: br=0, bi=1. Then sr=0, si=ai-bi=-1-1=-2, dr=0, di=ai+bi=-1+1=0. xr=0.5*(-2+0+0)=-1?? That's also wrong! X[1] should be 0.707-0.707i. Hmm.
+
+Let me recompute the formula. E[k] = FFT of even samples x[2j] = Re z. O[k] = FFT of odd = Im z. Z = E + i O (since FFT linear, FFT(z) = FFT(Re z) + i FFT(Im z)). So E = Re Z? No: E[k] = Re(Z[k])? FFT(z)[k] = E[k] + i O[k], so E[k]=Re Z[k], O[k]=Im Z[k]. Also E,O real-input but complex-valued; E[k] = (Z[k] + conj(Z[M-k]))/2 ✓, O[k] = (Z[k]-conj(Z[M-k]))/(2i) ✓.
+
+X[k] = E[k] + W_N^k O[k], W_N = e^{-2πi/N}.
+
+With z=[0,1,0,0]: even samples all 0 → E=0. odd samples: x[1]=1, others 0 → O[k]=1 all k. X[k] = W_N^k = e^{-iπk/4} ✓.
+
+Z[1]=-i, Z[3]=i. conj Z[3] = -i. E[1] = (-i + -i)/2 = -i ✓ (=0 real). O[1] = (Z1 - conjZ3)/(2i) = (-i - (-i))/(2i)=0 ✓.
+
+Kernel with correct partner (3): ar=0,ai=-1, br=0,bi=1. sr=0, si=ai-bi=-2, dr=ar-br=0, di=ai+bi=0. xr = 0.5*(sr + wr*di + wi*dr) = 0. xi = 0.5*(si - (wr*dr - wi*di)) = 0.5*(-2) = -1. That gives X[1] = -i?? But correct is e^{-iπ/4}=0.707-0.707i. So something's off in my formula derivation!
+
+Let me redo. X[k] = E[k] + W_N^k O[k]. 
+Xr = Er + Re(W Ok) = Er + (wr*Or - wi*Oi).
+Xi = Oi... = Ei + (wr*Oi + wi*Or).
+
+E[k] = (Z[k] + conj(Z[M-k]))/2: Er = (ar+br)/2, Ei = (ai-bi)/2.
+O[k] = (Z[k] - conj(Z[M-k]))/(2i) = -i(Z[k]-conj Z[M-k])/2. Z - conjZ' = (ar-br) + i(ai+bi) = dr + i di. Multiply -i: di - i dr. So Or = di/2, Oi = -dr/2.
+
+Xr = (ar+br)/2 + (wr*di/2 - wi*(-dr)/2) = 0.5(ar+br + wr*di + wi*dr) ✓ matches kernel xr.
+Xi = (ai-bi)/2 + (wr*(-dr)/2 + wi*di/2) = 0.5(ai-bi - wr*dr + wi*di) ✓ matches kernel xi = 0.5*(si - (wr*dr - wi*di)).
+
+Now recheck example: E[1]=-i means Er=0, Ei=-1. O[1]=0. X[1] = -i?? But direct computation said X[1]=e^{-iπ/4}. Contradiction! Let me recheck E and O.
+
+z[j] = x[2j] + i x[2j+1]. x = [0,1,0,0,0,0,0,0]. x[0]=0,x[1]=1: z[0] = 0 + i*1 = i. z[1]=z[2]=z[3]=0. Oops! I set z=[0,1,0,0] but x[2j]+i x[2j+1] means z[0]=i, not z[1]=1. Let me redo: z=[i,0,0,0].
+
+Z = i * [1,1,1,1] = [i,i,i,i]. E = Re Z = 0 ✓ (even samples zero). O = Im Z = 1 each ✓.
+
+Kernel trace: Stage0: z0=i, z2=0: new0 = i, new2 = i. z1=z3=0: new1=0, new3=0. Stage1: arr0 = i, arr1 = i, arr2 = i, arr3 = i. arr=[i,i,i,i].
+
+k=1: address=rev(1)=2: ar=0, ai=1. partner computed=2 → br=0, bi=1 (wrong; should be Z[3]=arr[3]=i → br=0,bi=1 — same values here!). Ugh, all equal again. sr=0, si=0, dr=0, di=2. xr = 0.5*(0 + wr*2 + 0) = wr = cos(π/4) = 0.707 ✓. xi = 0.5*(0 - (0 - wi*2)) = wi = -sin(π/4) = -0.707 ✓. Correct again due to symmetry (Z constant).
+
+Need a case where Z[k] ≠ Z[M-k]. Take x = [1,0, 0,0, 0,0, 0,0]: z=[1,0,0,0]. Then X[k]=1 ∀k. Earlier trace gave arr=[1,1,1,1] — again degenerate.
+
+Take x with z=[1, i, 0, 0]: x = [1,1,0,0,0,0,0,0]. Z = FFT([1,i,0,0]) = [1+i, 1-i·? compute: Z[k]=z0 + z1 e^{-2πik/4} = 1 + i·e^{-iπk/2}. Z0=1+i. Z1=1+i(-i)=1+1=2. Z2=1+i(-1)=1-i. Z3=1+i(i)=1-1=0.
+
+Even part FFT: E[k]=(Z[k]+conj Z[4-k])/2. X[k]=E[k]+W^k O[k]. Direct: x0=x1=1: X[k]=1+e^{-iπk/4}.
+
+X[1] = 1 + e^{-iπ/4} = 1 + 0.707 - 0.707i = 1.707 - 0.707i.
+
+Kernel: compute arr. z=[1,i,0,0]. Stage0 (width4, half2): k0: new0 = z0+z2 = 1. k1: new1 = z1+z3 = i. k2: new2 = z0-z2 = 1 (phase (2&1)*64=0 →W=1). k3: new3 = (z1-z3)*W^{phase (3&1)*64=64} = i * e^{-iπ/2} = i*(-i) = 1. Stage1 (width2, half1): arr0 = new0+new1 = 1+i. arr1 = new0-new1 = 1-i. arr2 = new2+new3 = 2. arr3 = new2-new3 = 0.
+
+Check arr[i]=Z[rev(i)]: Z0=1+i=arr0 ✓. Z1=2=arr2 ✓ (rev(2)=1). Z2=1-i=arr1 ✓. Z3=0=arr3 ✓.
+
+k=1: address=rev(1)=2 → ar=2, ai=0 (Z1 ✓). partner = (-2)&3 = 2 → br=2, bi=0. But Z[3]=0 (br=0,bi=0). BUG exposed.
+
+Kernel result: phase=32, wr=c, wi=-s. sr=4, si=0, dr=0, di=0. xr = 0.5*4 = 2. Correct X[1]r = 1.707. So output 2 vs 1.707 — error 0.29 >> 1e-4. Definitively wrong for k=1.
+
+Wait — but hold on, maybe I mis-derived and the correct partner relation in bit-reversed order is actually different, e.g., maybe the intended code is partner = _reverse((-k)&(M-1)) and they mistakenly negated address. Either way, as written with (-address)&mask it's wrong unless rev(-k) = -rev(k)... Let me double check with M=8 whether perhaps it accidentally works for some k but not all — no need; M=4 counterexample suffices? But wait, M=4 requires N=8, and N ∈ {64,128,256}, so M ∈ {32,64,128}. LOG_M ∈ {5,6,7}. Does the bug persist for M≥32? rev(-k) = -rev(k) fails whenever adding 1 to rev(~k) has carries — happens for most k. E.g., M=32, k=1: rev(1) = 16, partner = 16. Should be rev(31) = 31. Wrong. In general for k=1, partner = rev(1) = M/2, but Z[M-1] stored at arr[M-1] (since rev(M-1)=M-1). Wrong unless M=2.
+
+Hmm, but wait — is the k=1 reconstruction affected? Yes, k=1 output uses Z[1] and Z[M-1]. With the wrong partner it uses Z[1] twice. Unless... hmm, wait: address = rev(k), for k=1 address = M/2. partner = (-M/2)&(M-1) = M/2. So it uses Z[1] as both. Z[M-1] = conj-ish... definitely different in general. So the implementation is wrong for M≥... let me just double-check M=2 (N=4, not in domain). So reject.
+
+Actually wait, let me reconsider: maybe I have DIF order backwards. In many DIF implementations input natural → output bit-reversed means arr[i] = X[rev(i)]... I verified explicitly with M=4 example: arr2 = 2 = Z[1], and rev(2) = 1, so arr[i] = Z[rev(i)] ✓. So Z[k] = arr[rev(k)] — gather at rev(k) correct, and partner should be rev((M-k)%M). Code uses (-rev(k))&mask. For k=1, M=4: rev(3)=3 vs 2. Bug confirmed by the numeric example above: kernel gives X[1]r = 2 vs exact 1.707.
+
+Hmm, but hold on — one more sanity: maybe the intended partner is (-k)&(M-1) reversed, and there's an identity making (-address)&mask... no. The numeric counterexample settles it.
+
+Also check the Nyquist bin store: OUT[..., M, :] = (ar - ai, 0) masked k==0, where ar,ai at address 0 = Z[0]. X[N/2] = sum (-1)^j x[j] = Re Z[0] - Im Z[0]? Z[0] = sum z = sumE + i sumO. X[Nyq] = E[? ]... X[M] = sum x_j e^{-iπj} = sum even x - sum odd x = Re Z0 - Im Z0 = ar - ai ✓.
+
+So verdict: reject. Confidence high given explicit counterexample (N=8 not in domain, but the same structural error applies for M=32 etc.). Let me quickly verify with M=32, k=1 conceptually: address=rev(1)=16, partner=16; should be rev(31)=31. Yes.
+
+Actually, let me be extra careful: is it possible that the DIF loop as written yields arr[i] = Z[rev(i)] for all M (verified M=4) — yes standard. And partner for k: natural M-k, stored at rev(M-k). Kernel's (-address)&mask. rev(M-k) =? (M - rev(k)) mod M. Counterexample M=4,k=1: 3 vs 2. So reject.
+
+Wait, one more: is it possible that the reconstruction formula uses Z[k] and Z[partner-natural] where the partner in bit-reversed domain equals (-address)&mask because of how DIF reverses *pairs*? Some implementations note that in bit-reversed order, Z[M-k] is at index (M - rev(k)) only when... no. My numeric test with z=[1,i,0,0] at M=4 showed actual wrong output. Good enough.

@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-ba0ca331",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent runtime probes: c1 tests the cancellation case (a=1000,b=1,c=-1,d=1000) plus a small sweep of cancellation cases; c2 tests FP16 extrema / large-magnitude combinations.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0a7c60276e58856",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ncases = [\\n    [1000.0, 1.0, -1.0, 1000.0],\\n    [1.0, 1000.0, 1000.0, 1.0],\\n    [65504.0, 1.0, -1.0, 65504.0],\\n    [2048.0, 3.0, -3.0, 2048.0],\\n    [100.0, 0.5, -0.5, 100.0],\\n]\\nnum = torch.tensor([[a, b] for a, b, c, d in cases], dtype=torch.float16, device=\\\"cuda\\\")\\nden = torch.tensor([[c, d] for a, b, c, d in cases], dtype=torch.float16, device=\\\"cuda\\\")\\nout = K.run(num, den).double()\\nref = K.reference(num.cpu(), den.cpu()).double().cuda()\\nerr = (out - ref).abs()\\ntol = 1e-7 + 5e-7 * ref.abs()\\nok = err <= tol\\nprint(\\\"ref:\\\", ref.tolist())\\nprint(\\\"out:\\\", out.tolist())\\nprint(\\\"err:\\\", err.tolist())\\nprint(\\\"tol:\\\", tol.tolist())\\nprint(\\\"ok:\\\", ok.tolist())\\nimport json\\nprint(json.dumps({\\\"n_violations\\\": int((~ok).sum()), \\\"err\\\": err.tolist(), \\\"tol\\\": tol.tolist(), \\\"ok\\\": ok.tolist()}))\", \"expected_signal\": \"imag (or real) component error exceeding 1e-7+5e-7*|target| for cancellation cases like a=1000,b=1,c=-1,d=1000\", \"use_gpu\": true}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-ba8d253a2702869f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json, itertools, random\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\nE = 65504.0\\n# large-magnitude combinations, including extrema, plus a random large-magnitude sweep\\ncases = []\\nfor a in [E, 32768.0, 4096.0]:\\n    for c in [E, 32768.0, 4096.0, 2048.0]:\\n        for b in [0.0, 1.0, E]:\\n            for d in [0.0, 1.0, E]:\\n                if c == 0 and d == 0: continue\\n                cases.append([a, b, c, d])\\nrandom.seed(1)\\nfor _ in range(2000):\\n    a = random.choice([E, -E, 2**random.randint(11, 15), random.random()*1000])\\n    b = random.choice([0.0, 2**random.randint(11, 15), random.random()*1000, -2**14])\\n    c = random.choice([E, -E, 2**random.randint(11, 15), random.random()*1000])\\n    d = random.choice([0.0, 2**random.randint(11, 15), random.random()*1000, -2**14])\\n    if c == 0 and d == 0: c = 1.0\\n    cases.append([a, b, c, d])\\n\\nnum = torch.tensor([[a, b] for a, b, c, d in cases], dtype=torch.float16, device=\\\"cuda\\\")\\nden = torch.tensor([[c, d] for a, b, c, d in cases], dtype=torch.float16, device=\\\"cuda\\\")\\nout = K.run(num, den).double()\\nref = K.reference(num.cpu(), den.cpu()).double().cuda()\\nerr = (out - ref).abs()\\ntol = 1e-7 + 5e-7 * ref.abs()\\nok = err <= tol\\nbad = (~ok).nonzero()\\nprint(\\\"n_violations:\\\", int((~ok).sum()))\\nif len(bad):\\n    i = bad[0, 0].item(); comp = bad[0, 1].item()\\n    print(\\\"worst case:\\\", cases[i], \\\"ref:\\\", ref[i, comp].item(), \\\"out:\\\", out[i, comp].item(),\\n          \\\"err:\\\", err[i, comp].item(), \\\"tol:\\\", tol[i, comp].item())\\nprint(json.dumps({\\\"n_violations\\\": int((~ok).sum()), \\\"n_cases\\\": len(cases)}))\", \"expected_signal\": \"component error exceeding 1e-7+5e-7*|target| at FP16 extrema / large-magnitude cases\", \"use_gpu\": true}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 cancellation case, c2 extrema case. Both independent."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306285,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1101,
+    "prompt_tokens": 21554,
+    "total_tokens": 22655,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 18,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5843,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

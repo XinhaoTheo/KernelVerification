@@ -1,0 +1,84 @@
+{
+  "id": "chatcmpl-8fc9c8ce",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The first batch had a design flaw for c1 (c=2048 dominating d makes `a` small, so the cancelling operands were only ~8, not ~65504) and two dtype bugs (torch.tensor defaults to FP32, triggering validate_inputs). I'll mark t9 inconclusive and relaunch all three with fixes: c1 now uses c≈d so that b·ratio and a are both ~65504, c2/c3 with explicit dtype=torch.float16.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9af003409f5ded7d",
+            "function": {
+              "arguments": "{\"data\": {\"max_err_over_tol\": 0.2255, \"n_components\": 400, \"n_violations\": 0, \"probe_flaw\": \"c=2048 >> d made a≈8 so cancelling operands were ~8, not ~65504; true worst-case conditioning (c≈d, a≈±65504) not exercised\"}, \"event_id\": \"t9\", \"status\": \"inconclusive\", \"summary\": \"Probe passed with 0/400 violations but its input construction (c=2048 dominant) forces a≈-b*d/c to be small (~8), so the cancelling operands in tl.fma(b,ratio,a) were only ~8 in magnitude, not ~65504 as the claim hypothesizes. The worst-case conditioning (|c|≈|d|, large a) was not exercised; evidence is inconclusive for c1.\", \"supports\": \"inconclusive\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9696cfb453a5dd2b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_155/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ndef exact(nume, den):\\n    a,b = nume.to(torch.float64).unbind(1); c,d = den.to(torch.float64).unbind(1)\\n    s = c*c+d*d\\n    return torch.stack(((a*c+b*d)/s,(b*c-a*d)/s),dim=1)\\nworst=None; nviol=0; total=0\\ng = torch.Generator().manual_seed(0)\\nfor trial in range(300):\\n    # |c| ~ |d| so ratio ~ 1 and a = -b*d/c is large (~ +-65504)\\n    c = (torch.rand(1,generator=g)*2-1).double()\\n    d = c*(1.0 - torch.rand(1,generator=g).double()*4e-4)  # ratio ~ 1, inexact\\n    b = torch.tensor(-65504.0).double() if trial%2==0 else torch.tensor(65504.0).double()\\n    a = -b*d/c  # near-exact cancellation of real numerator, both operands ~65504\\n    num = torch.tensor([[a.item(),b.item()]]).to(torch.float16).to(dev)\\n    den = torch.tensor([[c.item(),d.item()]]).to(torch.float16).to(dev)\\n    tgt = exact(num.cpu(), den.cpu())\\n    out = k.run(num, den).cpu().double()\\n    tol = 1e-7 + 5e-7*tgt.abs(); err=(out-tgt).abs()\\n    total += err.numel(); nviol += int((err>tol).sum())\\n    r = float((err/tol).max())\\n    if worst is None or r>worst[0]:\\n        worst=(r,num.cpu().tolist(),den.cpu().tolist(),out.tolist(),tgt.tolist(),err.tolist(),tol.tolist())\\nprint(json.dumps({\\\"max_err_over_tol\\\":worst[0],\\\"n_violations\\\":nviol,\\\"n_components\\\":total,\\n  \\\"example\\\":{\\\"num\\\":worst[1],\\\"den\\\":worst[2],\\\"kernel_out\\\":worst[3],\\\"exact\\\":worst[4],\\n             \\\"abs_err\\\":worst[5],\\\"tol\\\":worst[6]}}))\", \"expected_signal\": \"with |c|~|d| and a,b~65504, cancelling FP32 fma numerator leaves componentwise error >> 1e-7+5e-7*|target|\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-a2bb84b456e55526",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_155/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\ndef exact(nume,den):\\n    a,b=nume.to(torch.float64).unbind(1); c,d=den.to(torch.float64).unbind(1)\\n    s=c*c+d*d\\n    return torch.stack(((a*c+b*d)/s,(b*c-a*d)/s),dim=1)\\n# exact FP16 inputs; ratio d/c inexact in FP32; a chosen so real numerator nearly cancels\\nb=65504.0\\nrows=[]\\nfor cc,dd in [(3.0,1.0),(5.0,2.0),(7.0,3.0),(11.0,5.0),(13.0,6.0),(17.0,8.0),(1021.0,512.0),(2053.0,1024.0)]:\\n    aa = torch.tensor(-b*dd/cc, dtype=torch.float64).to(torch.float16).item()\\n    n=torch.tensor([[aa,b]],dtype=torch.float16).to(dev)\\n    dn=torch.tensor([[cc,dd]],dtype=torch.float16).to(dev)\\n    t=exact(n.cpu(),dn.cpu()); o=k.run(n,dn).cpu().double()\\n    e=(o-t).abs(); tl2=1e-7+5e-7*t.abs()\\n    rows.append({\\\"c\\\":cc,\\\"d\\\":dd,\\\"num\\\":[aa,b],\\\"exact\\\":t.tolist()[0],\\\"kernel\\\":o.tolist()[0],\\n                 \\\"abs_err\\\":e.tolist()[0],\\\"tol\\\":tl2.tolist()[0],\\n                 \\\"err_over_tol\\\":float((e/tl2).max())})\\nworst=max(rows,key=lambda r:r[\\\"err_over_tol\\\"])\\nprint(json.dumps({\\\"worst\\\":worst,\\\"sweep\\\":rows}))\", \"expected_signal\": \"rounded FP32 ratio times b=65504 leaves absolute error >> per-component tolerance for exact FP16 inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          },
+          {
+            "id": "chatcmpl-tool-bade1c646acfd3cb",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import importlib.util, torch, json\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_155/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev=\\\"cuda\\\"\\ndef exact(nume,den):\\n    a,b=nume.to(torch.float64).unbind(1); c,d=den.to(torch.float64).unbind(1)\\n    s=c*c+d*d\\n    return torch.stack(((a*c+b*d)/s,(b*c-a*d)/s),dim=1)\\nsub = float(torch.tensor(5.96e-8, dtype=torch.float16))\\ncases=[\\n  [[65504.0,0.0],[sub,0.0]],\\n  [[65504.0,65504.0],[sub,0.0]],\\n  [[-65504.0,65504.0],[0.0,sub]],\\n  [[65504.0,65504.0],[sub,sub]],\\n  [[-65504.0,65504.0],[sub,-sub]],\\n  [[65504.0,-65504.0],[-sub,-sub]],\\n  [[0.0,65504.0],[sub,sub]],\\n]\\nres=[]\\nfor nc,dc in cases:\\n    num=torch.tensor([nc],dtype=torch.float16).to(dev)\\n    den=torch.tensor([dc],dtype=torch.float16).to(dev)\\n    out=k.run(num,den).cpu().double()\\n    tgt=exact(num.cpu(),den.cpu())\\n    finite=bool(torch.isfinite(out).all())\\n    tol=1e-7+5e-7*tgt.abs(); err=(out-tgt).abs()\\n    res.append({\\\"num\\\":nc,\\\"den\\\":dc,\\\"kernel\\\":out.tolist()[0],\\\"exact\\\":tgt.tolist()[0],\\n                \\\"finite\\\":finite,\\\"abs_err\\\":err.tolist()[0],\\\"tol\\\":tol.tolist()[0],\\n                \\\"err_over_tol\\\":float((err/tol).max())})\\nprint(json.dumps({\\\"cases\\\":res,\\\"max_exact_quotient_magnitude\\\":65504.0/5.96e-8,\\n                  \\\"fp32_max\\\":3.4028234663852886e38}))\", \"expected_signal\": \"kernel output becomes inf (or stays finite within tolerance) for subnormal denominators\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 3
+          }
+        ],
+        "reasoning_content": "The t10/t11 probes failed due to default dtype (torch.tensor defaults to float32; .to(dev) preserves dtype). Fix by specifying dtype=torch.float16.\n\nt9 result: c1 probe found 0 violations, max ratio 0.225. That's a benign result — near-cancelling inputs with b up to ±65504 but a = -b*d/c quantization makes a large relative... hmm, but note the exact real component was ~7e-7, tolerance 1e-7... error 4e-14, fine. Actually the test was weak: a ≈ -b*d/c quantized to FP16 introduces error ~ b*d/c relative ulp, making the \"near-cancellation\" not tight. Actually with a=8.2 and b=34240, cancellation to ~1e-6 relative 1e-7 — but the errors were small. Interesting: since a is small and b*ratio is large... wait, b*ratio = 34240*(0.49/2048)=8.2. Both operands ~8.2, error ~1e-15 * scale ~ 2048 → real err ~ 4e-13... observed 4e-14. Fine — FP32 has plenty of precision here because a and b*ratio are only ~8, not 65504. The claim's scenario requires a itself to be large, i.e., c small relative to d. To make b*ratio ~ 65504 need |ratio|~1, but then minor≈major, d≈c. E.g. c=1, d=0.9995, b=65504, a=-b*d/c≈-65471. Then real numerator cancellation with operands ~65471, error ~65471*6e-8*... divided by scale ~2 → ~2e-3 absolute error. That's the true c1 scenario! t9's design was flawed (c=2048 dominates d, making a small).\n\nSo relaunch c1 with c≈d design. Fix c2 and c3 with dtype=torch.float16.\n\nFinalize t9: it rebutted the specific scenario tested but the claim scenario not properly exercised — mark inconclusive? The claim says \"e.g. a ≈ -b*d/c\" with large components. My t9 test had large b but small a. I'll mark t9 as inconclusive (probe didn't realize the worst-case conditioning) and relaunch a proper c1 probe.\n\nBatch: finalize t9 (inconclusive), relaunch c1, c2, c3 fixed probes."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306084,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2434,
+    "prompt_tokens": 30052,
+    "total_tokens": 32486,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 554,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10961,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

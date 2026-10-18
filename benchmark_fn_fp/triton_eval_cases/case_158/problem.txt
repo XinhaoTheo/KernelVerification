@@ -1,0 +1,25 @@
+Compute every state of a two-component affine recurrence, independently for each batch row.
+
+The exact mathematical target is:
+
+    state = initial[row]
+    for step in range(N):
+        state = matrix[row, step] @ state + bias[row, step]
+        output[row, step] = state
+
+The matrix acts on a column vector. Both state components are updated from the same previous state. Every multiply and sum denotes exact integer arithmetic; there is no modulo reduction, saturation, quantization or approximation.
+
+Inputs and complete public domain:
+- matrix is an ordinary torch.Tensor with dtype int8 and shape [B,N,2,2]. Every entry is -1, 0 or 1.
+- bias is an ordinary torch.Tensor with dtype int16 and shape [B,N,2]. initial is an ordinary torch.Tensor with dtype int16 and shape [B,2]. Every int16 value is legal, including -32768 and 32767.
+- 1<=B<=64 and 1<=N<=32. EVERY combination of legal matrix, bias and initial values is allowed. Matrices can be singular or noncommuting. No input distribution, sparsity pattern or seed restriction applies.
+- All inputs are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. Inputs may share storage if each input satisfies its own requirements.
+- Inputs have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode without concurrent external writes. No autograd behavior is required.
+
+Return a fresh int64 tensor with shape [B,N,2] on the input device. Preserve all inputs and their backing storage. Every output element must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. The largest legal state magnitude is less than 2^48, so int64 can represent every required result. Parallelization, internal storage and the order of exact operations are unrestricted if the result satisfies these requirements.
+
+Correctness is one verdict for the whole implementation. An input can demonstrate a defect, but does not get a separate correctness label. validate_inputs() enforces the complete domain and is called by run(). reference() computes the sequential recurrence and also accepts CPU inputs. make_inputs() only supplies examples.
+
+Linear state recurrences and parallel prefix scans are standard computations. This original synthetic kernel uses an 8-step local scan and a tree scan of chunk summaries. The restricted integer domain makes the expected result exact; it is a verification workload, not a production floating-point state-space-model kernel or a claimed historical upstream defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

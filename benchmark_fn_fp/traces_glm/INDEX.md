@@ -14,19 +14,19 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 
 | 分组 | Case / traces |
 |---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | [case_109](case_109/)、[case_114](case_114/)、[case_127](case_127/)、[case_128](case_128/) |
-| 未体现增益，保留待归普通集合 | [case_106](case_106/)、[case_107](case_107/)、[case_108](case_108/)、[case_110](case_110/)、[case_111](case_111/)、[case_112](case_112/)、[case_113](case_113/)、[case_115](case_115/)、[case_116](case_116/)、[case_117](case_117/)、[case_118](case_118/)、[case_119](case_119/)、[case_120](case_120/)、[case_121](case_121/)、[case_122](case_122/)、[case_123](case_123/)、[case_124](case_124/)、[case_125](case_125/)、[case_126](case_126/)、[case_129](case_129/)、[case_130](case_130/)、[case_131](case_131/)、[case_132](case_132/)、[case_133](case_133/) |
+| 成功案例：已观察到工具流程增益，单独保留 | [case_109](case_109/)、[case_114](case_114/)、[case_127](case_127/)、[case_128](case_128/)、[case_135](case_135/)、[case_141](case_141/)、[case_147](case_147/)、[case_149](case_149/)、[case_151](case_151/)、[case_154](case_154/)、[case_159](case_159/)、[case_163](case_163/) |
+| 未体现增益，保留待归普通集合 | [case_106](case_106/)、[case_107](case_107/)、[case_108](case_108/)、[case_110](case_110/)、[case_111](case_111/)、[case_112](case_112/)、[case_113](case_113/)、[case_115](case_115/)、[case_116](case_116/)、[case_117](case_117/)、[case_118](case_118/)、[case_119](case_119/)、[case_120](case_120/)、[case_121](case_121/)、[case_122](case_122/)、[case_123](case_123/)、[case_124](case_124/)、[case_125](case_125/)、[case_126](case_126/)、[case_129](case_129/)、[case_130](case_130/)、[case_131](case_131/)、[case_132](case_132/)、[case_133](case_133/)、[case_134](case_134/)、[case_136](case_136/)、[case_137](case_137/)、[case_138](case_138/)、[case_139](case_139/)、[case_140](case_140/)、[case_142](case_142/)、[case_143](case_143/)、[case_144](case_144/)、[case_145](case_145/)、[case_146](case_146/)、[case_148](case_148/)、[case_150](case_150/)、[case_152](case_152/)、[case_153](case_153/)、[case_155](case_155/)、[case_156](case_156/)、[case_157](case_157/)、[case_158](case_158/)、[case_160](case_160/)、[case_161](case_161/)、[case_162](case_162/) |
 
 ## 全题库三组覆盖
 
-范围：case_map.json 中全部 108 个活跃案例，共 324 个 case-arm 槽位。
+范围：case_map.json 中全部 138 个活跃案例，共 414 个 case-arm 槽位。
 完成包含正确、错误和 needs_more_evidence（弃答）；截断、无最终判断、运行错误和运行中均不算完成。错误答案和有效弃答保留，不因结果不理想而补跑。
 
 | 实验组 | 已完成 | 从未运行 | 失败/未完成 | 运行中 | 未完成合计 |
 |---|---:|---:|---:|---:|---:|
-| single_call | 108 | 0 | 0 | 0 | 0 |
-| solo | 108 | 0 | 0 | 0 | 0 |
-| debate | 106 | 0 | 2 | 0 | 2 |
+| single_call | 137 | 0 | 1 | 0 | 1 |
+| solo | 138 | 0 | 0 | 0 | 0 |
+| debate | 136 | 0 | 2 | 0 | 2 |
 
 完成记录按最早的 created_at 选取；缺少日期的旧记录优先，并以迁移前路径稳定排序。不按正确性或置信度筛选；下方索引保留当前题库的全部尝试。
 本页是覆盖清单，不是统一协议的准确率对照：历史记录包含 OpenRouter 的 `z-ai/glm-5.3-flash` 与 Fireworks 的 `accounts/fireworks/models/glm-5p3`，模型、推理配置、预算和运行器版本可能不同。
@@ -117,7 +117,7 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | case_106 | real_kernel_challenges | [r1](case_106/single_call/r1/transcript.md) · reject / 正确 | [r1](case_106/solo/r1/transcript.md) · reject / 正确 | [r1](case_106/debate/r1/transcript.md) · reject / 正确 |
 | case_107 | real_kernel_challenges | [r1](case_107/single_call/r1/transcript.md) · trust / 错误 | [r1](case_107/solo/r1/transcript.md) · trust / 错误 | [r1](case_107/debate/r1/transcript.md) · trust / 错误 |
 | case_108 | real_kernel_challenges | [r1](case_108/single_call/r1/transcript.md) · trust / 错误 | [r2](case_108/solo/r2/transcript.md) · trust / 错误 | [r2](case_108/debate/r2/transcript.md) · trust / 错误 |
-| case_109 | real_kernel_challenges | [r1](case_109/single_call/r1/transcript.md) · trust / 错误 | [r2](case_109/solo/r2/transcript.md) · reject / 正确 | 失败/未完成 |
+| case_109 | real_kernel_challenges | [r1](case_109/single_call/r1/transcript.md) · trust / 错误 | [r2](case_109/solo/r2/transcript.md) · reject / 正确 | [r3](case_109/debate/r3/transcript.md) · reject / 正确 |
 | case_110 | real_kernel_challenges | [r1](case_110/single_call/r1/transcript.md) · trust / 正确 | [r1](case_110/solo/r1/transcript.md) · trust / 正确 | [r1](case_110/debate/r1/transcript.md) · trust / 正确 |
 | case_111 | real_kernel_challenges | [r1](case_111/single_call/r1/transcript.md) · trust / 正确 | [r1](case_111/solo/r1/transcript.md) · trust / 正确 | [r1](case_111/debate/r1/transcript.md) · trust / 正确 |
 | case_112 | real_kernel_challenges | [r1](case_112/single_call/r1/transcript.md) · trust / 正确 | [r1](case_112/solo/r1/transcript.md) · trust / 正确 | [r1](case_112/debate/r1/transcript.md) · trust / 正确 |
@@ -142,6 +142,36 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | case_131 | real_kernel_challenges | [r1](case_131/single_call/r1/transcript.md) · reject / 正确 | [r1](case_131/solo/r1/transcript.md) · reject / 正确 | [r1](case_131/debate/r1/transcript.md) · reject / 正确 |
 | case_132 | real_kernel_challenges | [r1](case_132/single_call/r1/transcript.md) · trust / 正确 | [r1](case_132/solo/r1/transcript.md) · trust / 正确 | [r1](case_132/debate/r1/transcript.md) · trust / 正确 |
 | case_133 | real_kernel_challenges | [r1](case_133/single_call/r1/transcript.md) · reject / 正确 | [r1](case_133/solo/r1/transcript.md) · reject / 正确 | [r1](case_133/debate/r1/transcript.md) · reject / 正确 |
+| case_134 | real_kernel_challenges | [r1](case_134/single_call/r1/transcript.md) · trust / 正确 | [r1](case_134/solo/r1/transcript.md) · trust / 正确 | [r1](case_134/debate/r1/transcript.md) · trust / 正确 |
+| case_135 | real_kernel_challenges | [r1](case_135/single_call/r1/transcript.md) · trust / 错误 | [r1](case_135/solo/r1/transcript.md) · reject / 正确 | [r1](case_135/debate/r1/transcript.md) · reject / 正确 |
+| case_136 | real_kernel_challenges | [r1](case_136/single_call/r1/transcript.md) · trust / 正确 | [r1](case_136/solo/r1/transcript.md) · trust / 正确 | [r1](case_136/debate/r1/transcript.md) · trust / 正确 |
+| case_137 | real_kernel_challenges | [r1](case_137/single_call/r1/transcript.md) · reject / 正确 | [r1](case_137/solo/r1/transcript.md) · reject / 正确 | [r1](case_137/debate/r1/transcript.md) · reject / 正确 |
+| case_138 | real_kernel_challenges | [r1](case_138/single_call/r1/transcript.md) · trust / 正确 | [r1](case_138/solo/r1/transcript.md) · trust / 正确 | [r1](case_138/debate/r1/transcript.md) · trust / 正确 |
+| case_139 | real_kernel_challenges | [r1](case_139/single_call/r1/transcript.md) · reject / 正确 | [r1](case_139/solo/r1/transcript.md) · reject / 正确 | [r1](case_139/debate/r1/transcript.md) · reject / 正确 |
+| case_140 | real_kernel_challenges | [r1](case_140/single_call/r1/transcript.md) · trust / 正确 | [r1](case_140/solo/r1/transcript.md) · trust / 正确 | [r1](case_140/debate/r1/transcript.md) · trust / 正确 |
+| case_141 | real_kernel_challenges | [r1](case_141/single_call/r1/transcript.md) · trust / 错误 | [r1](case_141/solo/r1/transcript.md) · reject / 正确 | [r1](case_141/debate/r1/transcript.md) · reject / 正确 |
+| case_142 | real_kernel_challenges | [r1](case_142/single_call/r1/transcript.md) · trust / 正确 | [r1](case_142/solo/r1/transcript.md) · trust / 正确 | [r1](case_142/debate/r1/transcript.md) · trust / 正确 |
+| case_143 | real_kernel_challenges | [r1](case_143/single_call/r1/transcript.md) · reject / 正确 | [r1](case_143/solo/r1/transcript.md) · reject / 正确 | [r1](case_143/debate/r1/transcript.md) · reject / 正确 |
+| case_144 | real_kernel_challenges | [r1](case_144/single_call/r1/transcript.md) · trust / 正确 | [r1](case_144/solo/r1/transcript.md) · trust / 正确 | 失败/未完成 |
+| case_145 | real_kernel_challenges | [r1](case_145/single_call/r1/transcript.md) · reject / 正确 | [r1](case_145/solo/r1/transcript.md) · reject / 正确 | [r1](case_145/debate/r1/transcript.md) · reject / 正确 |
+| case_146 | real_kernel_challenges | [r1](case_146/single_call/r1/transcript.md) · trust / 正确 | [r1](case_146/solo/r1/transcript.md) · trust / 正确 | [r1](case_146/debate/r1/transcript.md) · trust / 正确 |
+| case_147 | real_kernel_challenges | [r1](case_147/single_call/r1/transcript.md) · trust / 错误 | [r1](case_147/solo/r1/transcript.md) · reject / 正确 | [r1](case_147/debate/r1/transcript.md) · reject / 正确 |
+| case_148 | real_kernel_challenges | [r1](case_148/single_call/r1/transcript.md) · trust / 正确 | [r1](case_148/solo/r1/transcript.md) · trust / 正确 | [r1](case_148/debate/r1/transcript.md) · trust / 正确 |
+| case_149 | real_kernel_challenges | [r1](case_149/single_call/r1/transcript.md) · trust / 错误 | [r1](case_149/solo/r1/transcript.md) · reject / 正确 | [r1](case_149/debate/r1/transcript.md) · reject / 正确 |
+| case_150 | real_kernel_challenges | 失败/未完成 | [r1](case_150/solo/r1/transcript.md) · trust / 正确 | [r1](case_150/debate/r1/transcript.md) · trust / 正确 |
+| case_151 | real_kernel_challenges | [r1](case_151/single_call/r1/transcript.md) · trust / 错误 | [r1](case_151/solo/r1/transcript.md) · reject / 正确 | [r1](case_151/debate/r1/transcript.md) · reject / 正确 |
+| case_152 | real_kernel_challenges | [r1](case_152/single_call/r1/transcript.md) · trust / 正确 | [r1](case_152/solo/r1/transcript.md) · trust / 正确 | [r1](case_152/debate/r1/transcript.md) · trust / 正确 |
+| case_153 | real_kernel_challenges | [r1](case_153/single_call/r1/transcript.md) · reject / 正确 | [r1](case_153/solo/r1/transcript.md) · reject / 正确 | [r1](case_153/debate/r1/transcript.md) · reject / 正确 |
+| case_154 | real_kernel_challenges | [r1](case_154/single_call/r1/transcript.md) · reject / 错误 | [r1](case_154/solo/r1/transcript.md) · trust / 正确 | [r1](case_154/debate/r1/transcript.md) · trust / 正确 |
+| case_155 | real_kernel_challenges | [r1](case_155/single_call/r1/transcript.md) · reject / 正确 | [r1](case_155/solo/r1/transcript.md) · reject / 正确 | [r1](case_155/debate/r1/transcript.md) · reject / 正确 |
+| case_156 | real_kernel_challenges | [r1](case_156/single_call/r1/transcript.md) · trust / 正确 | [r1](case_156/solo/r1/transcript.md) · trust / 正确 | [r1](case_156/debate/r1/transcript.md) · trust / 正确 |
+| case_157 | real_kernel_challenges | [r1](case_157/single_call/r1/transcript.md) · reject / 正确 | [r1](case_157/solo/r1/transcript.md) · reject / 正确 | [r1](case_157/debate/r1/transcript.md) · trust / 错误 |
+| case_158 | real_kernel_challenges | [r1](case_158/single_call/r1/transcript.md) · trust / 正确 | [r1](case_158/solo/r1/transcript.md) · trust / 正确 | [r1](case_158/debate/r1/transcript.md) · trust / 正确 |
+| case_159 | real_kernel_challenges | [r1](case_159/single_call/r1/transcript.md) · trust / 错误 | [r1](case_159/solo/r1/transcript.md) · reject / 正确 | [r1](case_159/debate/r1/transcript.md) · reject / 正确 |
+| case_160 | real_kernel_challenges | [r1](case_160/single_call/r1/transcript.md) · trust / 正确 | [r1](case_160/solo/r1/transcript.md) · trust / 正确 | [r1](case_160/debate/r1/transcript.md) · trust / 正确 |
+| case_161 | real_kernel_challenges | [r1](case_161/single_call/r1/transcript.md) · reject / 正确 | [r1](case_161/solo/r1/transcript.md) · reject / 正确 | [r1](case_161/debate/r1/transcript.md) · reject / 正确 |
+| case_162 | real_kernel_challenges | [r1](case_162/single_call/r1/transcript.md) · trust / 正确 | [r1](case_162/solo/r1/transcript.md) · trust / 正确 | [r1](case_162/debate/r1/transcript.md) · trust / 正确 |
+| case_163 | real_kernel_challenges | [r1](case_163/single_call/r1/transcript.md) · trust / 错误 | [r1](case_163/solo/r1/transcript.md) · reject / 正确 | [r1](case_163/debate/r1/transcript.md) · reject / 正确 |
 
 ## 全部历史 trials
 
@@ -574,9 +604,12 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | real_kernel_challenges | case_108 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_108/solo/r2/transcript.md) |
 | real_kernel_challenges | case_109 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | error | None / no_verdict | [open](case_109/debate/r1/trace_meta.json) |
 | real_kernel_challenges | case_109 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | error | None / token_limit | [open](case_109/debate/r2/transcript.md) |
+| real_kernel_challenges | case_109 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_109/debate/r3/transcript.md) |
 | real_kernel_challenges | case_109 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_109/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_109 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_109/single_call/r2/transcript.md) |
 | real_kernel_challenges | case_109 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | error | None / no_verdict | [open](case_109/solo/r1/trace_meta.json) |
 | real_kernel_challenges | case_109 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_109/solo/r2/transcript.md) |
+| real_kernel_challenges | case_109 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_109/solo/r3/transcript.md) |
 | real_kernel_challenges | case_110 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_110/debate/r1/transcript.md) |
 | real_kernel_challenges | case_110 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_110/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_110 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_110/solo/r1/transcript.md) |
@@ -590,8 +623,11 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | real_kernel_challenges | case_113 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_113/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_113 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_113/solo/r1/transcript.md) |
 | real_kernel_challenges | case_114 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_114/debate/r1/transcript.md) |
+| real_kernel_challenges | case_114 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_114/debate/r2/transcript.md) |
 | real_kernel_challenges | case_114 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_114/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_114 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_114/single_call/r2/transcript.md) |
 | real_kernel_challenges | case_114 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_114/solo/r1/transcript.md) |
+| real_kernel_challenges | case_114 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_114/solo/r2/transcript.md) |
 | real_kernel_challenges | case_115 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_115/debate/r1/transcript.md) |
 | real_kernel_challenges | case_115 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_115/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_115 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_115/solo/r1/transcript.md) |
@@ -629,11 +665,17 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | real_kernel_challenges | case_126 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_126/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_126 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_126/solo/r1/transcript.md) |
 | real_kernel_challenges | case_127 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_127/debate/r1/transcript.md) |
+| real_kernel_challenges | case_127 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_127/debate/r2/transcript.md) |
 | real_kernel_challenges | case_127 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_127/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_127 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_127/single_call/r2/transcript.md) |
 | real_kernel_challenges | case_127 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_127/solo/r1/transcript.md) |
+| real_kernel_challenges | case_127 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_127/solo/r2/transcript.md) |
 | real_kernel_challenges | case_128 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_128/debate/r1/transcript.md) |
+| real_kernel_challenges | case_128 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_128/debate/r2/transcript.md) |
 | real_kernel_challenges | case_128 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / wrong_verdict | [open](case_128/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_128 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / wrong_verdict | [open](case_128/single_call/r2/transcript.md) |
 | real_kernel_challenges | case_128 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_128/solo/r1/transcript.md) |
+| real_kernel_challenges | case_128 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_128/solo/r2/transcript.md) |
 | real_kernel_challenges | case_129 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_129/debate/r1/transcript.md) |
 | real_kernel_challenges | case_129 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_129/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_129 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_129/solo/r1/transcript.md) |
@@ -649,5 +691,200 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 | real_kernel_challenges | case_133 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_133/debate/r1/transcript.md) |
 | real_kernel_challenges | case_133 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_133/single_call/r1/transcript.md) |
 | real_kernel_challenges | case_133 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_133/solo/r1/transcript.md) |
+| real_kernel_challenges | case_134 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_134/debate/r1/transcript.md) |
+| real_kernel_challenges | case_134 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_134/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_134 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_134/solo/r1/transcript.md) |
+| real_kernel_challenges | case_135 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_135/debate/r1/transcript.md) |
+| real_kernel_challenges | case_135 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_135/debate/r2/transcript.md) |
+| real_kernel_challenges | case_135 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_135/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_135 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_135/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_135 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_135/solo/r1/transcript.md) |
+| real_kernel_challenges | case_135 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_135/solo/r2/transcript.md) |
+| real_kernel_challenges | case_136 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_136/debate/r1/transcript.md) |
+| real_kernel_challenges | case_136 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_136/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_136 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_136/solo/r1/transcript.md) |
+| real_kernel_challenges | case_137 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_137/debate/r1/transcript.md) |
+| real_kernel_challenges | case_137 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_137/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_137 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_137/solo/r1/transcript.md) |
+| real_kernel_challenges | case_138 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_138/debate/r1/transcript.md) |
+| real_kernel_challenges | case_138 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_138/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_138 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_138/solo/r1/transcript.md) |
+| real_kernel_challenges | case_139 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_139/debate/r1/transcript.md) |
+| real_kernel_challenges | case_139 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_139/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_139 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_139/solo/r1/transcript.md) |
+| real_kernel_challenges | case_140 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_140/debate/r1/transcript.md) |
+| real_kernel_challenges | case_140 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_140/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_140 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_140/solo/r1/transcript.md) |
+| real_kernel_challenges | case_141 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/debate/r1/transcript.md) |
+| real_kernel_challenges | case_141 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/debate/r2/transcript.md) |
+| real_kernel_challenges | case_141 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/debate/r3/transcript.md) |
+| real_kernel_challenges | case_141 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/debate/r4/transcript.md) |
+| real_kernel_challenges | case_141 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/debate/r5/transcript.md) |
+| real_kernel_challenges | case_141 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_141/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_141 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_141/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_141 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_141 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_141/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_141 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_141 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/solo/r1/transcript.md) |
+| real_kernel_challenges | case_141 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/solo/r2/transcript.md) |
+| real_kernel_challenges | case_141 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/solo/r3/transcript.md) |
+| real_kernel_challenges | case_141 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/solo/r4/transcript.md) |
+| real_kernel_challenges | case_141 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_141/solo/r5/transcript.md) |
+| real_kernel_challenges | case_142 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_142/debate/r1/transcript.md) |
+| real_kernel_challenges | case_142 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_142/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_142 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_142/solo/r1/transcript.md) |
+| real_kernel_challenges | case_143 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_143/debate/r1/transcript.md) |
+| real_kernel_challenges | case_143 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_143/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_143 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_143/solo/r1/transcript.md) |
+| real_kernel_challenges | case_144 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | error | None / no_verdict | [open](case_144/debate/r1/transcript.md) |
+| real_kernel_challenges | case_144 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_144/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_144 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_144/solo/r1/transcript.md) |
+| real_kernel_challenges | case_145 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_145/debate/r1/transcript.md) |
+| real_kernel_challenges | case_145 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_145/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_145 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_145/solo/r1/transcript.md) |
+| real_kernel_challenges | case_146 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_146/debate/r1/transcript.md) |
+| real_kernel_challenges | case_146 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_146/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_146 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_146/solo/r1/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r1/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r2/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r3/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r4/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r5/transcript.md) |
+| real_kernel_challenges | case_147 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/debate/r6/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_147/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_147/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_147/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_147 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_147/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r1/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r2/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r3/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r4/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r5/transcript.md) |
+| real_kernel_challenges | case_147 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_147/solo/r6/transcript.md) |
+| real_kernel_challenges | case_148 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_148/debate/r1/transcript.md) |
+| real_kernel_challenges | case_148 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_148/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_148 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_148/solo/r1/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/debate/r1/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/debate/r2/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | needs_more_evidence / abstention | [open](case_149/debate/r3/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/debate/r4/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/debate/r5/transcript.md) |
+| real_kernel_challenges | case_149 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/debate/r6/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_149/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_149/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_149/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_149 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_149/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r1/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r2/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r3/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r4/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r5/transcript.md) |
+| real_kernel_challenges | case_149 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_149/solo/r6/transcript.md) |
+| real_kernel_challenges | case_150 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_150/debate/r1/transcript.md) |
+| real_kernel_challenges | case_150 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | None / token_limit | [open](case_150/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_150 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_150/solo/r1/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r1/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r2/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r3/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r4/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r5/transcript.md) |
+| real_kernel_challenges | case_151 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/debate/r6/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_151 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_151/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r1/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r2/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r3/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r4/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r5/transcript.md) |
+| real_kernel_challenges | case_151 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_151/solo/r6/transcript.md) |
+| real_kernel_challenges | case_152 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_152/debate/r1/transcript.md) |
+| real_kernel_challenges | case_152 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_152/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_152 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_152/solo/r1/transcript.md) |
+| real_kernel_challenges | case_153 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_153/debate/r1/transcript.md) |
+| real_kernel_challenges | case_153 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_153/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_153 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_153/solo/r1/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r1/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r2/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r3/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r4/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r5/transcript.md) |
+| real_kernel_challenges | case_154 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/debate/r6/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / wrong_verdict | [open](case_154/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_154 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r1/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r2/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r3/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r4/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r5/transcript.md) |
+| real_kernel_challenges | case_154 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_154/solo/r6/transcript.md) |
+| real_kernel_challenges | case_155 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_155/debate/r1/transcript.md) |
+| real_kernel_challenges | case_155 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_155/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_155 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_155/solo/r1/transcript.md) |
+| real_kernel_challenges | case_156 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_156/debate/r1/transcript.md) |
+| real_kernel_challenges | case_156 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_156/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_156 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_156/solo/r1/transcript.md) |
+| real_kernel_challenges | case_157 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_157/debate/r1/transcript.md) |
+| real_kernel_challenges | case_157 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_157/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_157 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_157/solo/r1/transcript.md) |
+| real_kernel_challenges | case_158 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_158/debate/r1/transcript.md) |
+| real_kernel_challenges | case_158 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_158/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_158 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_158/solo/r1/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/debate/r1/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/debate/r2/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/debate/r3/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | needs_more_evidence / abstention | [open](case_159/debate/r4/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/debate/r5/transcript.md) |
+| real_kernel_challenges | case_159 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/debate/r6/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_159/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_159/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_159/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_159 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_159/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r1/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r2/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r3/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r4/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r5/transcript.md) |
+| real_kernel_challenges | case_159 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_159/solo/r6/transcript.md) |
+| real_kernel_challenges | case_160 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_160/debate/r1/transcript.md) |
+| real_kernel_challenges | case_160 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_160/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_160 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_160/solo/r1/transcript.md) |
+| real_kernel_challenges | case_161 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_161/debate/r1/transcript.md) |
+| real_kernel_challenges | case_161 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_161/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_161 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_161/solo/r1/transcript.md) |
+| real_kernel_challenges | case_162 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_162/debate/r1/transcript.md) |
+| real_kernel_challenges | case_162 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_162/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_162 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / correct | [open](case_162/solo/r1/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r1/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r2/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r3/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r4/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r5/transcript.md) |
+| real_kernel_challenges | case_163 | debate | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/debate/r6/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_163/single_call/r1/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_163/single_call/r2/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/single_call/r3/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_163/single_call/r4/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/single_call/r5/transcript.md) |
+| real_kernel_challenges | case_163 | single_call | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | trust / wrong_verdict | [open](case_163/single_call/r6/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r1 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r1/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r2 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r2/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r3 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r3/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r4 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r4/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r5 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r5/transcript.md) |
+| real_kernel_challenges | case_163 | solo | r6 | accounts/fireworks/models/glm-5p3 / fireworks | completed | reject / correct | [open](case_163/solo/r6/transcript.md) |
 
-484 recorded GLM trials. See [trace format](../TRACES.md) for provenance and capture limits.
+691 recorded GLM trials. See [trace format](../TRACES.md) for provenance and capture limits.

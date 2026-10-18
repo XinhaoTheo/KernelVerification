@@ -1,0 +1,119 @@
+## Problem statement (contract + reference behavior)
+
+Compute the unit-scale pseudo-Huber robust loss elementwise on stored FP16
+values, returning FP32 output. The mathematical target is
+
+  target[i] = rho(x[i]) = sqrt(1 + x[i] * x[i]) - 1.
+
+The loss is a smooth alternative to absolute error: it is approximately
+x*x/2 near zero and approximately abs(x)-1 for large residuals.
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- EVERY finite FP16 value is legal, including both signed zeros, positive
+  and negative subnormal values, and both extrema +/-65504. NaN and infinity
+  are outside this input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x.
+Every output element must satisfy
+
+  abs(actual[i] - rho(x[i])) <= 1e-8 + 1e-5 * abs(rho(x[i])).
+
+These are fixed mixed absolute and relative tolerances. Signed zeros are
+numerically equivalent. The target is defined in real arithmetic on the
+exact stored input value. No particular algebraic expression, square-root
+approximation or intermediate rounding is required. Algebraic rewrites
+and approximations are permitted if they satisfy the tolerance throughout
+the entire legal domain. Correctness is one verdict for the implementation,
+not a verdict per input, input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses an algebraically equivalent FP64 expression and accepts CPU inputs.
+make_inputs() supplies examples only. Pseudo-Huber loss is a standard
+smooth robust-regression loss; this is an original synthetic Triton
+implementation, not a claim of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Elementwise unit-scale pseudo-Huber robust loss.
+
+Original Triton implementation of a standard smooth robust loss.
+This is a synthetic benchmark implementation, not a historical upstream bug.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _loss_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    active = index < N
+    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)
+    square = x * x
+    root = tl.sqrt(1.0 + square)
+    value = tl.div_rn(square, root + 1.0)
+    tl.store(OUT + index, value, mask=active)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public input domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 1 and 1 <= x.numel() <= 131072,
+            "x must have shape [N] with N in [1,131072]")
+    require(x.dtype == torch.float16, "FP16 input required")
+    require(bool(torch.isfinite(x).all().item()), "all input values must be finite")
+    return {"valid": True, "size": x.numel()}
+
+
+
+def run(x):
+    """Return a fresh FP32 tensor containing the loss of each stored input."""
+    validate_inputs(x)
+    n = x.numel()
+    with torch.cuda.device(x.device):
+        output = torch.empty((n,), dtype=torch.float32, device=x.device)
+        _loss_kernel[(triton.cdiv(n, 256),)](
+            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)
+    return output
+
+
+def reference(x):
+    """Evaluate the mathematical pseudo-Huber loss in FP64."""
+    validate_inputs(x, require_cuda=False)
+    value = x.to(torch.float64)
+    square = value * value
+    return square / (torch.sqrt(1.0 + square) + 1.0)
+
+
+def make_inputs(device="cuda", size=4093, seed=0):
+    """Convenience examples, not a restriction on the legal input domain."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)
+    return (x.to(device),)
+
+```
+
+Is this implementation correct?

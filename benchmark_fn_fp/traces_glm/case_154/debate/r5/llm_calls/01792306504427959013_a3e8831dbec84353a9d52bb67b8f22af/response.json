@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-8ed441ba",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Both probes had implementation bugs (flat argmax index over [N,2] vs [N] rows; N exceeding the 131072 validator cap). Fixing and relaunching both now.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b57d7d7f6a270989",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport importlib.util, json, torch\\n\\nspec = importlib.util.spec_from_file_location(\\\"k154\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\n\\ndef fp16_all_finite():\\n    bits = torch.arange(0, 65536, dtype=torch.int32)\\n    b = torch.tensor(bits.numpy(), dtype=torch.int16).view(torch.float16).to(torch.float64)\\n    return b[torch.isfinite(b)]\\n\\nV = fp16_all_finite()\\n\\ndef ref64(num, den):\\n    a, b = num.to(torch.float64).unbind(1)\\n    c, d = den.to(torch.float64).unbind(1)\\n    s = c*c + d*d\\n    return torch.stack(((a*c+b*d)/s, (b*c-a*d)/s), dim=1)\\n\\ndef check(num_cpu, den_cpu, tag):\\n    num = num_cpu.to(dev); den = den_cpu.to(dev)\\n    out = k.run(num, den).to(\\\"cpu\\\").to(torch.float64)\\n    tgt = ref64(num_cpu, den_cpu)\\n    err = (out - tgt).abs()\\n    tol = 1e-7 + 5e-7 * tgt.abs()\\n    ratio = err / tol\\n    flat = int(ratio.argmax())\\n    i = flat // 2; comp = flat % 2\\n    return {\\n        \\\"tag\\\": tag, \\\"n\\\": num_cpu.shape[0],\\n        \\\"n_violations\\\": int((ratio > 1.0).sum()),\\n        \\\"max_ratio\\\": float(ratio.max()),\\n        \\\"worst_row_index\\\": i, \\\"worst_component\\\": comp,\\n        \\\"num_row\\\": num_cpu[i].tolist(), \\\"den_row\\\": den_cpu[i].tolist(),\\n        \\\"actual\\\": out[i].tolist(), \\\"target\\\": tgt[i].tolist(),\\n        \\\"err\\\": err[i].tolist(), \\\"tol\\\": tol[i].tolist(),\\n        \\\"finite_out\\\": bool(torch.isfinite(out).all()),\\n    }\\n\\ng = torch.Generator().manual_seed(1)\\nresults = []\\n\\n# 1) targeted near-cancellation: choose d as nearest fp16 to -a*c/b so true real part tiny\\na_t = V[torch.randint(0, len(V), (100000,), generator=g)]\\nb_t = V[torch.randint(0, len(V), (100000,), generator=g)]\\nc_t = V[torch.randint(0, len(V), (100000,), generator=g)]\\nnz = (b_t != 0)\\na_t, b_t, c_t = a_t[nz], b_t[nz], c_t[nz]\\nn = a_t.shape[0]\\nd_ex = -a_t * c_t / b_t\\nd_t = torch.tensor(d_ex.numpy(), dtype=torch.float16).to(torch.float64)\\nbad = ~torch.isfinite(torch.tensor(d_t.tolist(), dtype=torch.float32))\\n# replace non-finite with extreme\\nd_t = torch.where(torch.tensor(bad.tolist()), torch.full((n,), 65504.0, dtype=torch.float64), d_t)\\nnum = torch.stack([a_t, b_t], dim=1).to(torch.float16)\\nden = torch.stack([c_t, d_t], dim=1).to(torch.float16)\\nmask = ~((den == 0).all(dim=1))\\nnum, den = num[mask], den[mask]\\nresults.append(check(num, den, \\\"targeted_cancellation\\\"))\\n\\n# 2) uniform random over ALL finite fp16 values\\nfor batch in range(6):\\n    idx = torch.randint(0, len(V), (200000, 4), generator=g)\\n    num = V[idx[:, 0:2]].to(torch.float16)\\n    den = V[idx[:, 2:4]].to(torch.float16)\\n    mask = ~((den == 0).all(dim=1))\\n    num, den = num[mask], den[mask]\\n    results.append(check(num, den, f\\\"uniform_all_fp16_batch{batch}\\\"))\\n\\nmx = max(x[\\\"max_ratio\\\"] for x in results)\\nnv = sum(x[\\\"n_violations\\\"] for x in results)\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"per-component error / (1e-7 + 5e-7*|target|), max over rows\\\",\\n    \\\"batches\\\": results,\\n    \\\"overall_max_ratio\\\": mx,\\n    \\\"total_violations\\\": nv,\\n    \\\"claim\\\": \\\"c1 cancellation-heavy inputs exceed tolerance\\\",\\n    \\\"decisive_signal\\\": \\\"overall_max_ratio > 1.0 confirms; <= 1.0 with large adversarial sample rebuts\\\",\\n}))\\n\", \"expected_signal\": \"max ratio of componentwise error to tolerance exceeding 1.0 on cancellation-heavy rows\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-8bddc8bb77c58294",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport importlib.util, json, torch\\n\\nspec = importlib.util.spec_from_file_location(\\\"k154b\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndev = \\\"cuda\\\"\\n\\ndef fp16_all_finite():\\n    bits = torch.arange(0, 65536, dtype=torch.int32)\\n    b = torch.tensor(bits.numpy(), dtype=torch.int16).view(torch.float16).to(torch.float64)\\n    return b[torch.isfinite(b)]\\n\\nV = fp16_all_finite()\\next = [65504.0, -65504.0, 65503.0, 60000.0, -60000.0]\\nsub = [5.96e-08, 1.19e-07, 2.38e-07, 6e-5]\\nspecial_c = ext + sub + [0.0, 1.0]\\nspecial_d = ext + sub + [0.0]\\n\\ndef ref64(num, den):\\n    a, b = num.to(torch.float64).unbind(1)\\n    c, d = den.to(torch.float64).unbind(1)\\n    s = c*c + d*d\\n    return torch.stack(((a*c+b*d)/s, (b*c-a*d)/s), dim=1)\\n\\ndef check(num_cpu, den_cpu, tag):\\n    num = num_cpu.to(dev); den = den_cpu.to(dev)\\n    out = k.run(num, den).to(\\\"cpu\\\").to(torch.float64)\\n    tgt = ref64(num_cpu, den_cpu)\\n    err = (out - tgt).abs()\\n    tol = 1e-7 + 5e-7 * tgt.abs()\\n    ratio = err / tol\\n    flat = int(ratio.argmax())\\n    i = flat // 2; comp = flat % 2\\n    return {\\n        \\\"tag\\\": tag, \\\"n\\\": num_cpu.shape[0],\\n        \\\"n_violations\\\": int((ratio > 1.0).sum()),\\n        \\\"max_ratio\\\": float(ratio.max()),\\n        \\\"worst_row_index\\\": i, \\\"worst_component\\\": comp,\\n        \\\"num_row\\\": num_cpu[i].tolist(), \\\"den_row\\\": den_cpu[i].tolist(),\\n        \\\"actual\\\": out[i].tolist(), \\\"target\\\": tgt[i].tolist(),\\n        \\\"err\\\": err[i].tolist(), \\\"tol\\\": tol[i].tolist(),\\n        \\\"finite_out\\\": bool(torch.isfinite(out).all()),\\n    }\\n\\ng = torch.Generator().manual_seed(7)\\nresults = []\\n\\n# 1) fixed extreme/subnormal denominator pairs, random numerator (cap each chunk at 131072)\\npairs = [(c, d) for c in special_c for d in special_d if not (c == 0.0 and d == 0.0)]\\nCHUNK = 12000\\nrows_n, rows_d = [], []\\nfor c, d in pairs:\\n    nn = V[torch.randint(0, len(V), (CHUNK, 2), generator=g)].to(torch.float16)\\n    rows_n.append(nn)\\n    rows_d.append(torch.tensor([[c, d]] * CHUNK, dtype=torch.float16))\\nnum = torch.cat(rows_n); den = torch.cat(rows_d)\\nassert num.shape[0] <= 131072\\nresults.append(check(num, den, \\\"denominator_extremes_subnormals\\\"))\\n\\n# 2) mixed-magnitude denominators: one component forced to an extreme\\nfor _ in range(2):\\n    cd = V[torch.randint(0, len(V), (100000, 2), generator=g)].to(torch.float16)\\n    force = torch.rand(100000, generator=g) < 0.5\\n    cd[force, 0] = 65504.0\\n    cd[~force, 1] = -65504.0\\n    mask = ~((cd == 0).all(dim=1))\\n    num = V[torch.randint(0, len(V), (100000, 2), generator=g)].to(torch.float16)\\n    num, cd = num[mask], cd[mask]\\n    results.append(check(num, cd, \\\"mixed_extreme_denominator\\\"))\\n\\nmx = max(x[\\\"max_ratio\\\"] for x in results)\\nnv = sum(x[\\\"n_violations\\\"] for x in results)\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"per-component error / (1e-7 + 5e-7*|target|), max over rows\\\",\\n    \\\"batches\\\": results,\\n    \\\"overall_max_ratio\\\": mx,\\n    \\\"total_violations\\\": nv,\\n    \\\"claim\\\": \\\"c2 extremes/subnormal denominators exceed tolerance\\\",\\n    \\\"decisive_signal\\\": \\\"overall_max_ratio > 1.0 confirms; <= 1.0 with large adversarial sample rebuts\\\",\\n}))\\n\", \"expected_signal\": \"max ratio of componentwise error to tolerance exceeding 1.0 for extreme/subnormal denominator components\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Both probes failed with bugs: c1 ratio.argmax() returned an index into flattened ratio (2N elements) but num_cpu has N rows. c2 batch exceeded N limit 131072 (rows_n had many 2000-row batches > 131072). Fix both, relaunch."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306506,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2214,
+    "prompt_tokens": 27612,
+    "total_tokens": 29826,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 61,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

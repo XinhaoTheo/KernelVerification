@@ -1,6 +1,6 @@
 # Success Cases
 
-Updated: October 17, 2026. Model: GLM-5p3 via Fireworks.
+Updated: October 18, 2026. Model: GLM-5p3 via Fireworks.
 
 This file describes cases where tools helped the model correct an incorrect decision. A correct decision can be **Accept** or **Reject**.
 
@@ -8,7 +8,7 @@ Each kernel has **one fixed Accept or Reject label for its full problem descript
 
 We ran all tests on an NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0.
 
-The table shows the trials described below. For cases 147, 149, and 151, it shows the first trial, `r1`. A separate table gives the results from five more trials.
+The table shows the trials described below. For cases 147, 149, 151, 159, and 163, it shows the first trial, `r1`. A separate table gives the results from five more trials.
 
 | Case | Kernel | Ground truth | No tools | Solo + tools | Debate + tools |
 |---|---|---|---|---|---|
@@ -19,6 +19,8 @@ The table shows the trials described below. For cases 147, 149, and 151, it show
 | 147 | Atan approximation | Reject | Accept | Reject | Reject |
 | 149 | Sigmoid rounding | Reject | Accept | Reject | Reject |
 | 151 | NTT coefficient conversion | Reject | Accept | Reject | Reject |
+| 159 | Recurrence order | Reject | Accept | Reject | Reject |
+| 163 | FFT address | Reject | Accept | Reject | Reject |
 
 ## 109 — RMSNorm backward
 
@@ -277,15 +279,99 @@ The correct sum is 64, which is less than 3329. Thus, the remainder must also be
 
 Traces, `r1`: [No tools](../traces_glm/case_151/single_call/r1/transcript.md) · [Solo](../traces_glm/case_151/solo/r1/transcript.md) · [Debate](../traces_glm/case_151/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r23.json).
 
+## 159 — Recurrence order
+
+**What it must do.** The kernel must update a two-component state at each step: `state = matrix @ state + bias`. It must return the state after every step. The [problem description](../triton_eval_cases/case_159/problem.txt) permits sequences of 1 to 32 steps. Each matrix entry is −1, 0, or 1. The bias and initial state can use any INT16 value. Every INT64 output must equal the mathematical result exactly. There is no permitted rounding error.
+
+**What goes wrong.** This synthetic [kernel](../triton_eval_cases/case_159/kernel.py) processes groups of eight steps. It then combines the groups to calculate the state at the start of each group. During this calculation, it applies two combined transforms in the wrong order. The helper `_compose(left, right)` applies the left transform first, then the right transform.
+
+This explanatory sketch uses names for complete transforms. It is not an exact code excerpt:
+
+```python
+# prefix: all steps before the current tree interval.
+# left_total: the earlier half of that interval.
+
+# Case 159 applies left_total before prefix.
+right_prefix = compose(left_total, prefix)
+
+# Required order: apply prefix, then left_total.
+right_prefix = compose(prefix, left_total)
+```
+
+The order matters because matrix operations do not generally give the same result when reversed. In this implementation, the wrong state first affects output at step index 24, in the fourth group. Sequences shorter than 25 steps can pass. That does not make the implementation correct for its full problem description.
+
+**What the model missed.** In `r1`, the model without tools correctly described the helper, but accepted the wrong order when the kernel combined groups. It did not correctly track which transform must run first. In later trials, the same model sometimes found this error without tools.
+
+**What tools found.** Solo and Debate ran the kernel and compared its states with a separate sequential calculation. Both found failures on permitted inputs. Independent GPU validation includes this simple example. Step indices start at zero:
+
+```text
+Sequence length         = 25
+Initial state           = [1, 2]
+Matrix at step 0        = [[1, 1], [0, 1]]
+Matrix at step 16       = [[1, 0], [1, 1]]
+All other matrices      = identity
+All biases              = [0, 0]
+Correct state at step 24 = [3, 5]
+Kernel state at step 24  = [4, 3]
+```
+
+The correct order changes `[1, 2]` to `[3, 2]`, then to `[3, 5]`. The reversed order changes it to `[1, 3]`, then to `[4, 3]`. This exact mismatch establishes the fixed **Reject** label. [Case 158](../triton_eval_cases/case_158/kernel.py) uses the correct order under the same requirements and has an **Accept** label.
+
+Traces, `r1`: [No tools](../traces_glm/case_159/single_call/r1/transcript.md) · [Solo](../traces_glm/case_159/solo/r1/transcript.md) · [Debate](../traces_glm/case_159/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r29.json).
+
+## 163 — FFT address
+
+**What it must do.** The kernel must calculate the Fourier transform of each real input row. The [problem description](../triton_eval_cases/case_163/problem.txt) permits row lengths of 64, 128, or 256 and every finite FP16 input value. It requires FP32 real and imaginary output components in increasing frequency order. Each component must satisfy `absolute error <= 0.0001 + 0.000001 * abs(exact result)`.
+
+**What goes wrong.** This synthetic [kernel](../triton_eval_cases/case_163/kernel.py) combines pairs of real inputs into complex values. It calculates a complex transform of length `M = N/2`, then uses that result to produce the real-input transform. This final step needs coefficients at frequency `k` and frequency `(-k) mod M`.
+
+The intermediate coefficients are stored in bit-reversed order. Bit reversal reverses the order of the binary digits in an index. The kernel must convert each required frequency to its storage address. Instead, it converts `k` to an address and then negates that address:
+
+```python
+# Case 163: actual kernel code.
+address = _reverse(k, LOG_M)
+partner = (-address) & (M - 1)
+```
+
+The correct partner calculation, used in [case 162](../triton_eval_cases/case_162/kernel.py), is:
+
+```python
+partner = _reverse((-k) & (M - 1), LOG_M)
+```
+
+For a permitted row length of 64, `M = 32`. At `k = 1`, the required partner frequency is 31. Reversing its five index bits gives address 31. Case 163 instead reverses 1 to get 16, then calculates `(-16) mod 32`, which is 16. It reads the wrong coefficient. Higher arithmetic precision cannot correct that address error.
+
+**What the model missed.** In `r1`, the model without tools checked the transform formulas but assumed that the partner address was correct. In `r2`, it incorrectly claimed that reversing bits and negating an index could occur in either order. Other trials did identify the source error without tools.
+
+**What tools found.** Solo and Debate compared actual GPU outputs with a separate reference and found failures. In some trials, the model first considered the implementation correct, then changed its decision after execution. Independent GPU validation includes this permitted input:
+
+```text
+Row length                         = 64
+Input at index 2                   = 1
+All other input values             = 0
+Frequency                         = 1
+Output component                  = real
+Exact result, approximately        = 0.9807852804032304
+Kernel output                     = 0.7866343855857849
+Absolute error, approximately      = 0.194150895
+Allowed error, approximately       = 0.000100981
+```
+
+The output error exceeds the limit, so the fixed label is **Reject**. The test exposes the effect of the wrong address on the complete transform. Case 162 uses the correct address calculation under the same requirements and has an **Accept** label.
+
+Traces, `r1`: [No tools](../traces_glm/case_163/single_call/r1/transcript.md) · [Solo](../traces_glm/case_163/solo/r1/transcript.md) · [Debate](../traces_glm/case_163/debate/r1/transcript.md) · [Independent validation](private_data/qualification/r28.json).
+
 ## Repeat results
 
-Each new case has one initial trial, `r1`, and five more trials, `r2` through `r6`, for each method. The table below counts correct decisions in the **five more trials only**. The kernel code and problem description stayed the same.
+Each case in this table has one initial trial, `r1`, and five more trials, `r2` through `r6`, for each method. The table below counts correct decisions in the **five more trials only**. The kernel code and problem description stayed the same.
 
 | Case | No tools: correct | Solo + tools: correct | Debate + tools: correct |
 |---|---|---|---|
 | 147 | 2/5 | 5/5 | 5/5 |
 | 149 | 2/5 | 5/5 | 4/5 |
 | 151 | 0/5 | 5/5 | 5/5 |
+| 159 | 2/5 | 5/5 | 4/5 |
+| 163 | 2/5 | 5/5 | 5/5 |
 
 **147:** Tools found failures in all five more trials. But the model without tools also returned the correct decision in two trials.
 
@@ -293,6 +379,10 @@ Each new case has one initial trial, `r1`, and five more trials, `r2` through `r
 
 **151:** Each trial from `r2` through `r6` gave the same result. The model without tools accepted the incorrect kernel. Solo and Debate correctly rejected it. Each correct decision from a method with tools included an actual GPU failure on a permitted input.
 
-These results show a consistent difference for case 151 across the five more trials. Cases 147 and 149 show benefits from tools, but the difference does not occur in every trial. These selected cases do not show that Debate is better than Solo.
+**159:** Solo returned the correct decision in all five more trials. Debate returned four correct decisions. In `r4`, two early role calls reached their output limits. The run entered its final-response stage before it ran a GPU test and returned insufficient evidence. This was not an API or GPU outage. The model without tools returned the correct decision in two trials.
 
-Full trial records: [147](private_data/source_atan_pair.json) · [149](private_data/source_rounding_pair.json) · [151](private_data/source_ntt_pair.json).
+**163:** Solo and Debate returned the correct decision in all five more trials. Each included an actual GPU failure on a permitted input. The model without tools returned the correct decision in two trials. Some correct responses without tools used numerical examples outside the permitted row lengths. Their correct decisions remain counted, but those examples are not valid test evidence.
+
+These results show a consistent difference for case 151 across the five more trials. Cases 147, 149, 159, and 163 show benefits from tools, but the difference does not occur in every trial. Cases 159 and 163 did not meet the planned requirement for separation in all five repeat trials. These results compare complete workflows, so they do not separate tool access from additional reasoning. These selected cases do not show that Debate is better than Solo.
+
+Full trial records: [147](private_data/source_atan_pair.json) · [149](private_data/source_rounding_pair.json) · [151](private_data/source_ntt_pair.json) · [159](private_data/source_affine_scan_pair.json) · [163](private_data/source_realfft_pair.json).

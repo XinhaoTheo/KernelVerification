@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-8a18a96b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch runtime probes for all three open claims in one batch — they target distinct input regions so no probe design depends on another's outcome.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-942859555867f08e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_156\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\n# Negative exact-halfway products: a*m = -(2k+1) * 2^(30+r) for small r\\ncases = []\\nfor r in [0,1,2,3,5,10,15,20,31]:\\n    # want a*m = -3 * 2^(30+r); m in [2^30, 2^31-1] so pick m=2^30*3? too big. m must be <=2^31-1.\\n    # choose m = 3*2^k where k <= 30 such that m <= 2^31-1, and a = -2^(30+r-k)\\n    for k in range(0, 31):\\n        m = 3 * (1 << k)\\n        if m > (1<<31)-1: continue\\n        if 30 + r - k < 0 or 30 + r - k > 31: continue\\n        a = -(1 << (30 + r - k))\\n        if not (-(1<<31) <= a < (1<<31)): continue\\n        cases.append((a, m, r))\\ncases = list(dict.fromkeys(cases))\\n# dedupe and also positive halfway\\nrows = len(cases) + 4\\nC = 1\\nacc = torch.zeros((rows, C), dtype=torch.int32, device=dev)\\nmul = torch.zeros(C, dtype=torch.int32, device=dev)\\nrsh = torch.zeros(C, dtype=torch.int32, device=dev)\\nzp = torch.zeros(C, dtype=torch.int32, device=dev)\\n# put cases across rows, channel 0\\na_list = [c[0] for c in cases] + [3, 3, 1, -1]\\nacc[:, 0] = torch.tensor(a_list, dtype=torch.int32, device=dev)\\nmul[0] = (1 << 30)  # placeholder, vary per row not possible; instead run kernel per case via C=rows trick\\n# Better: use per-row channel trick: make C = rows, each channel own m/r\\nC = len(a_list)\\nacc2 = torch.tensor(a_list, dtype=torch.int32, device=dev).reshape(1, C)\\nmul2 = torch.tensor([c[1] for c in cases] + [1<<31-1, (1<<31)-1, (1<<31)-1, (1<<31)-1], dtype=torch.int32, device=dev).reshape(C)\\n# last four: use m=(2^31-1) doesn't give exact halves; skip those, keep m as 1<<30\\nmul2 = torch.tensor([c[1] for c in cases] + [1<<30]*4, dtype=torch.int32, device=dev)\\nrsh2 = torch.tensor([c[2] for c in cases] + [0,0,0,0], dtype=torch.int32, device=dev)\\nzp2 = torch.zeros(C, dtype=torch.int32, device=dev)\\nout = K.run(acc2, mul2, rsh2, zp2)\\nref = K.reference(acc2, mul2, rsh2, zp2)\\nmism = (out != ref).sum().item()\\n# expected R per case: quotient = a*m/2^(31+r) = -(2k+1)/2 * ... check -1.5 -> -1\\nexp = []\\nfor (a,m,r) in cases:\\n    R = (a*m + (1 << (30+r))) >> (31+r)\\n    exp.append(R)\\ndetail = []\\nfor i,(a,m,r) in enumerate(cases):\\n    q = a*m / (1 << (31+r))\\n    if out[0,i].item() != ref[0,i].item():\\n        detail.append({\\\"a\\\":a,\\\"m\\\":m,\\\"r\\\":r,\\\"quotient\\\":q,\\\"kernel\\\":out[0,i].item(),\\\"ref\\\":ref[0,i].item(),\\\"math_floor\\\":exp[i]})\\nprint(json.dumps({\\\"metric\\\":\\\"exact_int8_equality_on_negative_halfway_cases\\\",\\\"n_cases\\\":len(cases),\\\"mismatches\\\":mism,\\\"mismatch_detail\\\":detail,\\\"sample_quotients\\\":[a*m/(1<<(31+r)) for (a,m,r) in cases[:5]]}))\\n\", \"expected_signal\": \"kernel output equals reference on all negative-halfway cases (R from arithmetic shift)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-966d8091819c54ff",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_156\\\")\\nimport kernel as K\\ndev = \\\"cuda\\\"\\n# Saturating extremes and R just outside [-255,255]: large |a| with m near 2^31 and small r\\nextremes = [-(1<<31), (1<<31)-1, -(1<<31)+1, (1<<31)-2, 1<<31-1,\\n            # targets for R in 256..383 and -383..-256: R = a*m/2^(31+r) roughly\\n            3*(1<<30), 2*(1<<31)-1, -3*(1<<30), -(2*(1<<31)-1)]\\na_list = extremes\\n# for each a, use r=0 (max |R|) and m=2^31-1\\nC = len(a_list)*2\\nacc = torch.tensor(a_list + a_list, dtype=torch.int32, device=dev).reshape(2, len(a_list))\\nmul = torch.full((C,), (1<<31)-1, dtype=torch.int32, device=dev)\\nrsh = torch.tensor([0]*len(a_list) + [1]*len(a_list), dtype=torch.int32, device=dev)\\nzp = torch.full((C,), -128, dtype=torch.int32, device=dev)  # z=-128 pulls R>255 region\\nzp2 = torch.full((C,), 127, dtype=torch.int32, device=dev)\\nout1 = K.run(acc, mul, rsh, zp)\\nref1 = K.reference(acc, mul, rsh, zp)\\nout2 = K.run(acc, mul, rsh, zp2)\\nref2 = K.reference(acc, mul, rsh, zp2)\\nm1 = (out1 != ref1).sum().item(); m2 = (out2 != ref2).sum().item()\\n# also scan R boundary band: choose a,m,r so R lands 250..260 and -250..-260\\ndetail = []\\nfor a in a_list:\\n    for r in [0,1,2]:\\n        pass\\nprint(json.dumps({\\\"metric\\\":\\\"exact_int8_equality_saturation_extremes\\\",\\\"a_list\\\":a_list,\\\"z=-128_mismatches\\\":m1,\\\"z=+127_mismatches\\\":m2,\\n \\\"R_samples_r0\\\":[((a*((1<<31)-1))+(1<<30))>>31 for a in a_list],\\n \\\"out_z_neg128\\\":out1.flatten().tolist(),\\\"ref_z_neg128\\\":ref1.flatten().tolist(),\\n \\\"out_z_pos127\\\":out2.flatten().tolist(),\\\"ref_z_pos127\\\":ref2.flatten().tolist()}))\\n\", \"expected_signal\": \"kernel equals reference on saturating extremes and |R|>255 band\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-ae7787585b0147a1",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_156\\\")\\nimport kernel as K\\ndev = \\\"cuda\\\"\\ng = torch.Generator().manual_seed(7)\\n# r=31 with large-magnitude negative and positive a, plus r=30,29\\nrows, C = 512, 4\\na = torch.randint(-(1<<31), 1<<31, (rows, C), generator=g, dtype=torch.int64).to(torch.int32)\\n# force extremes in first rows\\na[0,:] = torch.tensor([-(1<<31), (1<<31)-1, -(1<<31)+1, (1<<31)-2], dtype=torch.int32)\\nmul = torch.tensor([1<<30, (1<<31)-1, 1<<30, (1<<31)-1], dtype=torch.int32)\\nrsh = torch.tensor([31, 31, 30, 30], dtype=torch.int32)\\nzp = torch.tensor([0, 127, -128, 127], dtype=torch.int32)\\nout = K.run(a.to(dev), mul.to(dev), rsh.to(dev), zp.to(dev))\\nref = K.reference(a.to(dev), mul.to(dev), rsh.to(dev), zp.to(dev))\\nmism = (out != ref).sum().item()\\nmd = []\\nif mism:\\n    idx = (out != ref).nonzero()\\n    for i in idx[:10].tolist():\\n        md.append({\\\"i\\\":i,\\\"a\\\":a[i[0],i[1]].item(),\\\"c\\\":i[1],\\\"m\\\":mul[i[1]].item(),\\\"r\\\":rsh[i[1]].item(),\\\"z\\\":zp[i[1]].item(),\\\"kernel\\\":out[i[0],i[1]].item(),\\\"ref\\\":ref[i[0],i[1]].item()})\\n# expected R for extremes at r=31\\ndef R(a,m,r):\\n    return (a*m + (1<<(30+r))) >> (31+r)\\nexp = {f\\\"r31_a{a[0,j].item()}\\\":R(a[0,j].item(),mul[j].item(),31) for j in range(4)}\\nprint(json.dumps({\\\"metric\\\":\\\"exact_int8_equality_r31_shift62_large_products\\\",\\\"rows\\\":rows,\\\"mismatches\\\":mism,\\\"mismatch_detail\\\":md,\\\"expected_R_extremes_r31\\\":exp}))\\n\", \"expected_signal\": \"kernel equals reference at r=31 with int64 shift-by-62 and large products\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three independent probes for c1, c2, c3 in one response."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306153,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2200,
+    "prompt_tokens": 22337,
+    "total_tokens": 24537,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 17,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

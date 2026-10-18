@@ -1,0 +1,33 @@
+Check the block scan logic. The affine composition (a,b,c,d,e,f)∘(g,...): left interval precedes right. Applying left then right: new = R∘L, i.e. new matrix = R@L, bias = R@L_bias + R_bias. _compose(l=left, r=right): a = ra*la + rb*lc — right matrix times left matrix. e = ra*le + rb*lf + re — right applied to left's bias plus right's. Correct associative scan with combine of (left, right) → right-after-left? Wait, associative_scan combines elements in order; the combine should produce combined operator such that combined applied to x = right(left(x)). Yes correct.
+
+Local scan: loads with identity defaults for step>=N (identity matrix, zero bias), scan gives inclusive prefix within chunk; stores only step<N. Summary stores last lane (lane==BLOCK-1) which is total over the 8 steps (padded with identity). Good.
+
+_block_carries: exclusive chunks scan. Need to verify _exclusive_chunks. First loop builds tree totals at right endpoints; standard inclusive scan. Then last lane set to identity — making all lanes exclusive of total? Actually after inclusive scan, lane i holds total of 0..i. Setting lane C-1 to identity... hmm, then downward propagation: for each level, right = end of block, left = right-stride. pa = value at right (which after modification is... ). This is a known pattern: exclusive scan via clearing last element to identity and propagating: with inclusive scan values, setting the last element to identity, then downward sweep: at lane==left, set pa (the prefix at right, exclusive of everything after? )... Let me think with small C=2. Inclusive scan: lane0 = s0, lane1 = s0∘s1... wait order: associative_scan with combine(left,right) where left is earlier. lane1 = s1∘s0? Combine(l0, l1) — in _compose l is the first arg (earlier), r second. Actually scan elements combine in order: combine(s0, s1) where s0 earlier = left. Result applied to x: s1(s0(x)). Good.
+
+C=2, LEVELS=1. Inclusive: lane0=s0, lane1=combine(s0,s1)=total. Then identity at lane C-1=1: lane1 = identity. Downward loop level 0: stride=1. right = (lane//2+1)*2-1 → lane0: right=1, left=0. lane1: right=(1+1)*2-1=3, left=2 (out of range). Gather at right: for lane0, pa=a[1]=identity; la=a[0]=s0. na=compose(s0, identity)=s0. lane==left(0) → a=pa=identity. For lane1: pa=a[3] (out of range gather!). tl.gather with out-of-range index... hmm, lane1: right=3, left=2. Gather index 3 out of bounds for C=2. That could be UB. But then tl.where(lane==left(2)? no; lane==right(3)? no) → keeps original a. But the gather itself with out-of-bounds index—Triton gather may return garbage but that's fine since unused? Undefined behavior possibly but usually reads garbage; result still masked out. Hmm, but gather may compute on garbage; values used only in `na` which is discarded for lane1. Fine as long as no fault. Triton gather out-of-bounds typically returns undefined but doesn't fault? Actually it might fault. Hmm.
+
+Also for lane0 after downward: lane0 = pa = a[1] = identity = exclusive prefix for chunk 0. Correct. lane1 = na = compose(s0, identity) = s0 = exclusive prefix of chunk1. Correct.
+
+Larger C: exclusive prefix at lane i should be compose of summaries 0..i-1 applied... Actually exclusive scan: lane i holds combine of s_0..s_{i-1} with identity at lane 0. The standard algorithm: inclusive scan, then replace last element with identity, then downward propagate: at each node, left child gets parent's exclusive value, right child gets parent's exclusive ∘ left child's total. Looks correct (Hillis-Steele then down-sweep). The out-of-range gathers: right computed as (lane//(2*stride)+1)*(2*stride)-1 for lanes near end could exceed C-1 when C not multiple? C is padded power of 2, and lanes 0..C-1. For lane in last block of size 2*stride: right = C-1 ≤ C-1 fine. Actually (lane//(2s)+1)*2s-1: max lane = C-1, lane//(2s) ≤ (C-1)/(2s), +1 times 2s -1 ≤ ... e.g. C=4, stride=1, lane=3: (3//2+1)*2-1=3. OK in range. In my C=2 example, lane1, stride=1: (1//2+1)*2-1 = 1. I miscalculated: lane=1, 2*stride=2, 1//2=0, (0+1)*2-1=1. Right=1, left=0. OK, in range. Good, no OOB.
+
+So exclusive scan gives lane i = combine(s_0,...,s_{i-1}) (exclusive). Then carry = exclusive_total applied to initial. Correct: chunk c's prefix state = (composition of steps 0..c*8-1) applied to initial. Wait exclusive composition order: combine(s0,s1) applies s1 after s0. Exclusive at lane i = s_{i-1}∘...∘s_0 applied → yes.
+
+But careful: LEVELS = padded.bit_length()-1. For padded=1 (N≤8, chunks=1): LEVELS=0. _exclusive_chunks with LEVELS=0: no first loop, then lane C-1=0 set to identity. Downward loop from -1 to 0: static_range(-1,-1,-1) empty? tl.static_range(LEVELS-1,-1,-1) = static_range(-1,-1,-1) — empty. Returns identity. carry = identity applied to initial = initial. Correct.
+
+But note in _exclusive_chunks, out-of-bounds summary lanes: _block_carries loads summary with lane < CHUNKS, padding with identity. Good.
+
+_apply_prefix: loads prefix (inclusive within-chunk scan), carry for chunk; out = within-chunk inclusive prefix applied to carry state. Correct.
+
+Also check first loop take condition: (lane+1) % (2*stride)==0 — lanes at right endpoints of blocks. compose(left = lane-stride, right = lane). Correct Hillis-Steele.
+
+Concern: _compose uses int64 throughout (loaded as int64). Stores fine. tl.associative_scan with tuple and custom combine — supported in Triton 3.4.
+
+One subtlety: in _local_scan, gather/scan with BLOCK=8 fixed. associative_scan on axis 0 over lane of size 8. Fine.
+
+Also dtype: _block_carries loads summary as int64 (stored int64), .to(tl.int64) not needed but ok. INITIAL .to(tl.int64) — initial is int16 pointer; loads int16 then cast. Fine.
+
+Padded C: chunks up to 4 (N=32, block 8 → chunks=4, padded=4, LEVELS=2). Fine.
+
+Also summary stored via `summary = (row*C + chunk)*6 + 0*lane` — a scalar pointer plus mask lane==BLOCK-1; store scalar with mask of vector... storing `a` (vector) with scalar pointer and mask? Hmm: `tl.store(SUMMARY + summary, a, lane == BLOCK - 1)` — pointer scalar, value vector, mask vector. Triton broadcasts pointer to vector shape. OK.
+
+Verdict: trust.

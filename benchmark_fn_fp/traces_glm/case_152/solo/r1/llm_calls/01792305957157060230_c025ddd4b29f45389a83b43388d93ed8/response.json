@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-5af27b77",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run the empirical probe across the full shape domain with many random byte patterns, comparing against zlib.crc32.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b1779d956e0397b1",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, zlib, torch\\nsys.path.insert(0, \\\"/root/cases/case_152\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nmismatches = 0\\ntotal = 0\\ntested = []\\nfor width in (64, 128):\\n    for batch in (1, 7, 128):\\n        for seed in range(40):\\n            x = torch.randint(0, 256, (batch, width), dtype=torch.uint8,\\n                              generator=torch.Generator().manual_seed(seed)).to(dev)\\n            out = kernel.run(x)\\n            ref = kernel.reference(x)\\n            ok = torch.equal(out, ref) and out.dtype == torch.int64 and out.shape == (batch,) \\\\\\n                 and (out >= 0).all() and (out <= 0xFFFFFFFF).all()\\n            total += batch\\n            if not ok:\\n                mismatches += int((out != ref).sum()) if out.shape == ref.shape else batch\\n                if mismatches <= 5:\\n                    i = int((out != ref).nonzero()[0]) if out.shape == ref.shape else 0\\n                    print(\\\"MISMATCH\\\", width, batch, seed, i, int(out[i]), int(ref[i]))\\n        tested.append((width, batch))\\n\\n# targeted patterns: all zeros, all 255, single-byte-set, contiguous view with offset\\nedge = [\\n    torch.zeros(3, 64, dtype=torch.uint8),\\n    torch.full((3, 64), 255, dtype=torch.uint8),\\n    torch.full((2, 128), 255, dtype=torch.uint8),\\n    torch.zeros(2, 128, dtype=torch.uint8),\\n]\\nfor i in range(256):\\n    t = torch.zeros(1, 64, dtype=torch.uint8); t[0, 63] = i; edge.append(t)\\n    t = torch.zeros(1, 64, dtype=torch.uint8); t[0, 0] = i; edge.append(t)\\nfor t in edge:\\n    x = t.to(dev)\\n    out = kernel.run(x); ref = kernel.reference(x)\\n    total += x.shape[0]\\n    if not torch.equal(out, ref):\\n        mismatches += x.shape[0]\\n        print(\\\"EDGE MISMATCH\\\", x.shape, out.tolist(), ref.tolist())\\n\\n# contiguous view with nonzero storage offset\\nbig = torch.randint(0, 256, (300, 64), dtype=torch.uint8).to(dev)\\nview = big[100:100+7]\\nout = kernel.run(view); ref = kernel.reference(view)\\ntotal += 7\\nif not torch.equal(out, ref):\\n    mismatches += 7\\n    print(\\\"VIEW MISMATCH\\\")\\n\\nprint(json.dumps({\\\"mismatches\\\": mismatches, \\\"total_rows_checked\\\": total,\\n                  \\\"shapes\\\": tested, \\\"verdict_metric\\\": \\\"exact equality vs zlib.crc32 (tol=0)\\\"}))\\n\", \"expected_signal\": \"mismatches == 0 if kernel correct\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792305957,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 666,
+    "prompt_tokens": 11145,
+    "total_tokens": 11811,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6740,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

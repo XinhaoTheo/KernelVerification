@@ -1,0 +1,786 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_139",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise unit-scale pseudo-Huber robust loss.\n\nOriginal Triton implementation of a standard smooth robust loss.\nThis is a synthetic benchmark implementation, not a historical upstream bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _loss_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    square = x * x\n    root = tl.sqrt(1.0 + square)\n    value = root - 1.0\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor containing the loss of each stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _loss_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical pseudo-Huber loss in FP64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    square = value * value\n    return square / (torch.sqrt(1.0 + square) + 1.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples, not a restriction on the legal input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the unit-scale pseudo-Huber robust loss elementwise on stored FP16\nvalues, returning FP32 output. The mathematical target is\n\n  target[i] = rho(x[i]) = sqrt(1 + x[i] * x[i]) - 1.\n\nThe loss is a smooth alternative to absolute error: it is approximately\nx*x/2 near zero and approximately abs(x)-1 for large residuals.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - rho(x[i])) <= 1e-8 + 1e-5 * abs(rho(x[i])).\n\nThese are fixed mixed absolute and relative tolerances. Signed zeros are\nnumerically equivalent. The target is defined in real arithmetic on the\nexact stored input value. No particular algebraic expression, square-root\napproximation or intermediate rounding is required. Algebraic rewrites\nand approximations are permitted if they satisfy the tolerance throughout\nthe entire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses an algebraically equivalent FP64 expression and accepts CPU inputs.\nmake_inputs() supplies examples only. Pseudo-Huber loss is a standard\nsmooth robust-regression loss; this is an original synthetic Triton\nimplementation, not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_139",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:07:42Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:08:04Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cbe95f3a4f6be2052cc6043b94bcb7f95e2d9383936c4ca3673b3a7cc43981"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5adcd865ecb16018b968269e38145a0d772e20c89612eb2f06c17a8747e82cf4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4e7b47ff22c83fd3f7ea0f50e460a29a058c3b112d81554a7f51880f99ad11bc"
+              }
+            ],
+            "duration_s": 4.130794,
+            "exit_code": 0,
+            "expected_signal": "count of FP16 values exceeding contract tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 0.00019920317936339416,
+              "num_violating": 15728
+            },
+            "max_abs_err": 0.00019920317936339416,
+            "num_finite_fp16": 63488,
+            "num_violating": 15728,
+            "ratio_of_domain_violating": 0.248,
+            "stderr": "",
+            "stdout": "count finite FP16: 63488\nmax abs err: 0.00019920317936339416\nnum violating: 15728\nworst offenders x: [0.00014150142669677734, 0.00014162063598632812, 0.0001417398452758789, 0.0001418590545654297, 0.00014197826385498047, 0.00014209747314453125, 0.00014221668243408203, 0.0001423358917236328, 0.0001424551010131836, 0.00014257431030273438]\nerr: [1.0011326828498393e-08, 1.0028202218303608e-08, 1.0045091818963112e-08, 1.00619956304769e-08, 1.0078913652844975e-08, 1.0095845886067337e-08, 1.0112792330143984e-08, 1.0129752985074913e-08, 1.0146727850860127e-08, 1.0163716927499623e-08]\ntol: [1.0000100113268285e-08, 1.0000100282022183e-08, 1.000010045091819e-08, 1.0000100619956306e-08, 1.0000100789136529e-08, 1.0000100958458862e-08, 1.0000101127923302e-08, 1.0000101297529851e-08, 1.000010146727851e-08, 1.0000101637169276e-08]\n{\"num_violating\": 15728, \"max_abs_err\": 0.00019920317936339416}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Sweeping all 63488 finite FP16 values through the kernel: 15728 inputs violate the contract tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x)). Max absolute error ~1.99e-4. Worst offenders start at small x (~1.4e-4) where the direct sqrt(1+x*x)-1 computation catastrophically cancels. A mathematically stable rewrite (x*x/(sqrt(1+x*x)+1), as used in the kernel's own reference()) would satisfy the tolerance.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Direct FP32 evaluation of sqrt(1+x*x)-1 loses low bits of x*x when added to 1.0, and subtracting 1.0 amplifies that rounding; for x near 1e-3 to 1e-1 the output is O(1e-7..1e-3) while the absolute tolerance is only ~1e-8 plus 1e-5 relative, so direct evaluation likely exceeds the tolerance for some finite FP16 inputs.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every finite FP16 value is legal, and every output element must satisfy abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x))."
+        }
+      ],
+      "scope_rationale": "The contract requires the tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho) for EVERY finite FP16 input, so any input where direct sqrt(1+x^2)-1 in FP32 exceeds this tolerance is a violation.",
+      "statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error).",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T01:08:04Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_139",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_139"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_139"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_139"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_139",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 11.633495954999999,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel computes `sqrt(1+x*x)-1` directly in FP32, which risks catastrophic cancellation for small x \u2014 where `1+x\u00b2` rounds and the subtraction amplifies error. I'll record that claim and probe it by sweeping every finite FP16 value.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Direct FP32 evaluation of sqrt(1+x*x)-1 loses low bits of x*x when added to 1.0, and subtracting 1.0 amplifies that rounding; for x near 1e-3 to 1e-1 the output is O(1e-7..1e-3) while the absolute tolerance is only ~1e-8 plus 1e-5 relative, so direct evaluation likely exceeds the tolerance for some finite FP16 inputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every finite FP16 value is legal, and every output element must satisfy abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x))."
+              }
+            ],
+            "scope_rationale": "The contract requires the tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho) for EVERY finite FP16 input, so any input where direct sqrt(1+x^2)-1 in FP32 exceeds this tolerance is a violation.",
+            "statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 11.633,
+        "input_tokens": 8803,
+        "output_tokens": 841
+      }
+    },
+    {
+      "duration_s": 4.618152847999999,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll probe by sweeping all finite FP16 values through the kernel and comparing against the FP64 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_139/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\n# all finite FP16 values\nbits = torch.arange(0, 65536, dtype=torch.int32)\nallv = bits.to(torch.uint16).view(torch.float16)\nallf = allv[torch.isfinite(allv)].clone()\nprint(\"count finite FP16:\", allf.numel())\n\nout = k.run(allf.cuda())\nref = k.reference(allf)  # FP64\nerr = (out.double() - ref).abs()\ntol = 1e-8 + 1e-5*ref.abs()\nbad = err > tol\nprint(\"max abs err:\", err.max().item())\nprint(\"num violating:\", bad.sum().item())\nif bad.any():\n    idx = bad.nonzero().flatten()\n    xs = allf[idx.cpu()][:10].tolist()\n    print(\"worst offenders x:\", xs)\n    print(\"err:\", err[idx][:10].tolist())\n    print(\"tol:\", tol[idx][:10].tolist())\nprint(json.dumps({\"num_violating\": int(bad.sum().item()), \"max_abs_err\": float(err.max().item())}))\n",
+            "expected_signal": "count of FP16 values exceeding contract tolerance"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.618,
+        "input_tokens": 10281,
+        "output_tokens": 332
+      }
+    },
+    {
+      "duration_s": 4.430195069,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe errored on a device mismatch (kernel output on CUDA, reference on CPU). I'll rerun with the reference moved to the CUDA output's device.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_139/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nbits = torch.arange(0, 65536, dtype=torch.int32)\nallv = bits.to(torch.uint16).view(torch.float16)\nallf = allv[torch.isfinite(allv)].clone()\nprint(\"count finite FP16:\", allf.numel())\n\nout = k.run(allf.cuda())\nref = k.reference(allf).to(out.device)  # FP64\nerr = (out.double() - ref).abs()\ntol = 1e-8 + 1e-5*ref.abs()\nbad = err > tol\nprint(\"max abs err:\", err.max().item())\nprint(\"num violating:\", bad.sum().item())\nif bad.any():\n    idx = bad.nonzero().flatten()\n    xs = allf[idx.cpu()][:10].tolist()\n    print(\"worst offenders x:\", xs)\n    print(\"err:\", err[idx][:10].tolist())\n    print(\"tol:\", tol[idx][:10].tolist())\nprint(json.dumps({\"num_violating\": int(bad.sum().item()), \"max_abs_err\": float(err.max().item())}))\n",
+            "expected_signal": "count of FP16 values exceeding contract tolerance"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.43,
+        "input_tokens": 12225,
+        "output_tokens": 377
+      }
+    },
+    {
+      "duration_s": 4.539895037999997,
+      "role": "solo",
+      "round": 5,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 0.00019920317936339416,
+              "num_finite_fp16": 63488,
+              "num_violating": 15728,
+              "ratio_of_domain_violating": 0.248
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Sweeping all 63488 finite FP16 values through the kernel: 15728 inputs violate the contract tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x)). Max absolute error ~1.99e-4. Worst offenders start at small x (~1.4e-4) where the direct sqrt(1+x*x)-1 computation catastrophically cancels. A mathematically stable rewrite (x*x/(sqrt(1+x*x)+1), as used in the kernel's own reference()) would satisfy the tolerance.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.54,
+        "input_tokens": 15276,
+        "output_tokens": 214
+      }
+    },
+    {
+      "duration_s": 4.694478910000001,
+      "role": "solo",
+      "round": 6,
+      "text": "The claim is confirmed with exhaustive evidence over the full legal domain. I'll record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t7 swept all 63488 finite FP16 values (the entire legal input domain per problem.txt) through the kernel and compared against the FP64 reference. 15728 values (24.8% of the domain) violate the contract tolerance abs(actual - rho(x)) <= 1e-8 + 1e-5*abs(rho(x)); max absolute error ~1.99e-4. The cause is the kernel's direct FP32 evaluation of sqrt(1+x*x)-1 (kernel.py lines 17-18), which catastrophically cancels for small-to-moderate x (violations begin around x~1.4e-4). The contract permits algebraic rewrites, and the stable form x*x/(sqrt(1+x*x)+1) \u2014 which the kernel's own reference() uses \u2014 would satisfy the tolerance, so this is a fixable defect, but as shipped the kernel violates the required tolerance on a large in-scope fraction of the domain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.694,
+        "input_tokens": 19880,
+        "output_tokens": 265
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_139"
+      },
+      "created_at": "2026-10-18T01:07:29Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_139",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise unit-scale pseudo-Huber robust loss.\n\nOriginal Triton implementation of a standard smooth robust loss.\nThis is a synthetic benchmark implementation, not a historical upstream bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _loss_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    square = x * x\n    root = tl.sqrt(1.0 + square)\n    value = root - 1.0\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor containing the loss of each stored input.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _loss_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical pseudo-Huber loss in FP64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    square = value * value\n    return square / (torch.sqrt(1.0 + square) + 1.0)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples, not a restriction on the legal input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the unit-scale pseudo-Huber robust loss elementwise on stored FP16\nvalues, returning FP32 output. The mathematical target is\n\n  target[i] = rho(x[i]) = sqrt(1 + x[i] * x[i]) - 1.\n\nThe loss is a smooth alternative to absolute error: it is approximately\nx*x/2 near zero and approximately abs(x)-1 for large residuals.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - rho(x[i])) <= 1e-8 + 1e-5 * abs(rho(x[i])).\n\nThese are fixed mixed absolute and relative tolerances. Signed zeros are\nnumerically equivalent. The target is defined in real arithmetic on the\nexact stored input value. No particular algebraic expression, square-root\napproximation or intermediate rounding is required. Algebraic rewrites\nand approximations are permitted if they satisfy the tolerance throughout\nthe entire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses an algebraically equivalent FP64 expression and accepts CPU inputs.\nmake_inputs() supplies examples only. Pseudo-Huber loss is a standard\nsmooth robust-regression loss; this is an original synthetic Triton\nimplementation, not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_139",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_139"
+      },
+      "created_at": "2026-10-18T01:07:29Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the unit-scale pseudo-Huber robust loss elementwise on stored FP16\nvalues, returning FP32 output. The mathematical target is\n\n  target[i] = rho(x[i]) = sqrt(1 + x[i] * x[i]) - 1.\n\nThe loss is a smooth alternative to absolute error: it is approximately\nx*x/2 near zero and approximately abs(x)-1 for large residuals.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - rho(x[i])) <= 1e-8 + 1e-5 * abs(rho(x[i])).\n\nThese are fixed mixed absolute and relative tolerances. Signed zeros are\nnumerically equivalent. The target is defined in real arithmetic on the\nexact stored input value. No particular algebraic expression, square-root\napproximation or intermediate rounding is required. Algebraic rewrites\nand approximations are permitted if they satisfy the tolerance throughout\nthe entire legal domain. Correctness is one verdict for the implementation,\nnot a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses an algebraically equivalent FP64 expression and accepts CPU inputs.\nmake_inputs() supplies examples only. Pseudo-Huber loss is a standard\nsmooth robust-regression loss; this is an original synthetic Triton\nimplementation, not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_139",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_139"
+      },
+      "created_at": "2026-10-18T01:07:29Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_139",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2604
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2071
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_139",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:07:29Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_139",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Direct FP32 evaluation of sqrt(1+x*x)-1 loses low bits of x*x when added to 1.0, and subtracting 1.0 amplifies that rounding; for x near 1e-3 to 1e-1 the output is O(1e-7..1e-3) while the absolute tolerance is only ~1e-8 plus 1e-5 relative, so direct evaluation likely exceeds the tolerance for some finite FP16 inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every finite FP16 value is legal, and every output element must satisfy abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x))."
+          }
+        ],
+        "scope_rationale": "The contract requires the tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho) for EVERY finite FP16 input, so any input where direct sqrt(1+x^2)-1 in FP32 exceeds this tolerance is a violation.",
+        "statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error)."
+      },
+      "created_at": "2026-10-18T01:07:42Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T01:07:42Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Direct FP32 evaluation of sqrt(1+x*x)-1 loses low bits of x*x when added to 1.0, and subtracting 1.0 amplifies that rounding; for x near 1e-3 to 1e-1 the output is O(1e-7..1e-3) while the absolute tolerance is only ~1e-8 plus 1e-5 relative, so direct evaluation likely exceeds the tolerance for some finite FP16 inputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every finite FP16 value is legal, and every output element must satisfy abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x))."
+          }
+        ],
+        "scope_rationale": "The contract requires the tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho) for EVERY finite FP16 input, so any input where direct sqrt(1+x^2)-1 in FP32 exceeds this tolerance is a violation.",
+        "statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error).",
+        "status": "open",
+        "updated_at": "2026-10-18T01:07:42Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_139/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\n# all finite FP16 values\nbits = torch.arange(0, 65536, dtype=torch.int32)\nallv = bits.to(torch.uint16).view(torch.float16)\nallf = allv[torch.isfinite(allv)].clone()\nprint(\"count finite FP16:\", allf.numel())\n\nout = k.run(allf.cuda())\nref = k.reference(allf)  # FP64\nerr = (out.double() - ref).abs()\ntol = 1e-8 + 1e-5*ref.abs()\nbad = err > tol\nprint(\"max abs err:\", err.max().item())\nprint(\"num violating:\", bad.sum().item())\nif bad.any():\n    idx = bad.nonzero().flatten()\n    xs = allf[idx.cpu()][:10].tolist()\n    print(\"worst offenders x:\", xs)\n    print(\"err:\", err[idx][:10].tolist())\n    print(\"tol:\", tol[idx][:10].tolist())\nprint(json.dumps({\"num_violating\": int(bad.sum().item()), \"max_abs_err\": float(err.max().item())}))\n",
+        "expected_signal": "count of FP16 values exceeding contract tolerance"
+      },
+      "created_at": "2026-10-18T01:07:51Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "abb3ab09662c91d2c5e9b18de8f025e9f49a831f8428c7224cd1241ae565a8db"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "9a58da359628ff0c9dc1c04ba17d11b82435069d2d785f6c14402c6f4f641462"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "4cbbfcdc2e8e4b33df3d102d22148fd4dec9ff33ceede4e64118f86121675234"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error).",
+        "cwd": "/root/cases/case_139",
+        "duration_s": 4.848009,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "abb3ab09662c91d2c5e9b18de8f025e9f49a831f8428c7224cd1241ae565a8db"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "9a58da359628ff0c9dc1c04ba17d11b82435069d2d785f6c14402c6f4f641462"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "4cbbfcdc2e8e4b33df3d102d22148fd4dec9ff33ceede4e64118f86121675234"
+              }
+            ],
+            "duration_s": 4.848009,
+            "exit_code": 1,
+            "expected_signal": "count of FP16 values exceeding contract tolerance",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_139/solo/probes/t6_probe.py\", line 15, in <module>\n    err = (out.double() - ref).abs()\n           ~~~~~~~~~~~~~^~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+            "stdout": "count finite FP16: 63488\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": "count of FP16 values exceeding contract tolerance",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_139/solo/probes/t6_probe.py\", line 15, in <module>\n    err = (out.double() - ref).abs()\n           ~~~~~~~~~~~~~^~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+        "stdout": "count finite FP16: 63488\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_139/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nbits = torch.arange(0, 65536, dtype=torch.int32)\nallv = bits.to(torch.uint16).view(torch.float16)\nallf = allv[torch.isfinite(allv)].clone()\nprint(\"count finite FP16:\", allf.numel())\n\nout = k.run(allf.cuda())\nref = k.reference(allf).to(out.device)  # FP64\nerr = (out.double() - ref).abs()\ntol = 1e-8 + 1e-5*ref.abs()\nbad = err > tol\nprint(\"max abs err:\", err.max().item())\nprint(\"num violating:\", bad.sum().item())\nif bad.any():\n    idx = bad.nonzero().flatten()\n    xs = allf[idx.cpu()][:10].tolist()\n    print(\"worst offenders x:\", xs)\n    print(\"err:\", err[idx][:10].tolist())\n    print(\"tol:\", tol[idx][:10].tolist())\nprint(json.dumps({\"num_violating\": int(bad.sum().item()), \"max_abs_err\": float(err.max().item())}))\n",
+        "expected_signal": "count of FP16 values exceeding contract tolerance"
+      },
+      "created_at": "2026-10-18T01:08:00Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "f0cbe95f3a4f6be2052cc6043b94bcb7f95e2d9383936c4ca3673b3a7cc43981"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "5adcd865ecb16018b968269e38145a0d772e20c89612eb2f06c17a8747e82cf4"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "4e7b47ff22c83fd3f7ea0f50e460a29a058c3b112d81554a7f51880f99ad11bc"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error).",
+        "cwd": "/root/cases/case_139",
+        "duration_s": 4.130794,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cbe95f3a4f6be2052cc6043b94bcb7f95e2d9383936c4ca3673b3a7cc43981"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5adcd865ecb16018b968269e38145a0d772e20c89612eb2f06c17a8747e82cf4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4e7b47ff22c83fd3f7ea0f50e460a29a058c3b112d81554a7f51880f99ad11bc"
+              }
+            ],
+            "duration_s": 4.130794,
+            "exit_code": 0,
+            "expected_signal": "count of FP16 values exceeding contract tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 0.00019920317936339416,
+              "num_violating": 15728
+            },
+            "stderr": "",
+            "stdout": "count finite FP16: 63488\nmax abs err: 0.00019920317936339416\nnum violating: 15728\nworst offenders x: [0.00014150142669677734, 0.00014162063598632812, 0.0001417398452758789, 0.0001418590545654297, 0.00014197826385498047, 0.00014209747314453125, 0.00014221668243408203, 0.0001423358917236328, 0.0001424551010131836, 0.00014257431030273438]\nerr: [1.0011326828498393e-08, 1.0028202218303608e-08, 1.0045091818963112e-08, 1.00619956304769e-08, 1.0078913652844975e-08, 1.0095845886067337e-08, 1.0112792330143984e-08, 1.0129752985074913e-08, 1.0146727850860127e-08, 1.0163716927499623e-08]\ntol: [1.0000100113268285e-08, 1.0000100282022183e-08, 1.000010045091819e-08, 1.0000100619956306e-08, 1.0000100789136529e-08, 1.0000100958458862e-08, 1.0000101127923302e-08, 1.0000101297529851e-08, 1.000010146727851e-08, 1.0000101637169276e-08]\n{\"num_violating\": 15728, \"max_abs_err\": 0.00019920317936339416}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "count of FP16 values exceeding contract tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err": 0.00019920317936339416,
+          "num_violating": 15728
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "count finite FP16: 63488\nmax abs err: 0.00019920317936339416\nnum violating: 15728\nworst offenders x: [0.00014150142669677734, 0.00014162063598632812, 0.0001417398452758789, 0.0001418590545654297, 0.00014197826385498047, 0.00014209747314453125, 0.00014221668243408203, 0.0001423358917236328, 0.0001424551010131836, 0.00014257431030273438]\nerr: [1.0011326828498393e-08, 1.0028202218303608e-08, 1.0045091818963112e-08, 1.00619956304769e-08, 1.0078913652844975e-08, 1.0095845886067337e-08, 1.0112792330143984e-08, 1.0129752985074913e-08, 1.0146727850860127e-08, 1.0163716927499623e-08]\ntol: [1.0000100113268285e-08, 1.0000100282022183e-08, 1.000010045091819e-08, 1.0000100619956306e-08, 1.0000100789136529e-08, 1.0000100958458862e-08, 1.0000101127923302e-08, 1.0000101297529851e-08, 1.000010146727851e-08, 1.0000101637169276e-08]\n{\"num_violating\": 15728, \"max_abs_err\": 0.00019920317936339416}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 0.00019920317936339416,
+          "num_finite_fp16": 63488,
+          "num_violating": 15728,
+          "ratio_of_domain_violating": 0.248
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Sweeping all 63488 finite FP16 values through the kernel: 15728 inputs violate the contract tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x)). Max absolute error ~1.99e-4. Worst offenders start at small x (~1.4e-4) where the direct sqrt(1+x*x)-1 computation catastrophically cancels. A mathematically stable rewrite (x*x/(sqrt(1+x*x)+1), as used in the kernel's own reference()) would satisfy the tolerance.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T01:08:04Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:07:42Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:08:04Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "f0cbe95f3a4f6be2052cc6043b94bcb7f95e2d9383936c4ca3673b3a7cc43981"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "5adcd865ecb16018b968269e38145a0d772e20c89612eb2f06c17a8747e82cf4"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "4e7b47ff22c83fd3f7ea0f50e460a29a058c3b112d81554a7f51880f99ad11bc"
+                  }
+                ],
+                "duration_s": 4.130794,
+                "exit_code": 0,
+                "expected_signal": "count of FP16 values exceeding contract tolerance",
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err": 0.00019920317936339416,
+                  "num_violating": 15728
+                },
+                "max_abs_err": 0.00019920317936339416,
+                "num_finite_fp16": 63488,
+                "num_violating": 15728,
+                "ratio_of_domain_violating": 0.248,
+                "stderr": "",
+                "stdout": "count finite FP16: 63488\nmax abs err: 0.00019920317936339416\nnum violating: 15728\nworst offenders x: [0.00014150142669677734, 0.00014162063598632812, 0.0001417398452758789, 0.0001418590545654297, 0.00014197826385498047, 0.00014209747314453125, 0.00014221668243408203, 0.0001423358917236328, 0.0001424551010131836, 0.00014257431030273438]\nerr: [1.0011326828498393e-08, 1.0028202218303608e-08, 1.0045091818963112e-08, 1.00619956304769e-08, 1.0078913652844975e-08, 1.0095845886067337e-08, 1.0112792330143984e-08, 1.0129752985074913e-08, 1.0146727850860127e-08, 1.0163716927499623e-08]\ntol: [1.0000100113268285e-08, 1.0000100282022183e-08, 1.000010045091819e-08, 1.0000100619956306e-08, 1.0000100789136529e-08, 1.0000100958458862e-08, 1.0000101127923302e-08, 1.0000101297529851e-08, 1.000010146727851e-08, 1.0000101637169276e-08]\n{\"num_violating\": 15728, \"max_abs_err\": 0.00019920317936339416}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Sweeping all 63488 finite FP16 values through the kernel: 15728 inputs violate the contract tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x)). Max absolute error ~1.99e-4. Worst offenders start at small x (~1.4e-4) where the direct sqrt(1+x*x)-1 computation catastrophically cancels. A mathematically stable rewrite (x*x/(sqrt(1+x*x)+1), as used in the kernel's own reference()) would satisfy the tolerance.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Direct FP32 evaluation of sqrt(1+x*x)-1 loses low bits of x*x when added to 1.0, and subtracting 1.0 amplifies that rounding; for x near 1e-3 to 1e-1 the output is O(1e-7..1e-3) while the absolute tolerance is only ~1e-8 plus 1e-5 relative, so direct evaluation likely exceeds the tolerance for some finite FP16 inputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every finite FP16 value is legal, and every output element must satisfy abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x))."
+            }
+          ],
+          "scope_rationale": "The contract requires the tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho) for EVERY finite FP16 input, so any input where direct sqrt(1+x^2)-1 in FP32 exceeds this tolerance is a violation.",
+          "statement": "The kernel's direct FP32 expression sqrt(1+x*x)-1 fails the contract tolerance for some finite FP16 inputs (small-to-moderate x where cancellation amplifies rounding error).",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T01:08:04Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:08:04Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "f0cbe95f3a4f6be2052cc6043b94bcb7f95e2d9383936c4ca3673b3a7cc43981"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "5adcd865ecb16018b968269e38145a0d772e20c89612eb2f06c17a8747e82cf4"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "4e7b47ff22c83fd3f7ea0f50e460a29a058c3b112d81554a7f51880f99ad11bc"
+              }
+            ],
+            "duration_s": 4.130794,
+            "exit_code": 0,
+            "expected_signal": "count of FP16 values exceeding contract tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 0.00019920317936339416,
+              "num_violating": 15728
+            },
+            "max_abs_err": 0.00019920317936339416,
+            "num_finite_fp16": 63488,
+            "num_violating": 15728,
+            "ratio_of_domain_violating": 0.248,
+            "stderr": "",
+            "stdout": "count finite FP16: 63488\nmax abs err: 0.00019920317936339416\nnum violating: 15728\nworst offenders x: [0.00014150142669677734, 0.00014162063598632812, 0.0001417398452758789, 0.0001418590545654297, 0.00014197826385498047, 0.00014209747314453125, 0.00014221668243408203, 0.0001423358917236328, 0.0001424551010131836, 0.00014257431030273438]\nerr: [1.0011326828498393e-08, 1.0028202218303608e-08, 1.0045091818963112e-08, 1.00619956304769e-08, 1.0078913652844975e-08, 1.0095845886067337e-08, 1.0112792330143984e-08, 1.0129752985074913e-08, 1.0146727850860127e-08, 1.0163716927499623e-08]\ntol: [1.0000100113268285e-08, 1.0000100282022183e-08, 1.000010045091819e-08, 1.0000100619956306e-08, 1.0000100789136529e-08, 1.0000100958458862e-08, 1.0000101127923302e-08, 1.0000101297529851e-08, 1.000010146727851e-08, 1.0000101637169276e-08]\n{\"num_violating\": 15728, \"max_abs_err\": 0.00019920317936339416}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Sweeping all 63488 finite FP16 values through the kernel: 15728 inputs violate the contract tolerance abs(actual-rho(x)) <= 1e-8 + 1e-5*abs(rho(x)). Max absolute error ~1.99e-4. Worst offenders start at small x (~1.4e-4) where the direct sqrt(1+x*x)-1 computation catastrophically cancels. A mathematically stable rewrite (x*x/(sqrt(1+x*x)+1), as used in the kernel's own reference()) would satisfy the tolerance.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 swept all 63488 finite FP16 values (the entire legal input domain per problem.txt) through the kernel and compared against the FP64 reference. 15728 values (24.8% of the domain) violate the contract tolerance abs(actual - rho(x)) <= 1e-8 + 1e-5*abs(rho(x)); max absolute error ~1.99e-4. The cause is the kernel's direct FP32 evaluation of sqrt(1+x*x)-1 (kernel.py lines 17-18), which catastrophically cancels for small-to-moderate x (violations begin around x~1.4e-4). The contract permits algebraic rewrites, and the stable form x*x/(sqrt(1+x*x)+1) \u2014 which the kernel's own reference() uses \u2014 would satisfy the tolerance, so this is a fixable defect, but as shipped the kernel violates the required tolerance on a large in-scope fraction of the domain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T01:08:09Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-18T01:08:09Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t7 swept all 63488 finite FP16 values (the entire legal input domain per problem.txt) through the kernel and compared against the FP64 reference. 15728 values (24.8% of the domain) violate the contract tolerance abs(actual - rho(x)) <= 1e-8 + 1e-5*abs(rho(x)); max absolute error ~1.99e-4. The cause is the kernel's direct FP32 evaluation of sqrt(1+x*x)-1 (kernel.py lines 17-18), which catastrophically cancels for small-to-moderate x (violations begin around x~1.4e-4). The contract permits algebraic rewrites, and the stable form x*x/(sqrt(1+x*x)+1) \u2014 which the kernel's own reference() uses \u2014 would satisfy the tolerance, so this is a fixable defect, but as shipped the kernel violates the required tolerance on a large in-scope fraction of the domain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-18T01:08:09Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t7 swept all 63488 finite FP16 values (the entire legal input domain per problem.txt) through the kernel and compared against the FP64 reference. 15728 values (24.8% of the domain) violate the contract tolerance abs(actual - rho(x)) <= 1e-8 + 1e-5*abs(rho(x)); max absolute error ~1.99e-4. The cause is the kernel's direct FP32 evaluation of sqrt(1+x*x)-1 (kernel.py lines 17-18), which catastrophically cancels for small-to-moderate x (violations begin around x~1.4e-4). The contract permits algebraic rewrites, and the stable form x*x/(sqrt(1+x*x)+1) \u2014 which the kernel's own reference() uses \u2014 would satisfy the tolerance, so this is a fixable defect, but as shipped the kernel violates the required tolerance on a large in-scope fraction of the domain.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-9c0d20a8",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'm batching all three open claims into independent probes: c1 tests the accuracy budget on adversarial/extreme FP16 inputs, c2 directly tests whether `tl.div_rn` is correctly-rounded on this T4/Triton stack, and c3 tests shared-backing-storage aliasing.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a11799558b77ceff",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, itertools, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\" if torch.cuda.is_available() else \\\"cpu\\\"\\n\\ndef check(num, den, tag):\\n    n0, d0 = num.clone(), den.clone()\\n    out = k.run(num, den)\\n    ref = k.reference(num, den).to(torch.float64)\\n    err = (out.to(torch.float64) - ref).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    ratio = (err / tol)\\n    return {\\\"tag\\\": tag, \\\"n\\\": num.shape[0], \\\"max_ratio\\\": ratio.max().item(),\\n            \\\"max_abs_err\\\": err.max().item(), \\\"finite_out\\\": bool(torch.isfinite(out).all()),\\n            \\\"inputs_preserved\\\": bool(torch.equal(n0, num) and torch.equal(d0, den))}\\n\\nresults = []\\n# corner values incl. extrema, subnormals, signed zeros\\nvals = [0.0, -0.0, 5.96e-8, -5.96e-8, 6.1e-5, -6.1e-5, 1.0, -1.0, 1.001, 2048.0, 65504.0, -65504.0, 5e-4, 0.1, 3.0, 1234.5]\\nden_vals = [v for v in vals if v != 0.0] + [1e-4, -1e-4, 6e-5, 65504.0, -65504.0, 0.5, -0.5, 2.0]\\nnum_rows, den_rows = [], []\\nrng = torch.Generator().manual_seed(7)\\nfor a in vals:\\n    for b in vals:\\n        num_rows.append((a, b))\\nfor c in den_vals:\\n    for d in den_vals:\\n        if not (c == 0.0 and d == 0.0):\\n            den_rows.append((c, d))\\nnum = torch.tensor(num_rows, dtype=torch.float16, device=dev)\\nden = torch.tensor(den_rows[: len(num_rows)] if len(den_rows) >= len(num_rows) else den_rows, dtype=torch.float16, device=dev)\\nif len(num_rows) < len(den_rows):\\n    num = num.repeat(2, 1)[: len(den_rows)]\\n    den = den.repeat(2, 1)[: num.shape[0]]\\n    num = num[: den.shape[0]]\\nresults.append(check(num, den, \\\"grid_corners\\\"))\\n\\n# cancellation: numerator components chosen so a*c ~ -b*d, plus random pairs of all FP16 magnitudes\\nn2 = torch.empty((65536, 2), dtype=torch.float16)\\nn2[:, 0] = torch.randn(65536, generator=torch.Generator().manual_seed(1))\\nn2[:, 1] = -(n2[:, 0].to(torch.float32) * 1.0).to(torch.float16)  # near-cancellation pairs\\nd2 = torch.randn((65536, 2), generator=torch.Generator().manual_seed(2)).to(torch.float16).to(dev)\\nd2[(d2 == 0).all(dim=1), 0] = 1\\nn2 = n2.to(dev)\\nresults.append(check(n2, d2, \\\"near_cancellation_randn\\\"))\\n\\n# extreme magnitudes: large nums / tiny dens and vice versa\\nn3 = torch.full((8192, 2), 65504.0, dtype=torch.float16, device=dev); n3[:, 1] = -65504.0\\nd3 = torch.full((8192, 2), 5.96e-8, dtype=torch.float16, device=dev); d3[:, 1] = 5.96e-8\\nd3[::2, 0] = 6.1e-5\\nresults.append(check(n3, d3, \\\"extremes\\\"))\\nn4 = torch.randn((8192, 2)).to(torch.float16).to(dev)\\nd4 = torch.full((8192, 2), 65504.0, dtype=torch.float16, device=dev); d4[:, 1] = 6.0\\nresults.append(check(n4, d4, \\\"big_denominator\\\"))\\n\\nprint(json.dumps({\\\"metric\\\": \\\"max_ratio_of_error_to_per_component_tolerance\\\", \\\"results\\\": results}))\\n\", \"expected_signal\": \"max_ratio <= 1.0 means tolerance met on adversarial corners\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9c62c43838cea208",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, triton, triton.language as tl, json\\n\\n@triton.jit\\ndef _divtest(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    m = i < N\\n    x = tl.load(X + i, mask=m, other=1.0)\\n    y = tl.load(Y + i, mask=m, other=1.0)\\n    tl.store(OUT + i, tl.div_rn(x, y), mask=m)\\n\\nN = 1 << 20\\ng = torch.Generator().manual_seed(3)\\nx = (torch.rand(N, generator=g) * 2 - 1) * 1e3\\ny = (torch.rand(N, generator=g) * 2 - 1) * 1e3\\nx[(x == 0)] = 1.5  # div by anything nonzero\\ny[(y == 0)] = 2.5\\nx = x.to(\\\"cuda\\\"); y = y.to(\\\"cuda\\\")\\nout = torch.empty_like(x)\\n_divtest[(triton.cdiv(N, 1024),)](x, y, out, N=N, BLOCK=1024, enable_fp_fusion=False)\\ntorch.cuda.synchronize()\\n\\n# correctly-rounded target: round exact (FP64) quotient to FP32\\nexact = (x.to(torch.float64) / y.to(torch.float64))\\ncr = exact.to(torch.float32)\\nmismatch = (out != cr)\\n# ulp distance of out from exact\\nreldiff = ((out.to(torch.float64) - exact).abs() / exact.abs())\\nulp32 = torch.ldexp(torch.ones((), dtype=torch.float64, device=\\\"cuda\\\"),\\n                    (out.to(torch.float64).abs().log2().floor() - 23))\\n# simpler: report mismatch count and max relative error\\nprint(json.dumps({\\n    \\\"metric\\\": \\\"div_rn_correct_rounding_vs_round_of_fp64_exact\\\",\\n    \\\"n\\\": N, \\\"mismatch_count\\\": int(mismatch.sum()),\\n    \\\"max_rel_err\\\": float(reldiff.max()),\\n    \\\"mismatch_examples\\\": [\\n        {\\\"x\\\": float(x[j]), \\\"y\\\": float(y[j]), \\\"out\\\": float(out[j]), \\\"correct_rounded\\\": float(cr[j])}\\n        for j in mismatch.nonzero()[:5].flatten().tolist()\\n    ]}))\\n\", \"expected_signal\": \"mismatch_count == 0 means div_rn is correctly rounded on this stack\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b5b055f1a7add7fe",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nres = {}\\n\\n# case A: same tensor object as both args\\nt = torch.randn((1000, 2)).to(torch.float16).to(dev)\\nt[(t == 0).all(dim=1), 0] = 1\\nt0 = t.clone()\\ntry:\\n    out = k.run(t, t)\\n    ref = k.reference(t0, t0)\\n    err = (out.to(torch.float64) - ref.to(torch.float64)).abs()\\n    tol = 1e-7 + 5e-7 * ref.to(torch.float64).abs()\\n    res[\\\"same_tensor\\\"] = {\\\"accepted\\\": True, \\\"max_ratio\\\": float((err / tol).max()),\\n                          \\\"inputs_preserved\\\": bool(torch.equal(t, t0)),\\n                          \\\"finite_out\\\": bool(torch.isfinite(out).all())}\\nexcept Exception as e:\\n    res[\\\"same_tensor\\\"] = {\\\"accepted\\\": False, \\\"error\\\": str(e)}\\n\\n# case B: two overlapping views of one backing storage (offset views, both contiguous)\\nback = torch.randn((3000, 2)).to(torch.float16).to(dev)\\nback[(back == 0).all(dim=1)] = 1.0  # avoid all-zero rows anywhere\\nn_v = back[500:1500]          # contiguous view, nonzero offset\\nd_v = back[1000:2000]         # overlapping, contiguous, nonzero offset\\n# ensure no denominator row all zero\\nref = k.reference(n_v, d_v)\\nout = k.run(n_v, d_v)\\nerr = (out.to(torch.float64) - ref.to(torch.float64)).abs()\\ntol = 1e-7 + 5e-7 * ref.to(torch.float64).abs()\\nres[\\\"overlapping_views\\\"] = {\\\"max_ratio\\\": float((err / tol).max()),\\n                            \\\"finite_out\\\": bool(torch.isfinite(out).all()),\\n                            \\\"denominator_row_nonzero_ok\\\": True}\\n\\nprint(json.dumps({\\\"metric\\\": \\\"error_ratio_vs_tolerance_under_shared_backing_storage\\\", **res}))\\n\", \"expected_signal\": \"max_ratio <= 1 and accepted True means aliasing handled correctly\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes in one turn: c1 (extreme accuracy sweep), c2 (div_rn correctness — compare against exact FP64 for the division of computed FP32 numerator/scale), c3 (shared storage aliasing). These are independent.\n\nc1 probe: generate many adversarial FP16 combos (extremes, subnormals, cancellation), run kernel, compare per-component vs FP64 reference, report max ratio of error to tolerance.\n\nc2 probe: test div_rn directly — hard to isolate; better approach: exhaustive FP16 16-bit value sweeps? Domain has 65536 FP16 values each component; numerator pairs etc too big. Instead, direct div_rn test: a small Triton kernel doing div_rn on random FP32 pairs compared to torch FP32 division (correctly rounded). Check mismatch counts. Actually simpler: test through the kernel itself with cases where only division rounding matters... but claim is about lowering. A dedicated Triton kernel with tl.div_rn over a table of FP32 values (e.g. all products achievable) — test random FP32 pairs x/y, compare to double-precision computed then rounded to FP32 (correctly rounded). If div_rn is correctly rounded, quotient matches round(fp64(x/y)). That's a clean test.\n\nc3: same tensor as both numerator and denominator, plus overlapping views; check validate passes and result equals reference.\n\nWrite code loading kernel from /root/cases/case_154/kernel.py."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306452,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2487,
+    "prompt_tokens": 22647,
+    "total_tokens": 25134,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 306,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5848,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,113 @@
+Need to verify the scan logic. Key concerns: tl.associative_scan with _compose — is affine composition associative? Yes, function composition is associative. But does associative_scan with tuple combine correctly? _compose is associative (composition of affine maps), not commutative, but associative_scan works for associative ops with correct ordering? Triton's associative_scan requires commutativity? No, associative_scan works for non-commutative associative ops (it does ordered scans). Fine.
+
+Wait: _compose's second argument ordering — associative_scan's combine fn signature is (a, b) where a precedes b. Yes.
+
+Exclusive chunks: builds inclusive scan at right endpoints of tree, then converts last lane to identity, then propagates downward to get exclusive prefixes. Need to check the propagation logic.
+
+After the first loop, lane C-1 holds total of whole array; other lanes at multiples of 2*stride... actually lane l holds sum of segment ending at l where l+1 is divisible by 2^k for max k. Then identity at lane C-1. Then second loop from high level to low: for each lane, right = end of its subtree block, left = right - stride. If lane == left, gets a[right] (exclusive prefix of right? no—after identity conversion, a[right] holds... hmm). Actually standard downward pass: after first phase, node at position right holds sum of [.. right]. After setting total to identity, we shift values: for each level top-down, we push down: left node gets parent's value (which at that point is the exclusive prefix up to before the parent's segment? ). Standard Blelloch: after downsweep, each internal node holds exclusive prefix of its subtree. Lane==left gets p (=a[right] before update, which is exclusive prefix of the pair), lane==right gets compose(l, p) = inclusive sum. This looks like standard work-efficient scan; seems plausible.
+
+Note LEVELS = padded.bit_length()-1: for padded=1, levels=0, loops don't execute; lane 0 gets identity, so carry = identity applied to initial = initial. Correct.
+
+_padded = next_power_of_2(chunks). chunks = cdiv(length,8), ≤4. Fine.
+
+Local scan stores summary from lane BLOCK-1's value: a after associative_scan is inclusive scan; lane BLOCK-1 holds total of chunk — but note step < N masking loads identity (a=1,d=1) for out-of-range, fine. But BLOCK=8 always and associative_scan over BLOCK lanes.
+
+_apply_prefix: loads prefix values at pos, but for step >= N, loads default 0 — fine masked. Carry indexed (row*C+chunk)*2 where C=padded — carry stored at (row*C+lane)*2 in block_carries for lane < CHUNKS... wait block_carries stores for all lane in [0,C) without mask on store (lane < CHUNKS only masks load; store unmasked). That writes garbage (identity-padded values) for lane >= CHUNKS but within allocated carry [batch, padded, 2] — fine. And apply_prefix uses chunk < chunks ≤ padded, reading valid carries. Good.
+
+Exclusive chunks: lanes ≥ CHUNKS loaded identity, so exclusive scan is correct for lane < CHUNKS.
+
+Composition ordering in _exclusive_chunks first loop: at each level, lane with (lane+1)%(2*stride)==0 combines left=lane-stride with itself: _compose(l, r) with l left. Correct order.
+
+Second loop: right = ((lane//(2*stride))+1)*(2*stride)-1 — the last lane of the block containing lane; left = right - stride. Compose(l,p) where l is left child's value, p is right's current value... lane==right gets compose(l,p)? That would be l∘p, but we want inclusive = l * p where p precedes? Hmm. In downsweep, we set parent value p (exclusive prefix before pair), then left child = p, right child = compose(p, l) — the pair sum with p first. But here they compute _compose(l, p) = l∘p, and assign to lane==right. That's reversed order! Wait — but does it matter? Let's think again.
+
+Standard downsweep: at each level, node holding sum of pair (left=L, right=R), with exclusive prefix P. Then L_new = P, R_new = P ∘ L. Here p = value at "right" node (which after previous operations holds sum of the pair [left..right], i.e., L∘R combined). l = value at left node (sum of left subtree = L). na = compose(l, p, ...) — that's L∘(L∘R), wrong. We want P∘L where P is the value at right node BEFORE this level's update? Hmm, in the downsweep, at level, the "right" node's value should already have been replaced by the exclusive prefix of that pair. Let me re-derive.
+
+Blelloch downsweep: before processing level, node values: at each node that is a right-child... Actually algorithm: after upsweep and setting root to identity, process levels from top down. At level (stride s), for each internal node at position i (right end of block of size 2s), let left = i - s. temp = value[left]; value[left] = value[i]; value[i] = temp ∘ value[i] (in prefix order: temp precedes value[i]).
+
+Here: la..lf = value at left (that's "temp"), p = value at right. lane==left gets p. lane==right gets compose(l, p) = l ∘ p. But we want temp ∘ new value = l_value ∘ p? Wait: value[i] here holds the exclusive prefix P (already pushed from above), and temp = value[left] holds the pair sum S (L). Then value[left] = P, value[i](new) = temp ∘ value[i]... no wait: value at position i after update should be inclusive prefix of [..i] = P ∘ L. So combine(temp, P) = L∘P? combine(a,b) with a preceding: compose(temp, P). But here temp is gathered at left (l), P is at right (p), and they call _compose(l, p) = left∘right = L∘P. Hmm wait _compose(la..., ra...) treats left interval precedes right. So compose(L, P) — but we want P∘L.
+
+Hmm, wait. Let me recheck the standard downsweep. In Blelloch scan:
+
+```
+for d from top to bottom:
+  for each internal node i with left child l:
+    temp = A[l]
+    A[l] = A[i]
+    A[i] = temp ⊕ A[i]   # A[i] old value is exclusive prefix
+```
+Result: A[i] becomes temp ⊕ A[i], where temp = sum of left subtree, and A[i] old = exclusive prefix P of everything before the pair. Inclusive prefix of [.. i] = P ⊕ L (P first). So A[i]_new = P ⊕ L = compose(P, temp). But code computes compose(temp, P) = L ⊕ P. Wrong order!
+
+Hmm, but wait — maybe the tree orientation is different. Let me check the upsweep: at level, lane where (lane+1)%(2*stride)==0 combines lane-stride (left) into itself as compose(left, self) — inclusive sums at right ends. Standard.
+
+Identity at lane C-1 (root holds total → set to identity). Then downsweep from LEVELS-1 down. At level, right = last lane of block, left = right - stride. p = value[right]. At top level, value[right] = identity (exclusive prefix of whole array). l = value[left] = sum of left half. lane==left gets p = identity ✓ (exclusive prefix of left half). lane==right gets compose(l, p) = L∘identity = L?? That's wrong — right node should get identity∘L = L. Since p is identity at top, L∘I = L = I∘L, same. OK top level fine either way.
+
+Next level: consider block positions. Let's do concrete example C=4, elements x0,x1,x2,x3. After upsweep: level0 (stride1): lane1 = x0x1, lane3 = x2x3. level1 (stride2): lane3 = x0..x3. Identity at lane3.
+
+Downsweep level1 (stride2): right=3, left=1. p = A[3]=I. l=A[1]=x0x1. lane1 gets I ✓ (exclusive prefix before x0). lane3 gets compose(l,p)= (x0x1)∘I = x0x1. But correct exclusive prefix before x2 is x0x1 ✓.
+
+Downsweep level0 (stride1): block [0,1]: right=1,left=0. p=A[1]=I, l=A[0]=x0. lane0 gets I ✓, lane1 gets compose(x0, I)=x0 ✓. Block [2,3]: right=3, left=2. p=A[3]=x0x1, l=A[2]=x2. lane2 gets p = x0x1 ✓ (exclusive prefix before x2). lane3 gets compose(l,p) = x2∘(x0x1) — WRONG! Should be (x0x1)∘x2 = inclusive prefix. compose(l,p) applies p first then l.
+
+Hmm wait — compose(l,p) where left=l precedes: result = l ∘ p (apply p first? no). _compose(la.., ra..): the left interval precedes the right, so combined transform = L then R? "The left interval precedes the right interval" — so combined = R ∘ L as function composition (apply L first). Result: a = ra*la + rb*lc — that's R·L matrix product. So compose(L, R) = transform applying L first, then R. Good, that's the correct order semantics.
+
+So compose(l, p): apply l first, then p. We want inclusive prefix at lane3 = apply x0x1 first, then x2, i.e., compose((x0x1), x2) = compose(p, l). Code gives compose(l, p) = apply x2 first then x0x1. Wrong for noncommutative case!
+
+But wait — maybe I mislabeled. Let me recheck the standard downsweep order. In Blelloch: A[i]_new = temp ⊕ A[i], ⊕ with left operand first in scan order. temp = old A[left] = left subtree sum L. A[i] old = P. So new = L ⊕ P?? That would mean apply L then P — that's wrong in standard scan too. Hmm, let me recheck: standard downsweep actually:
+
+```
+temp := A[left]
+A[left] := A[i]
+A[i] := temp ⊕ A[i]
+```
+Hmm, is the ⊕ order temp first or A[i] first? The new value at right child should be P ⊕ L (P precedes L). So A[i] := A[i] ⊕ temp. Hmm... Actually in many references: `right = combine(left_val, right_val)`? Let me think: the pair sum S = L ⊕ R. Exclusive prefix of pair P. Left child gets P, right child gets P ⊕ L. Since combine(a,b) = a then b, P ⊕ L = combine(P, L). The code does compose(l, p) = combine(L, P) — reversed. So it's wrong unless... unless I've misidentified which node holds what.
+
+Hmm wait, wait. Actually reconsider: maybe code's p at right node after top-level processing isn't P but something else. In my C=4 example at level0 for block [2,3]: p = A[3] which after level1 was set to compose(l,p)=x0x1 (correct inclusive value for lane 3 at that stage... actually that value at lane3 = sum x0x1? that was set as lane3's new value = x0x1, which serves as the exclusive prefix P for block [2,3]. Good. And l = A[2] = x2 (left subtree). New A[2] = p = x0x1 ✓. New A[3] should be P⊕L = x0x1 then x2 = compose(p, l). Code: compose(l, p) = x2 then x0x1. ✗.
+
+So unless composition order in _compose is actually "right precedes left"? Check: "The left interval precedes the right interval." Result e = ra*le + rb*lf + re: applying combined to vector v: first apply L: L·v + [le,lf]; then R: R·(L·v + [le,lf]) + [re,rf] = RL·v + R[le,lf]+[re,rf]. e = ra*le + rb*lf + re matches R·l_bias. Yes, left precedes. So downsweep combine is reversed.
+
+Hold on—but also check associative_scan in local scan works with the same _compose; that's Triton's, fine.
+
+But wait, maybe I should double-check by considering whether reversed order still yields correct result by symmetry — no, matrices don't commute in general.
+
+Hmm, but let me double-check the downsweep formula once more against a known reference (Wikipedia parallel prefix scan, Blelloch):
+
+Downsweep:
+```
+a[i] = temp   (exclusive)
+a[left] = a[i]
+temp2 = a[left]  (old)
+a[right] = temp2 ⊕ a[i]
+```
+Hmm, Wikipedia's downsweep: for node i with left child l:
+```
+t = A[l]
+A[l] = A[i]
+A[i] = t ⊕ A[i]
+```
+Hmm, actually Wikipedia says: `A[i] = t ⊕ A[i]` where t is left child's value and ⊕ ordered... The new right value = inclusive prefix = P ⊕ L. Since A[i] currently = P, we need A[i]_new = P ⊕ L = combine(A[i], t), not combine(t, A[i]). Let me look at Wikipedia precisely (from memory): 
+
+```
+// down-sweep
+A[n-1] = identity
+for d = 0 to log2 n - 1:
+    for i from 0 to n-1 by 2^(d+1):
+        t = A[i + 2^d - 1]        // left child
+        A[i + 2^d - 1] = A[i + 2^(d+1) - 1]   // right child value to left
+        A[i + 2^(d+1) - 1] = t ⊕ A[i + 2^(d+1) - 1]
+```
+Hmm here t ⊕ A[right]... where ⊕ is written with... In Wikipedia's pseudocode the combine is written "t ⊕ A[i + 2^(d+1) - 1]" — and the new value at right = P ⊕ L requires the right operand... I genuinely recall it as: new right = left_sum ⊕ exclusive? Hmm. The new right child value should be the inclusive prefix at that position = P combined with L, P first. In pseudocode t = L, A[right] = P. "t ⊕ A[right]" would mean L first then P — that seems wrong, so maybe Wikipedia writes A[right] = A[right] ⊕ t. I don't trust memory; derive: final leaf value = exclusive prefix. Right child gets inclusive prefix of [..right] = P∘L (P precedes). Combine(P, L). P is A[right] current, L is t. So A[right]_new = combine(A[right], t). Code has combine(t, A[right]). Reversed → bug.
+
+Hmm, but wait — but maybe there's a subtlety: the code gathers pa..pf from `right` and la..lf from `left` and calls _compose(la,..., ra=pa...). So combine(L, P). As argued, should be combine(P, L). So defect.
+
+But careful: is it a defect? Only manifests when C ≥ 4 and noncommutative chunks. C = next_pow2(cdiv(N,8)). N ≤ 32 → chunks ≤ 4 → C=4 when N>24. Then noncommuting chunk summaries give wrong carries. E.g., N=32, chunk summaries L1,L2 (from local scans). Exclusive prefix before chunk2 should be L1. Let's simulate code with C=4, chunks=4: values v0,v1,v2,v3 (v_i = summary of chunk i). Upsweep: lane1=v0v1, lane3 = v0v1v2v3 (all correct order). Identity lane3.
+
+Level1: right=3,left=1. p=I, l=v0v1. lane1 = I ✓. lane3 = compose(l,p) = (v0v1)∘I = v0v1 ✓ (order irrelevant with I).
+
+Level0: blocks [0,1] and [2,3]. Block[2,3]: p = A[3] = v0v1, l = A[2] = v2. lane2 = p = v0v1 ✓. lane3 = compose(v2, v0v1) = apply v0v1 then v2?? Wait compose(l,p): left precedes → apply l first? No! compose(l, p) applies left's transform first. left = l = v2. So compose(v2, v0v1) = v0v1 ∘ v2 as function composition... ugh, terminology. compose(L,R) means: state goes through L first, then R. So compose(v2, v0v1): apply v2 first, then v0v1. But correct inclusive at lane3 = apply v0v1 first then v2. Reversed. But lane3's value is only used if it becomes someone's exclusive prefix — lane3 = C-1, not used further? At level0 it's the last level; final A[3] is exclusive prefix before chunk index 3? Wait, we only need exclusive prefixes, and lane3's value is the exclusive prefix before element 3 — but final answer stores all lanes' values as carries. Carries needed: exclusive prefix before chunk c for c in 0..3. lane0=I ✓, lane1 = from block[0,1]: p=A[1]=I, l=A[0]=v0; lane1 = compose(v0, I) = v0 ✓ (with I). lane2 = v0v1 ✓. lane3 = compose(v2, v0v1) = wrong order — should be v0v1 then v2.
+
+So carry for chunk 3 (i.e., prefix before step 24, chunks 0-2) is wrong when v2 and v0v1 don't commute. Definite bug. Affine maps rarely commute.
+
+Also check first loop more: for level where left lanes... in upsweep with C=4, level0: lane1 and lane3 combine left neighbors — correct.
+
+So reject. Confidence high, ~0.9. Actually wait — also double check lane1: it needs exclusive prefix before element 1 = v0. In block[0,1] at level0: p = A[1]. What is A[1] at this point? After level1, lane1 was set to p = I. So p=I, lane1 = compose(v0, I) = v0 ✓ (identity neutral both sides). Good. Only lane C-1 with C≥4, and deeper lanes with C≥8 — but C max 4. So error only in carry for last chunk when C=4 (N ≥ 25). Also when C=4 but chunks<4? chunks = cdiv(N,8); C=4 requires chunks ∈ {3,4} (next_pow2(3)=4). If chunks=3 (N in 17..24): lanes 0..2 real, lane3 identity. lane3 = compose(l, p) where p = A[3] = v0v1, l = A[2] = v2. lane3 wrong but lane3 is padding, not used (carry stores to lane < C always but apply uses chunk < chunks). lane2 = p = v0v1 ✓ correct. So with chunks=3 it's fine. Bug only when chunks=4 (N in 25..32) and v2 doesn't commute with v0v1.
+
+Verdict: reject.

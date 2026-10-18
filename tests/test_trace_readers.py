@@ -69,6 +69,32 @@ def test_reader_retains_batch_and_chronology_after_numeric_rename(tmp_path):
     assert trace_selection_key(row) == ("", original)
 
 
+def test_colliding_batch_timestamps_preserve_distinct_trials_and_costs(tmp_path):
+    reader = _reader()
+    records = []
+    for case in ("case_159", "case_163"):
+        for trial, verdict in (("r2", "reject"), ("r3", "trust")):
+            record = _single(tmp_path, provider="fireworks",
+                             model="accounts/fireworks/models/glm-5p3",
+                             case=case, trial=trial, verdict=verdict)
+            record["metadata"] = {"original_trial": "run_same_timestamp",
+                                  "pricing_snapshot": {"input_per_million": 1.4,
+                                                       "output_per_million": 4.4}}
+            records.append(record)
+    labels = {"benchmark_fn_fp": {"case_159": "reject", "case_163": "reject"}}
+    report = reader.build_report(records=records, benchmark_dir=tmp_path, labels=labels)
+    groups = list(report["arms"].values())
+    assert len(groups) == 2
+    assert sum(group["attempts"] for group in groups) == 4
+    assert sum(group["correct"] for group in groups) == 2
+    assert {group["collision_disambiguator"] for group in groups} == {"r2", "r3"}
+    assert all(group["original_trial"] == "run_same_timestamp" for group in groups)
+    assert all(len(group["per_case"]) == 2 for group in groups)
+    assert sum(group["usd"] for group in groups) == pytest.approx(0.0408)
+    with pytest.raises(ValueError, match="Duplicate"):
+        reader.build_report(records=records + [records[0]], benchmark_dir=tmp_path, labels=labels)
+
+
 def test_archived_pilot_is_opt_in_and_preserves_identity_truth_and_batches(tmp_path):
     from benchmark_fn_fp.eval_scripts.traces import iter_trace_records
     reader = _reader()

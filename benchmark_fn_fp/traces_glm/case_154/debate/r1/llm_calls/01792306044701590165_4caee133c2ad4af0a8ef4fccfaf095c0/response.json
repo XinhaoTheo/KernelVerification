@@ -1,0 +1,84 @@
+{
+  "id": "chatcmpl-9f36bbdd",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Both probes came back without tolerance failures. The c1 extreme cases all passed, likely because symmetric products (e.g. 65504×±65504) round identically and cancel exactly, so my handpicked cases never exercised asymmetric rounding — I'll mark both results inconclusive and launch sharper searches: an adversarial near-cancellation generator for c1, and a no-cancellation/skewed-denominator worst-case search for c2.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a8dbac1adef258fa",
+            "function": {
+              "arguments": "{\"data\": {\"any_fail\": false, \"n_rows_tested\": 7, \"note\": \"extreme cancellation rows tested all passed with ~0 error\"}, \"event_id\": \"t8\", \"status\": \"inconclusive\", \"summary\": \"All 7 handpicked extreme cancellation rows passed within tolerance (max err 6.2e-9). However, the chosen rows are symmetric (a*c and b*d are the same product with opposite signs), so both products round identically and cancel exactly; the probe did not exercise asymmetric rounding in the numerators. Claim remains undecided.\", \"supports\": \"inconclusive\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-aef15522d6d93d5d",
+            "function": {
+              "arguments": "{\"data\": {\"trials\": 200, \"rows_per_trial\": 4096, \"trials_with_fail\": 0, \"worst_err_over_tol\": 0.3258}, \"event_id\": \"t9\", \"status\": \"inconclusive\", \"summary\": \"200 randomized trials over full-magnitude-range FP16 inputs with skewed denominators produced zero tolerance failures; worst error/tolerance ratio was 0.326. Random sampling did not hit a violating row, but worst-case accumulation rows may not have been covered, so the claim is not yet decided.\", \"supports\": \"inconclusive\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-94b1cac0e34f082c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\n\\ndef rand_fp16(n, emin=-3, emax=15):\\n    e = torch.empty(n).uniform_(emin, emax, generator=g)\\n    mant = 1.0 + torch.empty(n).uniform_(0, 1, generator=g)\\n    s = torch.where(torch.empty(n).uniform_(-1, 1, generator=g) < 0, -1.0, 1.0)\\n    x = s * mant * (2.0 ** e)\\n    return x.to(torch.float16)\\n\\nn = 131072\\nfails_total = 0\\nworst_ratio = 0.0\\nexamples = []\\nfor trial in range(40):\\n    a = rand_fp16(n); b = rand_fp16(n); c = rand_fp16(n)\\n    # real cancellation: a*c + b*d ~ 0 -> d = -a*c/b ; imag cancellation rows too\\n    half = n // 2\\n    d_real = (-(a[:half].float() * c[:half].float()) / b[:half].float()).to(torch.float16)\\n    d_imag = (( b[half:].float() * c[half:].float()) / a[half:].float()).to(torch.float16)\\n    d = torch.cat([d_real, d_imag])\\n    keep = torch.isfinite(d) & (b[:half].abs() > 0)[: :, ].expand(-1) if False else torch.ones(n, dtype=torch.bool)\\n    keep[:half] &= (b[:half] != 0) & (c[:half] != 0)\\n    keep[half:] &= (a[half:] != 0) & (c[half:] != 0)\\n    num = torch.stack([a, b], dim=1)[keep].to(dev)\\n    den = torch.stack([c, d], dim=1)[keep].to(dev)\\n    z = (den == 0).all(dim=1)\\n    den[z, 0] = 1.0\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    ratio = err / tol\\n    f = ratio > 1.0\\n    nf = int(f.sum())\\n    fails_total += nf\\n    mr = float(ratio.max())\\n    if mr > worst_ratio:\\n        worst_ratio = mr\\n    if nf > 0 and len(examples) < 5:\\n        idx = torch.nonzero(f)\\n        for ij in idx[:5 - len(examples)]:\\n            i = int(ij[0]); j = int(ij[1])\\n            examples.append({\\n                \\\"num_row\\\": num.cpu()[i].tolist(), \\\"den_row\\\": den.cpu()[i].tolist(),\\n                \\\"out\\\": out.cpu()[i].tolist(), \\\"ref\\\": ref.cpu()[i].tolist(),\\n                \\\"err\\\": float(err.cpu()[i, j]), \\\"tol\\\": float(tol.cpu()[i, j]),\\n                \\\"ratio\\\": float(ratio.cpu()[i, j]), \\\"comp\\\": j})\\nprint(json.dumps({\\\"rows_tested\\\": 40 * int(keep.numel()) if False else None,\\n                  \\\"trials\\\": 40, \\\"fails_total\\\": fails_total,\\n                  \\\"worst_ratio\\\": worst_ratio, \\\"examples\\\": examples[:5]}))\\n\", \"expected_signal\": \"near-cancellation rows (d=-a*c/b) produce error/tolerance ratio > 1\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          },
+          {
+            "id": "chatcmpl-tool-8d9da195f0a907d0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(99)\\nn = 131072\\nfails_total = 0\\nworst_ratio = 0.0\\nworst_info = None\\nfor trial in range(60):\\n    # components spanning many magnitudes\\n    e = torch.empty(n, 4).uniform_(-5, 15, generator=g)\\n    mant = 1.0 + torch.empty(n, 4).uniform_(0, 1, generator=g)\\n    sgn = torch.where(torch.empty(n, 4).uniform_(-1, 1, generator=g) < 0, -1.0, 1.0)\\n    x = (sgn * mant * (2.0 ** e)).to(torch.float16)\\n    a, b, c, d = x[:, 0], x[:, 1], x[:, 2], x[:, 3]\\n    if trial % 2 == 0:\\n        # no-cancellation variant for real part: force sign(b) = sign(a)\\n        b = b.abs() * torch.where(a < 0, -1.0, 1.0)\\n        d = d.abs() * torch.where(c < 0, -1.0, 1.0)\\n        # a*c + b*d >= 0 both, no real cancellation\\n    if trial % 3 == 0:\\n        # skewed denominator: |d| << |c| so scale ~ c^2 exactly rounded\\n        d = (c.float() * (2.0 ** -14)).to(torch.float16)\\n    num = torch.stack([a, b], dim=1).to(dev)\\n    den = torch.stack([c, d], dim=1).to(dev)\\n    z = (den == 0).all(dim=1)\\n    den[z, 0] = 1.0\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    ratio = err / tol\\n    f = ratio > 1.0\\n    fails_total += int(f.sum())\\n    mr = float(ratio.max())\\n    if mr > worst_ratio:\\n        worst_ratio = mr\\n        i0, j0 = torch.unravel_index(ratio.argmax(), ratio.shape)\\n        worst_info = {\\\"num_row\\\": num.cpu()[int(i0)].tolist(),\\n                      \\\"den_row\\\": den.cpu()[int(i0)].tolist(),\\n                      \\\"out\\\": out.cpu()[int(i0)].tolist(),\\n                      \\\"ref\\\": ref.cpu()[int(i0)].tolist(),\\n                      \\\"err\\\": float(err.cpu()[int(i0), int(j0)]),\\n                      \\\"tol\\\": float(tol.cpu()[int(i0), int(j0)]),\\n                      \\\"ratio\\\": mr, \\\"comp\\\": int(j0)}\\nprint(json.dumps({\\\"trials\\\": 60, \\\"rows_per_trial\\\": n, \\\"fails_total\\\": fails_total,\\n                  \\\"worst_ratio\\\": worst_ratio, \\\"worst_case\\\": worst_info}))\\n\", \"expected_signal\": \"some no-cancellation / skewed-denominator row exceeds error/tolerance ratio 1\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 3
+          }
+        ],
+        "reasoning_content": "Both probes show no failures. The c1 extreme cancellation cases actually succeeded — why? Because products of FP16 extremas in FP32 are exact? a*c: a=65504, c=65504 → 4.29e9, which is not exactly representable in FP32 (ulp 512). But out=0.0 matched ref=0.0 exactly — coincidence? Actually 65504*65504 rounds; both products a*c and b*d get the same rounding so they cancel exactly. So my extreme test wasn't effective since it's symmetric. Need asymmetric cancellation where the rounding error survives, e.g. a=65504, b=65504, c=65504, d=-65504 exactly cancels symmetric. But e.g. a=2048, c=65504 (exact product), b*d with different rounding... Let's construct cases where a*c and -b*d differ slightly, i.e. ref real is small but products round differently.\n\nSimplest: search over random large-magnitude FP16 values, compute kernel output vs reference, find failures. Do a random adversarial search: sample components from large magnitudes (exponent 5-15 in fp16 range: values 1024..65504) with signs arranged for cancellation, e.g. choose a,c,b random positive and d = -a*c/b approximately (in fp16). Many rows, find fails. That's the way. Also FP16 grid is finite: could enumerate exponent combos exhaustively for a few cases.\n\nAlso important: FP16→FP32 cast is exact; product a*c in FP32 rounds if a*c has >24 bits significand. a*c magnitude up to 4.29e9, ulp 256. The cancellation error real: |round(a*c)+round(b*d) - (a*c+b*d)| up to ~512/scale. With scale up to 8.6e9, error ~6e-8... hmm wait 512/8.59e9 = 5.96e-8. Tolerance is 1e-7 + 5e-7*|target|. If target real = 0, tol = 1e-7. So error 6e-8 < 1e-7. Hmm — the claim may be wrong because with only two rounded products, max error is ~1.5 ulp of the largest product, divided by scale. If |scale| >= |a*c| (largest term magnitude)... Actually the error is bounded relative to the larger of |a*c|,|b*d|, and scale >= c^2 >= ... hmm scale can be small while products large? scale = c^2+d^2; products a*c up to 65504^2. scale min when c,d tiny? Then products also tiny. Rough bound: err ≤ 2^-23 * max|a*c|,|b*d| / scale. If c,d ~1 and a,b ~65504: products ~65504, err ≤ 0.0078/2 ≈ 4e-3... wait 65504*2^-23 = 0.0078. Divided by scale~2 → 0.004. Tolerance with target real: real = (a*c+b*d)/scale. If a*c ≈ -b*d ≈ 65504, scale≈2, real ≈ small; tol ≈ 1e-7+5e-7*small. So error ~0.004 >> tol → failure! But wait is 65504*1 exact in FP32? Yes (integers < 2^24). Need products that actually round: a=65504, c=1.00098 (non-power) → product rounds. Hmm: choose a=65504, c=65504/1.0? Better: a=65504, c = some fp16 like 1.001, product 65569.5 rounds. Then d chosen such that b*d ≈ -a*c. b=65504, d=-1.001 → product -65569.5 same rounding → cancels again! Symmetry again. Need asymmetry: a*c = 65504*1.001, b*d = -(65504)*1.001 not required equal; use a=65504,c=1.001 and b=-1,d=-65504? b*d = 65504*1.001 → real numerator 2*65569.5, no cancellation... use b=65504, d=-1.001 vs a=65504,c=1.001: same. Use different pairing: a=65504, c=1.001 (real term +65569.5), b=65569? no fp16. Use b=65472? Actually simplest is brute force: random search over FP16 values with large exponents, computing kernel and reference, count fails. The kernel is fast; sample millions of rows. Let me do that with a targeted distribution: components with exponent uniform in {1..15 range} and signs biased to cancel: sample a,b,c random, then set d = -a*c/b rounded to nearest fp16 → creates near-cancellation. Then run kernel vs reference on ~1M rows, report fails.\n\nAlso c2 evidence: 200 trials no fail, worst ratio 0.33. But claim c2 says accumulated roundoff can exceed 5e-7. Consider just scale rounding: scale relative err ~6e-8, propagates 6e-8 relative — well under 5e-7. Also numerator rounding: relative to largest term. If target is comparable to largest term (no cancellation), error ~1.2e-7 relative? Each product ~6e-8, sum rounding 6e-8 relative to sum... if no cancellation, total ~2e-7 relative? Plus scale 1.2e-7, div 6e-8 → ~3.5e-7 worst. Under 5e-7 typically but borderline. Random search will reveal. The same big search will test both claims. But c1 and c2 probes already ran; I need to finalize t8 and t9 first. t8: extreme cancellation cases all pass → this evidence rebuts c1? The cases tested pass, but the claim is broader — that some cancellation case fails. t8 inconclusive/rebutted for the tested set. Per guidance, mark t8 as inconclusive or rebutted? Evidence shows the specific extreme cases pass — the claim is general; better to run a stronger search before finalizing. But I must finalize t8 now (unfinalized result must be consumed). I'll finalize t8 as inconclusive (specific cases passed; claim not yet decided) — hmm finalize_probe_evidence supports 'inconclusive'. Then run a new probe for c1 with adversarial search. Actually could mark rebutted: those specific claimed examples pass, but claim is existence over class; better inconclusive.\n\nPlan this turn: finalize t8 (inconclusive, extreme symmetric cases pass due to symmetric rounding), finalize t9 (inconclusive, 200 trials no fail, worst ratio 0.33), and launch new probes for c1 (large search) — and maybe c2 also via same search? Keep probes one claim each: launch c1 targeted adversarial cancellation search; also c2 mild-cancellation worst-case search (exhaustive-ish small domain sampling focusing on non-cancelling rows with skewed denominators). Actually can batch both since independent.\n\nc1 probe: N=131072? use n=200000 rows? max 131072. Use n=131072, random: sample a,b,c as fp16 with exponent uniform in [-2, 15], d = -(a*c/b) rounded to fp16 (with sign flip for imag? that's for real cancellation: a*c + b*d ≈ 0). Guard b≠0, c≠0 rows. Also imag cancellation variant: d = b*c/a. Compute out vs ref, count fails, report worst and example rows.\n\nc2 probe: rows without cancellation: e.g. a*c and b*d same sign (no real cancellation), denominator skewed: d = c*2^-13 (so scale ≈ c^2 and rounding of d^2 negligible... wait claim says skew makes scale rounding relative to one term — scale = c^2(1+ (d/c)^2) ≈ c^2 exactly, relative error 6e-8). Also mild cancellation: numerator ~ largest term / 4. Just do broad random search with varied magnitudes and report worst error/tol ratio excluding catastrophic cancellation? Let the c1 search handle that. For c2, generate rows with no cancellation (same-sign terms) and various magnitudes, track worst ratio.\n\nWrite probes."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306047,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 3812,
+    "prompt_tokens": 28325,
+    "total_tokens": 32137,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1889,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 9991,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

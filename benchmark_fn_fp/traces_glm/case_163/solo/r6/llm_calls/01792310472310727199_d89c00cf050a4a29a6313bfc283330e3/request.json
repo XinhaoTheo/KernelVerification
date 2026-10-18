@@ -1,0 +1,472 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the sole verification agent for one GPU kernel. You decide whether the\nkernel satisfies the contract in its problem statement, and you have a real GPU\navailable to run experiments on.\n\nNobody will review your reasoning, ask you for more evidence, or challenge a\nconclusion you reach. Whatever you record is the final answer.\n\nHow to work:\n- Read the problem statement and the kernel source first. The problem statement\n  is the operative contract: what it requires is what the kernel must do, and\n  what it leaves unspecified cannot be the basis for a reject.\n- Form a specific, testable hypothesis about where the implementation could fail\n  the contract, and record it with record_claim so your own later turns can see\n  what you are testing. record_claim requires BOTH `statement` (what might be\n  wrong) and `rationale` (why you suspect it); neither is `scope_rationale`,\n  which answers a different question. Omitting `rationale` is rejected and costs\n  the turn.\n- Scope every claim as you record it. record_verdict will refuse a \"reject\" whose\n  decisive claims are unscoped, so a claim recorded without scope cannot support\n  the verdict it was raised for however well you evidence it. Pass scope as one\n  of in_scope, out_of_scope, unknown; pass scope_rationale saying which contract\n  detail decides it; and for in_scope pass scope_evidence with at least one\n  {source, summary} item drawn from the contract (problem.txt alone is a valid\n  source). If the contract states a required behaviour -- a formula, an\n  invariant, a tie-break rule, a declared numeric format -- a claim that the\n  kernel violates it is in_scope even when no test file exists to pin exact\n  inputs; choose representative inputs the contract admits and say so. Do not\n  mark a claim in_scope merely because it is interesting, or because PyTorch\n  would behave differently: scope_evidence must tie it to the stated contract.\n- Run it. Use run_claim_probe to execute Python against the real kernel, and put\n  the decisive numbers in the evidence `data` object with finalize_probe_evidence\n  or append_evidence, not only in prose. Probes are how you find out what the\n  code actually does rather than what it appears to do; a hypothesis you could\n  have tested and did not is a weaker basis for a verdict than one you ran.\n- Read what came back before deciding the next step. A probe that timed out, hit\n  an error, or produced output you cannot interpret has not confirmed anything.\n- Prefer the input domain the contract actually declares. A failure on an input\n  the contract excludes is not a defect; a failure on one it admits is.\n- Resolve every claim you open with update_claim_status before finishing.\n\nWhen to stop investigating:\n- Your round budget is finite and every probe spends it. Stop opening new lines\n  of inquiry once the claims you have already opened are resolved and the\n  remaining ones would not change the verdict either way, and spend what is left\n  on deciding.\n- A new claim is worth opening only if you can say, before running it, which\n  verdict each outcome would support. If both outcomes leave you in the same\n  place, it is not worth the round.\n- If you are told the budget is spent, record the verdict on the evidence you\n  have. Reporting what you established and what you did not is a real answer;\n  running out of rounds with nothing recorded is not.\n\nDeciding:\n- record_verdict exactly once, with \"reject\" if the implementation violates a\n  behaviour the contract requires, \"trust\" if it satisfies the contract or is an\n  equally valid alternative implementation, and \"needs_more_evidence\" if you\n  genuinely cannot tell from what you were able to establish.\n- Deviation the contract already accounts for is not a defect: quantization or\n  rounding error consistent with a declared low-precision format, a different but\n  internally consistent layout convention, a different floating-point reduction\n  order, run-to-run variation in a kernel the contract declares randomized, a\n  different choice among outcomes the contract leaves unspecified, or a large\n  relative error on values so near zero the absolute difference is negligible.\n- Conversely, when the contract explicitly requires a behaviour -- a formula, an\n  invariant, a tie-break rule, a numeric format -- and evidence shows the kernel\n  does not implement it, that is a defect however small it looks on typical\n  inputs.\n- Say in the reason what you ran and what it showed, citing the tool event ids,\n  so the verdict can be checked rather than taken on trust.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_163\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Synthetic packed real FFT using a radix-2 complex transform.\\\"\\\"\\\"\\n2: import torch\\n3: import triton\\n4: import triton.language as tl\\n5: \\n6: # Cosine table for the first quadrant of a 256-point transform.\\n7: _COSINE = (\\n8:     1.0, 0.9996988186962042, 0.9987954562051724, 0.9972904566786902,\\n9:     0.9951847266721969, 0.99247953459871, 0.989176509964781, 0.9852776423889412,\\n10:     0.9807852804032304, 0.9757021300385286, 0.970031253194544, 0.9637760657954398,\\n11:     0.9569403357322088, 0.9495281805930367, 0.9415440651830208, 0.9329927988347388,\\n12:     0.9238795325112867, 0.9142097557035307, 0.9039892931234433, 0.8932243011955153,\\n13:     0.881921264348355, 0.8700869911087115, 0.8577286100002721, 0.8448535652497071,\\n14:     0.8314696123025452, 0.8175848131515837, 0.8032075314806449, 0.7883464276266062,\\n15:     0.773010453362737, 0.7572088465064846, 0.7409511253549591, 0.7242470829514669,\\n16:     0.7071067811865476, 0.6895405447370669, 0.6715589548470184, 0.6531728429537768,\\n17:     0.6343932841636455, 0.6152315905806268, 0.5956993044924334, 0.5758081914178453,\\n18:     0.5555702330196022, 0.5349976198870973, 0.5141027441932218, 0.49289819222978404,\\n19:     0.47139673682599764, 0.4496113296546066, 0.4275550934302821, 0.40524131400498986,\\n20:     0.3826834323650898, 0.35989503653498817, 0.33688985339222005, 0.31368174039889146,\\n21:     0.2902846772544624, 0.26671275747489837, 0.2429801799032639, 0.2191012401568698,\\n22:     0.19509032201612828, 0.17096188876030122, 0.14673047445536175, 0.1224106751992162,\\n23:     0.0980171403295606, 0.07356456359966743, 0.049067674327418015, 0.024541228522912288,\\n24:     0.0,\\n25: )\\n26: \\n27: \\n28: @triton.jit\\n29: def _reverse(index, LOG_M: tl.constexpr):\\n30:     reversed_index = tl.full(index.shape, 0, tl.int32)\\n31:     for bit in tl.static_range(LOG_M):\\n32:         reversed_index = (reversed_index << 1) | ((index >> bit) & 1)\\n33:     return reversed_index\\n34: \\n35: \\n36: @triton.jit\\n37: def _twiddle(TABLE, phase):\\n38:     folded = tl.minimum(phase, 128 - phase)\\n39:     cosine = tl.load(TABLE + folded)\\n40:     cosine = tl.where(phase <= 64, cosine, -cosine)\\n41:     sine = tl.load(TABLE + tl.abs(64 - phase))\\n42:     return cosine, -sine\\n43: \\n44: \\n45: @triton.jit\\n46: def _realfft(X, TABLE, OUT, N: tl.constexpr, M: tl.constexpr, LOG_M: tl.constexpr):\\n47:     row = tl.program_id(0)\\n48:     k = tl.arange(0, M)\\n49:     real = tl.load(X + row * N + 2 * k).to(tl.float64)\\n50:     imag = tl.load(X + row * N + 2 * k + 1).to(tl.float64)\\n51:     # Decimation in frequency leaves the complex transform in bit-reversed order.\\n52:     for stage in tl.static_range(LOG_M):\\n53:         width = M >> stage\\n54:         half = width >> 1\\n55:         left = k & ~half\\n56:         right = k | half\\n57:         ar = tl.gather(real, left, axis=0)\\n58:         ai = tl.gather(imag, left, axis=0)\\n59:         br = tl.gather(real, right, axis=0)\\n60:         bi = tl.gather(imag, right, axis=0)\\n61:         wr, wi = _twiddle(TABLE, (k & (half - 1)) * (256 // width))\\n62:         dr = ar - br\\n63:         di = ai - bi\\n64:         lower = (k & half) == 0\\n65:         real = tl.where(lower, ar + br, dr * wr - di * wi)\\n66:         imag = tl.where(lower, ai + bi, dr * wi + di * wr)\\n67:     address = _reverse(k, LOG_M)\\n68:     partner = (-address) & (M - 1)\\n69:     ar = tl.gather(real, address, axis=0)\\n70:     ai = tl.gather(imag, address, axis=0)\\n71:     br = tl.gather(real, partner, axis=0)\\n72:     bi = tl.gather(imag, partner, axis=0)\\n73:     # Reconstruct the real transform from the packed complex transform.\\n74:     wr, wi = _twiddle(TABLE, k * (256 // N))\\n75:     sr = ar + br\\n76:     si = ai - bi\\n77:     dr = ar - br\\n78:     di = ai + bi\\n79:     xr = 0.5 * (sr + (wr * di + wi * dr))\\n80:     xi = 0.5 * (si - (wr * dr - wi * di))\\n81:     tl.store(OUT + (row * (M + 1) + k) * 2, xr.to(tl.float32))\\n82:     tl.store(OUT + (row * (M + 1) + k) * 2 + 1, xi.to(tl.float32))\\n83:     tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2, (ar - ai).to(tl.float32), mask=k == 0)\\n84:     tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2 + 1, 0.0, mask=k == 0)\\n85: \\n86: \\n87: def validate_inputs(values, require_cuda=True):\\n88:     \\\"\\\"\\\"Validate the public domain. Nonzero storage offsets are permitted.\\\"\\\"\\\"\\n89:     def require(condition, message):\\n90:         if not condition:\\n91:             raise ValueError(message)\\n92:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n93:     require(type(values) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n94:     require(values.layout == torch.strided and values.is_contiguous(), \\\"contiguous strided input required\\\")\\n95:     require(not values.requires_grad and not values.is_inference(), \\\"ordinary non-gradient input required\\\")\\n96:     require(not values.is_neg() and not values.is_conj(), \\\"logical view flags are outside this domain\\\")\\n97:     require(not require_cuda or values.is_cuda, \\\"CUDA input required by run\\\")\\n98:     require(values.dtype == torch.float16, \\\"float16 input required\\\")\\n99:     require(values.ndim == 2 and 1 <= values.shape[0] <= 256 and values.shape[1] in (64, 128, 256), \\\"shape must be [B,N], 1<=B<=256, N in {64,128,256}\\\")\\n100:     require(bool(torch.isfinite(values).all()), \\\"all input values must be finite\\\")\\n101:     return {\\\"valid\\\": True, \\\"batch\\\": values.shape[0], \\\"width\\\": values.shape[1]}\\n102: \\n103: \\n104: def run(values):\\n105:     \\\"\\\"\\\"Return real and imaginary components in a fresh FP32 tensor.\\\"\\\"\\\"\\n106:     validate_inputs(values)\\n107:     batch, n = values.shape\\n108:     m = n // 2\\n109:     with torch.cuda.device(values.device):\\n110:         table = torch.tensor(_COSINE, dtype=torch.float64, device=values.device)\\n111:         output = torch.empty((batch, m + 1, 2), dtype=torch.float32, device=values.device)\\n112:         _realfft[(batch,)](values, table, output, N=n, M=m, LOG_M=m.bit_length() - 1,\\n113:                           num_warps=4, enable_fp_fusion=False)\\n114:     return output\\n115: \\n116: \\n117: def reference(values):\\n118:     \\\"\\\"\\\"A separate library transform in complex128, returned as FP64 components.\\\"\\\"\\\"\\n119:     validate_inputs(values, require_cuda=False)\\n120:     result = torch.fft.rfft(values.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n121:     return torch.stack((result.real, result.imag), dim=-1)\\n122: \\n123: \\n124: def make_inputs(device=\\\"cuda\\\", batch=7, width=128, seed=0):\\n125:     \\\"\\\"\\\"Examples only; the contract includes every finite FP16 input.\\\"\\\"\\\"\\n126:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n127:     values = torch.randn((batch, width), generator=generator).to(torch.float16)\\n128:     return (values.to(device),)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\\n\\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\\n\\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_163\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-18T08:00:46Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"solo\",\n      \"rationale\": \"The kernel uses a packed complex DIF radix-2 FFT plus post-reconstruction with a 64-entry cosine table; any indexing, twiddle-folding, or Nyquist-store error would violate the required abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) tolerance for some legal finite FP16 input (widths 64/128/256, magnitudes up to 65504).\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"Contract requires X[b,k] = sum(values[b,j]*exp(-2*pi*i*j*k/N)) with abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) for every legal finite FP16 input with N in {64,128,256}, including signed zeros, subnormals and both finite extremes; output must be fresh contiguous FP32 [B,N/2+1,2] on the input device.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires the exact DFT values within 1e-4+1e-6|exact| for every legal finite FP16 input; a numeric or indexing failure on any such input violates the stated per-component tolerance requirement.\",\n      \"statement\": \"The kernel's run() output deviates from the exact unnormalized forward real DFT beyond the tolerance 1e-4 + 1e-6*abs(exact) for some legal input in the contract domain (N in {64,128,256}, 1<=B<=256, any finite FP16 values).\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T08:00:46Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_163\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_163\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_163\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_163\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_163\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 2,\n      \"text\": \"I've analyzed the kernel's DIF radix-2 complex FFT plus real-reconstruction math on paper; it looks consistent with the contract. The decisive step is running it against an FP64 reference across the full legal input domain (all widths, extreme FP16 magnitudes, subnormals, signed zeros). Let me record the claim and run that probe.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The kernel uses a packed complex DIF radix-2 FFT plus post-reconstruction with a 64-entry cosine table; any indexing, twiddle-folding, or Nyquist-store error would violate the required abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) tolerance for some legal finite FP16 input (widths 64/128/256, magnitudes up to 65504).\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"Contract requires X[b,k] = sum(values[b,j]*exp(-2*pi*i*j*k/N)) with abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) for every legal finite FP16 input with N in {64,128,256}, including signed zeros, subnormals and both finite extremes; output must be fresh contiguous FP32 [B,N/2+1,2] on the input device.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires the exact DFT values within 1e-4+1e-6|exact| for every legal finite FP16 input; a numeric or indexing failure on any such input violates the stated per-component tolerance requirement.\",\n            \"statement\": \"The kernel's run() output deviates from the exact unnormalized forward real DFT beyond the tolerance 1e-4 + 1e-6*abs(exact) for some legal input in the contract domain (N in {64,128,256}, 1<=B<=256, any finite FP16 values).\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    },\n    {\n      \"role\": \"solo\",\n      \"round\": 3,\n      \"text\": \"Running the decisive probe against the claim: all widths, extreme FP16 values, subnormals, signed zeros, random inputs, comparing kernel output to the FP64 reference under the contract tolerance.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"claim_id\": \"c1\",\n            \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfail = False\\ndetails = []\\n\\ndef check(name, values, ref):\\n    global fail\\n    out = kernel.run(values)\\n    ref = ref.to(dev).to(torch.float32).unsqueeze(-1)\\n    ref = torch.stack([kernel.reference(values)[...,0], kernel.reference(values)[...,1]], dim=-1)\\n    exact = ref\\n    err = (out.double() - exact.double()).abs()\\n    tol = 1e-4 + 1e-6 * exact.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    mx = err.max().item()\\n    nbad = int(bad.sum())\\n    results[name] = {\\\"max_err\\\": mx, \\\"violations\\\": nbad, \\\"shape\\\": list(out.shape), \\\"nonfinite\\\": int((~torch.isfinite(out)).sum())}\\n    if nbad:\\n        fail = True\\n        idx = bad.nonzero()[:5]\\n        details.append({\\\"name\\\": name, \\\"idx\\\": idx.tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"exact\\\": exact[bad][:5].tolist()})\\n    # input preservation\\n    return values\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\nfor n in (64, 128, 256):\\n    for b in (1, 7, 256):\\n        v = torch.randn((b, n), generator=g).to(torch.float16).to(dev)\\n        ref = kernel.reference(v)\\n        out = kernel.run(v)\\n        err = (out.double() - ref.double()).abs()\\n        tol = 1e-4 + 1e-6 * ref.double().abs()\\n        bad = (err > tol) | ~torch.isfinite(out)\\n        results[f\\\"rand_n{n}_b{b}\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n        if bad.sum():\\n            fail = True\\n            details.append({\\\"case\\\": f\\\"rand_n{n}_b{b}\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# extreme magnitudes\\nfor n in (64, 128, 256):\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16, device=dev)\\n    v[1] = -65504.0\\n    v[2] = torch.linspace(-65504, 65504, n, dtype=torch.float32).to(torch.float16)\\n    ref = kernel.reference(v); out = kernel.run(v)\\n    err = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\n...[truncated, 2780 more chars]\"\n          },\n          \"tool\": \"run_claim_probe\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_163\"\n      },\n      \"created_at\": \"2026-10-18T08:00:15Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_163\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Synthetic packed real FFT using a radix-2 complex transform.\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n# Cosine table for the first quadrant of a 256-point transform.\\n_COSINE = (\\n    1.0, 0.9996988186962042, 0.9987954562051724, 0.9972904566786902,\\n    0.9951847266721969, 0.99247953459871, 0.989176509964781, 0.9852776423889412,\\n    0.9807852804032304, 0.9757021300385286, 0.970031253194544, 0.9637760657954398,\\n    0.9569403357322088, 0.9495281805930367, 0.9415440651830208, 0.9329927988347388,\\n    0.9238795325112867, 0.9142097557035307, 0.9039892931234433, 0.8932243011955153,\\n    0.881921264348355, 0.8700869911087115, 0.8577286100002721, 0.8448535652497071,\\n    0.8314696123025452, 0.8175848131515837, 0.8032075314806449, 0.7883464276266062,\\n    0.773010453362737, 0.7572088465064846, 0.7409511253549591, 0.7242470829514669,\\n    0.7071067811865476, 0.6895405447370669, 0.6715589548470184, 0.6531728429537768,\\n    0.6343932841636455, 0.6152315905806268, 0.5956993044924334, 0.5758081914178453,\\n    0.5555702330196022, 0.5349976198870973, 0.5141027441932218, 0.49289819222978404,\\n    0.47139673682599764, 0.4496113296546066, 0.4275550934302821, 0.40524131400498986,\\n    0.3826834323650898, 0.35989503653498817, 0.33688985339222005, 0.31368174039889146,\\n    0.2902846772544624, 0.26671275747489837, 0.2429801799032639, 0.2191012401568698,\\n    0.19509032201612828, 0.17096188876030122, 0.14673047445536175, 0.1224106751992162,\\n    0.0980171403295606, 0.07356456359966743, 0.049067674327418015, 0.024541228522912288,\\n    0.0,\\n)\\n\\n\\n@triton.jit\\ndef _reverse(index, LOG_M: tl.constexpr):\\n    reversed_index = tl.full(index.shape, 0, tl.int32)\\n    for bit in tl.static_range(LOG_M):\\n        reversed_index = (reversed_index << 1) | ((index >> bit) & 1)\\n    return reversed_index\\n\\n\\n@triton.jit\\ndef _twiddle(TABLE, phase):\\n    folded = tl.minimum(phase, 128 - phase)\\n    cosine = tl.load(TABLE + folded)\\n    cosine = tl.where(phase <= 64, cosine, -cosine)\\n    sine = tl.load(TABLE + tl.abs(64 - phase))\\n    return cosine, -sine\\n\\n\\n@triton.jit\\ndef _realfft(X, TABLE, OUT, N: tl.constexpr, M: tl.constexpr, LOG_M: tl.constexpr):\\n    row = tl.program_id(0)\\n    k = tl.arange(0, M)\\n    real = tl.load(X + row * N + 2 * k).to(tl.float64)\\n    imag = tl.load(X + row * N + 2 * k + 1).to(tl.float64)\\n    # Decimation in frequency leaves the complex transform in bit-reversed order.\\n    for stage in tl.static_range(LOG_M):\\n        width = M >> stage\\n        half = width >> 1\\n        left = k & ~half\\n        right = k | half\\n        ar = tl.gather(real, left, axis=0)\\n        ai = tl.gather(imag, left, axis=0)\\n        br = tl.gather(real, right, axis=0)\\n        bi = tl.gather(imag, right, axis=0)\\n        wr, wi = _twiddle(TABLE, (k & (half - 1)) * (256 // width))\\n        dr = ar - br\\n        di = ai - bi\\n        lower = (k & half) == 0\\n        real = tl.where(lower, ar + br, dr * wr - di * wi)\\n        imag = tl.where(lower, ai + bi, dr * wi + di * wr)\\n    address = _reverse(k, LOG_M)\\n    partner = (-address) & (M - 1)\\n    ar = tl.gather(real, address, axis=0)\\n    ai = tl.gather(imag, address, axis=0)\\n    br = tl.gather(real, partner, axis=0)\\n    bi = tl.gather(imag, partner, axis=0)\\n    # Reconstruct the real transform from the packed complex transform.\\n    wr, wi = _twiddle(TABLE, k * (256 // N))\\n    sr = ar + br\\n    si = ai - bi\\n    dr = ar - br\\n    di = ai + bi\\n    xr = 0.5 * (sr + (wr * di + wi * dr))\\n    xi = 0.5 * (si - (wr * dr - wi * di))\\n    tl.store(OUT + (row * (M + 1) + k) * 2, xr.to(tl.float32))\\n    tl.store(OUT + (row * (M + 1) + k) * 2 + 1, xi.to(tl.float32))\\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2, (ar - ai).to(tl.float32), mask=k == 0)\\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2 + 1, 0.0, mask=k == 0)\\n\\n\\ndef validate_inputs(values, require_cuda=True):\\n    \\\"\\\"\\\"Validate the public domain. Nonzero storage offsets are permitted.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n...[truncated, 2092 more chars]\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\\n\\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\\n\\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_163\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_163\"\n      },\n      \"created_at\": \"2026-10-18T08:00:15Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\\n\\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\\n\\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\\n\",\n        \"entry\": \"case_163\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_163\"\n      },\n      \"created_at\": \"2026-10-18T08:00:15Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_163\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 6084\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1451\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_163\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T08:00:15Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_163\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The kernel uses a packed complex DIF radix-2 FFT plus post-reconstruction with a 64-entry cosine table; any indexing, twiddle-folding, or Nyquist-store error would violate the required abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) tolerance for some legal finite FP16 input (widths 64/128/256, magnitudes up to 65504).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract requires X[b,k] = sum(values[b,j]*exp(-2*pi*i*j*k/N)) with abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) for every legal finite FP16 input with N in {64,128,256}, including signed zeros, subnormals and both finite extremes; output must be fresh contiguous FP32 [B,N/2+1,2] on the input device.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact DFT values within 1e-4+1e-6|exact| for every legal finite FP16 input; a numeric or indexing failure on any such input violates the stated per-component tolerance requirement.\",\n        \"statement\": \"The kernel's run() output deviates from the exact unnormalized forward real DFT beyond the tolerance 1e-4 + 1e-6*abs(exact) for some legal input in the contract domain (N in {64,128,256}, 1<=B<=256, any finite FP16 values).\"\n      },\n      \"created_at\": \"2026-10-18T08:00:46Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T08:00:46Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"solo\",\n        \"rationale\": \"The kernel uses a packed complex DIF radix-2 FFT plus post-reconstruction with a 64-entry cosine table; any indexing, twiddle-folding, or Nyquist-store error would violate the required abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) tolerance for some legal finite FP16 input (widths 64/128/256, magnitudes up to 65504).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"Contract requires X[b,k] = sum(values[b,j]*exp(-2*pi*i*j*k/N)) with abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) for every legal finite FP16 input with N in {64,128,256}, including signed zeros, subnormals and both finite extremes; output must be fresh contiguous FP32 [B,N/2+1,2] on the input device.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires the exact DFT values within 1e-4+1e-6|exact| for every legal finite FP16 input; a numeric or indexing failure on any such input violates the stated per-component tolerance requirement.\",\n        \"statement\": \"The kernel's run() output deviates from the exact unnormalized forward real DFT beyond the tolerance 1e-4 + 1e-6*abs(exact) for some legal input in the contract domain (N in {64,128,256}, 1<=B<=256, any finite FP16 values).\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T08:00:46Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"claim_id\": \"c1\",\n        \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfail = False\\ndetails = []\\n\\ndef check(name, values, ref):\\n    global fail\\n    out = kernel.run(values)\\n    ref = ref.to(dev).to(torch.float32).unsqueeze(-1)\\n    ref = torch.stack([kernel.reference(values)[...,0], kernel.reference(values)[...,1]], dim=-1)\\n    exact = ref\\n    err = (out.double() - exact.double()).abs()\\n    tol = 1e-4 + 1e-6 * exact.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    mx = err.max().item()\\n    nbad = int(bad.sum())\\n    results[name] = {\\\"max_err\\\": mx, \\\"violations\\\": nbad, \\\"shape\\\": list(out.shape), \\\"nonfinite\\\": int((~torch.isfinite(out)).sum())}\\n    if nbad:\\n        fail = True\\n        idx = bad.nonzero()[:5]\\n        details.append({\\\"name\\\": name, \\\"idx\\\": idx.tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"exact\\\": exact[bad][:5].tolist()})\\n    # input preservation\\n    return values\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\nfor n in (64, 128, 256):\\n    for b in (1, 7, 256):\\n        v = torch.randn((b, n), generator=g).to(torch.float16).to(dev)\\n        ref = kernel.reference(v)\\n        out = kernel.run(v)\\n        err = (out.double() - ref.double()).abs()\\n        tol = 1e-4 + 1e-6 * ref.double().abs()\\n        bad = (err > tol) | ~torch.isfinite(out)\\n        results[f\\\"rand_n{n}_b{b}\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n        if bad.sum():\\n            fail = True\\n            details.append({\\\"case\\\": f\\\"rand_n{n}_b{b}\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# extreme magnitudes\\nfor n in (64, 128, 256):\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16, device=dev)\\n    v[1] = -65504.0\\n    v[2] = torch.linspace(-65504, 65504, n, dtype=torch.float32).to(torch.float16)\\n    ref = kernel.reference(v); out = kernel.run(v)\\n    err = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    results[f\\\"extreme_n{n}\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n    if bad.sum():\\n        fail = True\\n        details.append({\\\"case\\\": f\\\"extreme_n{n}\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# subnormals and signed zeros\\nv = torch.zeros((4, 128), dtype=torch.float16, device=dev)\\nv[0] = 6e-8\\nv[1] = -6e-8\\nv[2, 0] = -0.0\\nv[3] = torch.tensor([x * 6e-8 for x in range(128)], dtype=torch.float32).to(torch.float16)\\nref = kernel.reference(v); out = kernel.run(v)\\nerr = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\nbad = (err > tol) | ~torch.isfinite(out)\\nresults[\\\"subnormal_signedzero\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\nif bad.sum():\\n    fail = True\\n    details.append({\\\"case\\\": \\\"subnormal\\\", \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# adversarial bit patterns (finite FP16 values)\\nvals = []\\nfor i in range(0, 65536, 97):\\n    vals.append(i)\\nh = torch.tensor(vals, dtype=torch.int16).view(torch.float16).to(dev)\\nif not torch.isfinite(h).all():\\n    pass\\nelse:\\n    v = h[: 128 * 4].reshape(4, 128)\\n    ref = kernel.reference(v); out = kernel.run(v)\\n    err = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    results[\\\"bitpattern\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n    if bad.sum():\\n        fail = True\\n        details.append({\\\"case\\\": \\\"bitpattern\\\", \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# random uniform magnitudes across full FP16 range\\nv = (torch.rand((256, 256), generator=g) * 2 - 1).mul(65504).to(torch.float16).to(dev)\\nref = kernel.reference(v); out = kernel.run(v)\\nerr = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\nbad = (err > tol) | ~torch.isfinite(out)\\nresults[\\\"fullrange_n256_b256\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\nif bad.sum():\\n...[truncated, 751 more chars]\"\n      },\n      \"created_at\": \"2026-10-18T08:01:12Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"artifacts\": [\n          {\n            \"description\": \"Python probe code executed by local runtime.\",\n            \"kind\": \"probe_code\",\n            \"path\": \"probes/t6_probe.py\",\n            \"sha256\": \"99ab1f3c3b8692313336215a7516d50b8c9ea67f984d34681f7a91b4168bec75\"\n          },\n          {\n            \"description\": \"Captured stdout from the probe process.\",\n            \"kind\": \"stdout\",\n            \"path\": \"probes/t6_stdout.txt\",\n            \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n          },\n          {\n            \"description\": \"Captured stderr from the probe process.\",\n            \"kind\": \"stderr\",\n            \"path\": \"probes/t6_stderr.txt\",\n            \"sha256\": \"37466bf04eb8fb1fc3fca447ba130dbe94134b5ec8d3c0a050d8e6e0ea09d7f2\"\n          }\n        ],\n        \"claim_id\": \"c1\",\n        \"claim_statement\": \"The kernel's run() output deviates from the exact unnormalized forward real DFT beyond the tolerance 1e-4 + 1e-6*abs(exact) for some legal input in the contract domain (N in {64,128,256}, 1<=B<=256, any finite FP16 values).\",\n        \"cwd\": \"/root/cases/case_163\",\n        \"duration_s\": 6.979822,\n        \"event_id\": \"t6\",\n        \"evidence_draft\": {\n          \"claim_id\": \"c1\",\n          \"data\": {\n            \"artifacts\": [\n              {\n                \"description\": \"Python probe code executed by local runtime.\",\n                \"kind\": \"probe_code\",\n                \"path\": \"probes/t6_probe.py\",\n                \"sha256\": \"99ab1f3c3b8692313336215a7516d50b8c9ea67f984d34681f7a91b4168bec75\"\n              },\n              {\n                \"description\": \"Captured stdout from the probe process.\",\n                \"kind\": \"stdout\",\n                \"path\": \"probes/t6_stdout.txt\",\n                \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n              },\n              {\n                \"description\": \"Captured stderr from the probe process.\",\n                \"kind\": \"stderr\",\n                \"path\": \"probes/t6_stderr.txt\",\n                \"sha256\": \"37466bf04eb8fb1fc3fca447ba130dbe94134b5ec8d3c0a050d8e6e0ea09d7f2\"\n              }\n            ],\n            \"duration_s\": 6.979822,\n            \"exit_code\": 1,\n            \"expected_signal\": null,\n            \"json_parse_error\": \"stdout has no non-empty lines\",\n            \"json_result\": null,\n            \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r6/real_kernel_challenges/case_163/solo/probes/t6_probe.py\\\", line 74, in <module>\\n    h = torch.tensor(vals, dtype=torch.int16).view(torch.float16).to(dev)\\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\nRuntimeError: value cannot be converted to type int16 without overflow\\n\",\n            \"stdout\": \"\",\n            \"timed_out\": false,\n            \"timeout_s\": 60\n          },\n          \"kind\": \"runtime_probe\",\n          \"summary\": \"Probe failed or produced nonzero exit and needs Experimenter interpretation.\",\n          \"supports\": \"needs_interpretation\",\n          \"tool_event_id\": \"t6\"\n        },\n        \"exit_code\": 1,\n        \"expected_signal\": null,\n        \"json_parse_error\": \"stdout has no non-empty lines\",\n        \"json_result\": null,\n        \"sandbox\": {\n          \"cpu_limit_s\": 90,\n          \"cpu_quota_pct\": null,\n          \"memory_limit_mb\": null,\n          \"mode\": \"cpu_ulimit\",\n          \"network_isolated\": false\n        },\n        \"stderr\": \"Traceback (most recent call last):\\n  File \\\"/root/trace_runs/r6/real_kernel_challenges/case_163/solo/probes/t6_probe.py\\\", line 74, in <module>\\n    h = torch.tensor(vals, dtype=torch.int16).view(torch.float16).to(dev)\\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\\nRuntimeError: value cannot be converted to type int16 without overflow\\n\",\n        \"stdout\": \"\",\n        \"timed_out\": false,\n        \"timeout_s\": 60,\n        \"use_gpu\": true\n      },\n      \"status\": \"ok\",\n      \"tool\": \"run_claim_probe\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_claim",
+        "description": "Record one concrete, testable claim in the claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "statement",
+            "rationale",
+            "scope",
+            "scope_rationale",
+            "scope_evidence"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "description": "The falsifiable proposition itself, in one sentence. Check read_claim_ledger first: if this restates a claim already in the ledger, do not record it again -- add to the existing claim with append_evidence instead."
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Why this might be true. Required, and separate from scope_rationale."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "in_scope",
+                "out_of_scope",
+                "unknown"
+              ],
+              "default": "unknown",
+              "description": "Use in_scope ONLY when passing scope_rationale AND at least one scope_evidence item in this same call; the call is rejected otherwise. Use unknown if you cannot yet cite the contract."
+            },
+            "scope_rationale": {
+              "type": "string",
+              "default": "",
+              "description": "Always include this field. For in_scope it must explain which contract requirement this claim would violate. For unknown scope an empty string is allowed."
+            },
+            "scope_evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "summary"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string"
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "default": [],
+              "description": "Always include this field. For in_scope supply at least one quote from the contract, each with its source. For unknown scope an empty array is allowed."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_verdict",
+        "description": "Record the Judge agent's final evidence-based verdict.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "verdict",
+            "confidence",
+            "decisive_claims",
+            "reason"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "trust",
+                "reject",
+                "needs_more_evidence"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "decisive_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

@@ -1,0 +1,411 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Experimenter agent in an agentic kernel verification system.\nYour job is to gather evidence for open claims using local tools.\n\nRules:\n- Start from the claim ledger and description_model. Use read_claim_ledger when claim state is unclear.\n- Use contract_model and scope_notes to avoid probing irrelevant out-of-scope behavior.\n- Account for every open claim before yielding control to the Judge. Do not silently ignore open claims.\n- For each open claim with no evidence, either gather direct evidence or attach explicit inconclusive evidence explaining the blocker.\n- For each experiment, target one concrete claim.\n- Prefer run_claim_probe for runtime experiments; pass the target claim_id and a concise expected_signal.\n- Probe code should print a final JSON object on the last stdout line when possible.\n- You cannot observe a run_claim_probe result in the same response that requested it, so it is the response after that consumes it -- which is not the same as spending that whole turn on it (see below).\n- Finalize and launch in the same response. An unfinalized run_claim_probe result must be consumed before you yield control, but consuming it does not need a turn of its own: put finalize_probe_evidence for the results you can now see and the next run_claim_probe in the same response. A turn that only finalizes, or only launches, spends a whole model call on half a step.\n- Launch independent probes together. When several open claims can be tested without one claim's outcome changing another's experiment design, issue a run_claim_probe for each in one response and finalize them all in the next. Hold a probe back only when it genuinely depends on a result you do not have yet -- for example when you must choose inputs that avoid triggering a defect another claim just confirmed, so the two cannot confound each other. Say in your message which claims you are batching and which you are holding back, and why.\n- Use finalize_probe_evidence to interpret the probe output; it appends runtime evidence and updates claim status in one tool call.\n- Put every decisive measurement in the evidence `data` object as named key/value pairs (for example {\"rms_1e-8_ratio\": 990.1, \"max_abs_err\": 0.0731, \"tolerance\": 0.01}), not only in the prose summary. `data` is preserved in full for later turns; long prose summaries may be trimmed, so a number that exists only in prose can be lost to the agents who read your evidence afterwards.\n- Use run_python_probe only for debugging or exploratory work that is not yet tied to a claim.\n- Use append_evidence and update_claim_status directly only for non-probe evidence, such as source inspection or artifact reads.\n- Mark evidence inconclusive when the tool output cannot decide the claim.\n- Use request_description when a probe result or source path needs Describer interpretation before you can finalize evidence.\n- If tool budget or missing environment prevents covering all claims in one turn, state exactly which claim ids remain uncovered.\n- Do not invent results that are not present in tool output or source context.\n- Do not output a final verdict. That is the Judge agent's job.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- claim-lifecycle.md ---\n# Claim Lifecycle\n\nUse claim statuses consistently:\n\n- `open`: the hypothesis is recorded but not yet tested.\n- `confirmed`: evidence supports the claim.\n- `rebutted`: evidence contradicts the claim.\n- `inconclusive`: available evidence cannot decide the claim.\n\nDo not move a claim directly between `confirmed` and `rebutted`. If later\nevidence invalidates the previous status, mark it `inconclusive` first or refine\nthe claim into a narrower new claim.\n\n\n\n--- experiment-design.md ---\n# Experiment Design\n\nDesign probes around one claim at a time. Keep reference computation separate\nfrom candidate kernel invocation, use minimal inputs that target the hypothesis,\nand return structured metrics rather than prose-only output.\n\nThe agent decides what to test. Runtime tools only execute the requested local\nprobe and report results.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n\n\n--- metric-selection.md ---\n# Metric Selection\n\nChoose the verification metric from the operator's correctness contract, not\nfrom convenience.\n\n## Continuous Outputs\n\nFor matmul, elementwise ops, reductions, and normalizations with continuous\nnumeric outputs, elementwise error can be useful evidence. A probe should report\nat least max absolute error, max relative error when meaningful, shape, dtype,\nand the tested input distribution.\n\n## Saturating Or Lossy Outputs\n\nFor softmax, sigmoid, GELU, ReLU, SiLU, FP8, FP4, INT4, or any lossy/saturating\npath, final-output allclose is not enough by itself. Prefer metrics that expose\nwhere the error lives:\n\n- active region versus dead or saturated region;\n- dominant entries versus tails;\n- quantized-reference mismatch versus FP32-reference mismatch;\n- saturation, zero, and code/tie counts for low-bit formats.\n\n## Selection Outputs\n\nFor sort, top-k, argmax, sparse attention indices, or any discrete selection,\nstate which metric is authoritative before judging the claim:\n\n- exact index order;\n- selected index set;\n- selected values;\n- value gap between missed and selected elements;\n- downstream output after consuming the selected indices.\n\nIndex mismatch alone is weak evidence when the contract permits ties or\nnon-stable ordering. Missing a value far above the cutoff is stronger evidence\nthan swapping two tied boundary values.\n\n## Probe Result Format\n\nRuntime probes should print a final JSON object that includes the chosen metric,\nthe reason that metric matches the claim, and enough raw counts or extrema for\nJudge to distinguish a real correctness failure from a metric artifact.\n\n\n--- scope-policy.md ---\n# Scope Policy\n\nClassify claims by the benchmark input contract before deciding whether they can\nsupport a reject verdict.\n\n## Benchmark Contract First\n\nFor this verifier, `in_scope` means the case is required by the benchmark or\nartifact input contract, not merely by general PyTorch behavior. Prefer evidence\nfrom `test.py`, `get_inputs`, `get_init_inputs`, seed files, `meta.json`, or\nother artifact metadata that describes the actual verification domain.\n\n`problem.txt` can explain the operator, but by itself it is usually not enough\nto make a stress/generalization case decisive when `test.py` narrows the input\ndomain.\n\n## Default Out-of-Scope Or Unknown\n\nTreat the following as `unknown` or `out_of_scope` unless the benchmark contract\nexplicitly requires them:\n\n- non-contiguous views or unusual strides;\n- shapes, sizes, or ranks different from `get_inputs` / `test.py`;\n- dtypes different from the benchmark inputs;\n- module configuration changes such as a different LayerNorm `eps`;\n- NaN/Inf-only rows or other undefined/reference-nonfinite cases;\n- autograd, aliasing, zero-size tensors, broadcasting, or host/device variants.\n\nThese cases may be useful generalization notes, but they cannot by themselves\njustify rejecting a benchmark kernel.\n\n## Reference-Undefined Cases\n\nIf the PyTorch/reference computation is also NaN, non-finite, raises the same\nexception, or has unspecified tie-breaking, the evidence is not a confirmed\ncorrectness failure. Mark it `inconclusive`, `rebutted`, or narrow the claim to a\nmetric/contract artifact.\n\n## Reject Discipline\n\nA reject verdict requires a confirmed claim that is both `in_scope` and backed\nby scope evidence from the benchmark/test input domain. Claims supported only by\noperator generality or stress cases should lead to `trust`, `needs_more_evidence`,\nor a non-decisive generalization note, not `reject`.\n\n\nDo not use \"not forbidden\" or \"no explicit constraint\" as a substitute for\nbenchmark coverage. If `test.py` fixes `features = 64`, then `features = 0` is\nnot an in-scope decisive case unless another benchmark artifact explicitly\ngenerates or requires it.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_145\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Row-wise first-maximum index via a packed integer-key reduction.\\n2: \\n3: Original synthetic Triton implementation; not an upstream historical bug.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: \\n10: @triton.jit\\n11: def _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n12:     row = tl.program_id(0)\\n13:     column = tl.arange(0, BLOCK)\\n14:     value = tl.load(X + row * N + column, mask=column < N, other=0.0)\\n15:     raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\\n16:     mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\\n17:     rank = raw ^ mask\\n18:     # Rank dominates; reversed column indices select the first equal value.\\n19:     tie = 0xffffffff - column.to(tl.uint32)\\n20:     key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\\n21:     key = tl.where(column < N, key, 0)\\n22:     best = tl.max(key, axis=0)\\n23:     winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\\n24:     tl.store(OUT + row, winner)\\n25: \\n26: \\n27: def validate_inputs(x, require_cuda=True):\\n28:     def require(condition, message):\\n29:         if not condition:\\n30:             raise ValueError(message)\\n31:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n32:     require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n33:     require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n34:     require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient input required\\\")\\n35:     require(not x.is_neg() and not x.is_conj(), \\\"logical view flags outside domain\\\")\\n36:     require(not require_cuda or x.is_cuda, \\\"CUDA input required\\\")\\n37:     require(x.ndim == 2, \\\"matrix [M,N] required\\\")\\n38:     require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\\n39:             and x.numel() <= 262144, \\\"matrix dimensions outside domain\\\")\\n40:     require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n41:     require(bool(torch.isfinite(x).all().item()), \\\"all values must be finite\\\")\\n42:     return {\\\"valid\\\": True, \\\"shape\\\": list(x.shape)}\\n43: \\n44: \\n45: def run(x):\\n46:     validate_inputs(x)\\n47:     m, n = x.shape\\n48:     with torch.cuda.device(x.device):\\n49:         output = torch.empty((m,), dtype=torch.int64, device=x.device)\\n50:         _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\\n51:     return output\\n52: \\n53: \\n54: def reference(x):\\n55:     \\\"\\\"\\\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\\\"\\\"\\\"\\n56:     validate_inputs(x, require_cuda=False)\\n57:     return torch.argmax(x.to(torch.float64), dim=1)\\n58: \\n59: \\n60: def make_inputs(device=\\\"cuda\\\", rows=17, columns=257, seed=0):\\n61:     \\\"\\\"\\\"Convenience examples, not a restriction on the input domain.\\\"\\\"\\\"\\n62:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n63:     x = torch.randn((rows, columns), generator=generator).to(torch.float16)\\n64:     return (x.to(device),)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_145\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": false,\n    \"open_claim_ids\": [\n      \"c1\",\n      \"c2\"\n    ]\n  },\n  \"claims\": [\n    {\n      \"created_at\": \"2026-10-18T01:34:57Z\",\n      \"evidence\": [],\n      \"id\": \"c1\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"The kernel builds a total order where -0.0 (rank 0x7fff) is strictly smaller than +0.0 (rank 0x8000), while the contract mandates both zeros compare equal with the first zero of either sign winning. Any in-domain row like [-0.0, +0.0, negatives] must return index 0, but the kernel returns index 1.\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"\\\"Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins.\\\" ... \\\"the returned index must equal the specified first index\\\"\"\n        }\n      ],\n      \"scope_rationale\": \"problem.txt explicitly states positive and negative zero compare equal and the first zero of either sign wins, and that the exact index must be returned; this case is inside the stated domain (finite FP16 values include both signed zeros).\",\n      \"statement\": \"For a row whose maximum is zero and where -0.0 occurs before +0.0 (e.g. x[r] = [-0.0, +0.0, -1.0, ...]), run(x) returns the index of the +0.0 instead of the earlier -0.0, violating the contract's signed-zero tie rule.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T01:34:57Z\"\n    },\n    {\n      \"created_at\": \"2026-10-18T01:34:57Z\",\n      \"evidence\": [],\n      \"id\": \"c2\",\n      \"raised_by\": \"skeptic\",\n      \"rationale\": \"Line 20 shifts a uint32 rank into a uint64 by 32 bits and ORs the tie value; if Triton 3.4's type promotion truncates this (e.g. to 32-bit), the rank part of the key could be lost, letting padding lanes (key 0) or wrong rows win, especially for N not a power of 2 where masked lanes exist and for N=1 (BLOCK=1, tie=0xffffffff).\",\n      \"scope\": \"in_scope\",\n      \"scope_evidence\": [\n        {\n          \"source\": \"problem.txt\",\n          \"summary\": \"\\\"Any implementation strategy is allowed if it returns the required exact indices throughout the complete domain.\\\" Domain includes all finite FP16 values and all N in 1..4096.\"\n        }\n      ],\n      \"scope_rationale\": \"The contract requires exact indices throughout the complete domain, including e.g. N=1, N a non-power-of-2 (padding lanes present), and extreme values like -65504 (rank 0xfbff); a packing failure would produce a wrong index on such in-domain inputs.\",\n      \"statement\": \"The uint64 key packing / masked-lane handling may be incorrect in Triton 3.4 (uint64 shift semantics or width promotion), causing a wrong winning index for in-domain inputs such as non-power-of-2 N (padding lanes with key 0) or extreme values like -65504.\",\n      \"status\": \"open\",\n      \"updated_at\": \"2026-10-18T01:34:57Z\"\n    }\n  ],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [\n      \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n      \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n      \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n      \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n    ],\n    \"kernel_model\": [\n      \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n      \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n      \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n      \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n      \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n    ],\n    \"open_questions\": [\n      \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n      \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n    ],\n    \"risk_map\": [\n      \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n      \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n      \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n      \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n      \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n    ],\n    \"scope_notes\": [\n      \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n      \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n      \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n    ]\n  },\n  \"entry\": \"case_145\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    },\n    {\n      \"role\": \"describer\",\n      \"round\": 2,\n      \"text\": \"The contract and source are already in context; the key analysis point is how the packed-key ordering handles signed zeros versus the contract's equal-comparison rule.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"contract_model\": [\n              \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n              \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n              \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n              \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n            ],\n            \"kernel_model\": [\n              \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n              \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n              \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n              \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n              \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n            ],\n            \"open_questions\": [\n              \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n              \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n            ],\n            \"risk_map\": [\n              \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n              \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n              \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n              \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n              \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n            ],\n            \"scope_notes\": [\n              \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n              \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n              \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n            ],\n            \"summary\": \"Described case_145: FP16 row-wise stable argmax via packed uint64 (rank, reversed-column) keys; contract requires exact first-index ties with +0/-0 equal, kernel orders -0 below +0.\"\n          },\n          \"tool\": \"record_description_update\"\n        }\n      ]\n    },\n    {\n      \"role\": \"skeptic\",\n      \"round\": 3,\n      \"text\": \"The contract and source are already fully in context. The main attack surface is the signed-zero ordering: the kernel's rank mapping makes \\u22120.0 strictly less than +0.0, while the contract requires them to compare equal. I'll record that as the top in-scope claim, plus a second testable claim about the uint64 key packing / padding behavior.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"rationale\": \"The kernel builds a total order where -0.0 (rank 0x7fff) is strictly smaller than +0.0 (rank 0x8000), while the contract mandates both zeros compare equal with the first zero of either sign winning. Any in-domain row like [-0.0, +0.0, negatives] must return index 0, but the kernel returns index 1.\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"\\\"Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins.\\\" ... \\\"the returned index must equal the specified first index\\\"\"\n              }\n            ],\n            \"scope_rationale\": \"problem.txt explicitly states positive and negative zero compare equal and the first zero of either sign wins, and that the exact index must be returned; this case is inside the stated domain (finite FP16 values include both signed zeros).\",\n            \"statement\": \"For a row whose maximum is zero and where -0.0 occurs before +0.0 (e.g. x[r] = [-0.0, +0.0, -1.0, ...]), run(x) returns the index of the +0.0 instead of the earlier -0.0, violating the contract's signed-zero tie rule.\"\n          },\n          \"tool\": \"record_claim\"\n        },\n        {\n          \"args\": {\n            \"rationale\": \"Line 20 shifts a uint32 rank into a uint64 by 32 bits and ORs the tie value; if Triton 3.4's type promotion truncates this (e.g. to 32-bit), the rank part of the key could be lost, letting padding lanes (key 0) or wrong rows win, especially for N not a power of 2 where masked lanes exist and for N=1 (BLOCK=1, tie=0xffffffff).\",\n            \"scope\": \"in_scope\",\n            \"scope_evidence\": [\n              {\n                \"source\": \"problem.txt\",\n                \"summary\": \"\\\"Any implementation strategy is allowed if it returns the required exact indices throughout the complete domain.\\\" Domain includes all finite FP16 values and all N in 1..4096.\"\n              }\n            ],\n            \"scope_rationale\": \"The contract requires exact indices throughout the complete domain, including e.g. N=1, N a non-power-of-2 (padding lanes present), and extreme values like -65504 (rank 0xfbff); a packing failure would produce a wrong index on such in-domain inputs.\",\n            \"statement\": \"The uint64 key packing / masked-lane handling may be incorrect in Triton 3.4 (uint64 shift semantics or width promotion), causing a wrong winning index for in-domain inputs such as non-power-of-2 N (padding lanes with key 0) or extreme values like -65504.\"\n          },\n          \"tool\": \"record_claim\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [\n    {\n      \"contract_model\": [\n        \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n        \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n        \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n        \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n      ],\n      \"created_at\": \"2026-10-18T01:34:42Z\",\n      \"created_by\": \"describer\",\n      \"id\": \"du1\",\n      \"impact_on_claims\": [],\n      \"kernel_model\": [\n        \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n        \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n        \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n        \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n        \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n      ],\n      \"open_questions\": [\n        \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n        \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n      ],\n      \"risk_map\": [\n        \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n        \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n        \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n        \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n        \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n      ],\n      \"scope_notes\": [\n        \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n        \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n        \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n      ],\n      \"summary\": \"Described case_145: FP16 row-wise stable argmax via packed uint64 (rank, reversed-column) keys; contract requires exact first-index ties with +0/-0 equal, kernel orders -0 below +0.\",\n      \"task_ids\": [],\n      \"turn\": 2\n    }\n  ],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_145\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Row-wise first-maximum index via a packed integer-key reduction.\\n\\nOriginal synthetic Triton implementation; not an upstream historical bug.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    row = tl.program_id(0)\\n    column = tl.arange(0, BLOCK)\\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\\n    rank = raw ^ mask\\n    # Rank dominates; reversed column indices select the first equal value.\\n    tie = 0xffffffff - column.to(tl.uint32)\\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\\n    key = tl.where(column < N, key, 0)\\n    best = tl.max(key, axis=0)\\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\\n    tl.store(OUT + row, winner)\\n\\n\\ndef validate_inputs(x, require_cuda=True):\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n    require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n    require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient input required\\\")\\n    require(not x.is_neg() and not x.is_conj(), \\\"logical view flags outside domain\\\")\\n    require(not require_cuda or x.is_cuda, \\\"CUDA input required\\\")\\n    require(x.ndim == 2, \\\"matrix [M,N] required\\\")\\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\\n            and x.numel() <= 262144, \\\"matrix dimensions outside domain\\\")\\n    require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n    require(bool(torch.isfinite(x).all().item()), \\\"all values must be finite\\\")\\n    return {\\\"valid\\\": True, \\\"shape\\\": list(x.shape)}\\n\\n\\ndef run(x):\\n    validate_inputs(x)\\n    m, n = x.shape\\n    with torch.cuda.device(x.device):\\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\\n    return output\\n\\n\\ndef reference(x):\\n    \\\"\\\"\\\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\\\"\\\"\\\"\\n    validate_inputs(x, require_cuda=False)\\n    return torch.argmax(x.to(torch.float64), dim=1)\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", rows=17, columns=257, seed=0):\\n    \\\"\\\"\\\"Convenience examples, not a restriction on the input domain.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\\n    return (x.to(device),)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_145\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_145\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_145\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 2705\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1834\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_145\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    },\n    {\n      \"args\": {\n        \"contract_model\": [\n          \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n          \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n          \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n          \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n        ],\n        \"kernel_model\": [\n          \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n          \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n          \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n          \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n          \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n        ],\n        \"open_questions\": [\n          \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n          \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n        ],\n        \"risk_map\": [\n          \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n          \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n          \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n          \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n          \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n        ],\n        \"scope_notes\": [\n          \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n          \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n          \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n        ],\n        \"summary\": \"Described case_145: FP16 row-wise stable argmax via packed uint64 (rank, reversed-column) keys; contract requires exact first-index ties with +0/-0 equal, kernel orders -0 below +0.\"\n      },\n      \"created_at\": \"2026-10-18T01:34:42Z\",\n      \"id\": \"t5\",\n      \"output\": {\n        \"description_model\": {\n          \"contract_model\": [\n            \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n            \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n            \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n            \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n          ],\n          \"kernel_model\": [\n            \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n            \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n            \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n            \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n            \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n          ],\n          \"open_questions\": [\n            \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n            \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n          ],\n          \"risk_map\": [\n            \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n            \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n            \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n            \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n            \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n          ],\n          \"scope_notes\": [\n            \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n            \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n            \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n          ]\n        },\n        \"resolved_tasks\": [],\n        \"update\": {\n          \"contract_model\": [\n            \"Row-wise stable argmax over an FP16 CUDA matrix: return the smallest column index attaining each row's exact maximum, as a fresh int64 [M] CUDA tensor on x.device.\",\n            \"Positive and negative zero compare equal: if a row's maximum is zero, the first zero of either sign wins. All finite FP16 values legal including subnormals and +/-65504; NaN/inf out of scope.\",\n            \"Domain: contiguous ordinary FP16 torch.Tensor [M,N], 1<=M<=65536, 1<=N<=4096, M*N<=262144; nonzero storage offsets allowed; no autograd; x preserved. Exact index required, no tolerance; one verdict for the whole implementation.\",\n            \"reference() = torch.argmax(x.to(float64), dim=1) with FP64 exactness; make_inputs() is examples only.\"\n          ],\n          \"created_at\": \"2026-10-18T01:34:42Z\",\n          \"created_by\": \"describer\",\n          \"id\": \"du1\",\n          \"impact_on_claims\": [],\n          \"kernel_model\": [\n            \"Triton kernel packs each row element into a uint64 key = (rank<<32) | (0xffffffff - column), then tl.max over one power-of-2 block per row; winner index recovered as 0xffffffff - low 32 bits. Reversed column in low bits makes ties resolve to the smallest column.\",\n            \"rank is the classic total-order float key: raw = fp16 bits in uint32; negative (sign bit set) uses raw ^ 0xffff, positive uses raw ^ 0x8000, so numerically larger values get larger keys.\",\n            \"Masked lanes (column >= N) get key = 0, which can never win because every valid finite lane has rank >= ~0xfbff > 0 (padding is safe).\",\n            \"run() validates the domain, allocates int64 output, launches grid (M,) with BLOCK = next_power_of_2(N); BLOCK <= 4096 fits a single reduction since N <= 4096 and M*N <= 262144.\",\n            \"Potential mismatch with contract: +0.0 gets rank 0x8000 while -0.0 (raw 0x8000, negative branch) gets rank 0x7fff, so the kernel orders -0.0 strictly below +0.0 instead of comparing them equal.\"\n          ],\n          \"open_questions\": [\n            \"Does Triton 3.4 uint64 shift/or behave as assumed in the key packing (line 20)?\",\n            \"Do any in-domain shapes or offsets (nonzero storage offset) change base-pointer addressing correctness?\"\n          ],\n          \"risk_map\": [\n            \"Signed-zero tie handling: rows whose maximum is zero and where -0.0 appears before +0.0 (e.g. [-0.0, +0.0, ...] or a subnormal-negative-max row with an early -0.0) will return the first +0.0 index instead of the first zero of either sign, violating the explicit contract rule. Conversely rows with only -0.0 as zeros are fine.\",\n            \"Tie-break among equal values: intended smallest-index selection via reversed column key; should be verified, especially at N=1 and when the max appears at column 0 (tie key 0xffffffff).\",\n            \"Padding-lane safety: masked lanes contribute key 0; verify no in-domain finite value can produce key 0 (min rank is ~0xfbff for -65504, so padding should never win \\u2014 but confirm type/width handling of uint64 shift in Triton 3.4).\",\n            \"Reduction-size edge: BLOCK up to 4096 (N=4096 with M<=64 forced by M*N<=262144) in a single tl.max; check Triton handles the full-block reduction correctly.\",\n            \"Nonzero storage offset views: kernel indexes X + row*N + column from the base pointer; Triton data_ptr already includes the offset, so likely fine, but worth a probe.\"\n          ],\n          \"scope_notes\": [\n            \"NaN and infinity are outside the domain and rejected by validate_inputs via torch.isfinite, so behavior on non-finite input is out of scope.\",\n            \"Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0; single verdict covers the complete finite FP16 domain, not just randn-generated examples.\",\n            \"All rows fully finite FP16; M*N <= 262144 caps shapes, so single-block per-row reduction is structurally sufficient.\"\n          ],\n          \"summary\": \"Described case_145: FP16 row-wise stable argmax via packed uint64 (rank, reversed-column) keys; contract requires exact first-index ties with +0/-0 equal, kernel orders -0 below +0.\",\n          \"task_ids\": [],\n          \"turn\": 2\n        }\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_description_update\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"The kernel builds a total order where -0.0 (rank 0x7fff) is strictly smaller than +0.0 (rank 0x8000), while the contract mandates both zeros compare equal with the first zero of either sign winning. Any in-domain row like [-0.0, +0.0, negatives] must return index 0, but the kernel returns index 1.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins.\\\" ... \\\"the returned index must equal the specified first index\\\"\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt explicitly states positive and negative zero compare equal and the first zero of either sign wins, and that the exact index must be returned; this case is inside the stated domain (finite FP16 values include both signed zeros).\",\n        \"statement\": \"For a row whose maximum is zero and where -0.0 occurs before +0.0 (e.g. x[r] = [-0.0, +0.0, -1.0, ...]), run(x) returns the index of the +0.0 instead of the earlier -0.0, violating the contract's signed-zero tie rule.\"\n      },\n      \"created_at\": \"2026-10-18T01:34:57Z\",\n      \"id\": \"t6\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T01:34:57Z\",\n        \"evidence\": [],\n        \"id\": \"c1\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"The kernel builds a total order where -0.0 (rank 0x7fff) is strictly smaller than +0.0 (rank 0x8000), while the contract mandates both zeros compare equal with the first zero of either sign winning. Any in-domain row like [-0.0, +0.0, negatives] must return index 0, but the kernel returns index 1.\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins.\\\" ... \\\"the returned index must equal the specified first index\\\"\"\n          }\n        ],\n        \"scope_rationale\": \"problem.txt explicitly states positive and negative zero compare equal and the first zero of either sign wins, and that the exact index must be returned; this case is inside the stated domain (finite FP16 values include both signed zeros).\",\n        \"statement\": \"For a row whose maximum is zero and where -0.0 occurs before +0.0 (e.g. x[r] = [-0.0, +0.0, -1.0, ...]), run(x) returns the index of the +0.0 instead of the earlier -0.0, violating the contract's signed-zero tie rule.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T01:34:57Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    },\n    {\n      \"args\": {\n        \"rationale\": \"Line 20 shifts a uint32 rank into a uint64 by 32 bits and ORs the tie value; if Triton 3.4's type promotion truncates this (e.g. to 32-bit), the rank part of the key could be lost, letting padding lanes (key 0) or wrong rows win, especially for N not a power of 2 where masked lanes exist and for N=1 (BLOCK=1, tie=0xffffffff).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"Any implementation strategy is allowed if it returns the required exact indices throughout the complete domain.\\\" Domain includes all finite FP16 values and all N in 1..4096.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires exact indices throughout the complete domain, including e.g. N=1, N a non-power-of-2 (padding lanes present), and extreme values like -65504 (rank 0xfbff); a packing failure would produce a wrong index on such in-domain inputs.\",\n        \"statement\": \"The uint64 key packing / masked-lane handling may be incorrect in Triton 3.4 (uint64 shift semantics or width promotion), causing a wrong winning index for in-domain inputs such as non-power-of-2 N (padding lanes with key 0) or extreme values like -65504.\"\n      },\n      \"created_at\": \"2026-10-18T01:34:57Z\",\n      \"id\": \"t7\",\n      \"output\": {\n        \"created_at\": \"2026-10-18T01:34:57Z\",\n        \"evidence\": [],\n        \"id\": \"c2\",\n        \"raised_by\": \"skeptic\",\n        \"rationale\": \"Line 20 shifts a uint32 rank into a uint64 by 32 bits and ORs the tie value; if Triton 3.4's type promotion truncates this (e.g. to 32-bit), the rank part of the key could be lost, letting padding lanes (key 0) or wrong rows win, especially for N not a power of 2 where masked lanes exist and for N=1 (BLOCK=1, tie=0xffffffff).\",\n        \"scope\": \"in_scope\",\n        \"scope_evidence\": [\n          {\n            \"source\": \"problem.txt\",\n            \"summary\": \"\\\"Any implementation strategy is allowed if it returns the required exact indices throughout the complete domain.\\\" Domain includes all finite FP16 values and all N in 1..4096.\"\n          }\n        ],\n        \"scope_rationale\": \"The contract requires exact indices throughout the complete domain, including e.g. N=1, N a non-power-of-2 (padding lanes present), and extreme values like -65504 (rank 0xfbff); a packing failure would produce a wrong index on such in-domain inputs.\",\n        \"statement\": \"The uint64 key packing / masked-lane handling may be incorrect in Triton 3.4 (uint64 shift semantics or width promotion), causing a wrong winning index for in-domain inputs such as non-power-of-2 N (padding lanes with key 0) or extreme values like -65504.\",\n        \"status\": \"open\",\n        \"updated_at\": \"2026-10-18T01:34:57Z\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"record_claim\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol.\n\n=== Output budget ===\n{\"total_output_tokens\": 32768, \"used_output_tokens\": 2609, \"remaining_output_tokens\": 30159, \"debate_phase\": \"normal\", \"normal_turn_cap\": 8192, \"closeout_reserve\": 8192}\nOutput usage includes reasoning. Keep this turn focused; do not spend the entire allowance planning a large probe before obtaining evidence."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "request_description",
+        "description": "Request a Describer clarification for source, contract, probe, or verdict ambiguity.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "reason_kind",
+            "question"
+          ],
+          "properties": {
+            "reason_kind": {
+              "type": "string",
+              "enum": [
+                "contract_scope",
+                "source_interpretation",
+                "probe_anomaly",
+                "verdict_blocker",
+                "other"
+              ]
+            },
+            "question": {
+              "type": "string"
+            },
+            "related_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "source_refs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "append_evidence",
+        "description": "Attach source or runtime evidence to a claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "kind",
+            "summary",
+            "supports"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "runtime_probe",
+                "source_inspection",
+                "artifact_read",
+                "tool_error",
+                "agent_analysis"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "tool_event_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "update_claim_status",
+        "description": "Update a claim status after evidence has been recorded.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "status"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string",
+              "description": "e.g. c1."
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "open",
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ],
+              "description": "The claim must already hold evidence whose `supports` equals this status; append_evidence (or finalize_probe_evidence) first. If this call is rejected for missing evidence, supply the evidence -- do NOT retry with a different status, which changes your conclusion rather than supporting it."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_python_probe",
+        "description": "Run agent-generated Python probe code locally and return captured artifacts.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "code"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_claim_probe",
+        "description": "Run a Python probe for one claim and return an evidence draft bound to that claim.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "claim_id",
+            "code"
+          ],
+          "properties": {
+            "claim_id": {
+              "type": "string"
+            },
+            "code": {
+              "type": "string"
+            },
+            "expected_signal": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout_s": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1,
+              "maximum": 600
+            },
+            "use_gpu": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": true
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "finalize_probe_evidence",
+        "description": "Interpret a run_claim_probe result, append runtime evidence, and update the claim status.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "event_id",
+            "supports",
+            "summary"
+          ],
+          "properties": {
+            "event_id": {
+              "type": "string"
+            },
+            "supports": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive"
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "confirmed",
+                "rebutted",
+                "inconclusive",
+                null
+              ]
+            },
+            "data": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "retrieve_experiment_history",
+        "description": "Read prior run_python_probe tool events from the current run directory.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

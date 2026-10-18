@@ -1,0 +1,141 @@
+## Problem statement (contract + reference behavior)
+
+Compute an unnormalized Walsh-Hadamard transform for each row of an int16
+input tensor, returning int32 coefficients in increasing sequency order.
+
+The mathematical target is defined independently of any fast algorithm:
+1. Start with H_1 = [[1]] and recursively construct
+       H_(2n) = [[H_n, H_n],
+                 [H_n, -H_n]].
+2. For each row of H_N, count how many adjacent entries have different
+   signs. These counts are all distinct and range from 0 to N-1.
+3. Sort the rows by that count, in ascending order, to obtain W_N.
+4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].
+
+Thus output coefficient k uses a basis row with exactly k sign changes.
+No normalization factor is applied, and output order is part of correctness.
+
+Inputs and complete public domain:
+- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and
+  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.
+- EVERY stored int16 value is legal: the full range [-32768,32767].
+- x is dense, strided, contiguous and on a CUDA device. Contiguous views
+  with nonzero storage offsets are legal.
+- x has requires_grad=False, is_inference=False, is_neg=False and
+  is_conj=False. Calls run in ordinary non-inference mode, without
+  concurrent external writes to the input. No autograd is provided.
+
+Return a fresh int32 tensor of shape [B,N] on x.device, preserving x.
+Every element must equal the mathematical integer target exactly:
+absolute tolerance = 0 and relative tolerance = 0.
+The largest possible absolute result is at most N*32768<=4194304, which
+fits in int32. Approximate transforms, other coefficient orderings and
+normalized transforms do not satisfy this task. Implementations may use
+any algorithm that satisfies the same target over the whole legal domain.
+Correctness is one verdict for the implementation, not a verdict per input,
+input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+builds the Sylvester matrix, sorts its rows by sign-change count and uses
+int64 products and sums before exact int32 conversion; it also accepts
+CPU inputs. make_inputs() supplies examples only.
+
+Walsh-Hadamard transforms are used for discrete signals and their sequency
+ordering arranges coefficients by the sign-change rate of the basis.
+This is an original synthetic Triton implementation with integer
+butterflies and coefficient reordering, not a claimed upstream historical
+defect. The input/output convention is explicitly unnormalized.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Sequency-ordered integer Walsh-Hadamard transform.
+
+Original synthetic Triton implementation of a standard signal transform.
+This is not an upstream implementation or a claimed historical defect.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):
+    row = tl.program_id(0)
+    lane = tl.arange(0, N)
+    value = tl.load(X + row * N + lane).to(tl.int32)
+    for stage in tl.static_range(0, LOG_N):
+        step = 1 << stage
+        peer = tl.gather(value, lane ^ step, axis=0)
+        value = tl.where((lane & step) == 0, value + peer, peer - value)
+
+    # Convert the coefficient index to the butterfly's natural row index.
+    reversed_lane = tl.full((N,), 0, tl.int32)
+    for bit in tl.static_range(0, LOG_N):
+        reversed_lane = reversed_lane | (((lane >> bit) & 1) << (LOG_N - 1 - bit))
+    source_lane = reversed_lane ^ (reversed_lane >> 1)
+
+    result = tl.gather(value, source_lane, axis=0)
+    tl.store(OUT + row * N + lane, result)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),
+            "x must have shape [B,N], B in [1,128] and N in {32,64,128}")
+    require(x.dtype == torch.int16, "int16 input required")
+    return {"valid": True, "batch": x.shape[0], "width": x.shape[1]}
+
+
+def run(x):
+    """Return the unnormalized transform with coefficients in sequency order."""
+    validate_inputs(x)
+    batch, width = x.shape
+    with torch.cuda.device(x.device):
+        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)
+        _transform_kernel[(batch,)](
+            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)
+    return output
+
+
+def reference(x):
+    """Build the mathematical basis independently, then multiply in int64."""
+    validate_inputs(x, require_cuda=False)
+    width = x.shape[1]
+    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)
+    while hadamard.shape[0] < width:
+        top = torch.cat((hadamard, hadamard), dim=1)
+        bottom = torch.cat((hadamard, -hadamard), dim=1)
+        hadamard = torch.cat((top, bottom), dim=0)
+    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)
+    sequency_rows = hadamard[torch.argsort(changes)]
+    # int64 products and sums are exact throughout the complete int16 domain.
+    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)
+    return result.to(torch.int32)
+
+
+def make_inputs(device="cuda", batch=7, width=64, seed=0):
+    """Examples only; all stored int16 values are legal."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)
+    return (x.to(device=device, dtype=torch.int16),)
+
+```
+
+Is this implementation correct?

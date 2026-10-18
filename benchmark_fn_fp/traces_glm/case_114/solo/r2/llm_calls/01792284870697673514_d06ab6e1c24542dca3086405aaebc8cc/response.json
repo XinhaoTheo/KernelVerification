@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-13356ad1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll start with the most decisive claim (c1): poison V slots at expired window positions and check for NaN in the output.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ad0fd559d6024cf5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, math, json\\ntorch.cuda.init()\\nimport sys\\nsys.path.insert(0, '/root/cases/case_114')\\nfrom kernel import run, reference, validate_inputs\\n\\n# B=1, Q=4, Hq=2 (group 2, Hkv=1), D=64, S=16 pages\\nb, qt, hq, d, page, hk = 1, 4, 2, 64, 16, 1\\npages = 16\\nlengths = torch.tensor([100], dtype=torch.int32)\\nwindow = 5  # small window: lots of expired positions inside loaded tiles\\n\\ng = torch.Generator().manual_seed(1)\\nq = (2*torch.rand((b,qt,hq,d), generator=g)-1).half()\\nk = (2*torch.rand((pages,page,hk,d), generator=g)-1).half()\\nv = (2*torch.rand((pages,page,hk,d), generator=g)-1).half()\\ntable = torch.randperm(pages, generator=g)[:7].to(torch.int32).reshape(1,7)\\n\\n# clean run\\ndev = 'cuda'\\nqc,kc,vc,tc,lc = (t.to(dev) for t in (q,k,v,table,lengths))\\nout_clean = run(qc,kc,vc,tc,lc,window)\\n\\n# poison: V slots at logical positions NOT allowed for any query (expired positions < a-window+1 for all queries)\\n# query rows abs positions: lengths-Q+r = 96..99; allowed min = 99-5+1=95. So positions 0..94 are unreachable.\\n# poison every V position with logical t in [0,16) (loaded in first tile? tile_start = (context+0-5+1)//64 = (96-4)//64=1... careful)\\n# Just poison all V slots whose logical t in [0,95) — but must keep reachable ones clean.\\nvp = vc.clone()\\nn = int(lc[0]); lo_allowed = n - qt - window + 1  # min allowed across all queries\\n# construct poisoned copy: for each logical position t < lo_allowed, set V slot to NaN\\nfor t in range(0, lo_allowed):\\n    pid = int(tc[0, t//page]); vp[pid, t%page] = float('nan')\\n# also poison completely unreferenced pages (beyond ceil(length/page)) in K and V\\nfor pid in range(7, pages):\\n    vp[pid, :] = float('nan')\\n# also poison block_table entries beyond ceil(length/page) — arbitrary INT32 allowed... but kernel masks by logical<max_prefix so fine. Set to valid garbage:\\ntc2 = tc.clone(); tc2[0, -1] = 3  # still valid range, unused\\n\\nout_pois = run(qc,kc,vc2:=vp,tc2,lc,window)\\nprint(json.dumps({\\n  \\\"window\\\": window, \\\"lo_allowed\\\": lo_allowed,\\n  \\\"clean_finite\\\": bool(torch.isfinite(out_clean).all()),\\n  \\\"pois_finite\\\": bool(torch.isfinite(out_pois).all()),\\n  \\\"nan_count\\\": int(torch.isnan(out_pois).sum()),\\n  \\\"inf_count\\\": int(torch.isinf(out_pois).sum()),\\n  \\\"diff_abs\\\": float((out_pois.double()-out_clean.double()).abs().max()) if torch.isfinite(out_pois).all() else None,\\n}))\\n\", \"expected_signal\": \"NaN in output when V at expired window positions is NaN\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284871,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 802,
+    "prompt_tokens": 14445,
+    "total_tokens": 15247,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8176,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

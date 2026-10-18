@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-75d358e0",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The structured cancellation tests passed (0 violations, worst error ≈0.3× tolerance), and the earlier crash was just my 200000-row tensors exceeding the 131072 row cap. I'll rerun the remaining cases with legal sizes, including tiny subnormal denominators and the value grid.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a6b18afb7a33aa4f",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n\\ndef check(num, den, label):\\n    out = k.run(num.clone().to(dev), den.clone().to(dev))\\n    ref = k.reference(num.cpu(), den.cpu()).to(dev)\\n    err = (out - ref).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    viol = err > tol\\n    ratio = err / tol\\n    worst = ratio.max().item()\\n    detail = {}\\n    if viol.any():\\n        i = int(ratio.argmax()); r, cidx = divmod(i, 2)\\n        detail = {\\\"row\\\": r, \\\"comp\\\": cidx, \\\"num\\\": num[r].tolist(), \\\"den\\\": den[r].tolist(),\\n                  \\\"out\\\": out[r].tolist(), \\\"ref\\\": ref[r].tolist(),\\n                  \\\"err\\\": err.flatten()[i].item(), \\\"tol\\\": tol.flatten()[i].item()}\\n    print(label, {\\\"violations\\\": int(viol.sum()), \\\"components\\\": num.numel(),\\n                  \\\"worst_err_over_tol\\\": worst, \\\"detail\\\": detail})\\n    return int(viol.sum())\\n\\ng = torch.Generator().manual_seed(0)\\ndef fp16_uniform(shape, lo, hi):\\n    return ((torch.rand(shape, generator=g) * (hi - lo) + lo)).clamp(-65504, 65504).to(torch.float16)\\n\\ntotal = 0\\n# random sweeps at extreme magnitudes (size within domain)\\nfor scale in (65504.0, 30000.0, 1.0, 1e-4, 6.1e-5):\\n    num = (torch.randn(131072, 2, generator=g) * scale).clamp(-65504, 65504).to(torch.float16)\\n    den = (torch.randn(131072, 2, generator=g) * scale).clamp(-65504, 65504).to(torch.float16)\\n    z = (den == 0).all(dim=1); den[z, 0] = 1\\n    total += check(num, den, f\\\"random_scale_{scale}\\\")\\n\\n# extreme magnitude quotient: max numerator, subnormal-ish denominator\\nnum = torch.full((1000, 2), 65504.0, dtype=torch.float16)\\nden = torch.full((1000, 2), 6.1e-5, dtype=torch.float16)\\nden[:, 1] = float(torch.tensor(5.96e-8, dtype=torch.float16))\\ntotal += check(num, den, \\\"extreme_magnitude\\\")\\n\\n# subnormal numerators and denominators\\nvals_sub = torch.tensor([5.96e-8, 1.19e-7, 5.96e-7, 6.1e-5], dtype=torch.float16)\\nnum = torch.stack([vals_sub.repeat(250), (-vals_sub).repeat(250)], dim=1)\\nden = torch.stack([vals_sub.flip(0).repeat(250), vals_sub.repeat(250)], dim=1)\\ntotal += check(num, den, \\\"subnormals\\\")\\n\\n# grid of tricky values\\nvals = torch.tensor([0.0, -0.0, 6.1e-5, -6.1e-5, 1e-4, 0.001, -0.001, 1.0, -1.0, 1.5, -2.25,\\n                     100.0, -100.0, 1000.0, -1000.0, 30000.0, -30000.0, 65504.0, -65504.0,\\n                     float(torch.tensor(65504.0/3, dtype=torch.float16))], dtype=torch.float16)\\nA, B = torch.meshgrid(vals, vals, indexing=\\\"ij\\\")\\nnrows = torch.stack([A.flatten(), B.flatten()], dim=1)\\ndens = torch.tensor([[65504.0, -65504.0], [1.0, 6.1e-5], [30000.0, 30000.0], [-1000.0, 0.5],\\n                     [6.1e-5, 6.1e-5], [65504.0, float(torch.tensor(65504.0/3, dtype=torch.float16))],\\n                     [1.0, 1.0], [1.0, -1.0]], dtype=torch.float16)\\nnum = nrows.repeat(len(dens), 1)\\nden = dens.repeat(len(nrows), 1)\\ntotal += check(num, den, \\\"grid\\\")\\n\\n# make_inputs example and N=1\\nn, d = k.make_inputs()\\ntotal += check(n, d, \\\"make_inputs_example\\\")\\ntotal += check(torch.tensor([[1.0, -2.0]], dtype=torch.float16),\\n               torch.tensor([[3.0, 4.0]], dtype=torch.float16), \\\"single_row\\\")\\n\\nprint(\\\"TOTAL_VIOLATIONS\\\", total)\\nimport json\\nprint(json.dumps({\\\"total_violations\\\": total}))\\n\", \"expected_signal\": \"componentwise tolerance violations > 0 somewhere in the contract domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The structured cancellation tests passed (0 violations, worst ratio 0.30). Interesting — worst 0.3 not near 1. Need to run remaining tests with size ≤131072. Also note the worst ratio ~0.3 across scales — that's the truncation-level error; scaling all components doesn't increase the ratio since errors scale. Actually cancellation can push error relative to tiny target up. But observed 0.3 max. Let me rerun corrected probe with sizes capped, and stronger cancellation targeting (make real numerator exactly cancelling products? a*c = -b*d exactly: then target real = 0, and fp32 error from product rounding ~ ulp(a*c) up to ~2048 for 65504^2 ≈ 2^31, ulp ~ 256; divided by scale ~ 65504^2*2 → error quotient ~ 256/8.6e9 ≈ 3e-8 < 1e-7. Hmm. So error/tol: numerator abs error up to ~2*ulp(2^31)=512; scale ~ c²+d² ~ 8.6e9 → error ~6e-8 < 1e-7 tol. So maybe it always passes? The bound: product ulp error ≤ (2^-24)*|a*c| ≤ (2^-24)*|a||c|. Error in sum ≤ 2^-24*(|ac|+|bd|) ≤ 2^-24*|a||c|(1+|b/d|)... Actually |ac|+|bd| ≤ sqrt(a²+b²)*sqrt(c²+d²) = |num||den|. So numerator error ≤ 2^-24*|num||den|. Quotient = num/den_conj basically; error ≤ 2^-24*|num||den|/|den|² = 2^-24*|num|/|den| = 2^-24*|target| approx. Plus division rounding 2^-24*|target|. Total ~ 2^-23*|target| ≈ 1.2e-7*|target| — hmm, vs 5e-7*|target| rel tolerance + 1e-7 abs. Actually each fp32 op rounds to 2^-24 rel; 3 ops (mul, mul, add) → ~3*2^-24|target| ≤ 1.8e-7*|target|, plus division 2^-24, plus scale error. Scale error: relative 2^-23 in scale → 2^-23 rel error in output. Total ~ 3e-7 rel — borderline vs 5e-7. Worst observed 0.3 of tol. Probably fine. Also FP32 div_rn is correctly rounded. So kernel is likely accurate enough. The observed worst 0.299 suggests passes always.\n\nRun final probe with all cases fixed (size ≤131072), including extreme subnormal denominator case (den = 6.1e-5, 5.96e-8 — wait 5.96e-8 is subnormal smallest; c*c may underflow to 0 in fp32? 5.96e-8² = 3.6e-15, fine in fp32). Also denominator with subnormals: scale computed fine. Also a=65504, c=65504: ac = 4.29e9 rounds fine in fp32 (max 3.4e38).\n\nRun one comprehensive probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306532,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1975,
+    "prompt_tokens": 22893,
+    "total_tokens": 24868,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 746,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6536,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

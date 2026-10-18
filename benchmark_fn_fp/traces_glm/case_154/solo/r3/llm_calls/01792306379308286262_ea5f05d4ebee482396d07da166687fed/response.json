@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-a60e18b5",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The t9 probe failed due to my own bug: I built the numerator with 4 columns instead of 2. I'll fix and rerun the corner-case probe (extrema, subnormals, signed zeros, input preservation).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-97a24d4ea81829d5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys, random\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\ndev = \\\"cuda\\\"\\nrandom.seed(0)\\nvals = [0.0, -0.0, 65504.0, -65504.0, 6.104e-05, -6.104e-05, 6.0e-08, -6.0e-08, 1.0, -1.0, 5.0e-08, 5.0e-05]\\nrows = []\\nfor a in vals:\\n    for b in vals:\\n        for c in vals:\\n            for d in vals:\\n                if c == 0 and d == 0: continue\\n                rows.append((a, b, c, d))\\nrandom.shuffle(rows)\\nrows = rows[:20000]\\nnum = torch.tensor([(r[0], r[1]) for r in rows], dtype=torch.float16, device=dev)\\nden = torch.tensor([(r[2], r[3]) for r in rows], dtype=torch.float16, device=dev)\\nout = kernel.run(num, den)\\nref = kernel.reference(num.cpu(), den.cpu()).to(dev).double()\\nratio = (out.double() - ref).abs() / (1e-7 + 5e-7 * ref.abs())\\nres = {\\n  \\\"n\\\": len(rows), \\\"max_ratio\\\": float(ratio.max()),\\n  \\\"violations\\\": int((ratio > 1.0).sum()),\\n  \\\"output_finite\\\": bool(torch.isfinite(out).all()),\\n}\\nnum2, den2 = kernel.make_inputs(dev, size=1000, seed=1)\\nnumc, denc = num2.clone(), den2.clone()\\nkernel.run(num2, den2)\\nres[\\\"inputs_preserved\\\"] = bool(torch.equal(num2, numc) and torch.equal(den2, denc))\\n# shared backing storage + storage offset view\\nbase = torch.randn(2*3000, generator=torch.Generator().manual_seed(3)).to(torch.float16).to(dev)\\nnumv = base[:5000].view(2500, 2)\\ndenv = base[500:5500].view(2500, 2)  # same storage, overlapping\\noutv = kernel.run(numv, denv)\\nrefv = kernel.reference(numv.cpu(), denv.cpu()).to(dev).double()\\nrv = (outv.double() - refv).abs() / (1e-7 + 5e-7 * refv.abs())\\nres[\\\"shared_view_max_ratio\\\"] = float(rv.max())\\nres[\\\"shared_view_violations\\\"] = int((rv > 1.0).sum())\\nif res[\\\"violations\\\"] > 0 or res[\\\"shared_view_violations\\\"] > 0:\\n    i = int(ratio.flatten().argmax()); r, cc = divmod(i, 2)\\n    res[\\\"worst_row\\\"] = [float(num[r,0]), float(num[r,1]), float(den[r,0]), float(den[r,1]), cc]\\nprint(json.dumps(res))\", \"expected_signal\": \"max_ratio > 1, non-finite output, or inputs not preserved on corner-case legal inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The t9 probe failed: torch.tensor with -0.0 etc.? Error: shape must be [N,2] — probably because the tensor construction failed? Actually error says ndim==2... rows empty? No — likely `torch.tensor(rows, ...)` with rows of tuples of floats with -0.0... Hmm, actually the issue: 12^4 = 20736 combos minus c==d==0 cases; rows[:50000] fine. Why shape failure? Possibly `torch.tensor` built shape (20736,4)? No, each row is (a,b,c,d) → num has shape [N,4]? Wait: num = torch.tensor(rows) with rows being (a,b,c,d) — that's 4 columns! Yes, bug in probe: numerator should be (a,b). So fix and rerun t9 probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306381,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 934,
+    "prompt_tokens": 24174,
+    "total_tokens": 25108,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 179,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10392,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,120 @@
+[
+  {
+    "created_at": "2026-10-18T08:01:23Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T08:01:46Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t7_probe.py",
+              "sha256": "22baae3dcbd718eb9420a34ea43900f6f0cc91c352dab0d8fc1364c6ded4b756"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t7_stdout.txt",
+              "sha256": "0ff94b9f477311ceed98266c06260db72d5c5d424bd32ddd0dab054ddaed4621"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t7_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t7_json_result.json",
+              "sha256": "f600177859be9bd37e329a703f3bedffd757d9d63cb4f152ab91a4d21d10987c"
+            }
+          ],
+          "duration_s": 6.49863,
+          "exit_code": 0,
+          "expected_signal": "crafted N=32 noncommuting input mismatches reference in steps 24..31 (exact comparison), confirming down-sweep order bug",
+          "first_mismatch_step": 24,
+          "json_parse_error": null,
+          "json_result": {
+            "crafted_N32_exact_match": false,
+            "crafted_fail_details": {
+              "N32_crafted": {
+                "first_mismatch_row_step": [
+                  0,
+                  24
+                ],
+                "n_mismatch_elements": 32,
+                "out_step16": [
+                  -1559,
+                  -1304
+                ],
+                "out_step24": [
+                  2668,
+                  498
+                ],
+                "ref_step16": [
+                  -1559,
+                  -1304
+                ],
+                "ref_step24": [
+                  -13276,
+                  -11414
+                ]
+              }
+            },
+            "metric": "exact elementwise equality (atol=rtol=0) vs sequential int64 reference",
+            "random_N32_mismatch_counts_by_seed": {
+              "0": 27,
+              "1": 41,
+              "2": 20,
+              "3": 42,
+              "4": 38
+            }
+          },
+          "mismatch_count_random_seeds": {
+            "seed0": 27,
+            "seed1": 41,
+            "seed2": 20,
+            "seed3": 42,
+            "seed4": 38
+          },
+          "n_mismatch_elements_crafted": 32,
+          "out_step16_matches": true,
+          "out_step24": [
+            2668,
+            498
+          ],
+          "ref_step24": [
+            -13276,
+            -11414
+          ],
+          "stderr": "",
+          "stdout": "{\"metric\": \"exact elementwise equality (atol=rtol=0) vs sequential int64 reference\", \"crafted_N32_exact_match\": false, \"crafted_fail_details\": {\"N32_crafted\": {\"first_mismatch_row_step\": [0, 24], \"n_mismatch_elements\": 32, \"out_step24\": [2668, 498], \"ref_step24\": [-13276, -11414], \"out_step16\": [-1559, -1304], \"ref_step16\": [-1559, -1304]}}, \"random_N32_mismatch_counts_by_seed\": {\"0\": 27, \"1\": 41, \"2\": 20, \"3\": 42, \"4\": 38}}\n",
+          "timed_out": false,
+          "timeout_s": 180
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Crafted N=32 input (chunks 0-1 use A=[[1,1],[0,1]], chunk 2 uses A=[[1,0],[1,1]], noncommuting chunk summaries) matches the sequential int64 reference exactly through step 23 but first mismatches at row 0, step 24 (out [2668,498] vs ref [-13276,-11414]), with 32 mismatched elements confined to the chunk-3 (steps 24-31) region. Random full-range int16 inputs at N=32 also mismatch in 20-42 elements across all 5 seeds. This matches the predicted signature of the down-sweep composition-order bug in _exclusive_chunks (line 55: _compose(la..., pa...) applies left child before parent exclusive prefix instead of after). Metric: exact elementwise equality (atol=rtol=0) vs sequential int64 reference, the contract-authoritative metric.",
+        "supports": "confirmed",
+        "tool_event_id": "t7"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "_compose(left,right) applies left first (\"The left interval precedes the right interval\"), and the up-sweep and tl.associative_scan both call it in (earlier, later) order. But the down-sweep calls _compose(la..., pa...) where la is the left child's interval and pa is the parent's exclusive prefix; time order is parent-prefix then left-child, so the correct call is _compose(pa..., la...). For C=4 with 4 real chunks, at stride 1 the pair (2,3) has pa = T01 (chunk 0-1 summary, non-identity) and la = M2, so chunk 3's exclusive prefix becomes T01\u2218M2 instead of M2\u2218T01 \u2014 wrong whenever the summaries don't commute (easy with {-1,0,1} matrices). For C<=2 and 3-chunk cases pa is identity or the reversed value lands on padding lanes, so the bug only surfaces at N in [25,32].",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Every output element must equal state = matrix[row,step] @ state + bias[row,step] exactly (atol=rtol=0), and the domain explicitly allows EVERY combination of legal values with 1<=N<=32, including noncommuting matrices \u2014 so N=32 (4 chunks) with noncommuting chunk summaries is a legal in-scope input."
+      }
+    ],
+    "scope_rationale": "The contract requires exact output for every legal input, including all N in [1,32] and noncommuting matrices; N in [25,32] gives chunks=4, padded=4, which is inside the stated domain.",
+    "statement": "For legal inputs with N in [25,32] (4 chunks, C=4), the output for steps 24..31 of each row is wrong whenever the composed summary of chunks 0-1 does not commute with chunk 2's summary, because _exclusive_chunks' down-sweep composes the parent exclusive prefix and left-child interval in reversed time order (line 55: _compose(la..., pa...) instead of _compose(pa..., la...)).",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T08:01:46Z"
+  }
+]

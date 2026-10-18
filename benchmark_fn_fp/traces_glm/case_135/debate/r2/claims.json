@@ -1,0 +1,126 @@
+[
+  {
+    "created_at": "2026-10-18T01:20:38Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:21:07Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t8_probe.py",
+              "sha256": "6e18087666f714f583a6dfe2f4b1f613da893d750ba2338c827fdbf3658af5b6"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t8_stdout.txt",
+              "sha256": "32ed932e35618600c768d76453e2596d04391a4fe12e5a24aec3a873c2cfee5d"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t8_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t8_json_result.json",
+              "sha256": "93feab71b9d6246126eb51caeed95b4c7b2f4f146422e0a0bc7b903e6bebc00d"
+            }
+          ],
+          "duration_s": 5.942802,
+          "err_at_65504": 4.291417894708438e-06,
+          "exit_code": 0,
+          "expected_signal": "max absolute error over all finite FP16 values vs FP64 target, compared against 1e-6 tolerance; also location of the max",
+          "json_parse_error": null,
+          "json_result": {
+            "err_at_65504": 4.291417894708438e-06,
+            "err_at_neg65504": 4.291417894708438e-06
+          },
+          "max_abs_err": 4.701679674146142e-06,
+          "n_values": 63488,
+          "n_violations": 20050,
+          "stderr": "",
+          "stdout": "{\"n_values\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"n_violations\": 20050, \"worst_x\": 1640.0, \"worst_out\": 0.9999951124191284, \"worst_target\": 0.9999998140988026, \"top10_x_err_out_tgt\": [[1640.0, 4.701679674146142e-06, 0.9999951124191284, 0.9999998140988026], [-1640.0, 4.701679674146142e-06, -0.9999951124191284, -0.9999998140988026], [102.4375, 4.687473057041203e-06, 0.9999476671218872, 0.9999523545949442], [-102.4375, 4.687473057041203e-06, -0.9999476671218872, -0.9999523545949442], [823.0, 4.685829792960838e-06, 0.9999945759773254, 0.9999992618071184], [-823.0, 4.685829792960838e-06, -0.9999945759773254, -0.9999992618071184], [822.5, 4.6849320222142055e-06, 0.9999945759773254, 0.9999992609093477], [-822.5, 4.6849320222142055e-06, -0.9999945759773254, -0.9999992609093477], [821.5, 4.683131560434539e-06, 0.9999945759773254, 0.9999992591088859], [-821.5, 4.683131560434539e-06, -0.9999945759773254, -0.9999992591088859]], \"extrema_err\": null}\n{\"err_at_65504\": 4.291417894708438e-06, \"err_at_neg65504\": 4.291417894708438e-06}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance": 1e-06,
+          "worst_target": 0.9999998140988026,
+          "worst_x": 1640.0
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 values through the kernel (k.run) vs FP64 reference (k.reference): max abs error 4.701679674146142e-06 at x=+/-1640, far above the 1e-6 fixed absolute tolerance; 20050 values violate the tolerance. Even the extrema x=+/-65504 give 4.29e-06 error. This confirms c1: the two-iteration fast inverse square root fails the contract's fixed 1e-6 absolute tolerance for legal finite FP16 inputs, in both large-|x| and intermediate regimes.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The classic 0x5F3759DF seed plus two Newton-Raphson iterations yields residual relative error on the order of 1.5e-6 (error after 2 iterations \u2248 1.5\u00b7e1\u00b2 with e1 \u2248 0.00175), and since output = x/sqrt(1+x\u00b2) approaches magnitude 1 as |x| grows (e.g., x=\u00b165504 gives target \u2248 0.99999999988), the absolute error can exceed the fixed 1e-6 tolerance. make_inputs (std ~8) does not sample this regime, so a benign probe would not expose it.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with relative tolerance zero, and 'EVERY finite FP16 value is legal, including ... both extrema +/-65504'; correctness is 'one verdict for the implementation' across the entire legal domain, so any single legal x with abs error > 1e-6 is a contract violation."
+      }
+    ],
+    "scope_rationale": "The contract requires abs(actual[i]-target[i]) <= 1e-6 for EVERY finite FP16 value, including both extrema +/-65504, with one verdict for the whole implementation. Any single legal input (e.g., large |x| where the output approaches 1) exceeding 1e-6 absolute error violates the stated contract.",
+    "statement": "The two-Newton-iteration fast inverse square root (seed 0x5F3759DF) fails the contract's fixed 1e-6 absolute tolerance for some legal finite FP16 input x, with the worst case expected in the large-|x| regime (target near 1) where |x/sqrt(1+x\u00b2)|\u00b7(relative rsqrt error ~1.5e-6) > 1e-6.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:21:07Z"
+  },
+  {
+    "created_at": "2026-10-18T01:20:38Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:21:07Z",
+        "data": {
+          "err_at_102": 4.687473057041203e-06,
+          "err_at_65504": 4.291417894708438e-06,
+          "err_at_823": 4.685829792960838e-06,
+          "max_abs_err": 4.701679674146142e-06,
+          "max_x": 1640.0,
+          "n_values": 63488,
+          "n_violations": 20050,
+          "top10_x": [
+            1640.0,
+            -1640.0,
+            102.4375,
+            -102.4375,
+            823.0,
+            -823.0,
+            822.5,
+            -822.5,
+            821.5,
+            -821.5
+          ]
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Same exhaustive sweep of all 63488 finite FP16 values (probe t8) confirms c2: the error is non-monotonic in |x|. The global maximum abs error 4.70e-06 occurs at intermediate x=+/-1640, not at the extrema (+/-65504 gives 4.29e-06); x=+/-102.4375 and +/-823 are also near the max (4.69e-06, 4.69e-06). A probe restricted to extrema or random sampling would have missed the true worst case; the exhaustive sweep was required and located it.",
+        "supports": "confirmed",
+        "tool_event_id": "t8"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "The Newton-iteration relative error is not uniform across the exponent/mantissa range of squared_length \u2208 [1, ~4.3e9]; combined with FP32 rounding of squared_length = 1.0+x*x (relative ~6e-8 for large x) and the final x*inverse_length multiply, the worst-case absolute error may occur at intermediate |x| rather than only at the extremes, so a probe restricted to extrema could miss the true maximum. An exhaustive sweep over the ~65504 finite FP16 values is cheap and definitive.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The tolerance must hold 'throughout the entire legal domain' for every finite FP16 value, one verdict for the whole implementation; 'No particular inverse-square-root seed, number of refinement steps, or intermediate rounding is part of the mathematical target', so intermediate FP32 rounding effects are subsumed under the single 1e-6 absolute criterion."
+      }
+    ],
+    "scope_rationale": "The contract mandates the 1e-6 absolute tolerance for every finite FP16 value throughout the entire legal domain (one verdict for the implementation), so the decisive evidence is the max abs error over an exhaustive sweep of all ~65504 finite FP16 values, not merely the extremes or a random sample.",
+    "statement": "The maximum absolute error of the kernel across the full finite FP16 grid is non-monotonic in |x| and must be located by an exhaustive sweep of all finite FP16 values; a violation may appear at intermediate magnitudes (where FP32 rounding of 1+x*x compounds with the two-iteration rsqrt error) even if the extrema pass.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:21:11Z"
+  }
+]

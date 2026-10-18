@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-b0d4f456",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run three independent probes in parallel: per-N structured input correctness (c1), extreme/cancellation accuracy (c2), and input preservation/aliasing with nonzero offset (c3).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-977941dc1dcf901c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, os\\nsys.path.insert(0, os.environ.get(\\\"CASE_DIR\\\", \\\"/root/cases/case_163\\\"))\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nworst = {\\\"max_ratio\\\": 0.0, \\\"case\\\": None}\\nfail = False\\nfor N in (64, 128, 256):\\n    B = min(N // 2 + 1, 256)  # one row per tone bin k=0..N/2\\n    rows = []\\n    for k in range(N // 2 + 1):\\n        j = torch.arange(N, dtype=torch.float64)\\n        tone = torch.cos(2 * torch.pi * j * k / N)  # exact real tone at bin k\\n        rows.append(tone)\\n    rows = torch.stack(rows).to(torch.float16).to(dev)\\n    # clamp to legal batch\\n    if rows.shape[0] > 256:\\n        rows = rows[:256]\\n    out = kernel.run(rows)\\n    ref = torch.fft.rfft(rows.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n    ref = torch.stack((ref.real, ref.imag), dim=-1)\\n    err = (out.double() - ref).abs()\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    viol = err > tol\\n    ratio = (err / tol).max().item()\\n    if ratio > worst[\\\"max_ratio\\\"]:\\n        worst = {\\\"max_ratio\\\": ratio, \\\"case\\\": f\\\"tone_N{N}\\\"}\\n    # also alternating-sign rows and impulse rows\\n    for name, mat in [(\\\"alt\\\", torch.stack([torch.tensor([(-1)**(i+1) for i in range(N)], dtype=torch.float64) for _ in range(4)])),\\n                      (\\\"imp\\\", torch.stack([torch.eye(N)[i] for i in range(4)]))]:\\n        m = mat.to(torch.float16).to(dev)\\n        out = kernel.run(m)\\n        ref = torch.fft.rfft(m.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n        ref = torch.stack((ref.real, ref.imag), dim=-1)\\n        err = (out.double() - ref).abs()\\n        tol = 1e-4 + 1e-6 * ref.abs()\\n        v = int((err > tol).sum().item())\\n        r = (err / tol).max().item()\\n        if v > 0:\\n            fail = True\\n            print(f\\\"VIOLATION {name} N={N} count={v}\\\", file=sys.stderr)\\n        if r > worst[\\\"max_ratio\\\"]:\\n            worst[\\\"max_ratio\\\"] = r; worst[\\\"case\\\"] = f\\\"{name}_N{N}\\\"\\n    nv = int((err > tol).sum().item()) if False else 0\\n    print(f\\\"N={N} done\\\")\\nprint({\\\"fail\\\": fail, \\\"worst\\\": worst})\\nimport json\\nprint(json.dumps({\\\"claim\\\": \\\"c1\\\", \\\"fail\\\": fail, \\\"worst_ratio\\\": worst}))\", \"expected_signal\": \"Per-bin tone/alternating/impulse errors vs tolerance across N=64,128,256\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9c828729f4717311",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, os, json\\nsys.path.insert(0, os.environ.get(\\\"CASE_DIR\\\", \\\"/root/cases/case_163\\\"))\\nimport kernel\\ndev = \\\"cuda\\\"\\nworst = 0.0; worst_case = None; fails = []\\nfor N in (64, 128, 256):\\n    cases = {}\\n    cases[\\\"const65504\\\"] = torch.full((4, N), 65504.0)\\n    cases[\\\"alt65504\\\"] = torch.stack([torch.tensor([65504.0 if (i%2==0) else -65504.0 for i in range(N)], dtype=torch.float64) for _ in range(4)])\\n    cases[\\\"mix\\\"] = torch.randn(8, N, generator=torch.Generator().manual_seed(1))\\n    mix = cases[\\\"mix\\\"].abs() * 65504\\n    mix[0, 3] = 65504.0; mix[1, 5] = -65504.0\\n    mix[2, :] = 6.0e-8  # subnormal fp16? use smallest subnormal\\n    mix[3, :] = torch.where(torch.arange(N) % 2 == 0, 65504.0, -65504.0)\\n    cases[\\\"mix\\\"] = mix\\n    cases[\\\"subnorm\\\"] = torch.full((2, N), 5.96e-8)\\n    for name, m in cases.items():\\n        m16 = m.to(torch.float16).to(dev)\\n        out = kernel.run(m16)\\n        ref = torch.fft.rfft(m16.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n        ref = torch.stack((ref.real, ref.imag), dim=-1)\\n        err = (out.double() - ref).abs()\\n        tol = 1e-4 + 1e-6 * ref.abs()\\n        v = int((err > tol).sum().item())\\n        r = (err / tol).max().item()\\n        if v > 0:\\n            fails.append({\\\"case\\\": name, \\\"N\\\": N, \\\"count\\\": v, \\\"max_ratio\\\": r,\\n                          \\\"max_abs_err\\\": err.max().item()})\\n        if r > worst:\\n            worst = r; worst_case = f\\\"{name}_N{N}\\\"\\n        nonfinite = int((~torch.isfinite(out)).sum().item())\\n        if nonfinite:\\n            fails.append({\\\"case\\\": name, \\\"N\\\": N, \\\"nonfinite\\\": nonfinite})\\nprint(json.dumps({\\\"claim\\\": \\\"c2\\\", \\\"fails\\\": fails, \\\"worst_ratio\\\": worst, \\\"worst_case\\\": worst_case}))\", \"expected_signal\": \"Extreme FP16 and cancellation inputs stay within tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-a3e72b3b65b149b5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, sys, os, json\\nsys.path.insert(0, os.environ.get(\\\"CASE_DIR\\\", \\\"/root/cases/case_163\\\"))\\nimport kernel\\ndev = \\\"cuda\\\"\\nres = []\\nfor N in (64, 128, 256):\\n    # nonzero storage offset: slice of a larger buffer, contiguous view\\n    big = torch.randn((300, N + 33), generator=torch.Generator().manual_seed(2)).to(torch.float16).to(dev)\\n    view = big[5:5+8, 3:3+N]  # contiguous? rows stride N+33 -> not contiguous; need contiguous slice\\n    # use a flat storage slice instead\\n    flat = torch.randn(4096, generator=torch.Generator().manual_seed(3)).to(torch.float16).to(dev)\\n    sub = flat[17:17 + 8 * N].view(8, N)  # contiguous, nonzero offset\\n    sub_c = sub.clone()\\n    before = flat.clone()\\n    out = kernel.run(sub)\\n    torch.cuda.synchronize()\\n    storage_preserved = torch.equal(flat, before)\\n    out_sep = out.data_ptr() != flat.data_ptr() and out.storage_offset() == 0 and out.is_contiguous()\\n    # correctness under offset too\\n    ref = torch.fft.rfft(sub.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n    ref = torch.stack((ref.real, ref.imag), dim=-1)\\n    err = (out.double() - ref).abs()\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    ok = int((err > tol).sum().item()) == 0\\n    res.append({\\\"N\\\": N, \\\"storage_preserved\\\": bool(storage_preserved),\\n                \\\"out_sep\\\": bool(out_sep), \\\"correct\\\": bool(ok),\\n                \\\"out_shape\\\": list(out.shape), \\\"out_dtype\\\": str(out.dtype)})\\nprint(json.dumps({\\\"claim\\\": \\\"c3\\\", \\\"results\\\": res}))\", \"expected_signal\": \"Input storage preserved byte-identical and output is separate fresh storage for nonzero-offset inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes at once for c1, c2, c3."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309430,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1795,
+    "prompt_tokens": 26382,
+    "total_tokens": 28177,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 15,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

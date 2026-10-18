@@ -1,0 +1,789 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_154",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise complex division on finite binary16 components.\n\nOriginal synthetic Triton implementation of standard complex arithmetic.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\n    b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\n    c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\n    d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\n    scale = c * c + d * d\n    real_numerator = a * c + b * d\n    imag_numerator = b * c - a * d\n    real = tl.div_rn(real_numerator, scale)\n    imag = tl.div_rn(imag_numerator, scale)\n    tl.store(OUT + 2 * index, real, mask=active)\n    tl.store(OUT + 2 * index + 1, imag, mask=active)\n\n\ndef validate_inputs(numerator, denominator, require_cuda=True):\n    \"\"\"Enforce the complete public tensor and component domain.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for value in (numerator, denominator):\n        require(type(value) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(value.layout == torch.strided and value.is_contiguous(), \"contiguous strided input required\")\n        require(not value.requires_grad and not value.is_inference(), \"ordinary non-gradient input required\")\n        require(not value.is_neg() and not value.is_conj(), \"logical view flags are outside this domain\")\n        require(not require_cuda or value.is_cuda, \"CUDA input required by run\")\n        require(value.dtype == torch.float16, \"float16 input required\")\n        require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \"shape must be [N,2], 1<=N<=131072\")\n        require(bool(torch.isfinite(value).all()), \"all input components must be finite\")\n    require(numerator.shape == denominator.shape and numerator.device == denominator.device, \"inputs must have the same shape and device\")\n    require(bool((denominator != 0).any(dim=1).all()), \"each complex denominator must be nonzero\")\n    return {\"valid\": True, \"size\": numerator.shape[0]}\n\n\ndef run(numerator, denominator):\n    \"\"\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\"\"\"\n    validate_inputs(numerator, denominator)\n    n = numerator.shape[0]\n    with torch.cuda.device(numerator.device):\n        output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\n        _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\n                                     N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(numerator, denominator):\n    \"\"\"Direct real formulas in FP64; supports CPU tensors for comparison.\"\"\"\n    validate_inputs(numerator, denominator, require_cuda=False)\n    a, b = numerator.to(torch.float64).unbind(dim=1)\n    c, d = denominator.to(torch.float64).unbind(dim=1)\n    scale = c * c + d * d\n    return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples, not restrictions on the legal component values.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\n    denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\n    zero = (denominator == 0).all(dim=1)\n    denominator[zero, 0] = 1\n    return numerator.to(device), denominator.to(device)\n",
+    "passed": null,
+    "problem_text": "Compute the elementwise mathematical complex quotient of two input tensors.\n\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\n\n    real = (a*c + b*d) / (c*c + d*d)\n    imag = (b*c - a*d) / (c*c + d*d).\n\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\n\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\n\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\n\nInputs and complete public domain:\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\n\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\n\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\n\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_154",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T06:51:26Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T06:52:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b0ea819acf77c0a7731cd8111e5ef124ad0861d80650910a8b8d058fe3bd696a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "695c24a7af2648efd1330fa4c9c4e2ea18a078548946c26f021e55aa4c4e7ebd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "7b7c3b0d11a88eab4cd32652089fd225517f6884f4bc432fdf514826f2661b8b"
+              }
+            ],
+            "duration_s": 10.074453,
+            "exit_code": 0,
+            "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "trials": 2457600,
+              "violations": 0,
+              "worst": null,
+              "worst_excess_ratio": -1.0
+            },
+            "stderr": "",
+            "stdout": "num positive fp16 values: 31744\n{\"trials\": 2457600, \"violations\": 0, \"worst_excess_ratio\": -1.0, \"worst\": null}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "trials": 2457600,
+            "violation_count": 0,
+            "worst_excess_ratio": -1.0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "2,457,600 random rows drawn from the full finite FP16 value grid (subnormals, signed values, extrema, plus structured cancellation cases b*c - a*d = u*(v1-v2) with adjacent grid values) produced zero violations of the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target) against the exact FP64 reference. Combined with the analysis that fp16\u00d7fp16 products are exact in fp32 and IEEE fp32 add/div_rn are correctly rounded (relative error \u2264 ~3\u00b72^-24 \u2248 1.8e-7 < 5e-7, plus 1e-7 absolute slack), the FP32 numerator-cancellation hypothesis does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "fp16\u00d7fp16 products are exact in fp32, but their sum/difference rounds to fp32; if the exact real (or imaginary) numerator is tiny relative to the larger term (cancellation factor >~8), the absolute rounding error in the numerator divided by the result exceeds the contract's abs(actual-target) <= 1e-7 + 5e-7*abs(target) componentwise tolerance. The FP64 reference computes exact math, so this is a real discrepancy.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "EVERY combination of finite FP16 component values is legal... No other magnitude, conditioning, distribution, seed or correlation restriction applies. The tolerance is abs(actual - target) <= 1e-7 + 5e-7 * abs(target) compared per component."
+        }
+      ],
+      "scope_rationale": "The contract declares every finite FP16 component combination legal (including cancellation-prone ones) and requires the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); the reference is exact FP64 arithmetic on those values.",
+      "statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T06:52:54Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_154",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_154"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_154"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_154"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_154",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 35.041817499000004,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll analyze the kernel: it computes the naive complex-division formula in FP32. Since fp16\u00d7fp16 products are exact in fp32, the main risk is rounding in `a*c + b*d` (or `b*c - a*d`) when there is cancellation, which can exceed the tight 5e-7 relative tolerance. I'll record that claim and probe empirically.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "fp16\u00d7fp16 products are exact in fp32, but their sum/difference rounds to fp32; if the exact real (or imaginary) numerator is tiny relative to the larger term (cancellation factor >~8), the absolute rounding error in the numerator divided by the result exceeds the contract's abs(actual-target) <= 1e-7 + 5e-7*abs(target) componentwise tolerance. The FP64 reference computes exact math, so this is a real discrepancy.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "EVERY combination of finite FP16 component values is legal... No other magnitude, conditioning, distribution, seed or correlation restriction applies. The tolerance is abs(actual - target) <= 1e-7 + 5e-7 * abs(target) compared per component."
+              }
+            ],
+            "scope_rationale": "The contract declares every finite FP16 component combination legal (including cancellation-prone ones) and requires the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); the reference is exact FP64 arithmetic on those values.",
+            "statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 35.042,
+        "input_tokens": 9566,
+        "output_tokens": 2245
+      }
+    },
+    {
+      "duration_s": 17.890366791000005,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll test the cancellation hypothesis with adversarial FP16 inputs where the numerator nearly cancels.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport torch, sys, json, os\nsys.path.insert(0, \"/root/cases/case_154\")\nimport kernel\n\ndev = \"cuda\"\ntorch.manual_seed(0)\n\nrows = []\n# Construct cancellation: real numerator a*c + b*d ~ 0 exactly or tiny\n# pick a*c = b*d (exact in fp16) => real numerator exactly 0 (harmless)\n# better: a*c + b*d small but products huge relative => rounding error\n# e.g. a=1e4, c=1e4 product 1e8; b,d chosen so b*d = -(a*c - eps). But fp16 quantizes eps.\n# Use imag numerator b*c - a*d with b*c and a*d nearly equal.\ndef add(a,b,c,d):\n    rows.append((a,b,c,d))\n\n# systematic cancellation: for fp16 values, b*c - a*d exactly representable? Try a/b ratio approximating c... \n# construct: let u,v be fp16. set a=u, d=v, b=u, c=v -> imag num = u*v - u*v =0 exact.\n# Instead: b = u, c = v1; a = u, d = v2 with v1,v2 adjacent fp16 values: num = u*(v1-v2)\n# v1-v2 = 1 ulp of v. num = u*ulp(v). kernel fp32: u*v1 exact, u*v2 exact, subtraction exact (both fp32 representable, difference maybe subnormal fp32? u*ulp(v) exact in fp32? u<=65504, ulp(v)<=64 => product <= ~4.2e6, representable). Actually both products exact, diff of two exact fp32 numbers is exact if representable. u*v1 - u*v2 = u*(v1-v2); |u*(v1-v2)| may be subnormal? no, it's >= u*min_ulp. Exact if within fp32 precision: difference of two fp32s is exactly representable when close (Sterbenz) or small; generally fp32 has 24 bits; products need <=11 bits each; difference needs <= 22 bits -> exact. So this path is exact.\n# The real error source: division rounding (div_rn, 0.5 ulp) and scale computation c*c+d*d rounding.\n# Cancellation case where fp32 sum of products is NOT exact: a*c + b*d with opposite signs and different exponents -> rounding to 24 bits of a value that needs up to 22 bits -> exact actually. Hmm products are each <= 2^22-ish in ulps... products of two 11-bit significands need 22 bits; sum of two needs up to 23 bits (or more with exponent spread). Exponent spread -> rounding.\n# Classic failing case: real num small relative to terms with exponent spread, e.g. a*c = 65504*65504 ~ 4.29e9 (needs 2 bits + exponent) and b*d = -(4.29e9 - tiny). tiny must be fp16-quantizable difference of products... \n# Simplest robust approach: random search over all fp16 values for max violation.\n\n# Build a large random search over fp16 values in a reasonable range plus systematic edge values\nimport itertools, random\nrandom.seed(0)\n\nvals = set()\n# fp16 positive values\nx = torch.tensor([0.0])\nfor e in range(-14, 16):\n    for m in range(1024):\n        pass\n# easier: generate fp16 grid pieces\ngrids = []\nfor scale_exp in range(-14, 16):\n    base = 2.0**scale_exp\n    mant = torch.arange(1024, dtype=torch.float32)/1024.0\n    g = (1+mant)*base\n    grids.append(g)\npos = torch.cat(grids)  # all positive normal fp16\npos = pos.to(torch.float16)\nextra = torch.tensor([0.0, 5.96e-8, 6.1e-5, 1e-3, 1, 2, 4, 100, 1000, 65504, 6.0976e-5, 5.9605e-8], dtype=torch.float16)\npos_all = torch.unique(torch.cat([pos, extra.to(torch.float32).to(torch.float16)]))\nneg_all = torch.cat([-pos_all, pos_all])\n\nworst = None\nworst_info = None\ncount_viol = 0\ntrials = 0\n\ndef check(num, den):\n    global worst, worst_info, count_viol, trials\n    n = num.shape[0]\n    out = kernel.run(num, den)\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\n    err = (out - ref).abs()\n    tol = 1e-7 + 5e-7*ref.abs()\n    viol = err > tol\n    if viol.any():\n        cnt = int(viol.sum())\n        count_viol += cnt\n        ratio = ((err - tol)/tol)[viol].max().item()\n        if worst is None or ratio > worst:\n            worst = ratio\n            idx = int(viol.nonzero()[0,0])\n            worst_info = dict(row=idx, num=num[idx].tolist(), den=den[idx].tolist(),\n                              out=out[idx].tolist(), ref=ref[idx].tolist(),\n                              err=err[idx].tolist(), tol=tol[idx].tolist())\n    trials += n\n    return int(viol.sum())\n\n# random fp16 combos, bias to cancellation-prone\nfor it in range(300):\n    n = 4096\n    # sample from pos_all & negatives, biased toward similar magnitudes in numerator vs denominator rows\n    a = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    b = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    c = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    d = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    num = torch.stack([a,b],1).to(torch.float16)\n    den = torch.stack([c,d],1).to(torch.float16)\n    # ensure denominator nonzero rows\n    z = (den==0).all(dim=1)\n    den[z,0] = 1\n    check(num, den)\n\n# targeted: a=c and b=-d? then real num = a*c + b*d = a^2 - b^2 fine. \n# targeted cancellation: make b*c \u2248 a*d with big exponent spread: a=2^-14 subnormal u, b=huge B... \n# numerator row proportional: (a,b) = t*(d,-c)? then real num = a*c+b*d = t*(d*c - c*d)=0 exact.\n# offset by one ulp: a = t*d, b = -t*c adjusted... use imag: b*c - a*d.\n# direct: set b = w, c = P (big), a = w, d = P2 where P2 = nextafter(P) in fp16 -> imag num = w*(P-P2) tiny while terms w*P huge.\nfor w_exp in range(-14, 16):\n    for p_exp in range(-5, 16):\n        w = (2.0**w_exp)\n        P = (2.0**p_exp)*(1+ 512/1024.0)  # has ulp 2^(p_exp-10)\n        P2 = P + 2.0**(p_exp-10)\n        n = 1\n        num = torch.tensor([[w, w]], dtype=torch.float16, device=dev)\n        den = torch.tensor([[P2, P]], dtype=torch.float16, device=dev)\n        check(num, den)\n        # real numerator analog\n        num2 = torch.tensor([[w, -w]], dtype=torch.float16, device=dev)\n        den2 = torch.tensor([[P, -P2]], dtype=torch.float16, device=dev)\n        check(num2, den2)\n\nprint(json.dumps(dict(trials=trials, violations=count_viol, worst_excess_ratio=worst, worst_info=worst_info)))\n",
+            "expected_signal": "componentwise tolerance violations under cancellation if claim true; zero violations if false"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.89,
+        "input_tokens": 11243,
+        "output_tokens": 1936
+      }
+    },
+    {
+      "duration_s": 13.271105462999998,
+      "role": "solo",
+      "round": 4,
+      "text": "The previous probe failed on a device mismatch. I'll fix that and rerun the cancellation search.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_154\")\nimport kernel\n\ndev = \"cuda\"\ntorch.manual_seed(0)\n\n# grid of positive fp16 values\npos = torch.arange(0x0400, 0x7C00, dtype=torch.int32).to(torch.float32).view(torch.int16)  # invalid\n# simpler: all positive finite fp16 bit patterns\nbits = torch.arange(0, 0x7C01, dtype=torch.int16)\npos_all = torch.cat([bits, torch.tensor([0], dtype=torch.int16)]).to(torch.uint16).to(torch.int16)\npos16 = pos_all.view(torch.float16).to(torch.float32)\npos16 = pos16[torch.isfinite(pos16) & (pos16 >= 0)]\n# subnormals included since view handles all patterns\npos16 = torch.unique(pos16)\nprint(\"num positive fp16 values:\", len(pos16))\n\nworst = -1.0\nworst_info = None\ncount_viol = 0\ntrials = 0\n\ndef check(num, den):\n    global worst, worst_info, count_viol, trials\n    out = kernel.run(num, den)\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\n    err = (out - ref).abs()\n    tol = 1e-7 + 5e-7*ref.abs()\n    viol = err > tol\n    cnt = int(viol.sum())\n    if cnt:\n        count_viol += cnt\n        r = ((err - tol)/tol)\n        rmasked = torch.where(viol, r, torch.full_like(r, -1.0))\n        m = rmasked.max().item()\n        if m > worst:\n            worst = m\n            flat = int(rmasked.argmax())\n            i, comp = flat // 2, flat % 2\n            worst_info = dict(row=int(i), comp=comp,\n                              num=num[i].tolist(), den=den[i].tolist(),\n                              out=out[i].tolist(), ref=ref[i].tolist(),\n                              err=err[i].tolist(), tol=tol[i].tolist(),\n                              excess_ratio=m)\n    trials += num.shape[0]\n\n# random combinations over full fp16 grid incl subnormals/extremes, with sign\nimport random\nrandom.seed(0)\nfor it in range(400):\n    n = 4096\n    a = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    b = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    c = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    d = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    nz = ~((c == 0) & (d == 0))\n    num = torch.stack([a, b], dim=1).to(torch.float16).to(dev)\n    den = torch.stack([c, d], dim=1).to(torch.float16).to(dev)\n    num = num[nz.to(dev)].contiguous(); den = den[nz.to(dev)].contiguous()\n    if num.shape[0] == 0: continue\n    check(num, den)\n\n# targeted cancellation: imag numerator b*c - a*d with b*c ~ a*d\n# pick b, c, a arbitrary fp16, then d = closest fp16 to a/b*c... hard; instead\n# use structured: a = u, d = v, b = u, c = v1, v1 adjacent to v\nfor it in range(200):\n    n = 4096\n    idx = torch.randint(0, len(pos16)-1, (n,))\n    u = pos16[idx]; v1 = pos16[idx+1]; v2 = pos16[torch.randint(0, len(pos16), (n,))]\n    # imag numerator = u*v1 - u*v2? no, structure: a=u, b=u, c=v1, d=v2 -> b*c - a*d = u*(v1 - v2)\n    a = u; b = u; c = v1; d = v2\n    signs = (torch.randint(0,2,(n,))*2-1).float()\n    num = torch.stack([a, b*signs], dim=1).to(torch.float16).to(dev)\n    den = torch.stack([c, d], dim=1).to(torch.float16).to(dev)\n    check(num, den)\n\nprint(json.dumps(dict(trials=trials, violations=count_viol,\n                      worst_excess_ratio=worst, worst=worst_info)))\n",
+            "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.271,
+        "input_tokens": 14598,
+        "output_tokens": 1153
+      }
+    },
+    {
+      "duration_s": 37.74708449500001,
+      "role": "solo",
+      "round": 5,
+      "text": "The random probe over 2.4M full-grid FP16 combinations (including subnormals and extrema) found zero tolerance violations. The analytical reason is now clear: fp16\u00d7fp16 products are exact in fp32, and IEEE fp32 add/div_rn are correctly rounded, so the relative error of each component is bounded by ~3\u00b72\u207b\u00b2\u2074 \u2248 1.8e-7, comfortably inside the 1e-7 + 5e-7\u00b7|target| tolerance \u2014 cancellation of two nearly-equal products rounds to the true sum within 0.5 ulp of the result itself. I'll record this as evidence rebutting claim c1 and finalize.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "trials": 2457600,
+              "violation_count": 0,
+              "worst_excess_ratio": -1.0
+            },
+            "event_id": "t7",
+            "summary": "2,457,600 random rows drawn from the full finite FP16 value grid (subnormals, signed values, extrema, plus structured cancellation cases b*c - a*d = u*(v1-v2) with adjacent grid values) produced zero violations of the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target) against the exact FP64 reference. Combined with the analysis that fp16\u00d7fp16 products are exact in fp32 and IEEE fp32 add/div_rn are correctly rounded (relative error \u2264 ~3\u00b72^-24 \u2248 1.8e-7 < 5e-7, plus 1e-7 absolute slack), the FP32 numerator-cancellation hypothesis does not materialize.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 37.747,
+        "input_tokens": 17882,
+        "output_tokens": 2424
+      }
+    },
+    {
+      "duration_s": 9.396440757999983,
+      "role": "solo",
+      "round": 6,
+      "text": "The single opened claim (c1) was resolved with a 2.4M-row adversarial probe over the full FP16 grid: zero tolerance violations. The kernel's FP32 computation is analytically sound (exact fp16 products, correctly-rounded fp32 add/div), masked lanes don't write, and outputs are fresh FP32 tensors. No further line of inquiry would change the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.9,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The kernel computes real=(a*c+b*d)/(c*c+d*d), imag=(b*c-a*d)/(c*c+d*d) in FP32 with div_rn, matching the contract formulas, and returns a fresh FP32 [N,2] tensor. The only in-scope failure hypothesis \u2014 that FP32 rounding under numerator cancellation breaks the per-component tolerance 1e-7+5e-7*|target| \u2014 was tested (event t7) with 2,457,600 rows drawn from the entire finite FP16 grid including subnormals, signed values, extrema, and structured cancellation cases (b*c-a*d = u*(v1-v2) with adjacent grid values), compared against the exact FP64 reference: zero violations, worst excess ratio -1.0. This is consistent with the analysis that fp16\u00d7fp16 products are exact in fp32 and the correctly-rounded fp32 sum/div_rn bound relative error well below 5e-7. Masked lanes never store, inputs are not modified, and outputs are finite on the legal domain. No evidence of any contract violation remains.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.396,
+        "input_tokens": 21243,
+        "output_tokens": 548
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_154"
+      },
+      "created_at": "2026-10-18T06:50:47Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_154",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise complex division on finite binary16 components.\n\nOriginal synthetic Triton implementation of standard complex arithmetic.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\n    b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\n    c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\n    d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\n    scale = c * c + d * d\n    real_numerator = a * c + b * d\n    imag_numerator = b * c - a * d\n    real = tl.div_rn(real_numerator, scale)\n    imag = tl.div_rn(imag_numerator, scale)\n    tl.store(OUT + 2 * index, real, mask=active)\n    tl.store(OUT + 2 * index + 1, imag, mask=active)\n\n\ndef validate_inputs(numerator, denominator, require_cuda=True):\n    \"\"\"Enforce the complete public tensor and component domain.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    for value in (numerator, denominator):\n        require(type(value) is torch.Tensor, \"ordinary torch.Tensor required\")\n        require(value.layout == torch.strided and value.is_contiguous(), \"contiguous strided input required\")\n        require(not value.requires_grad and not value.is_inference(), \"ordinary non-gradient input required\")\n        require(not value.is_neg() and not value.is_conj(), \"logical view flags are outside this domain\")\n        require(not require_cuda or value.is_cuda, \"CUDA input required by run\")\n        require(value.dtype == torch.float16, \"float16 input required\")\n        require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \"shape must be [N,2], 1<=N<=131072\")\n        require(bool(torch.isfinite(value).all()), \"all input components must be finite\")\n    require(numerator.shape == denominator.shape and numerator.device == denominator.device, \"inputs must have the same shape and device\")\n    require(bool((denominator != 0).any(dim=1).all()), \"each complex denominator must be nonzero\")\n    return {\"valid\": True, \"size\": numerator.shape[0]}\n\n\ndef run(numerator, denominator):\n    \"\"\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\"\"\"\n    validate_inputs(numerator, denominator)\n    n = numerator.shape[0]\n    with torch.cuda.device(numerator.device):\n        output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\n        _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\n                                     N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(numerator, denominator):\n    \"\"\"Direct real formulas in FP64; supports CPU tensors for comparison.\"\"\"\n    validate_inputs(numerator, denominator, require_cuda=False)\n    a, b = numerator.to(torch.float64).unbind(dim=1)\n    c, d = denominator.to(torch.float64).unbind(dim=1)\n    scale = c * c + d * d\n    return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples, not restrictions on the legal component values.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\n    denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\n    zero = (denominator == 0).all(dim=1)\n    denominator[zero, 0] = 1\n    return numerator.to(device), denominator.to(device)\n",
+        "passed": null,
+        "problem_text": "Compute the elementwise mathematical complex quotient of two input tensors.\n\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\n\n    real = (a*c + b*d) / (c*c + d*d)\n    imag = (b*c - a*d) / (c*c + d*d).\n\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\n\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\n\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\n\nInputs and complete public domain:\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\n\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\n\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\n\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_154",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_154"
+      },
+      "created_at": "2026-10-18T06:50:47Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the elementwise mathematical complex quotient of two input tensors.\n\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\n\n    real = (a*c + b*d) / (c*c + d*d)\n    imag = (b*c - a*d) / (c*c + d*d).\n\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\n\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\n\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\n\nInputs and complete public domain:\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\n\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\n\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\n\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_154",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_154"
+      },
+      "created_at": "2026-10-18T06:50:47Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_154",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3728
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2482
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_154",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T06:50:47Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_154",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "fp16\u00d7fp16 products are exact in fp32, but their sum/difference rounds to fp32; if the exact real (or imaginary) numerator is tiny relative to the larger term (cancellation factor >~8), the absolute rounding error in the numerator divided by the result exceeds the contract's abs(actual-target) <= 1e-7 + 5e-7*abs(target) componentwise tolerance. The FP64 reference computes exact math, so this is a real discrepancy.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY combination of finite FP16 component values is legal... No other magnitude, conditioning, distribution, seed or correlation restriction applies. The tolerance is abs(actual - target) <= 1e-7 + 5e-7 * abs(target) compared per component."
+          }
+        ],
+        "scope_rationale": "The contract declares every finite FP16 component combination legal (including cancellation-prone ones) and requires the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); the reference is exact FP64 arithmetic on those values.",
+        "statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs."
+      },
+      "created_at": "2026-10-18T06:51:26Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T06:51:26Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "fp16\u00d7fp16 products are exact in fp32, but their sum/difference rounds to fp32; if the exact real (or imaginary) numerator is tiny relative to the larger term (cancellation factor >~8), the absolute rounding error in the numerator divided by the result exceeds the contract's abs(actual-target) <= 1e-7 + 5e-7*abs(target) componentwise tolerance. The FP64 reference computes exact math, so this is a real discrepancy.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY combination of finite FP16 component values is legal... No other magnitude, conditioning, distribution, seed or correlation restriction applies. The tolerance is abs(actual - target) <= 1e-7 + 5e-7 * abs(target) compared per component."
+          }
+        ],
+        "scope_rationale": "The contract declares every finite FP16 component combination legal (including cancellation-prone ones) and requires the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); the reference is exact FP64 arithmetic on those values.",
+        "statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs.",
+        "status": "open",
+        "updated_at": "2026-10-18T06:51:26Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport torch, sys, json, os\nsys.path.insert(0, \"/root/cases/case_154\")\nimport kernel\n\ndev = \"cuda\"\ntorch.manual_seed(0)\n\nrows = []\n# Construct cancellation: real numerator a*c + b*d ~ 0 exactly or tiny\n# pick a*c = b*d (exact in fp16) => real numerator exactly 0 (harmless)\n# better: a*c + b*d small but products huge relative => rounding error\n# e.g. a=1e4, c=1e4 product 1e8; b,d chosen so b*d = -(a*c - eps). But fp16 quantizes eps.\n# Use imag numerator b*c - a*d with b*c and a*d nearly equal.\ndef add(a,b,c,d):\n    rows.append((a,b,c,d))\n\n# systematic cancellation: for fp16 values, b*c - a*d exactly representable? Try a/b ratio approximating c... \n# construct: let u,v be fp16. set a=u, d=v, b=u, c=v -> imag num = u*v - u*v =0 exact.\n# Instead: b = u, c = v1; a = u, d = v2 with v1,v2 adjacent fp16 values: num = u*(v1-v2)\n# v1-v2 = 1 ulp of v. num = u*ulp(v). kernel fp32: u*v1 exact, u*v2 exact, subtraction exact (both fp32 representable, difference maybe subnormal fp32? u*ulp(v) exact in fp32? u<=65504, ulp(v)<=64 => product <= ~4.2e6, representable). Actually both products exact, diff of two exact fp32 numbers is exact if representable. u*v1 - u*v2 = u*(v1-v2); |u*(v1-v2)| may be subnormal? no, it's >= u*min_ulp. Exact if within fp32 precision: difference of two fp32s is exactly representable when close (Sterbenz) or small; generally fp32 has 24 bits; products need <=11 bits each; difference needs <= 22 bits -> exact. So this path is exact.\n# The real error source: division rounding (div_rn, 0.5 ulp) and scale computation c*c+d*d rounding.\n# Cancellation case where fp32 sum of products is NOT exact: a*c + b*d with opposite signs and different exponents -> rounding to 24 bits of a value that needs up to 22 bits -> exact actually. Hmm products are each <= 2^22-ish in ulps... products of two 11-bit significands need 22 bits; sum of two needs up to 23 bits (or more with exponent spread). Exponent spread -> rounding.\n# Classic failing case: real num small relative to terms with exponent spread, e.g. a*c = 65504*65504 ~ 4.29e9 (needs 2 bits + exponent) and b*d = -(4.29e9 - tiny). tiny must be fp16-quantizable difference of products... \n# Simplest robust approach: random search over all fp16 values for max violation.\n\n# Build a large random search over fp16 values in a reasonable range plus systematic edge values\nimport itertools, random\nrandom.seed(0)\n\nvals = set()\n# fp16 positive values\nx = torch.tensor([0.0])\nfor e in range(-14, 16):\n    for m in range(1024):\n        pass\n# easier: generate fp16 grid pieces\ngrids = []\nfor scale_exp in range(-14, 16):\n    base = 2.0**scale_exp\n    mant = torch.arange(1024, dtype=torch.float32)/1024.0\n    g = (1+mant)*base\n    grids.append(g)\npos = torch.cat(grids)  # all positive normal fp16\npos = pos.to(torch.float16)\nextra = torch.tensor([0.0, 5.96e-8, 6.1e-5, 1e-3, 1, 2, 4, 100, 1000, 65504, 6.0976e-5, 5.9605e-8], dtype=torch.float16)\npos_all = torch.unique(torch.cat([pos, extra.to(torch.float32).to(torch.float16)]))\nneg_all = torch.cat([-pos_all, pos_all])\n\nworst = None\nworst_info = None\ncount_viol = 0\ntrials = 0\n\ndef check(num, den):\n    global worst, worst_info, count_viol, trials\n    n = num.shape[0]\n    out = kernel.run(num, den)\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\n    err = (out - ref).abs()\n    tol = 1e-7 + 5e-7*ref.abs()\n    viol = err > tol\n    if viol.any():\n        cnt = int(viol.sum())\n        count_viol += cnt\n        ratio = ((err - tol)/tol)[viol].max().item()\n        if worst is None or ratio > worst:\n            worst = ratio\n            idx = int(viol.nonzero()[0,0])\n            worst_info = dict(row=idx, num=num[idx].tolist(), den=den[idx].tolist(),\n                              out=out[idx].tolist(), ref=ref[idx].tolist(),\n                              err=err[idx].tolist(), tol=tol[idx].tolist())\n    trials += n\n    return int(viol.sum())\n\n# random fp16 combos, bias to cancellation-prone\nfor it in range(300):\n    n = 4096\n    # sample from pos_all & negatives, biased toward similar magnitudes in numerator vs denominator rows\n    a = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    b = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    c = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    d = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n    num = torch.stack([a,b],1).to(torch.float16)\n    den = torch.stack([c,d],1).to(torch.float16)\n    # ensure denominator nonzero rows\n    z = (den==0).all(dim=1)\n    den[z,0] = 1\n    check(num, den)\n\n# targeted: a=c and b=-d? then real num = a*c + b*d = a^2 - b^2 fine. \n# targeted cancellation: make b*c \u2248 a*d with big exponent spread: a=2^-14 subnormal u, b=huge B... \n# numerator row proportional: (a,b) = t*(d,-c)? then real num = a*c+b*d = t*(d*c - c*d)=0 exact.\n# offset by one ulp: a = t*d, b = -t*c adjusted... use imag: b*c - a*d.\n# direct: set b = w, c = P (big), a = w, d = P2 where P2 = nextafter(P) in fp16 -> imag num = w*(P-P2) tiny while terms w*P huge.\nfor w_exp in range(-14, 16):\n    for p_exp in range(-5, 16):\n        w = (2.0**w_exp)\n        P = (2.0**p_exp)*(1+ 512/1024.0)  # has ulp 2^(p_exp-10)\n        P2 = P + 2.0**(p_exp-10)\n        n = 1\n        num = torch.tensor([[w, w]], dtype=torch.float16, device=dev)\n        den = torch.tensor([[P2, P]], dtype=torch.float16, device=dev)\n        check(num, den)\n        # real numerator analog\n        num2 = torch.tensor([[w, -w]], dtype=torch.float16, device=dev)\n        den2 = torch.tensor([[P, -P2]], dtype=torch.float16, device=dev)\n        check(num2, den2)\n\nprint(json.dumps(dict(trials=trials, violations=count_viol, worst_excess_ratio=worst, worst_info=worst_info)))\n",
+        "expected_signal": "componentwise tolerance violations under cancellation if claim true; zero violations if false"
+      },
+      "created_at": "2026-10-18T06:51:53Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "573f08e80c4136641c9aaf2c8a6460d5ea798c4a1d8cfb08a03febd45ea1efb0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "4670f59a2df19c7b92465f3cb0965e4c684c6cfd4074de3328e3ee42da6df4b2"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs.",
+        "cwd": "/root/cases/case_154",
+        "duration_s": 8.527467,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "573f08e80c4136641c9aaf2c8a6460d5ea798c4a1d8cfb08a03febd45ea1efb0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "4670f59a2df19c7b92465f3cb0965e4c684c6cfd4074de3328e3ee42da6df4b2"
+              }
+            ],
+            "duration_s": 8.527467,
+            "exit_code": 1,
+            "expected_signal": "componentwise tolerance violations under cancellation if claim true; zero violations if false",
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_154/solo/probes/t6_probe.py\", line 80, in <module>\n    a = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": "componentwise tolerance violations under cancellation if claim true; zero violations if false",
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r2/real_kernel_challenges/case_154/solo/probes/t6_probe.py\", line 80, in <module>\n    a = pos_all[torch.randint(0, len(pos_all), (n,))].to(dev) * (torch.randint(0,2,(n,))*2-1).float()\n        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nRuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_154\")\nimport kernel\n\ndev = \"cuda\"\ntorch.manual_seed(0)\n\n# grid of positive fp16 values\npos = torch.arange(0x0400, 0x7C00, dtype=torch.int32).to(torch.float32).view(torch.int16)  # invalid\n# simpler: all positive finite fp16 bit patterns\nbits = torch.arange(0, 0x7C01, dtype=torch.int16)\npos_all = torch.cat([bits, torch.tensor([0], dtype=torch.int16)]).to(torch.uint16).to(torch.int16)\npos16 = pos_all.view(torch.float16).to(torch.float32)\npos16 = pos16[torch.isfinite(pos16) & (pos16 >= 0)]\n# subnormals included since view handles all patterns\npos16 = torch.unique(pos16)\nprint(\"num positive fp16 values:\", len(pos16))\n\nworst = -1.0\nworst_info = None\ncount_viol = 0\ntrials = 0\n\ndef check(num, den):\n    global worst, worst_info, count_viol, trials\n    out = kernel.run(num, den)\n    ref = kernel.reference(num.cpu(), den.cpu()).to(dev)\n    err = (out - ref).abs()\n    tol = 1e-7 + 5e-7*ref.abs()\n    viol = err > tol\n    cnt = int(viol.sum())\n    if cnt:\n        count_viol += cnt\n        r = ((err - tol)/tol)\n        rmasked = torch.where(viol, r, torch.full_like(r, -1.0))\n        m = rmasked.max().item()\n        if m > worst:\n            worst = m\n            flat = int(rmasked.argmax())\n            i, comp = flat // 2, flat % 2\n            worst_info = dict(row=int(i), comp=comp,\n                              num=num[i].tolist(), den=den[i].tolist(),\n                              out=out[i].tolist(), ref=ref[i].tolist(),\n                              err=err[i].tolist(), tol=tol[i].tolist(),\n                              excess_ratio=m)\n    trials += num.shape[0]\n\n# random combinations over full fp16 grid incl subnormals/extremes, with sign\nimport random\nrandom.seed(0)\nfor it in range(400):\n    n = 4096\n    a = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    b = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    c = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    d = pos16[torch.randint(0, len(pos16), (n,))] * (torch.randint(0,2,(n,))*2-1)\n    nz = ~((c == 0) & (d == 0))\n    num = torch.stack([a, b], dim=1).to(torch.float16).to(dev)\n    den = torch.stack([c, d], dim=1).to(torch.float16).to(dev)\n    num = num[nz.to(dev)].contiguous(); den = den[nz.to(dev)].contiguous()\n    if num.shape[0] == 0: continue\n    check(num, den)\n\n# targeted cancellation: imag numerator b*c - a*d with b*c ~ a*d\n# pick b, c, a arbitrary fp16, then d = closest fp16 to a/b*c... hard; instead\n# use structured: a = u, d = v, b = u, c = v1, v1 adjacent to v\nfor it in range(200):\n    n = 4096\n    idx = torch.randint(0, len(pos16)-1, (n,))\n    u = pos16[idx]; v1 = pos16[idx+1]; v2 = pos16[torch.randint(0, len(pos16), (n,))]\n    # imag numerator = u*v1 - u*v2? no, structure: a=u, b=u, c=v1, d=v2 -> b*c - a*d = u*(v1 - v2)\n    a = u; b = u; c = v1; d = v2\n    signs = (torch.randint(0,2,(n,))*2-1).float()\n    num = torch.stack([a, b*signs], dim=1).to(torch.float16).to(dev)\n    den = torch.stack([c, d], dim=1).to(torch.float16).to(dev)\n    check(num, den)\n\nprint(json.dumps(dict(trials=trials, violations=count_viol,\n                      worst_excess_ratio=worst, worst=worst_info)))\n",
+        "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim"
+      },
+      "created_at": "2026-10-18T06:52:16Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "b0ea819acf77c0a7731cd8111e5ef124ad0861d80650910a8b8d058fe3bd696a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "695c24a7af2648efd1330fa4c9c4e2ea18a078548946c26f021e55aa4c4e7ebd"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "7b7c3b0d11a88eab4cd32652089fd225517f6884f4bc432fdf514826f2661b8b"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs.",
+        "cwd": "/root/cases/case_154",
+        "duration_s": 10.074453,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b0ea819acf77c0a7731cd8111e5ef124ad0861d80650910a8b8d058fe3bd696a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "695c24a7af2648efd1330fa4c9c4e2ea18a078548946c26f021e55aa4c4e7ebd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "7b7c3b0d11a88eab4cd32652089fd225517f6884f4bc432fdf514826f2661b8b"
+              }
+            ],
+            "duration_s": 10.074453,
+            "exit_code": 0,
+            "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "trials": 2457600,
+              "violations": 0,
+              "worst": null,
+              "worst_excess_ratio": -1.0
+            },
+            "stderr": "",
+            "stdout": "num positive fp16 values: 31744\n{\"trials\": 2457600, \"violations\": 0, \"worst_excess_ratio\": -1.0, \"worst\": null}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim",
+        "json_parse_error": null,
+        "json_result": {
+          "trials": 2457600,
+          "violations": 0,
+          "worst": null,
+          "worst_excess_ratio": -1.0
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "num positive fp16 values: 31744\n{\"trials\": 2457600, \"violations\": 0, \"worst_excess_ratio\": -1.0, \"worst\": null}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "trials": 2457600,
+          "violation_count": 0,
+          "worst_excess_ratio": -1.0
+        },
+        "event_id": "t7",
+        "summary": "2,457,600 random rows drawn from the full finite FP16 value grid (subnormals, signed values, extrema, plus structured cancellation cases b*c - a*d = u*(v1-v2) with adjacent grid values) produced zero violations of the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target) against the exact FP64 reference. Combined with the analysis that fp16\u00d7fp16 products are exact in fp32 and IEEE fp32 add/div_rn are correctly rounded (relative error \u2264 ~3\u00b72^-24 \u2248 1.8e-7 < 5e-7, plus 1e-7 absolute slack), the FP32 numerator-cancellation hypothesis does not materialize.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T06:52:54Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T06:51:26Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T06:52:54Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "b0ea819acf77c0a7731cd8111e5ef124ad0861d80650910a8b8d058fe3bd696a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "695c24a7af2648efd1330fa4c9c4e2ea18a078548946c26f021e55aa4c4e7ebd"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "7b7c3b0d11a88eab4cd32652089fd225517f6884f4bc432fdf514826f2661b8b"
+                  }
+                ],
+                "duration_s": 10.074453,
+                "exit_code": 0,
+                "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim",
+                "json_parse_error": null,
+                "json_result": {
+                  "trials": 2457600,
+                  "violations": 0,
+                  "worst": null,
+                  "worst_excess_ratio": -1.0
+                },
+                "stderr": "",
+                "stdout": "num positive fp16 values: 31744\n{\"trials\": 2457600, \"violations\": 0, \"worst_excess_ratio\": -1.0, \"worst\": null}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "trials": 2457600,
+                "violation_count": 0,
+                "worst_excess_ratio": -1.0
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "2,457,600 random rows drawn from the full finite FP16 value grid (subnormals, signed values, extrema, plus structured cancellation cases b*c - a*d = u*(v1-v2) with adjacent grid values) produced zero violations of the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target) against the exact FP64 reference. Combined with the analysis that fp16\u00d7fp16 products are exact in fp32 and IEEE fp32 add/div_rn are correctly rounded (relative error \u2264 ~3\u00b72^-24 \u2248 1.8e-7 < 5e-7, plus 1e-7 absolute slack), the FP32 numerator-cancellation hypothesis does not materialize.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "fp16\u00d7fp16 products are exact in fp32, but their sum/difference rounds to fp32; if the exact real (or imaginary) numerator is tiny relative to the larger term (cancellation factor >~8), the absolute rounding error in the numerator divided by the result exceeds the contract's abs(actual-target) <= 1e-7 + 5e-7*abs(target) componentwise tolerance. The FP64 reference computes exact math, so this is a real discrepancy.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "EVERY combination of finite FP16 component values is legal... No other magnitude, conditioning, distribution, seed or correlation restriction applies. The tolerance is abs(actual - target) <= 1e-7 + 5e-7 * abs(target) compared per component."
+            }
+          ],
+          "scope_rationale": "The contract declares every finite FP16 component combination legal (including cancellation-prone ones) and requires the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); the reference is exact FP64 arithmetic on those values.",
+          "statement": "The kernel's FP32 computation of the real/imaginary numerators (a*c + b*d and b*c - a*d) incurs rounding error that, under strong cancellation between the two product terms, exceeds the per-component tolerance of 1e-7 + 5e-7*abs(target) for legal FP16 inputs.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T06:52:54Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T06:52:54Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "b0ea819acf77c0a7731cd8111e5ef124ad0861d80650910a8b8d058fe3bd696a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "695c24a7af2648efd1330fa4c9c4e2ea18a078548946c26f021e55aa4c4e7ebd"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "7b7c3b0d11a88eab4cd32652089fd225517f6884f4bc432fdf514826f2661b8b"
+              }
+            ],
+            "duration_s": 10.074453,
+            "exit_code": 0,
+            "expected_signal": "tolerance violation counts and worst excess ratio; violations > 0 confirms claim",
+            "json_parse_error": null,
+            "json_result": {
+              "trials": 2457600,
+              "violations": 0,
+              "worst": null,
+              "worst_excess_ratio": -1.0
+            },
+            "stderr": "",
+            "stdout": "num positive fp16 values: 31744\n{\"trials\": 2457600, \"violations\": 0, \"worst_excess_ratio\": -1.0, \"worst\": null}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "trials": 2457600,
+            "violation_count": 0,
+            "worst_excess_ratio": -1.0
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "2,457,600 random rows drawn from the full finite FP16 value grid (subnormals, signed values, extrema, plus structured cancellation cases b*c - a*d = u*(v1-v2) with adjacent grid values) produced zero violations of the per-component tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target) against the exact FP64 reference. Combined with the analysis that fp16\u00d7fp16 products are exact in fp32 and IEEE fp32 add/div_rn are correctly rounded (relative error \u2264 ~3\u00b72^-24 \u2248 1.8e-7 < 5e-7, plus 1e-7 absolute slack), the FP32 numerator-cancellation hypothesis does not materialize.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.9,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel computes real=(a*c+b*d)/(c*c+d*d), imag=(b*c-a*d)/(c*c+d*d) in FP32 with div_rn, matching the contract formulas, and returns a fresh FP32 [N,2] tensor. The only in-scope failure hypothesis \u2014 that FP32 rounding under numerator cancellation breaks the per-component tolerance 1e-7+5e-7*|target| \u2014 was tested (event t7) with 2,457,600 rows drawn from the entire finite FP16 grid including subnormals, signed values, extrema, and structured cancellation cases (b*c-a*d = u*(v1-v2) with adjacent grid values), compared against the exact FP64 reference: zero violations, worst excess ratio -1.0. This is consistent with the analysis that fp16\u00d7fp16 products are exact in fp32 and the correctly-rounded fp32 sum/div_rn bound relative error well below 5e-7. Masked lanes never store, inputs are not modified, and outputs are finite on the legal domain. No evidence of any contract violation remains.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-18T06:53:03Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.9,
+        "created_at": "2026-10-18T06:53:03Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel computes real=(a*c+b*d)/(c*c+d*d), imag=(b*c-a*d)/(c*c+d*d) in FP32 with div_rn, matching the contract formulas, and returns a fresh FP32 [N,2] tensor. The only in-scope failure hypothesis \u2014 that FP32 rounding under numerator cancellation breaks the per-component tolerance 1e-7+5e-7*|target| \u2014 was tested (event t7) with 2,457,600 rows drawn from the entire finite FP16 grid including subnormals, signed values, extrema, and structured cancellation cases (b*c-a*d = u*(v1-v2) with adjacent grid values), compared against the exact FP64 reference: zero violations, worst excess ratio -1.0. This is consistent with the analysis that fp16\u00d7fp16 products are exact in fp32 and the correctly-rounded fp32 sum/div_rn bound relative error well below 5e-7. Masked lanes never store, inputs are not modified, and outputs are finite on the legal domain. No evidence of any contract violation remains.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.9,
+    "created_at": "2026-10-18T06:53:03Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The kernel computes real=(a*c+b*d)/(c*c+d*d), imag=(b*c-a*d)/(c*c+d*d) in FP32 with div_rn, matching the contract formulas, and returns a fresh FP32 [N,2] tensor. The only in-scope failure hypothesis \u2014 that FP32 rounding under numerator cancellation breaks the per-component tolerance 1e-7+5e-7*|target| \u2014 was tested (event t7) with 2,457,600 rows drawn from the entire finite FP16 grid including subnormals, signed values, extrema, and structured cancellation cases (b*c-a*d = u*(v1-v2) with adjacent grid values), compared against the exact FP64 reference: zero violations, worst excess ratio -1.0. This is consistent with the analysis that fp16\u00d7fp16 products are exact in fp32 and the correctly-rounded fp32 sum/div_rn bound relative error well below 5e-7. Masked lanes never store, inputs are not modified, and outputs are finite on the legal domain. No evidence of any contract violation remains.",
+    "verdict": "trust"
+  }
+}

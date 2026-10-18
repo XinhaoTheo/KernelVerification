@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_145\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Row-wise first-maximum index via a packed integer-key reduction.\\n2: \\n3: Original synthetic Triton implementation; not an upstream historical bug.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: \\n10: @triton.jit\\n11: def _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n12:     row = tl.program_id(0)\\n13:     column = tl.arange(0, BLOCK)\\n14:     value = tl.load(X + row * N + column, mask=column < N, other=0.0)\\n15:     raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\\n16:     mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\\n17:     rank = raw ^ mask\\n18:     # Rank dominates; reversed column indices select the first equal value.\\n19:     tie = 0xffffffff - column.to(tl.uint32)\\n20:     key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\\n21:     key = tl.where(column < N, key, 0)\\n22:     best = tl.max(key, axis=0)\\n23:     winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\\n24:     tl.store(OUT + row, winner)\\n25: \\n26: \\n27: def validate_inputs(x, require_cuda=True):\\n28:     def require(condition, message):\\n29:         if not condition:\\n30:             raise ValueError(message)\\n31:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n32:     require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n33:     require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n34:     require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient input required\\\")\\n35:     require(not x.is_neg() and not x.is_conj(), \\\"logical view flags outside domain\\\")\\n36:     require(not require_cuda or x.is_cuda, \\\"CUDA input required\\\")\\n37:     require(x.ndim == 2, \\\"matrix [M,N] required\\\")\\n38:     require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\\n39:             and x.numel() <= 262144, \\\"matrix dimensions outside domain\\\")\\n40:     require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n41:     require(bool(torch.isfinite(x).all().item()), \\\"all values must be finite\\\")\\n42:     return {\\\"valid\\\": True, \\\"shape\\\": list(x.shape)}\\n43: \\n44: \\n45: def run(x):\\n46:     validate_inputs(x)\\n47:     m, n = x.shape\\n48:     with torch.cuda.device(x.device):\\n49:         output = torch.empty((m,), dtype=torch.int64, device=x.device)\\n50:         _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\\n51:     return output\\n52: \\n53: \\n54: def reference(x):\\n55:     \\\"\\\"\\\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\\\"\\\"\\\"\\n56:     validate_inputs(x, require_cuda=False)\\n57:     return torch.argmax(x.to(torch.float64), dim=1)\\n58: \\n59: \\n60: def make_inputs(device=\\\"cuda\\\", rows=17, columns=257, seed=0):\\n61:     \\\"\\\"\\\"Convenience examples, not a restriction on the input domain.\\\"\\\"\\\"\\n62:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n63:     x = torch.randn((rows, columns), generator=generator).to(torch.float16)\\n64:     return (x.to(device),)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_145\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_145\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_145\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_145\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Row-wise first-maximum index via a packed integer-key reduction.\\n\\nOriginal synthetic Triton implementation; not an upstream historical bug.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    row = tl.program_id(0)\\n    column = tl.arange(0, BLOCK)\\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\\n    rank = raw ^ mask\\n    # Rank dominates; reversed column indices select the first equal value.\\n    tie = 0xffffffff - column.to(tl.uint32)\\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\\n    key = tl.where(column < N, key, 0)\\n    best = tl.max(key, axis=0)\\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\\n    tl.store(OUT + row, winner)\\n\\n\\ndef validate_inputs(x, require_cuda=True):\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    require(type(x) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n    require(x.layout == torch.strided and x.is_contiguous(), \\\"contiguous strided input required\\\")\\n    require(not x.requires_grad and not x.is_inference(), \\\"ordinary non-gradient input required\\\")\\n    require(not x.is_neg() and not x.is_conj(), \\\"logical view flags outside domain\\\")\\n    require(not require_cuda or x.is_cuda, \\\"CUDA input required\\\")\\n    require(x.ndim == 2, \\\"matrix [M,N] required\\\")\\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\\n            and x.numel() <= 262144, \\\"matrix dimensions outside domain\\\")\\n    require(x.dtype == torch.float16, \\\"FP16 input required\\\")\\n    require(bool(torch.isfinite(x).all().item()), \\\"all values must be finite\\\")\\n    return {\\\"valid\\\": True, \\\"shape\\\": list(x.shape)}\\n\\n\\ndef run(x):\\n    validate_inputs(x)\\n    m, n = x.shape\\n    with torch.cuda.device(x.device):\\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\\n    return output\\n\\n\\ndef reference(x):\\n    \\\"\\\"\\\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\\\"\\\"\\\"\\n    validate_inputs(x, require_cuda=False)\\n    return torch.argmax(x.to(torch.float64), dim=1)\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", rows=17, columns=257, seed=0):\\n    \\\"\\\"\\\"Convenience examples, not a restriction on the input domain.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\\n    return (x.to(device),)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_145\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the first index of the largest value in each row of an FP16 matrix.\\nFor every row r, return the smallest column index j for which\\n\\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\\n\\nThe comparison is ordinary numerical comparison of the exact stored values.\\nPositive and negative zero compare equal; if a row's maximum is zero, the\\nfirst zero of either sign wins. Every finite FP16 value is legal, including\\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\\ninfinity are outside the domain. There is no approximate tolerance for the\\ninteger index: the returned index must equal the specified first index.\\n\\nComplete input domain:\\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\\n  offsets are legal.\\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\\n  Calls run in ordinary non-inference mode without concurrent external\\n  writes to x. This forward-only operation does not provide autograd.\\n\\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\\nAny implementation strategy is allowed if it returns the required exact\\nindices throughout the complete domain. Correctness is one verdict for the\\nimplementation, not a verdict per input, shape, distribution, or seed.\\n\\nvalidate_inputs() checks this domain and is called by run(). reference()\\nuses numerical FP64 comparisons of exactly representable FP16 values and\\nalso accepts CPU input. make_inputs() supplies examples only.\\n\\nThis is an original synthetic Triton implementation of stable argmax using\\npacked integer keys. It is not copied from an upstream kernel and is not a\\nclaim of a historical upstream bug.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_145\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_145\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 2705\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 1834\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_145\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T01:34:17Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_145\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol.\n\n=== Output budget ===\n{\"total_output_tokens\": 32768, \"used_output_tokens\": 0, \"remaining_output_tokens\": 32768, \"debate_phase\": \"normal\", \"normal_turn_cap\": 8192, \"closeout_reserve\": 8192}\nOutput usage includes reasoning. Keep this turn focused; do not spend the entire allowance planning a large probe before obtaining evidence."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

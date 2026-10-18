@@ -1,0 +1,244 @@
+[
+  {
+    "created_at": "2026-10-18T01:08:07Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:08:54Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "f20b265abc256663dba4a261d029d1843c800b886f16bac5a1f0c766bfafd061"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "001c7c6acc53315ebb58c2fa67b821b76b333e802afd08015d424631999c0bbf"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "62f30a6441abf94f6b65a90f6a716a9f6510e823d389f11eb42b6e651ec4826e"
+            }
+          ],
+          "duration_s": 4.781504,
+          "err_over_tol_worst": 9.51,
+          "exit_code": 0,
+          "expected_signal": "worst err/tol ratio over small-magnitude FP16 band; >1 means tolerance violation",
+          "json_parse_error": null,
+          "json_result": {
+            "err_over_tol_worst": 9.509887961955979,
+            "n_tested": 13796,
+            "num_violations": 10356,
+            "rho_at_worst": 0.000997552419027175,
+            "tolerance_at_worst": 1.997552419027175e-08,
+            "worst_abs_err": 1.2829335578829273e-07,
+            "worst_x": 0.044677734375
+          },
+          "n_tested": 13796,
+          "num_violations": 10356,
+          "rho_at_worst": 0.000997552419027175,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 13796, \"num_violations\": 10356, \"worst_x\": 0.044677734375, \"worst_abs_err\": 1.2829335578829273e-07, \"tolerance_at_worst\": 1.997552419027175e-08, \"err_over_tol_worst\": 9.509887961955979, \"rho_at_worst\": 0.000997552419027175}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tolerance_at_worst": 1.997552419027175e-08,
+          "worst_abs_err": 1.2829335578829273e-07,
+          "worst_x": 0.044677734375
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Swept all positive/negative FP16 values in [1e-3, 0.11] (13796 elements) through run() vs FP64 rationalized reference: 10356 tolerance violations; worst at x=0.044677734375 with abs err 1.28e-7 vs tolerance 2.0e-8 (err/tol = 9.51). Cancellation in sqrt(1+u)-1 confirmed.",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "The kernel computes sqrt(1.0 + x*x) - 1.0 directly in FP32 (kernel.py lines 16-18) instead of the cancellation-free form x*x/(sqrt(1+x*x)+1) that its own reference() uses. Rounding sqrt(1+u) (~1 ulp \u2248 1.2e-7 absolute) then subtracting 1 loses most significant bits when u is small; the surviving error is on the order of 6e-8 absolute while rho(x) = u/(sqrt(1+u)+1) \u2248 x\u00b2/2 is tiny (e.g. x=0.01 gives rho=5e-5, tolerance \u2248 5.1e-10; x=0.1 gives rho=5e-3, tolerance \u2248 6e-8). In the band 1e-3 \u2272 |x| \u2272 0.1 the absolute error of the direct form plausibly exceeds 1e-8 + 1e-5\u00b7rho, violating the stated tolerance. These small FP16 values (0.001, 0.01, 0.05, 0.1) are explicitly in the contract's legal domain (\"EVERY finite FP16 value is legal\"), so the single-domain verdict requires the kernel to be accurate there.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract states tolerance abs(actual[i]-rho(x[i])) <= 1e-8 + 1e-5*abs(rho(x[i])) must hold for EVERY finite FP16 value, and 'Correctness is one verdict for the implementation ... not per input, input distribution, seed or size.' Small values like 0.01 are inside the declared complete domain."
+      }
+    ],
+    "scope_rationale": "The contract requires the tolerance abs(actual[i]-rho(x[i])) <= 1e-8 + 1e-5*abs(rho(x[i])) to hold for every finite FP16 value, including small magnitudes where rho is tiny, and a single verdict over the whole legal domain.",
+    "statement": "For legal FP16 inputs in roughly the 1e-3 to 1e-1 magnitude band, the kernel's direct FP32 expression sqrt(1+x*x)-1 violates the per-element tolerance abs(actual - rho(x)) <= 1e-8 + 1e-5*abs(rho(x)) due to catastrophic cancellation, e.g. at x = 0.01 the expected error is ~2-6e-8 absolute versus a tolerance of ~5e-10 relative to rho \u2248 5e-5 (tolerance \u2248 5.1e-10).",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:08:54Z"
+  },
+  {
+    "created_at": "2026-10-18T01:08:07Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:08:54Z",
+        "data": {
+          "all_within_1e-8_abs": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "915caaeef394b1abf6000801b04f4857f2615f646e38c26f87f93fb26bc54d41"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "44423862c97ecb9ef18236ef8e38aad4a0abc1da7a1b66a9f102eef4849eb8e4"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "e38fd01966878e977511580df6714abbfeac9bd743fd72b118a1fca734330f04"
+            }
+          ],
+          "duration_s": 4.063975,
+          "err_over_tol_worst": 8.934,
+          "exit_code": 0,
+          "expected_signal": "snap-to-zero counts and tolerance violations for |x|<0.011 band",
+          "json_parse_error": null,
+          "json_result": {
+            "all_within_1e-8_abs": false,
+            "err_over_tol_worst": 8.93364821127368,
+            "n_tested": 17220,
+            "num_snap_to_zero_nonzero_rho": 7642,
+            "num_violations": 11080,
+            "tol_at_worst": 1.0604317249739372e-08,
+            "worst_abs_err": 8.93637124441364e-08
+          },
+          "n_tested": 17220,
+          "num_snap_to_zero_nonzero_rho": 7642,
+          "num_violations": 11080,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 17220, \"num_snap_to_zero_nonzero_rho\": 7642, \"num_violations\": 11080, \"worst_abs_err\": 8.93637124441364e-08, \"tol_at_worst\": 1.0604317249739372e-08, \"err_over_tol_worst\": 8.93364821127368, \"all_within_1e-8_abs\": false}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "tol_at_worst": 1.0604317249739372e-08,
+          "worst_abs_err": 8.93637124441364e-08
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Swept all FP16 values with |x| < 0.011 (17220 elements): 7642 outputs snapped to exactly 0.0 while true rho(x) nonzero, and 11080 tolerance violations; worst abs err 8.94e-8 vs tolerance 1.06e-8 (ratio 8.93). Quantization of 1+x*x near 1.0 confirmed.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Even before the subtraction, computing 1.0 + x*x in FP32 rounds the small increment u = x*x to the FP32 grid near 1.0 (spacing ~1.19e-7), introducing an absolute input-rounding error of up to ~6e-8 in sqrt(1+u) that translates directly into output error via the same cancellation mechanism. This is a distinct, independently testable component of the tolerance failure (probing tl.sqrt alone at u values like 1e-4 vs 1.0000001, and comparing against FP64) and would persist even if the subtraction were made exact.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract's tolerance clause applies to all finite FP16 values and fixes the verdict over the entire declared domain, so intermediate-rounding error at small x is in scope."
+      }
+    ],
+    "scope_rationale": "Same contract clause: tolerance must hold for every finite FP16 value over the whole declared domain; the rounding of the increment 1.0+x*x in FP32 affects exactly those legal small-x inputs.",
+    "statement": "The intermediate addition 1.0 + square in FP32 quantizes the small increment x*x for |x| below ~0.011 (x*x < half-ulp of 1.0, i.e. x*x < 5.96e-8), sometimes snapping 1+u to exactly 1.0 so the output is exactly 0.0 where the true rho(x) is nonzero but small; more broadly the quantization of u near 1.0 injects absolute error up to ~6e-8 that exceeds the 1e-8 absolute tolerance term for small rho.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:08:54Z"
+  },
+  {
+    "created_at": "2026-10-18T01:08:07Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:09:26Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t14_probe.py",
+              "sha256": "b9b4ebe059af03a4c74afe2d694006813f56df206370097f3443ae58f043ac95"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t14_stdout.txt",
+              "sha256": "85296a8353effecc681437e115aa188255f566585a8edf6e798773d5ca15fe22"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t14_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t14_json_result.json",
+              "sha256": "2ac677f87574bedfa9cf26466ec9679a68492923215892a65b22e947e99a1e8e"
+            }
+          ],
+          "duration_s": 4.291504,
+          "exit_code": 0,
+          "expected_signal": "zero violations for extrema \u00b165504, subnormals, and large-x band; all within tolerance",
+          "extrema_65504_abs_err": 7.63e-06,
+          "extrema_65504_ok": true,
+          "json_parse_error": null,
+          "json_result": {
+            "err_over_tol_worst": 1.3505587379975659,
+            "extrema_65504_abs_err": 7.633127097506076e-06,
+            "max_abs_err_large_band": 0.00019920317936339416,
+            "n_tested": 39918,
+            "num_violations": 50,
+            "output_finite_all": true,
+            "subnormal_max_abs_err": 1.1550760347533028e-10
+          },
+          "max_abs_err_large_band": 0.000199,
+          "n_tested": 39918,
+          "num_violations_band": 50,
+          "output_finite_all": true,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 39918, \"num_violations\": 50, \"err_over_tol_worst\": 1.3505587379975659, \"output_finite_all\": true, \"max_abs_err_large_band\": 0.00019920317936339416, \"extrema_65504_abs_err\": 7.633127097506076e-06, \"subnormal_max_abs_err\": 1.1550760347533028e-10}\n",
+          "subnormal_max_abs_err": 1.155e-10,
+          "subnormals_ok": true,
+          "timed_out": false,
+          "timeout_s": 60,
+          "worst_err_over_tol_in_band": 1.3506
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Extrema \u00b165504 (abs err 7.6e-6, tolerance ~0.655) and all subnormals (abs err 1.16e-10, within 1e-8 absolute term) are within tolerance and outputs are all finite, so no overflow/large-x failure at the extrema. However the claim asserts no tolerance violations in the tested |x|\u22650.11 band, and 50 violations exist (worst err/tol 1.35), so the compound assertion is contradicted for part of the band \u2014 likely just above the 0.11 cutoff where rho is small.",
+        "supports": "rebutted",
+        "tool_event_id": "t14"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "For x = \u00b165504, x*x \u2248 4.29e9 in FP32 is fine, and sqrt(1+4.29e9)-1 \u2248 x - 1 + 1/(2x); FP32 relative precision (~1.2e-7 relative) against rho \u2248 65503 gives tolerance \u2248 0.655, so large-x error is comfortably within the relative term. Similarly subnormals give rho \u2248 5.9e-39, far below the 1e-8 absolute term, so exact-zero outputs pass. Recording this as an explicit claim ensures the experimenter's domain sweep covers the extremes rather than only the mid-band, closing the coverage gap the contract's \"every finite FP16 value\" clause creates.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract explicitly declares 'both extrema +/-65504' and 'positive and negative subnormal values' as legal inputs, so any verdict must include them."
+      }
+    ],
+    "scope_rationale": "The contract explicitly declares extrema +/-65504 and subnormals legal, so probes must cover them even if only to confirm they are not failure points.",
+    "statement": "For large legal FP16 values including the extrema x = \u00b165504, the FP32 computation x*x (\u22484.29e9, near but below FP32 max 3.4e38) stays finite and the output sqrt(1+u)-1 remains within the 1e-5 relative tolerance, so no large-x or overflow failure exists \u2014 but this should be confirmed at runtime, since the contract requires correctness across the full finite domain including subnormals (where rho \u2248 5.9e-39 and outputs may snap to 0.0, which the 1e-8 absolute term permits).",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T01:09:26Z"
+  }
+]

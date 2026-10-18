@@ -1,0 +1,206 @@
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the Describer agent in an agentic kernel verification system.\nYour job is to explain what the kernel appears to implement and what assumptions\nare visible in the source or problem statement.\n\nRules:\n- Maintain the shared description model. Your useful output should be structured, not just prose.\n- When enough context is available, call record_description_update with concise entries for contract_model, kernel_model, risk_map, scope_notes, and open_questions. Each of those five takes a JSON array of strings, exactly this shape:\n    {\"summary\": \"...\", \"contract_model\": [\"first point\", \"second point\"], \"risk_map\": [\"...\"]}\n  Do not pass a paragraph, and do not number the points or wrap them in an object -- the array itself is the ordering.\n- contract_model: what the problem/test/benchmark appears to require.\n- kernel_model: what the kernel source appears to implement and assume.\n- risk_map: specific bug surfaces Skeptic should consider, without recording claims yourself.\n- scope_notes: benchmark/test-domain boundaries that matter for in-scope vs out-of-scope reasoning.\n- open_questions: unresolved facts that need more context or later experiments.\n- If open_description_tasks are present, answer the task directly and include task_id or resolved_task_ids in record_description_update.\n- Cite concrete source, problem, test, metadata, or tool-event context when available.\n- Use inspect_problem, inspect_kernel_source, list_artifact_files, or read_artifact_file when more context is needed.\n- Do not record claims. That is the Skeptic agent's job.\n- Do not run experiments. That is the Experimenter agent's job.\n- Do not output a final correctness verdict.\n- If you cannot resolve a description task, record an update explaining what remains unknown in open_questions.\n\nTools are provided for this turn through the tool-calling mechanism. To take any action (record a claim, run a probe, update state, request a verdict, etc.) you must call the tool directly through that mechanism.\nDo not describe a tool call in your message text, and do not write it out as a JSON object yourself -- a tool call written as text is not executed and has no effect. Do not claim a tool was run unless it appears in the ledger.\nYour message should be a short natural-language explanation of what you are doing and why, separate from any tool call you make.\n\n=== Skills ===\n--- kernel-verification.md ---\n# Kernel Verification\n\nYou are verifying a generated GPU kernel through evidence-driven investigation.\n\nDo not follow a fixed checklist. First understand what the artifact appears to\nimplement, then raise concrete claims about possible correctness failures, then\ncollect source or runtime evidence for those claims.\n\nEvery important conclusion must be tied to a claim and evidence entry.\n\n\n\n--- evidence-driven-review.md ---\n# Evidence-Driven Review\n\nRationale is not evidence. A claim can start from source suspicion, but it is\nnot confirmed or rebutted until the ledger contains source inspection or runtime\ntool output that directly addresses it.\n\nPassing one probe is only evidence for the tested condition. It is not a global\ncorrectness proof unless the claim itself is scoped that narrowly.\n\n\n\n--- adversarial-precision.md ---\n# Adversarial Precision Verification\n\nUse this skill when the kernel involves lossy, saturating, quantized, or\ndiscrete-selection behavior where plain final-output allclose can be a weak\ncorrectness proxy. This is guidance for claim and probe design, not a fixed\nchecklist. Only investigate a mode when the problem contract, kernel source, or\nartifact context makes it relevant.\n\n## Softmax And Activations\n\nSoftmax, ReLU, GELU, SiLU, and similar functions can hide errors in tails or\ndead/saturated regions. A small pre-activation mistake may disappear after the\noperation, while a small dominant-logit mistake can be amplified.\n\nWhen relevant, prefer claims and probes that separate:\n\n- pre-operation quantities from final output when source access makes that\n  possible;\n- dominant entries from tail entries;\n- dead/saturated regions from active regions.\n\nDo not confirm or reject from one benign random input if the suspected failure\nonly appears under tail-heavy or dominant-entry distributions.\n\n## Sort And Top-k\n\nSort/top-k correctness is not a single elementwise numeric distance. Index\nrecall can falsely reject valid tie-breaking, while value-only comparison can\nhide harmful misses.\n\nWhen relevant, design evidence around the selected values and their gaps:\n\n- distinguish harmless boundary swaps where selected and missed values are tied\n  or nearly tied;\n- treat missing a value far above the cutoff as a stronger bug signal;\n- include tied, quantized, and cutoff-clustered inputs, not only `torch.randn`;\n- when the top-k is used inside attention, consider a downstream softmax-value\n  output comparison as better evidence than raw index overlap alone.\n\nA claim about top-k should state which metric decides it: exact index order, set\noverlap, selected values, value-gap-weighted misses, or downstream output.\n\n## FP8 With Softmax Or Activations\n\nFP8 can snap many small probabilities or activations to the same code or zero.\nThat can hide tail errors, and it can also make a correct lossy kernel look far\nfrom an FP32 reference under a tight tolerance.\n\nWhen relevant, compare against the contractually correct quantized behavior, not\nonly an FP32 reference with a magic tolerance. Probe tail probabilities, flush-to\nzero cases, and dominant entries separately when those cases are in scope.\n\n## FP4 And INT4\n\nVery low bit formats can erase differences smaller than the quantization step.\nElementwise allclose against an FP32 reference is often not decisive by itself.\n\nWhen relevant, prefer evidence based on quantized-reference behavior, downstream\nimpact, or task-level invariants. A probe should report quantization step, value\nranges, saturation/zero counts, and whether an observed mismatch is representable\nin the target format.\n\n## Verdict Discipline\n\nDo not reject a kernel merely because an adversarial case is interesting. The\nclaim still needs scope evidence tying that case to the problem/test contract.\nDo not trust a kernel merely because benign random probes pass when the operator\nclass is known to hide distribution-dependent failures.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== Current Run State ===\n{\n  \"artifact\": {\n    \"artifact_files\": [\n      \"kernel.py\",\n      \"meta.json\",\n      \"problem.txt\"\n    ],\n    \"entry\": \"case_154\",\n    \"has_error\": \"unknown\",\n    \"kernel_code\": \"1: \\\"\\\"\\\"Elementwise complex division on finite binary16 components.\\n2: \\n3: Original synthetic Triton implementation of standard complex arithmetic.\\n4: \\\"\\\"\\\"\\n5: import torch\\n6: import triton\\n7: import triton.language as tl\\n8: \\n9: \\n10: @triton.jit\\n11: def _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n12:     index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n13:     active = index < N\\n14:     a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\\n15:     b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n16:     c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\\n17:     d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n18:     scale = c * c + d * d\\n19:     real_numerator = a * c + b * d\\n20:     imag_numerator = b * c - a * d\\n21:     real = tl.div_rn(real_numerator, scale)\\n22:     imag = tl.div_rn(imag_numerator, scale)\\n23:     tl.store(OUT + 2 * index, real, mask=active)\\n24:     tl.store(OUT + 2 * index + 1, imag, mask=active)\\n25: \\n26: \\n27: def validate_inputs(numerator, denominator, require_cuda=True):\\n28:     \\\"\\\"\\\"Enforce the complete public tensor and component domain.\\\"\\\"\\\"\\n29:     def require(condition, message):\\n30:         if not condition:\\n31:             raise ValueError(message)\\n32:     require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n33:     for value in (numerator, denominator):\\n34:         require(type(value) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n35:         require(value.layout == torch.strided and value.is_contiguous(), \\\"contiguous strided input required\\\")\\n36:         require(not value.requires_grad and not value.is_inference(), \\\"ordinary non-gradient input required\\\")\\n37:         require(not value.is_neg() and not value.is_conj(), \\\"logical view flags are outside this domain\\\")\\n38:         require(not require_cuda or value.is_cuda, \\\"CUDA input required by run\\\")\\n39:         require(value.dtype == torch.float16, \\\"float16 input required\\\")\\n40:         require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n41:         require(bool(torch.isfinite(value).all()), \\\"all input components must be finite\\\")\\n42:     require(numerator.shape == denominator.shape and numerator.device == denominator.device, \\\"inputs must have the same shape and device\\\")\\n43:     require(bool((denominator != 0).any(dim=1).all()), \\\"each complex denominator must be nonzero\\\")\\n44:     return {\\\"valid\\\": True, \\\"size\\\": numerator.shape[0]}\\n45: \\n46: \\n47: def run(numerator, denominator):\\n48:     \\\"\\\"\\\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\\\"\\\"\\\"\\n49:     validate_inputs(numerator, denominator)\\n50:     n = numerator.shape[0]\\n51:     with torch.cuda.device(numerator.device):\\n52:         output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\\n53:         _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\\n54:                                      N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n55:     return output\\n56: \\n57: \\n58: def reference(numerator, denominator):\\n59:     \\\"\\\"\\\"Direct real formulas in FP64; supports CPU tensors for comparison.\\\"\\\"\\\"\\n60:     validate_inputs(numerator, denominator, require_cuda=False)\\n61:     a, b = numerator.to(torch.float64).unbind(dim=1)\\n62:     c, d = denominator.to(torch.float64).unbind(dim=1)\\n63:     scale = c * c + d * d\\n64:     return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\\n65: \\n66: \\n67: def make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n68:     \\\"\\\"\\\"Convenience examples, not restrictions on the legal component values.\\\"\\\"\\\"\\n69:     generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n70:     numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n71:     denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n72:     zero = (denominator == 0).all(dim=1)\\n73:     denominator[zero, 0] = 1\\n74:     return numerator.to(device), denominator.to(device)\",\n    \"passed\": \"unknown\",\n    \"problem_text\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n    \"rounds\": null,\n    \"session_dir\": \"/root/cases/case_154\",\n    \"status\": \"unknown\",\n    \"test_code\": \"\"\n  },\n  \"claim_coverage\": {\n    \"all_open_claims_have_evidence\": true,\n    \"open_claim_ids\": []\n  },\n  \"claims\": [],\n  \"convergence\": null,\n  \"description_model\": {\n    \"contract_model\": [],\n    \"kernel_model\": [],\n    \"open_questions\": [],\n    \"risk_map\": [],\n    \"scope_notes\": []\n  },\n  \"entry\": \"case_154\",\n  \"history\": [\n    {\n      \"role\": \"orchestrator\",\n      \"round\": 1,\n      \"text\": \"Loading artifact context for the agent.\",\n      \"tool_calls\": [\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"load_artifact\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"inspect_problem\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\"\n          },\n          \"tool\": \"list_artifact_files\"\n        },\n        {\n          \"args\": {\n            \"entry\": \"case_154\",\n            \"path\": \"meta.json\"\n          },\n          \"tool\": \"read_artifact_file\"\n        }\n      ]\n    }\n  ],\n  \"open_description_tasks\": [],\n  \"recent_description_updates\": [],\n  \"skeptic_review\": null,\n  \"tool_events\": [\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:53:32Z\",\n      \"id\": \"t1\",\n      \"output\": {\n        \"artifact_files\": [\n          \"kernel.py\",\n          \"meta.json\",\n          \"problem.txt\"\n        ],\n        \"entry\": \"case_154\",\n        \"has_error\": null,\n        \"kernel_code\": \"\\\"\\\"\\\"Elementwise complex division on finite binary16 components.\\n\\nOriginal synthetic Triton implementation of standard complex arithmetic.\\n\\\"\\\"\\\"\\nimport torch\\nimport triton\\nimport triton.language as tl\\n\\n\\n@triton.jit\\ndef _divide(X, Y, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\\n    active = index < N\\n    a = tl.load(X + 2 * index, mask=active, other=0).to(tl.float32)\\n    b = tl.load(X + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n    c = tl.load(Y + 2 * index, mask=active, other=1).to(tl.float32)\\n    d = tl.load(Y + 2 * index + 1, mask=active, other=0).to(tl.float32)\\n    scale = c * c + d * d\\n    real_numerator = a * c + b * d\\n    imag_numerator = b * c - a * d\\n    real = tl.div_rn(real_numerator, scale)\\n    imag = tl.div_rn(imag_numerator, scale)\\n    tl.store(OUT + 2 * index, real, mask=active)\\n    tl.store(OUT + 2 * index + 1, imag, mask=active)\\n\\n\\ndef validate_inputs(numerator, denominator, require_cuda=True):\\n    \\\"\\\"\\\"Enforce the complete public tensor and component domain.\\\"\\\"\\\"\\n    def require(condition, message):\\n        if not condition:\\n            raise ValueError(message)\\n    require(not torch.is_inference_mode_enabled(), \\\"ordinary execution mode required\\\")\\n    for value in (numerator, denominator):\\n        require(type(value) is torch.Tensor, \\\"ordinary torch.Tensor required\\\")\\n        require(value.layout == torch.strided and value.is_contiguous(), \\\"contiguous strided input required\\\")\\n        require(not value.requires_grad and not value.is_inference(), \\\"ordinary non-gradient input required\\\")\\n        require(not value.is_neg() and not value.is_conj(), \\\"logical view flags are outside this domain\\\")\\n        require(not require_cuda or value.is_cuda, \\\"CUDA input required by run\\\")\\n        require(value.dtype == torch.float16, \\\"float16 input required\\\")\\n        require(value.ndim == 2 and value.shape[1] == 2 and 1 <= value.shape[0] <= 131072, \\\"shape must be [N,2], 1<=N<=131072\\\")\\n        require(bool(torch.isfinite(value).all()), \\\"all input components must be finite\\\")\\n    require(numerator.shape == denominator.shape and numerator.device == denominator.device, \\\"inputs must have the same shape and device\\\")\\n    require(bool((denominator != 0).any(dim=1).all()), \\\"each complex denominator must be nonzero\\\")\\n    return {\\\"valid\\\": True, \\\"size\\\": numerator.shape[0]}\\n\\n\\ndef run(numerator, denominator):\\n    \\\"\\\"\\\"Return a fresh [N,2] FP32 tensor containing real and imaginary parts.\\\"\\\"\\\"\\n    validate_inputs(numerator, denominator)\\n    n = numerator.shape[0]\\n    with torch.cuda.device(numerator.device):\\n        output = torch.empty((n, 2), dtype=torch.float32, device=numerator.device)\\n        _divide[(triton.cdiv(n, 256),)](numerator, denominator, output,\\n                                     N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\\n    return output\\n\\n\\ndef reference(numerator, denominator):\\n    \\\"\\\"\\\"Direct real formulas in FP64; supports CPU tensors for comparison.\\\"\\\"\\\"\\n    validate_inputs(numerator, denominator, require_cuda=False)\\n    a, b = numerator.to(torch.float64).unbind(dim=1)\\n    c, d = denominator.to(torch.float64).unbind(dim=1)\\n    scale = c * c + d * d\\n    return torch.stack(((a * c + b * d) / scale, (b * c - a * d) / scale), dim=1)\\n\\n\\ndef make_inputs(device=\\\"cuda\\\", size=4093, seed=0):\\n    \\\"\\\"\\\"Convenience examples, not restrictions on the legal component values.\\\"\\\"\\\"\\n    generator = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    numerator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n    denominator = torch.randn((size, 2), generator=generator).to(torch.float16)\\n    zero = (denominator == 0).all(dim=1)\\n    denominator[zero, 0] = 1\\n    return numerator.to(device), denominator.to(device)\\n\",\n        \"passed\": null,\n        \"problem_text\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"rounds\": null,\n        \"session_dir\": \"/root/cases/case_154\",\n        \"status\": \"unknown\",\n        \"test_code\": \"\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"load_artifact\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:53:32Z\",\n      \"id\": \"t2\",\n      \"output\": {\n        \"content\": \"Compute the elementwise mathematical complex quotient of two input tensors.\\n\\nEach input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return\\n\\n    real = (a*c + b*d) / (c*c + d*d)\\n    imag = (b*c - a*d) / (c*c + d*d).\\n\\nThese expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is\\n\\n    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).\\n\\nThe tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\\n\\nInputs and complete public domain:\\n- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.\\n- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.\\n- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.\\n- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.\\n\\nReturn a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.\\n\\nvalidate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.\\n\\nComplex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.\\n\\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\\n\",\n        \"entry\": \"case_154\",\n        \"exists\": true,\n        \"path\": \"problem.txt\"\n      },\n      \"status\": \"ok\",\n      \"tool\": \"inspect_problem\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\"\n      },\n      \"created_at\": \"2026-10-18T06:53:32Z\",\n      \"id\": \"t3\",\n      \"output\": {\n        \"entry\": \"case_154\",\n        \"files\": [\n          {\n            \"kind\": \"kernel_source\",\n            \"path\": \"kernel.py\",\n            \"size_bytes\": 3728\n          },\n          {\n            \"kind\": \"metadata\",\n            \"path\": \"meta.json\",\n            \"size_bytes\": 3\n          },\n          {\n            \"kind\": \"problem\",\n            \"path\": \"problem.txt\",\n            \"size_bytes\": 2482\n          }\n        ]\n      },\n      \"status\": \"ok\",\n      \"tool\": \"list_artifact_files\"\n    },\n    {\n      \"args\": {\n        \"entry\": \"case_154\",\n        \"path\": \"meta.json\"\n      },\n      \"created_at\": \"2026-10-18T06:53:32Z\",\n      \"id\": \"t4\",\n      \"output\": {\n        \"content\": \"{}\\n\",\n        \"entry\": \"case_154\",\n        \"kind\": \"metadata\",\n        \"path\": \"meta.json\",\n        \"size_chars\": 3,\n        \"truncated\": false\n      },\n      \"status\": \"ok\",\n      \"tool\": \"read_artifact_file\"\n    }\n  ]\n}\n\nartifact.kernel_code above is the complete kernel source with line numbers, artifact.problem_text is the operative contract in full, and artifact.artifact_files lists every file the artifact holds. All three are present on every turn. Do not spend a turn re-reading them. Read what you have and act on it.\n\nReturn your next action using the JSON protocol.\n\n=== Output budget ===\n{\"total_output_tokens\": 32768, \"used_output_tokens\": 0, \"remaining_output_tokens\": 32768, \"debate_phase\": \"normal\", \"normal_turn_cap\": 8192, \"closeout_reserve\": 8192}\nOutput usage includes reasoning. Keep this turn focused; do not spend the entire allowance planning a large probe before obtaining evidence."
+    }
+  ],
+  "max_tokens": 8192,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_kernel_source",
+        "description": "Read a line-numbered kernel.py source slice from a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "start_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "end_line": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inspect_problem",
+        "description": "Read the problem/spec text for a dataset artifact.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_artifact_files",
+        "description": "List files inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_artifact_file",
+        "description": "Read a controlled text file path inside one dataset artifact directory.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "entry",
+            "path"
+          ],
+          "properties": {
+            "entry": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "max_chars": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "record_description_update",
+        "description": "Record a structured Describer update to the shared description model.",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resolved_task_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "contract_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "kernel_model": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "risk_map": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "scope_notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "open_questions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "impact_on_claims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_claim_ledger",
+        "description": "Read the current claim ledger.",
+        "parameters": {
+          "type": "object",
+          "required": [],
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "low"
+}

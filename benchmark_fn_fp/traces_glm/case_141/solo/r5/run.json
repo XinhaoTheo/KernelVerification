@@ -1,0 +1,1682 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_141",
+    "has_error": null,
+    "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+    "passed": null,
+    "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_141",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T02:13:51Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:17:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3166307396b0de61267020365e2194f8f00ab43e74e190109fa448390f7a27a0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "d9e8b24f81c9c3f56df69d0ea385af27a7a341f0c7c614913233259e67d22ede"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "ce58c249fd826da59c5de728d14eea3829abbe2dfe24b0945890d2fb745b571d"
+              }
+            ],
+            "duration_s": 112.30968,
+            "exit_code": 0,
+            "expected_signal": null,
+            "first_failure_value": 3435973841,
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [
+                [
+                  3435973841,
+                  490853406,
+                  490853405
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  490853406
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  490853407
+                ],
+                [
+                  3435973862,
+                  490853409,
+                  490853408
+                ],
+                [
+                  3435973869,
+                  490853410,
+                  490853409
+                ],
+                [
+                  3489660929,
+                  498522990,
+                  498522989
+                ],
+                [
+                  3489660936,
+                  498522991,
+                  498522990
+                ],
+                [
+                  3489660943,
+                  498522992,
+                  498522991
+                ],
+                [
+                  3489660950,
+                  498522993,
+                  498522992
+                ],
+                [
+                  3489660957,
+                  498522994,
+                  498522993
+                ]
+              ],
+              "mismatches_over_all_uint32": 582888419
+            },
+            "kernel_quotient": 490853406,
+            "mismatch_examples": [
+              [
+                3435973841,
+                490853406,
+                490853405
+              ],
+              [
+                3435973848,
+                490853407,
+                490853406
+              ],
+              [
+                3489660929,
+                498522990,
+                498522989
+              ]
+            ],
+            "note": "counts above ~3.75e9 inflated by host int64 overflow; examples listed are below that threshold and valid",
+            "reported_total_mismatches": 582888419,
+            "stderr": "",
+            "stdout": "MULT 2454267027 SHIFT 34\n{\"mismatches_over_all_uint32\": 582888419, \"examples\": [[3435973841, 490853406, 490853405], [3435973848, 490853407, 490853406], [3435973855, 490853408, 490853407], [3435973862, 490853409, 490853408], [3435973869, 490853410, 490853409], [3489660929, 498522990, 498522989], [3489660936, 498522991, 498522990], [3489660943, 498522992, 498522991], [3489660950, 498522993, 498522992], [3489660957, 498522994, 498522993]]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Reciprocal constants (MULT=2454267027=ceil(2^34/7), SHIFT=34) compute floor(v/7) incorrectly starting at the legal uint32 value 3435973841 (computed q=490853406 vs true 490853405), with mismatches repeating every 7 thereafter. Overflow caveat: the total count is unreliable above v\u22483.75e9 due to signed int64 wrap in the host check, but the first mismatch examples are below that threshold and are exact, and a quotient overestimate by 1 also forces col out of [0,6]. This matches GPU behavior (see t9).",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "Reciprocal division with a single precomputed multiplier and shift is only exact on a bounded value range; the shift/multiplier choice (_SHIFT=34, ceil multiplier) must be proven to cover all 2^32 inputs, and an off-by-one in the constant bounds silently corrupts row/col for large indices.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295, and every coordinate must equal the integer mathematical target EXACTLY; any division method is allowed only if it satisfies this for every legal index."
+        }
+      ],
+      "scope_rationale": "The contract requires exact row=floor(idx/7) and col=idx-7*row for every uint32 value; a quotient error at any legal index violates the exactness requirement.",
+      "statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T02:17:12Z"
+    },
+    {
+      "created_at": "2026-10-18T02:13:51Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:17:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ecc74ed873d8a689bdd7b5cba66f54d11ca98e5e0c59104d9147febbf4fe4d06"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "fafd6e3c234742aa907ffa248a17ee56270687700649b944fb9d496af462ff49"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "6e60cecd51769e99a30a98862f82e250da3fa27a771f726a7fe44eefd0240db2"
+              }
+            ],
+            "duration_s": 5.812353,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "boundaries_exact": true,
+              "boundary_7r_plus_c": true,
+              "input_preserved": true,
+              "n=131072_exact": false,
+              "n=1_exact": true,
+              "n=255_exact": false,
+              "n=256_exact": false,
+              "n=257_exact": false,
+              "n=4093_exact": false,
+              "offset_view_exact": false
+            },
+            "n=131072_exact": false,
+            "n=1_exact": true,
+            "n=255_exact": false,
+            "n=256_exact": false,
+            "n=257_exact": false,
+            "n=4093_exact": false,
+            "offset_view_exact": false,
+            "stderr": "",
+            "stdout": "{\"boundaries_exact\": true, \"boundary_7r_plus_c\": true, \"n=1_exact\": true, \"n=255_exact\": false, \"n=256_exact\": false, \"n=257_exact\": false, \"n=4093_exact\": false, \"n=131072_exact\": false, \"offset_view_exact\": false, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "End-to-end GPU comparison run() vs reference(): exact for tiny boundary lists and N=1, but false for N=255, 256, 257, 4093, 131072 and contiguous offset views \u2014 make_inputs random uint32 values above ~3435973841 (0.8*2^32) produce wrong row (and thus col) coordinates, violating the exactness requirement for legal indices. Input tensor itself was preserved.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "run() with masked loads/stores and fresh output allocation is straightforward, but a runtime comparison on representative N values (including extremes 0, 4294967295, and various N sizes) is needed to confirm end-to-end behavior matches reference exactly.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Return a fresh uint32 [N,2] tensor on indices.device with columns [row,col]; every col in [0,6] and 7*row+col equals the original index exactly; 1<=N<=131072."
+        }
+      ],
+      "scope_rationale": "The contract requires the returned tensor to be a fresh [N,2] uint32 with exact coordinates for N in [1,131072]; run() must satisfy this on admitted inputs.",
+      "statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes).",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T02:17:12Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_141",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_141",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 19.164842224,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll record a claim that the reciprocal-multiplication constants might be wrong for some uint32 values (the classic failure mode for this operator class), then exhaustively verify the arithmetic on the GPU.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Reciprocal division with a single precomputed multiplier and shift is only exact on a bounded value range; the shift/multiplier choice (_SHIFT=34, ceil multiplier) must be proven to cover all 2^32 inputs, and an off-by-one in the constant bounds silently corrupts row/col for large indices.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295, and every coordinate must equal the integer mathematical target EXACTLY; any division method is allowed only if it satisfies this for every legal index."
+              }
+            ],
+            "scope_rationale": "The contract requires exact row=floor(idx/7) and col=idx-7*row for every uint32 value; a quotient error at any legal index violates the exactness requirement.",
+            "statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "run() with masked loads/stores and fresh output allocation is straightforward, but a runtime comparison on representative N values (including extremes 0, 4294967295, and various N sizes) is needed to confirm end-to-end behavior matches reference exactly.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Return a fresh uint32 [N,2] tensor on indices.device with columns [row,col]; every col in [0,6] and 7*row+col equals the original index exactly; 1<=N<=131072."
+              }
+            ],
+            "scope_rationale": "The contract requires the returned tensor to be a fresh [N,2] uint32 with exact coordinates for N in [1,131072]; run() must satisfy this on admitted inputs.",
+            "statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 19.165,
+        "input_tokens": 8994,
+        "output_tokens": 1336
+      }
+    },
+    {
+      "duration_s": 9.505679186999998,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll verify the reciprocal-division constants exhaustively over all 2^32 uint32 values (chunked int64 arithmetic mirrors the kernel's uint64 math), then test the actual Triton kernel end-to-end.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch\n\nMULT = ((1 << 34) + 6) // 7\nSHIFT = 34\nassert MULT == (1 << 34 + 7 - 1) // 7  # placeholder sanity, actual value below\nMULT = ((1 << 34) + 7 - 1) // 7\nprint(\"MULT\", MULT, \"SHIFT\", SHIFT, \"MULT*7\", MULT*7)\n\nbad = 0\nbad_examples = []\nCH = 1 << 28\nfor base in range(0, 1 << 32, CH):\n    v = torch.arange(base, base + CH, dtype=torch.int64)\n    q = (v * MULT) >> SHIFT\n    ref = v // 7\n    diff = (q != ref).sum().item()\n    bad += diff\n    if diff:\n        idx = (q != ref).nonzero()[:5].flatten().tolist()\n        bad_examples += [(base + i, int((base+i)*MULT >> SHIFT), (base+i)//7) for i in idx]\nprint(\"total mismatches over all 2^32 uint32 values:\", bad)\nprint(\"examples (value, computed q, true q):\", bad_examples[:10])\nimport json\nprint(json.dumps({\"mismatches\": bad, \"examples\": bad_examples[:10]}))\n",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.506,
+        "input_tokens": 11488,
+        "output_tokens": 589
+      }
+    },
+    {
+      "duration_s": 8.950945664000002,
+      "role": "solo",
+      "round": 4,
+      "text": "The previous probe failed on my own bad sanity assert, so it decided nothing. I'll rerun a clean exhaustive check of the constants for c1, and in parallel run an end-to-end GPU comparison of run() vs reference() for c2.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\nSHIFT = 34\nMULT = ((1 << SHIFT) + 7 - 1) // 7\nprint(\"MULT\", MULT, \"SHIFT\", SHIFT)\nbad = 0\nexamples = []\nCH = 1 << 28\nfor base in range(0, 1 << 32, CH):\n    v = torch.arange(base, base + CH, dtype=torch.int64)\n    q = (v * MULT) >> SHIFT\n    ref = v // 7\n    m = q != ref\n    diff = int(m.sum())\n    bad += diff\n    if diff:\n        idx = m.nonzero()[:5].flatten().tolist()\n        examples += [(base + i, int((base + i) * MULT >> SHIFT), (base + i) // 7) for i in idx]\nprint(json.dumps({\"mismatches_over_all_uint32\": bad, \"examples\": examples[:10]}))\n",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\nresults = {}\n# boundary values\nvals = [0, 1, 6, 7, 13, 14, 4294967294, 4294967295, 4294967289]\nx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = run(x); ref = reference(x.cpu())\nresults[\"boundaries_exact\"] = bool(torch.equal(out.cpu(), ref))\n# invariant check\nv64 = x.cpu().to(torch.int64)\nok = bool(((out[:,0].cpu().to(torch.int64)*7 + out[:,1].cpu().to(torch.int64)) == v64).all())\nresults[\"boundary_7r_plus_c\"] = ok\n# sizes incl. non-multiples of 256 and max N\nfor n in [1, 255, 256, 257, 4093, 131072]:\n    (idx,) = make_inputs(device=\"cuda\", size=n, seed=n)\n    o = run(idx); r = reference(idx.cpu())\n    results[f\"n={n}_exact\"] = bool(torch.equal(o.cpu(), r))\n# contiguous view with nonzero storage offset\nbig = torch.randint(0, 1<<32, (300,), dtype=torch.int64).to(torch.uint32).cuda()\nview = big[37:267]  # contiguous, offset 37\nassert view.is_contiguous()\nresults[\"offset_view_exact\"] = bool(torch.equal(run(view).cpu(), reference(view.cpu())))\n# input preserved\nbefore = view.clone()\nrun(view)\nresults[\"input_preserved\"] = bool(torch.equal(view, before))\nprint(json.dumps(results))\n",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.951,
+        "input_tokens": 13356,
+        "output_tokens": 747
+      }
+    },
+    {
+      "duration_s": 13.924098721999997,
+      "role": "solo",
+      "round": 5,
+      "text": "t8's int64 host check itself may overflow signed int64 (v*MULT \u2248 1.05e19 > 2^63), so I'll trust the GPU end-to-end probe t9, which shows real failures for N\u2265255. I need to inspect one mismatch case to confirm the defect is in the kernel output (not the comparison).",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2<arg_key>code</arg_key><arg_value>import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\n(idx,) = make_inputs(device=\"cuda\", size=255, seed=255)\no = run(idx).cpu()\nr = reference(idx.cpu())\nv = idx.cpu().to(torch.int64)\nmism = (o != r).any(dim=1)\nres = {\n  \"n\": 255,\n  \"n_mismatched_rows\": int(mism.sum()),\n  \"first_bad_indices_hex\": [hex(int(x)) for x in idx.cpu()[mism][:5].tolist()],\n  \"kernel_rows\": o[mism][:5,0].tolist(),\n  \"ref_rows\": r[mism][:5,0].tolist(),\n  \"kernel_cols\": o[mism][:5,1].tolist(),\n  \"ref_cols\": r[mism][:5,1].tolist(),\n}\n# smallest failing value\nbad_vals = idx.cpu()[mism].to(torch.int64)\nres[\"min_bad_value\"] = int(bad_vals.min()) if len(bad_vals) else None\nres[\"max_bad_value\"] = int(bad_vals.max()) if len(bad_vals) else None\n# test threshold: scan values around 3435973841 (where host probe found first error)\nedges = torch.tensor([3435973830, 3435973840, 3435973841, 3435973841+7, 2**32-1, 2**32-8], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"edge_kernel\"] = oe.tolist()\nres[\"edge_ref\"] = re.tolist()\nprint(json.dumps(res))\n",
+            "code": "see above",
+            "expected_signal": "mismatched row values for large uint32 indices",
+            "timeout_s": 120,
+            "use_gpu": true
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 13.924,
+        "input_tokens": 18686,
+        "output_tokens": 927
+      }
+    },
+    {
+      "duration_s": 28.232922445999975,
+      "role": "solo",
+      "round": 6,
+      "text": "t9 already shows real GPU failures (n\u2265255 exact-comparison false), but the failed t10 call left the mismatch uncharacterized, and t8's host arithmetic overflows int64 above ~3.75e9. I'll run a clean GPU probe pinpointing a concrete wrong coordinate at a legal uint32 value.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference\n\nres = {}\n# values chosen to straddle the first known mismatch from exact math\nedges = torch.tensor([0, 6, 7, 3435973840, 3435973841, 3435973842, 3435973847, 3435973848, 2**31, 2**32-1], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"kernel_rows_cols\"] = oe.tolist()\nres[\"ref_rows_cols\"] = re.tolist()\nres[\"edge_exact\"] = (oe == re).all(dim=1).tolist()\n# a dense scan of one 7-block around the mismatch\nscan = torch.arange(3435973841, 3435973841+14, dtype=torch.int64).to(torch.uint32).cuda()\nos_ = run(scan).cpu(); rs = reference(scan.cpu())\nres[\"scan_exact\"] = bool((os_ == rs).all())\nres[\"scan_first_mismatch\"] = None\nm = (os_ != rs).any(dim=1)\nif m.any():\n    i = int(m.nonzero()[0])\n    res[\"scan_first_mismatch\"] = {\"value\": int(scan[i]), \"kernel\": os_[i].tolist(), \"ref\": rs[i].tolist()}\n# random 4093 on GPU: count mismatches and invariant violations\ntorch.manual_seed(0)\nx = torch.randint(0, 1<<32, (4093,), dtype=torch.int64).to(torch.uint32).cuda()\no = run(x).cpu(); r = reference(x.cpu())\nmism = (o != r).any(dim=1)\nv64 = x.cpu().to(torch.int64)\ninv = ((o[:,0].to(torch.int64)*7 + o[:,1].to(torch.int64)) == v64)\nres[\"random_4093\"] = {\"n_mismatch_vs_ref\": int(mism.sum()), \"n_invariant_violations\": int((~inv).sum()),\n                      \"min_bad_value\": int(v64[mism].min()) if mism.any() else None}\nprint(json.dumps(res))\n",
+            "expected_signal": "kernel row differs from reference at legal uint32 values; 7*row+col invariant broken",
+            "timeout_s": 120
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 28.233,
+        "input_tokens": 20816,
+        "output_tokens": 2203
+      }
+    },
+    {
+      "duration_s": 17.650184230000008,
+      "role": "solo",
+      "round": 7,
+      "text": "t8's exhaustive host check has an int64-overflow caveat above ~3.75e9 (inflating the total count), but its first mismatch examples (e.g. value 3435973841 \u2192 kernel q 490853406 vs true 490853405) are below the overflow threshold and are valid, and t9's GPU end-to-end run confirms real failures on the actual kernel. I'll finalize both probes as confirming evidence.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "first_failure_value": 3435973841,
+              "kernel_quotient": 490853406,
+              "mismatch_examples": [
+                [
+                  3435973841,
+                  490853406,
+                  490853405
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  490853406
+                ],
+                [
+                  3489660929,
+                  498522990,
+                  498522989
+                ]
+              ],
+              "note": "counts above ~3.75e9 inflated by host int64 overflow; examples listed are below that threshold and valid",
+              "reported_total_mismatches": 582888419
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Reciprocal constants (MULT=2454267027=ceil(2^34/7), SHIFT=34) compute floor(v/7) incorrectly starting at the legal uint32 value 3435973841 (computed q=490853406 vs true 490853405), with mismatches repeating every 7 thereafter. Overflow caveat: the total count is unreliable above v\u22483.75e9 due to signed int64 wrap in the host check, but the first mismatch examples are below that threshold and are exact, and a quotient overestimate by 1 also forces col out of [0,6]. This matches GPU behavior (see t9).",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "n=131072_exact": false,
+              "n=1_exact": true,
+              "n=255_exact": false,
+              "n=256_exact": false,
+              "n=257_exact": false,
+              "n=4093_exact": false,
+              "offset_view_exact": false
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "End-to-end GPU comparison run() vs reference(): exact for tiny boundary lists and N=1, but false for N=255, 256, 257, 4093, 131072 and contiguous offset views \u2014 make_inputs random uint32 values above ~3435973841 (0.8*2^32) produce wrong row (and thus col) coordinates, violating the exactness requirement for legal indices. Input tensor itself was preserved.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 17.65,
+        "input_tokens": 22405,
+        "output_tokens": 1375
+      }
+    },
+    {
+      "duration_s": 7.785895341999975,
+      "role": "solo",
+      "round": 8,
+      "text": "Both claims are confirmed with in-scope evidence: the reciprocal-multiplication constants (MULT=2454267027, SHIFT=34) overestimate floor(v/7) starting at legal value 3435973841, and the actual GPU kernel's run() output mismatches reference() on admitted inputs (N=255, 256, 257, 4093, 131072, offset views). The contract demands exactness for every uint32 value. This is decisive for a reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The kernel's reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7)=2454267027, SHIFT=34) do not compute floor(value/7) exactly over the full uint32 domain the contract requires. Exhaustive host arithmetic check (tool event t8, finalized as c1.e1) found the first mismatch at the legal value 3435973841 (kernel quotient 490853406 vs true 490853405), with mismatches repeating every 7 thereafter; the reported total count above ~3.75e9 is inflated by int64 overflow in the host checker, but the cited failing examples are below that threshold and exact. End-to-end GPU comparison (tool event t9, finalized as c2.e1) confirms the defect in the real kernel: run() vs reference() is exact only for tiny hand-picked boundary lists and N=1, and mismatches for N=255, 256, 257, 4093, 131072 and a contiguous offset view \u2014 i.e., random legal uint32 values above ~3435973841 (about 20% of the domain) get wrong row and col, breaking both the exact-coordinate and 7*row+col invariants the contract demands for every legal index. Input tensor preservation and output tensor layout were fine, but the exactness requirement is violated on admitted inputs, so the implementation fails the contract.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.786,
+        "input_tokens": 29581,
+        "output_tokens": 471
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:31Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_141",
+        "has_error": null,
+        "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+        "passed": null,
+        "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_141",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:31Z",
+      "id": "t2",
+      "output": {
+        "content": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_141",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:31Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_141",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3125
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2050
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_141",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T02:13:31Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_141",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "Reciprocal division with a single precomputed multiplier and shift is only exact on a bounded value range; the shift/multiplier choice (_SHIFT=34, ceil multiplier) must be proven to cover all 2^32 inputs, and an off-by-one in the constant bounds silently corrupts row/col for large indices.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295, and every coordinate must equal the integer mathematical target EXACTLY; any division method is allowed only if it satisfies this for every legal index."
+          }
+        ],
+        "scope_rationale": "The contract requires exact row=floor(idx/7) and col=idx-7*row for every uint32 value; a quotient error at any legal index violates the exactness requirement.",
+        "statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates."
+      },
+      "created_at": "2026-10-18T02:13:51Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T02:13:51Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "Reciprocal division with a single precomputed multiplier and shift is only exact on a bounded value range; the shift/multiplier choice (_SHIFT=34, ceil multiplier) must be proven to cover all 2^32 inputs, and an off-by-one in the constant bounds silently corrupts row/col for large indices.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295, and every coordinate must equal the integer mathematical target EXACTLY; any division method is allowed only if it satisfies this for every legal index."
+          }
+        ],
+        "scope_rationale": "The contract requires exact row=floor(idx/7) and col=idx-7*row for every uint32 value; a quotient error at any legal index violates the exactness requirement.",
+        "statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates.",
+        "status": "open",
+        "updated_at": "2026-10-18T02:13:51Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "run() with masked loads/stores and fresh output allocation is straightforward, but a runtime comparison on representative N values (including extremes 0, 4294967295, and various N sizes) is needed to confirm end-to-end behavior matches reference exactly.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Return a fresh uint32 [N,2] tensor on indices.device with columns [row,col]; every col in [0,6] and 7*row+col equals the original index exactly; 1<=N<=131072."
+          }
+        ],
+        "scope_rationale": "The contract requires the returned tensor to be a fresh [N,2] uint32 with exact coordinates for N in [1,131072]; run() must satisfy this on admitted inputs.",
+        "statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes)."
+      },
+      "created_at": "2026-10-18T02:13:51Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T02:13:51Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "run() with masked loads/stores and fresh output allocation is straightforward, but a runtime comparison on representative N values (including extremes 0, 4294967295, and various N sizes) is needed to confirm end-to-end behavior matches reference exactly.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Return a fresh uint32 [N,2] tensor on indices.device with columns [row,col]; every col in [0,6] and 7*row+col equals the original index exactly; 1<=N<=131072."
+          }
+        ],
+        "scope_rationale": "The contract requires the returned tensor to be a fresh [N,2] uint32 with exact coordinates for N in [1,131072]; run() must satisfy this on admitted inputs.",
+        "statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes).",
+        "status": "open",
+        "updated_at": "2026-10-18T02:13:51Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch\n\nMULT = ((1 << 34) + 6) // 7\nSHIFT = 34\nassert MULT == (1 << 34 + 7 - 1) // 7  # placeholder sanity, actual value below\nMULT = ((1 << 34) + 7 - 1) // 7\nprint(\"MULT\", MULT, \"SHIFT\", SHIFT, \"MULT*7\", MULT*7)\n\nbad = 0\nbad_examples = []\nCH = 1 << 28\nfor base in range(0, 1 << 32, CH):\n    v = torch.arange(base, base + CH, dtype=torch.int64)\n    q = (v * MULT) >> SHIFT\n    ref = v // 7\n    diff = (q != ref).sum().item()\n    bad += diff\n    if diff:\n        idx = (q != ref).nonzero()[:5].flatten().tolist()\n        bad_examples += [(base + i, int((base+i)*MULT >> SHIFT), (base+i)//7) for i in idx]\nprint(\"total mismatches over all 2^32 uint32 values:\", bad)\nprint(\"examples (value, computed q, true q):\", bad_examples[:10])\nimport json\nprint(json.dumps({\"mismatches\": bad, \"examples\": bad_examples[:10]}))\n",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T02:14:05Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "e79f33550f932ddc11dd3fd06d33ad6af0b6acd855c217aff0009228db0c038b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "84dc4fbbb68a6711636db55fc1dae5e4d9bdd65e4118c8a410ff058f973eaa45"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates.",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 4.485396,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "e79f33550f932ddc11dd3fd06d33ad6af0b6acd855c217aff0009228db0c038b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "84dc4fbbb68a6711636db55fc1dae5e4d9bdd65e4118c8a410ff058f973eaa45"
+              }
+            ],
+            "duration_s": 4.485396,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r5/real_kernel_challenges/case_141/solo/probes/t7_probe.py\", line 5, in <module>\n    assert MULT == (1 << 34 + 7 - 1) // 7  # placeholder sanity, actual value below\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r5/real_kernel_challenges/case_141/solo/probes/t7_probe.py\", line 5, in <module>\n    assert MULT == (1 << 34 + 7 - 1) // 7  # placeholder sanity, actual value below\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\nSHIFT = 34\nMULT = ((1 << SHIFT) + 7 - 1) // 7\nprint(\"MULT\", MULT, \"SHIFT\", SHIFT)\nbad = 0\nexamples = []\nCH = 1 << 28\nfor base in range(0, 1 << 32, CH):\n    v = torch.arange(base, base + CH, dtype=torch.int64)\n    q = (v * MULT) >> SHIFT\n    ref = v // 7\n    m = q != ref\n    diff = int(m.sum())\n    bad += diff\n    if diff:\n        idx = m.nonzero()[:5].flatten().tolist()\n        examples += [(base + i, int((base + i) * MULT >> SHIFT), (base + i) // 7) for i in idx]\nprint(json.dumps({\"mismatches_over_all_uint32\": bad, \"examples\": examples[:10]}))\n",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T02:16:06Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "3166307396b0de61267020365e2194f8f00ab43e74e190109fa448390f7a27a0"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "d9e8b24f81c9c3f56df69d0ea385af27a7a341f0c7c614913233259e67d22ede"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "ce58c249fd826da59c5de728d14eea3829abbe2dfe24b0945890d2fb745b571d"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates.",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 112.30968,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3166307396b0de61267020365e2194f8f00ab43e74e190109fa448390f7a27a0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "d9e8b24f81c9c3f56df69d0ea385af27a7a341f0c7c614913233259e67d22ede"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "ce58c249fd826da59c5de728d14eea3829abbe2dfe24b0945890d2fb745b571d"
+              }
+            ],
+            "duration_s": 112.30968,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [
+                [
+                  3435973841,
+                  490853406,
+                  490853405
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  490853406
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  490853407
+                ],
+                [
+                  3435973862,
+                  490853409,
+                  490853408
+                ],
+                [
+                  3435973869,
+                  490853410,
+                  490853409
+                ],
+                [
+                  3489660929,
+                  498522990,
+                  498522989
+                ],
+                [
+                  3489660936,
+                  498522991,
+                  498522990
+                ],
+                [
+                  3489660943,
+                  498522992,
+                  498522991
+                ],
+                [
+                  3489660950,
+                  498522993,
+                  498522992
+                ],
+                [
+                  3489660957,
+                  498522994,
+                  498522993
+                ]
+              ],
+              "mismatches_over_all_uint32": 582888419
+            },
+            "stderr": "",
+            "stdout": "MULT 2454267027 SHIFT 34\n{\"mismatches_over_all_uint32\": 582888419, \"examples\": [[3435973841, 490853406, 490853405], [3435973848, 490853407, 490853406], [3435973855, 490853408, 490853407], [3435973862, 490853409, 490853408], [3435973869, 490853410, 490853409], [3489660929, 498522990, 498522989], [3489660936, 498522991, 498522990], [3489660943, 498522992, 498522991], [3489660950, 498522993, 498522992], [3489660957, 498522994, 498522993]]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "examples": [
+            [
+              3435973841,
+              490853406,
+              490853405
+            ],
+            [
+              3435973848,
+              490853407,
+              490853406
+            ],
+            [
+              3435973855,
+              490853408,
+              490853407
+            ],
+            [
+              3435973862,
+              490853409,
+              490853408
+            ],
+            [
+              3435973869,
+              490853410,
+              490853409
+            ],
+            [
+              3489660929,
+              498522990,
+              498522989
+            ],
+            [
+              3489660936,
+              498522991,
+              498522990
+            ],
+            [
+              3489660943,
+              498522992,
+              498522991
+            ],
+            [
+              3489660950,
+              498522993,
+              498522992
+            ],
+            [
+              3489660957,
+              498522994,
+              498522993
+            ]
+          ],
+          "mismatches_over_all_uint32": 582888419
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "MULT 2454267027 SHIFT 34\n{\"mismatches_over_all_uint32\": 582888419, \"examples\": [[3435973841, 490853406, 490853405], [3435973848, 490853407, 490853406], [3435973855, 490853408, 490853407], [3435973862, 490853409, 490853408], [3435973869, 490853410, 490853409], [3489660929, 498522990, 498522989], [3489660936, 498522991, 498522990], [3489660943, 498522992, 498522991], [3489660950, 498522993, 498522992], [3489660957, 498522994, 498522993]]}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\nresults = {}\n# boundary values\nvals = [0, 1, 6, 7, 13, 14, 4294967294, 4294967295, 4294967289]\nx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = run(x); ref = reference(x.cpu())\nresults[\"boundaries_exact\"] = bool(torch.equal(out.cpu(), ref))\n# invariant check\nv64 = x.cpu().to(torch.int64)\nok = bool(((out[:,0].cpu().to(torch.int64)*7 + out[:,1].cpu().to(torch.int64)) == v64).all())\nresults[\"boundary_7r_plus_c\"] = ok\n# sizes incl. non-multiples of 256 and max N\nfor n in [1, 255, 256, 257, 4093, 131072]:\n    (idx,) = make_inputs(device=\"cuda\", size=n, seed=n)\n    o = run(idx); r = reference(idx.cpu())\n    results[f\"n={n}_exact\"] = bool(torch.equal(o.cpu(), r))\n# contiguous view with nonzero storage offset\nbig = torch.randint(0, 1<<32, (300,), dtype=torch.int64).to(torch.uint32).cuda()\nview = big[37:267]  # contiguous, offset 37\nassert view.is_contiguous()\nresults[\"offset_view_exact\"] = bool(torch.equal(run(view).cpu(), reference(view.cpu())))\n# input preserved\nbefore = view.clone()\nrun(view)\nresults[\"input_preserved\"] = bool(torch.equal(view, before))\nprint(json.dumps(results))\n",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T02:16:12Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "ecc74ed873d8a689bdd7b5cba66f54d11ca98e5e0c59104d9147febbf4fe4d06"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "fafd6e3c234742aa907ffa248a17ee56270687700649b944fb9d496af462ff49"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "6e60cecd51769e99a30a98862f82e250da3fa27a771f726a7fe44eefd0240db2"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes).",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 5.812353,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ecc74ed873d8a689bdd7b5cba66f54d11ca98e5e0c59104d9147febbf4fe4d06"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "fafd6e3c234742aa907ffa248a17ee56270687700649b944fb9d496af462ff49"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "6e60cecd51769e99a30a98862f82e250da3fa27a771f726a7fe44eefd0240db2"
+              }
+            ],
+            "duration_s": 5.812353,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "boundaries_exact": true,
+              "boundary_7r_plus_c": true,
+              "input_preserved": true,
+              "n=131072_exact": false,
+              "n=1_exact": true,
+              "n=255_exact": false,
+              "n=256_exact": false,
+              "n=257_exact": false,
+              "n=4093_exact": false,
+              "offset_view_exact": false
+            },
+            "stderr": "",
+            "stdout": "{\"boundaries_exact\": true, \"boundary_7r_plus_c\": true, \"n=1_exact\": true, \"n=255_exact\": false, \"n=256_exact\": false, \"n=257_exact\": false, \"n=4093_exact\": false, \"n=131072_exact\": false, \"offset_view_exact\": false, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "boundaries_exact": true,
+          "boundary_7r_plus_c": true,
+          "input_preserved": true,
+          "n=131072_exact": false,
+          "n=1_exact": true,
+          "n=255_exact": false,
+          "n=256_exact": false,
+          "n=257_exact": false,
+          "n=4093_exact": false,
+          "offset_view_exact": false
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"boundaries_exact\": true, \"boundary_7r_plus_c\": true, \"n=1_exact\": true, \"n=255_exact\": false, \"n=256_exact\": false, \"n=257_exact\": false, \"n=4093_exact\": false, \"n=131072_exact\": false, \"offset_view_exact\": false, \"input_preserved\": true}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2<arg_key>code</arg_key><arg_value>import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\n(idx,) = make_inputs(device=\"cuda\", size=255, seed=255)\no = run(idx).cpu()\nr = reference(idx.cpu())\nv = idx.cpu().to(torch.int64)\nmism = (o != r).any(dim=1)\nres = {\n  \"n\": 255,\n  \"n_mismatched_rows\": int(mism.sum()),\n  \"first_bad_indices_hex\": [hex(int(x)) for x in idx.cpu()[mism][:5].tolist()],\n  \"kernel_rows\": o[mism][:5,0].tolist(),\n  \"ref_rows\": r[mism][:5,0].tolist(),\n  \"kernel_cols\": o[mism][:5,1].tolist(),\n  \"ref_cols\": r[mism][:5,1].tolist(),\n}\n# smallest failing value\nbad_vals = idx.cpu()[mism].to(torch.int64)\nres[\"min_bad_value\"] = int(bad_vals.min()) if len(bad_vals) else None\nres[\"max_bad_value\"] = int(bad_vals.max()) if len(bad_vals) else None\n# test threshold: scan values around 3435973841 (where host probe found first error)\nedges = torch.tensor([3435973830, 3435973840, 3435973841, 3435973841+7, 2**32-1, 2**32-8], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"edge_kernel\"] = oe.tolist()\nres[\"edge_ref\"] = re.tolist()\nprint(json.dumps(res))\n",
+        "code": "see above",
+        "expected_signal": "mismatched row values for large uint32 indices",
+        "timeout_s": 120,
+        "use_gpu": true
+      },
+      "created_at": "2026-10-18T02:16:26Z",
+      "id": "t10",
+      "output": {
+        "error": {
+          "message": "unknown claim id: c2<arg_key>code</arg_key><arg_value>import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\n(idx,) = make_inputs(device=\"cuda\", size=255, seed=255)\no = run(idx).cpu()\nr = reference(idx.cpu())\nv = idx.cpu().to(torch.int64)\nmism = (o != r).any(dim=1)\nres = {\n  \"n\": 255,\n  \"n_mismatched_rows\": int(mism.sum()),\n  \"first_bad_indices_hex\": [hex(int(x)) for x in idx.cpu()[mism][:5].tolist()],\n  \"kernel_rows\": o[mism][:5,0].tolist(),\n  \"ref_rows\": r[mism][:5,0].tolist(),\n  \"kernel_cols\": o[mism][:5,1].tolist(),\n  \"ref_cols\": r[mism][:5,1].tolist(),\n}\n# smallest failing value\nbad_vals = idx.cpu()[mism].to(torch.int64)\nres[\"min_bad_value\"] = int(bad_vals.min()) if len(bad_vals) else None\nres[\"max_bad_value\"] = int(bad_vals.max()) if len(bad_vals) else None\n# test threshold: scan values around 3435973841 (where host probe found first error)\nedges = torch.tensor([3435973830, 3435973840, 3435973841, 3435973841+7, 2**32-1, 2**32-8], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"edge_kernel\"] = oe.tolist()\nres[\"edge_ref\"] = re.tolist()\nprint(json.dumps(res))\n",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t10",
+        "message": "unknown claim id: c2<arg_key>code</arg_key><arg_value>import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference, make_inputs\n\n(idx,) = make_inputs(device=\"cuda\", size=255, seed=255)\no = run(idx).cpu()\nr = reference(idx.cpu())\nv = idx.cpu().to(torch.int64)\nmism = (o != r).any(dim=1)\nres = {\n  \"n\": 255,\n  \"n_mismatched_rows\": int(mism.sum()),\n  \"first_bad_indices_hex\": [hex(int(x)) for x in idx.cpu()[mism][:5].tolist()],\n  \"kernel_rows\": o[mism][:5,0].tolist(),\n  \"ref_rows\": r[mism][:5,0].tolist(),\n  \"kernel_cols\": o[mism][:5,1].tolist(),\n  \"ref_cols\": r[mism][:5,1].tolist(),\n}\n# smallest failing value\nbad_vals = idx.cpu()[mism].to(torch.int64)\nres[\"min_bad_value\"] = int(bad_vals.min()) if len(bad_vals) else None\nres[\"max_bad_value\"] = int(bad_vals.max()) if len(bad_vals) else None\n# test threshold: scan values around 3435973841 (where host probe found first error)\nedges = torch.tensor([3435973830, 3435973840, 3435973841, 3435973841+7, 2**32-1, 2**32-8], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"edge_kernel\"] = oe.tolist()\nres[\"edge_ref\"] = re.tolist()\nprint(json.dumps(res))\n",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_141\")\nfrom kernel import run, reference\n\nres = {}\n# values chosen to straddle the first known mismatch from exact math\nedges = torch.tensor([0, 6, 7, 3435973840, 3435973841, 3435973842, 3435973847, 3435973848, 2**31, 2**32-1], dtype=torch.uint32, device=\"cuda\")\noe = run(edges).cpu(); re = reference(edges.cpu())\nres[\"edge_values\"] = edges.cpu().tolist()\nres[\"kernel_rows_cols\"] = oe.tolist()\nres[\"ref_rows_cols\"] = re.tolist()\nres[\"edge_exact\"] = (oe == re).all(dim=1).tolist()\n# a dense scan of one 7-block around the mismatch\nscan = torch.arange(3435973841, 3435973841+14, dtype=torch.int64).to(torch.uint32).cuda()\nos_ = run(scan).cpu(); rs = reference(scan.cpu())\nres[\"scan_exact\"] = bool((os_ == rs).all())\nres[\"scan_first_mismatch\"] = None\nm = (os_ != rs).any(dim=1)\nif m.any():\n    i = int(m.nonzero()[0])\n    res[\"scan_first_mismatch\"] = {\"value\": int(scan[i]), \"kernel\": os_[i].tolist(), \"ref\": rs[i].tolist()}\n# random 4093 on GPU: count mismatches and invariant violations\ntorch.manual_seed(0)\nx = torch.randint(0, 1<<32, (4093,), dtype=torch.int64).to(torch.uint32).cuda()\no = run(x).cpu(); r = reference(x.cpu())\nmism = (o != r).any(dim=1)\nv64 = x.cpu().to(torch.int64)\ninv = ((o[:,0].to(torch.int64)*7 + o[:,1].to(torch.int64)) == v64)\nres[\"random_4093\"] = {\"n_mismatch_vs_ref\": int(mism.sum()), \"n_invariant_violations\": int((~inv).sum()),\n                      \"min_bad_value\": int(v64[mism].min()) if mism.any() else None}\nprint(json.dumps(res))\n",
+        "expected_signal": "kernel row differs from reference at legal uint32 values; 7*row+col invariant broken",
+        "timeout_s": 120
+      },
+      "created_at": "2026-10-18T02:16:54Z",
+      "id": "t11",
+      "output": {
+        "error": {
+          "message": "claim c1 already has a successful probe you have not interpreted: event t8. Call finalize_probe_evidence(event_id='t8', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t8 first and then probe again.",
+          "recoverable": true,
+          "type": "LedgerError"
+        },
+        "error_type": "LedgerError",
+        "event_id": "t11",
+        "message": "claim c1 already has a successful probe you have not interpreted: event t8. Call finalize_probe_evidence(event_id='t8', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t8 first and then probe again.",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "first_failure_value": 3435973841,
+          "kernel_quotient": 490853406,
+          "mismatch_examples": [
+            [
+              3435973841,
+              490853406,
+              490853405
+            ],
+            [
+              3435973848,
+              490853407,
+              490853406
+            ],
+            [
+              3489660929,
+              498522990,
+              498522989
+            ]
+          ],
+          "note": "counts above ~3.75e9 inflated by host int64 overflow; examples listed are below that threshold and valid",
+          "reported_total_mismatches": 582888419
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Reciprocal constants (MULT=2454267027=ceil(2^34/7), SHIFT=34) compute floor(v/7) incorrectly starting at the legal uint32 value 3435973841 (computed q=490853406 vs true 490853405), with mismatches repeating every 7 thereafter. Overflow caveat: the total count is unreliable above v\u22483.75e9 due to signed int64 wrap in the host check, but the first mismatch examples are below that threshold and are exact, and a quotient overestimate by 1 also forces col out of [0,6]. This matches GPU behavior (see t9).",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T02:17:12Z",
+      "id": "t12",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T02:13:51Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T02:17:12Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "3166307396b0de61267020365e2194f8f00ab43e74e190109fa448390f7a27a0"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "d9e8b24f81c9c3f56df69d0ea385af27a7a341f0c7c614913233259e67d22ede"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "ce58c249fd826da59c5de728d14eea3829abbe2dfe24b0945890d2fb745b571d"
+                  }
+                ],
+                "duration_s": 112.30968,
+                "exit_code": 0,
+                "expected_signal": null,
+                "first_failure_value": 3435973841,
+                "json_parse_error": null,
+                "json_result": {
+                  "examples": [
+                    [
+                      3435973841,
+                      490853406,
+                      490853405
+                    ],
+                    [
+                      3435973848,
+                      490853407,
+                      490853406
+                    ],
+                    [
+                      3435973855,
+                      490853408,
+                      490853407
+                    ],
+                    [
+                      3435973862,
+                      490853409,
+                      490853408
+                    ],
+                    [
+                      3435973869,
+                      490853410,
+                      490853409
+                    ],
+                    [
+                      3489660929,
+                      498522990,
+                      498522989
+                    ],
+                    [
+                      3489660936,
+                      498522991,
+                      498522990
+                    ],
+                    [
+                      3489660943,
+                      498522992,
+                      498522991
+                    ],
+                    [
+                      3489660950,
+                      498522993,
+                      498522992
+                    ],
+                    [
+                      3489660957,
+                      498522994,
+                      498522993
+                    ]
+                  ],
+                  "mismatches_over_all_uint32": 582888419
+                },
+                "kernel_quotient": 490853406,
+                "mismatch_examples": [
+                  [
+                    3435973841,
+                    490853406,
+                    490853405
+                  ],
+                  [
+                    3435973848,
+                    490853407,
+                    490853406
+                  ],
+                  [
+                    3489660929,
+                    498522990,
+                    498522989
+                  ]
+                ],
+                "note": "counts above ~3.75e9 inflated by host int64 overflow; examples listed are below that threshold and valid",
+                "reported_total_mismatches": 582888419,
+                "stderr": "",
+                "stdout": "MULT 2454267027 SHIFT 34\n{\"mismatches_over_all_uint32\": 582888419, \"examples\": [[3435973841, 490853406, 490853405], [3435973848, 490853407, 490853406], [3435973855, 490853408, 490853407], [3435973862, 490853409, 490853408], [3435973869, 490853410, 490853409], [3489660929, 498522990, 498522989], [3489660936, 498522991, 498522990], [3489660943, 498522992, 498522991], [3489660950, 498522993, 498522992], [3489660957, 498522994, 498522993]]}\n",
+                "timed_out": false,
+                "timeout_s": 300
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Reciprocal constants (MULT=2454267027=ceil(2^34/7), SHIFT=34) compute floor(v/7) incorrectly starting at the legal uint32 value 3435973841 (computed q=490853406 vs true 490853405), with mismatches repeating every 7 thereafter. Overflow caveat: the total count is unreliable above v\u22483.75e9 due to signed int64 wrap in the host check, but the first mismatch examples are below that threshold and are exact, and a quotient overestimate by 1 also forces col out of [0,6]. This matches GPU behavior (see t9).",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "Reciprocal division with a single precomputed multiplier and shift is only exact on a bounded value range; the shift/multiplier choice (_SHIFT=34, ceil multiplier) must be proven to cover all 2^32 inputs, and an off-by-one in the constant bounds silently corrupts row/col for large indices.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295, and every coordinate must equal the integer mathematical target EXACTLY; any division method is allowed only if it satisfies this for every legal index."
+            }
+          ],
+          "scope_rationale": "The contract requires exact row=floor(idx/7) and col=idx-7*row for every uint32 value; a quotient error at any legal index violates the exactness requirement.",
+          "statement": "The reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7), SHIFT=34) fail to compute floor(value/7) exactly for some legal uint32 values, producing wrong row/col coordinates.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T02:17:12Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:17:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "3166307396b0de61267020365e2194f8f00ab43e74e190109fa448390f7a27a0"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "d9e8b24f81c9c3f56df69d0ea385af27a7a341f0c7c614913233259e67d22ede"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "ce58c249fd826da59c5de728d14eea3829abbe2dfe24b0945890d2fb745b571d"
+              }
+            ],
+            "duration_s": 112.30968,
+            "exit_code": 0,
+            "expected_signal": null,
+            "first_failure_value": 3435973841,
+            "json_parse_error": null,
+            "json_result": {
+              "examples": [
+                [
+                  3435973841,
+                  490853406,
+                  490853405
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  490853406
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  490853407
+                ],
+                [
+                  3435973862,
+                  490853409,
+                  490853408
+                ],
+                [
+                  3435973869,
+                  490853410,
+                  490853409
+                ],
+                [
+                  3489660929,
+                  498522990,
+                  498522989
+                ],
+                [
+                  3489660936,
+                  498522991,
+                  498522990
+                ],
+                [
+                  3489660943,
+                  498522992,
+                  498522991
+                ],
+                [
+                  3489660950,
+                  498522993,
+                  498522992
+                ],
+                [
+                  3489660957,
+                  498522994,
+                  498522993
+                ]
+              ],
+              "mismatches_over_all_uint32": 582888419
+            },
+            "kernel_quotient": 490853406,
+            "mismatch_examples": [
+              [
+                3435973841,
+                490853406,
+                490853405
+              ],
+              [
+                3435973848,
+                490853407,
+                490853406
+              ],
+              [
+                3489660929,
+                498522990,
+                498522989
+              ]
+            ],
+            "note": "counts above ~3.75e9 inflated by host int64 overflow; examples listed are below that threshold and valid",
+            "reported_total_mismatches": 582888419,
+            "stderr": "",
+            "stdout": "MULT 2454267027 SHIFT 34\n{\"mismatches_over_all_uint32\": 582888419, \"examples\": [[3435973841, 490853406, 490853405], [3435973848, 490853407, 490853406], [3435973855, 490853408, 490853407], [3435973862, 490853409, 490853408], [3435973869, 490853410, 490853409], [3489660929, 498522990, 498522989], [3489660936, 498522991, 498522990], [3489660943, 498522992, 498522991], [3489660950, 498522993, 498522992], [3489660957, 498522994, 498522993]]}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Reciprocal constants (MULT=2454267027=ceil(2^34/7), SHIFT=34) compute floor(v/7) incorrectly starting at the legal uint32 value 3435973841 (computed q=490853406 vs true 490853405), with mismatches repeating every 7 thereafter. Overflow caveat: the total count is unreliable above v\u22483.75e9 due to signed int64 wrap in the host check, but the first mismatch examples are below that threshold and are exact, and a quotient overestimate by 1 also forces col out of [0,6]. This matches GPU behavior (see t9).",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "n=131072_exact": false,
+          "n=1_exact": true,
+          "n=255_exact": false,
+          "n=256_exact": false,
+          "n=257_exact": false,
+          "n=4093_exact": false,
+          "offset_view_exact": false
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "End-to-end GPU comparison run() vs reference(): exact for tiny boundary lists and N=1, but false for N=255, 256, 257, 4093, 131072 and contiguous offset views \u2014 make_inputs random uint32 values above ~3435973841 (0.8*2^32) produce wrong row (and thus col) coordinates, violating the exactness requirement for legal indices. Input tensor itself was preserved.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T02:17:12Z",
+      "id": "t13",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T02:13:51Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T02:17:12Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "ecc74ed873d8a689bdd7b5cba66f54d11ca98e5e0c59104d9147febbf4fe4d06"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "fafd6e3c234742aa907ffa248a17ee56270687700649b944fb9d496af462ff49"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "6e60cecd51769e99a30a98862f82e250da3fa27a771f726a7fe44eefd0240db2"
+                  }
+                ],
+                "duration_s": 5.812353,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "boundaries_exact": true,
+                  "boundary_7r_plus_c": true,
+                  "input_preserved": true,
+                  "n=131072_exact": false,
+                  "n=1_exact": true,
+                  "n=255_exact": false,
+                  "n=256_exact": false,
+                  "n=257_exact": false,
+                  "n=4093_exact": false,
+                  "offset_view_exact": false
+                },
+                "n=131072_exact": false,
+                "n=1_exact": true,
+                "n=255_exact": false,
+                "n=256_exact": false,
+                "n=257_exact": false,
+                "n=4093_exact": false,
+                "offset_view_exact": false,
+                "stderr": "",
+                "stdout": "{\"boundaries_exact\": true, \"boundary_7r_plus_c\": true, \"n=1_exact\": true, \"n=255_exact\": false, \"n=256_exact\": false, \"n=257_exact\": false, \"n=4093_exact\": false, \"n=131072_exact\": false, \"offset_view_exact\": false, \"input_preserved\": true}\n",
+                "timed_out": false,
+                "timeout_s": 300
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "End-to-end GPU comparison run() vs reference(): exact for tiny boundary lists and N=1, but false for N=255, 256, 257, 4093, 131072 and contiguous offset views \u2014 make_inputs random uint32 values above ~3435973841 (0.8*2^32) produce wrong row (and thus col) coordinates, violating the exactness requirement for legal indices. Input tensor itself was preserved.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "run() with masked loads/stores and fresh output allocation is straightforward, but a runtime comparison on representative N values (including extremes 0, 4294967295, and various N sizes) is needed to confirm end-to-end behavior matches reference exactly.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Return a fresh uint32 [N,2] tensor on indices.device with columns [row,col]; every col in [0,6] and 7*row+col equals the original index exactly; 1<=N<=131072."
+            }
+          ],
+          "scope_rationale": "The contract requires the returned tensor to be a fresh [N,2] uint32 with exact coordinates for N in [1,131072]; run() must satisfy this on admitted inputs.",
+          "statement": "The Triton kernel's end-to-end run() output differs from reference() for some admitted inputs (e.g. boundary values 0, 4294967295, or particular N sizes).",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T02:17:12Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:17:12Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "ecc74ed873d8a689bdd7b5cba66f54d11ca98e5e0c59104d9147febbf4fe4d06"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "fafd6e3c234742aa907ffa248a17ee56270687700649b944fb9d496af462ff49"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "6e60cecd51769e99a30a98862f82e250da3fa27a771f726a7fe44eefd0240db2"
+              }
+            ],
+            "duration_s": 5.812353,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "boundaries_exact": true,
+              "boundary_7r_plus_c": true,
+              "input_preserved": true,
+              "n=131072_exact": false,
+              "n=1_exact": true,
+              "n=255_exact": false,
+              "n=256_exact": false,
+              "n=257_exact": false,
+              "n=4093_exact": false,
+              "offset_view_exact": false
+            },
+            "n=131072_exact": false,
+            "n=1_exact": true,
+            "n=255_exact": false,
+            "n=256_exact": false,
+            "n=257_exact": false,
+            "n=4093_exact": false,
+            "offset_view_exact": false,
+            "stderr": "",
+            "stdout": "{\"boundaries_exact\": true, \"boundary_7r_plus_c\": true, \"n=1_exact\": true, \"n=255_exact\": false, \"n=256_exact\": false, \"n=257_exact\": false, \"n=4093_exact\": false, \"n=131072_exact\": false, \"offset_view_exact\": false, \"input_preserved\": true}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "End-to-end GPU comparison run() vs reference(): exact for tiny boundary lists and N=1, but false for N=255, 256, 257, 4093, 131072 and contiguous offset views \u2014 make_inputs random uint32 values above ~3435973841 (0.8*2^32) produce wrong row (and thus col) coordinates, violating the exactness requirement for legal indices. Input tensor itself was preserved.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel's reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7)=2454267027, SHIFT=34) do not compute floor(value/7) exactly over the full uint32 domain the contract requires. Exhaustive host arithmetic check (tool event t8, finalized as c1.e1) found the first mismatch at the legal value 3435973841 (kernel quotient 490853406 vs true 490853405), with mismatches repeating every 7 thereafter; the reported total count above ~3.75e9 is inflated by int64 overflow in the host checker, but the cited failing examples are below that threshold and exact. End-to-end GPU comparison (tool event t9, finalized as c2.e1) confirms the defect in the real kernel: run() vs reference() is exact only for tiny hand-picked boundary lists and N=1, and mismatches for N=255, 256, 257, 4093, 131072 and a contiguous offset view \u2014 i.e., random legal uint32 values above ~3435973841 (about 20% of the domain) get wrong row and col, breaking both the exact-coordinate and 7*row+col invariants the contract demands for every legal index. Input tensor preservation and output tensor layout were fine, but the exactness requirement is violated on admitted inputs, so the implementation fails the contract.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T02:17:20Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-18T02:17:20Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The kernel's reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7)=2454267027, SHIFT=34) do not compute floor(value/7) exactly over the full uint32 domain the contract requires. Exhaustive host arithmetic check (tool event t8, finalized as c1.e1) found the first mismatch at the legal value 3435973841 (kernel quotient 490853406 vs true 490853405), with mismatches repeating every 7 thereafter; the reported total count above ~3.75e9 is inflated by int64 overflow in the host checker, but the cited failing examples are below that threshold and exact. End-to-end GPU comparison (tool event t9, finalized as c2.e1) confirms the defect in the real kernel: run() vs reference() is exact only for tiny hand-picked boundary lists and N=1, and mismatches for N=255, 256, 257, 4093, 131072 and a contiguous offset view \u2014 i.e., random legal uint32 values above ~3435973841 (about 20% of the domain) get wrong row and col, breaking both the exact-coordinate and 7*row+col invariants the contract demands for every legal index. Input tensor preservation and output tensor layout were fine, but the exactness requirement is violated on admitted inputs, so the implementation fails the contract.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-18T02:17:20Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The kernel's reciprocal-multiplication constants (MULTIPLIER=ceil(2^34/7)=2454267027, SHIFT=34) do not compute floor(value/7) exactly over the full uint32 domain the contract requires. Exhaustive host arithmetic check (tool event t8, finalized as c1.e1) found the first mismatch at the legal value 3435973841 (kernel quotient 490853406 vs true 490853405), with mismatches repeating every 7 thereafter; the reported total count above ~3.75e9 is inflated by int64 overflow in the host checker, but the cited failing examples are below that threshold and exact. End-to-end GPU comparison (tool event t9, finalized as c2.e1) confirms the defect in the real kernel: run() vs reference() is exact only for tiny hand-picked boundary lists and N=1, and mismatches for N=255, 256, 257, 4093, 131072 and a contiguous offset view \u2014 i.e., random legal uint32 values above ~3435973841 (about 20% of the domain) get wrong row and col, breaking both the exact-coordinate and 7*row+col invariants the contract demands for every legal index. Input tensor preservation and output tensor layout were fine, but the exactness requirement is violated on admitted inputs, so the implementation fails the contract.",
+    "verdict": "reject"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-31872d48",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The open claim c1 concerns NaN contamination from expired-window V positions inside scanned tiles. I'll build a domain-admitted case (B=1, Q=33, length=130, window=50 → lo=48, non-tile-aligned so positions 0–47 are scanned by the qb=0 program but disallowed for every query), poison pages 0–2 of K/V with NaN, invoke the Triton kernel directly, and compare against a manual FP64 reference that ignores garbage slots.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0f9ef0189cb10db",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, math, sys, importlib.util\\nimport torch\\n\\nspec = importlib.util.spec_from_file_location(\\\"k114\\\", \\\"/root/cases/case_114/kernel.py\\\")\\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\\nimport triton\\n\\ndev = \\\"cuda\\\"\\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\\nlength, window, P = 130, 50, 16\\nC = math.ceil(length / PAGE)  # 9\\n\\ng = torch.Generator().manual_seed(7)\\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half()\\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16)\\nv = torch.zeros_like(k)\\ntable = torch.arange(P, dtype=torch.int32).reshape(1, P)  # identity mapping, C=9 <= P\\nlengths = torch.tensor([length], dtype=torch.int32)\\n\\nlo = length - QT - window + 1  # 48\\n# Fill allowed positions [lo, length) with finite values; poison all earlier slots with NaN.\\nfor t in range(lo, length):\\n    p, s = t // PAGE, t % PAGE\\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\\nk[:3] = float(\\\"nan\\\"); v[:3] = float(\\\"nan\\\")   # pages covering positions 0..47 -> NaN\\nfor t in (q, k, v, table, lengths): t = t.to(dev)\\n\\n# Direct kernel launch, bypassing validate_inputs (garbage slots violate its finite check\\n# but are contractually admitted by problem.txt).\\nb, qt, hq, d = q.shape\\npage, hk = k.shape[1:3]\\ngroup = hq // hk\\nbq = 16 // group\\nout = torch.empty_like(q)\\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\\n    q, k, v, table, lengths, out,\\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\\n    num_warps=4, enable_fp_fusion=False,\\n)\\ntorch.cuda.synchronize()\\n\\n# Independent FP64 reference over exactly the allowed positions (ignore garbage slots).\\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\\nfor bb in range(b):\\n    ctx = int(lengths[bb]) - qt\\n    for r in range(qt):\\n        a = ctx + r\\n        end = a + 1\\n        begin = max(0, end - window)\\n        pos = torch.arange(begin, end, device=dev)\\n        mapped = table[bb, pos // page].long()\\n        kk = k[mapped, pos % page].double()\\n        vv = v[mapped, pos % page].double()\\n        for h in range(hq):\\n            kh = h // group\\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\\n            p_ = torch.softmax(s, dim=0)\\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\\n\\nfinite = bool(torch.isfinite(out).all())\\ndiff = (out.double() - ref).abs()\\ntol = 0.003 + 0.003 * ref.abs()\\nmax_err = float(diff.max()) if finite else float(\\\"nan\\\")\\nratio = float((diff / tol).max()) if finite else float(\\\"nan\\\")\\nnan_rows = torch.isnan(out).any(dim=-1)[:, :, 0].sum().item() if not finite else 0\\nprint(json.dumps({\\n    \\\"case\\\": {\\\"B\\\":B,\\\"Q\\\":QT,\\\"Hq\\\":HQ,\\\"Hkv\\\":HK,\\\"D\\\":D,\\\"S\\\":PAGE,\\\"length\\\":length,\\\"window\\\":window,\\\"lo\\\":lo,\\n             \\\"poisoned_positions\\\":\\\"[0,48) via NaN pages 0-2\\\"},\\n    \\\"metric\\\": \\\"output finiteness + per-element abs err vs FP64 reference (tolerance 0.003+0.003|target|)\\\",\\n    \\\"output_finite\\\": finite, \\\"nan_query_rows\\\": int(nan_rows),\\n    \\\"max_abs_err\\\": max_err, \\\"tolerance_ratio\\\": ratio, \\\"tol_pass\\\": bool(finite and (diff <= tol).all().item()),\\n}))\\n\", \"expected_signal\": \"If contamination occurs, output rows contain NaN (infinite/NaN outputs) while the FP64 reference on the same allowed positions is finite; otherwise output is finite and within the 0.003 tolerance.\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Design probe for c1: construct inputs within domain, window>0, poison V (and K) at expired positions inside scanned tiles, run kernel, compare to reference. Need to bypass validate_inputs? validate_inputs checks finiteness of positions from lo to length... positions = arange(lo, length) covers all allowed positions for any query — actually lo = max(0, length-qt-window+1); positions between lo and length includes expired positions (positions allowed for *some* query? For query row 0, allowed = [length-qt-window+1, length-qt]. For row Q-1, allowed up to length-1. positions arange(lo, length) includes positions allowed for row Q-1... window check: reference per-row uses begin=max(0,end-window). validate checks lo..length-1, i.e. all positions t>=lo are considered \"reachable by at least one allowed position\" — union of allowed = [lo, length-1]. So to poison expired positions, they must be < lo. Tile skipping: tile_start = max(0, first_key//TILE) where first_key = context + qb*BQ - WINDOW + 1. Expired positions < lo are in tiles before tile_start for qb=0... but for larger qb, first_key larger. Hmm, positions in scanned tile but disallowed for a query row: for row 0 of qb tile, allowed range starts at first_key. Tiles between tile_start and tile_end can include positions < first_key for some rows within the same qb. tile_start = first_key//TILE, so positions from tile_start*TILE to first_key-1 are scanned but disallowed for all rows in this qb program. Those are between lo(qb=0) and first_key(qb) — are they within [lo, length)? Yes for qb>0. But validate_inputs treats them as reachable... they're reachable for qb=0's queries? No — qb=0 first_key = lo. Positions >= lo are allowed for some query. Positions in [tile_start*TILE, first_key) where tile_start*TILE >= lo are >= lo, so considered finite by validate.\n\nHmm, but validate_inputs is just an assertion in kernel.py run(); the contract itself says only positions reachable by an allowed position must be finite. So I can construct a valid-per-contract input that fails validate_inputs. That's fine—probe can call the Triton kernel directly, or temporarily patch. Simpler: poison positions in [lo, first_key(qb=1)) region — but validate asserts finite for arange(lo, length). To probe the kernel itself, call _paged_attention directly, or monkeypatch validate_inputs. Better: craft inputs where the poisoned positions are disallowed for all queries yet inside scanned tiles. Positions t with t < lo are disallowed for all. Scanned tiles: tile_start for qb=0 is max(0, first_key//TILE) = lo//TILE. If lo is not tile-aligned, positions in [lo//TILE*TILE, lo) are scanned by qb=0 and disallowed for ALL queries. Those positions are < lo, contractually garbage-allowed.\n\nSo: choose params so lo not multiple of 64. E.g. length=130, qt=33, window=50 → lo = 130-33-50+1=48. lo//64=0, tile_start=0. Positions 0..47 are scanned in tile 0 but disallowed for every query. Poison V (and maybe K) there.\n\nAlso K contamination: tl.where with NaN score from K garbage — where should discard NaN (where returns -inf lane since cond false, doesn't propagate). But tl.max(scores,1) is computed before where? No, scores already where'd. Actually the risk: NaN in K gives NaN dot → where replaces with -inf, fine (where doesn't propagate). The V path: probabilities=0 for disallowed → 0*NaN=NaN in dot → accumulator NaN. That's the claim.\n\nProbe: build input via direct Triton call bypassing validate (call _paged_attention directly mimicking run), poison V at positions [0,48), check output vs reference (compute reference myself excluding those or via kernel.reference on clean cache plus manual). Easiest: create cache with NaN at those slots, run kernel via a patched run (monkeypatch kernel.validate_inputs to a no-op? but reference also validates). I'll compute my own FP64 reference inline. And compare.\n\nWrite probe code. Need triton available; GPU presumably. Use shapes: B=1, Q=33, Hq=2, Hkv=1, D=64, S(page)=16, P=16, C=ceil(130/16)=9. window=50, length=130.\n\nAlso qpos rows: grid = ceil(33/bq), group=2, bq=8, so 5 qb programs. lo for whole batch = 48.\n\nPoison V slots for positions t in [0,48): physical = table[0, t//16], slot t%16 — poison all pages not used by allowed positions? Positions 48..129 use pages 3..8. Pages 0..2 (positions 0..47) can be fully NaN in both K and V. But table entries: pages 0-2 map positions 0..47. Good.\n\nExpected: kernel output rows NaN (from tile 0 contamination). Also check the \"clean\" reference.\n\nWrite code:\n\nimport kernel module via path /root/cases/case_114/kernel.py, sys.path. Or exec file. Use importlib.\n\nCompute reference manually in torch FP64 replicating kernel.reference but with garbage allowed (skip validate). I'll write my own reference loop.\n\nPrint JSON: output_isfinite, nan_rows, max error vs reference, case params.\n\nRun as run_claim_probe for c1."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284773,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2432,
+    "prompt_tokens": 23585,
+    "total_tokens": 26017,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1231,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3952,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

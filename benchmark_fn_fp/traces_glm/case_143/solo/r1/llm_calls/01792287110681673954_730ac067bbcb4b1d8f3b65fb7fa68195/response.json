@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-21472ff8",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the kernel against the reference across all legal widths, batches, extreme values, and nonzero storage offsets.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-90b01217fa2535a8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport json, torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_143\\\")\\nimport kernel\\n\\nresults = []\\nmismatches = 0\\nfor width in (32, 64, 128):\\n    for seed in range(3):\\n        x = kernel.make_inputs(batch=7, width=width, seed=seed)[0]\\n        out = kernel.run(x)\\n        ref = kernel.reference(x)\\n        eq = torch.equal(out, ref)\\n        if not eq:\\n            mismatches += 1\\n            results.append({\\\"case\\\": \\\"random\\\", \\\"width\\\": width, \\\"seed\\\": seed, \\\"equal\\\": eq,\\n                            \\\"first_diff\\\": (out[0][out[0] != ref[0]]).tolist()[:5]})\\n        results.append({\\\"case\\\": \\\"random\\\", \\\"width\\\": width, \\\"seed\\\": seed, \\\"equal\\\": eq})\\n\\n# extremes\\nfor width in (32, 64, 128):\\n    for fill in (-32768, 32767):\\n        x = torch.full((3, width), fill, dtype=torch.int16, device=\\\"cuda\\\")\\n        out = kernel.run(x); ref = kernel.reference(x)\\n        eq = torch.equal(out, ref)\\n        mismatches += (not eq)\\n        results.append({\\\"case\\\": \\\"extreme\\\", \\\"width\\\": width, \\\"fill\\\": fill, \\\"equal\\\": eq})\\n\\n# max magnitude stress (alternating signs)\\nfor width in (32, 64, 128):\\n    vals = torch.tensor([(-32768 if (i % 2 == 0) else 32767) for i in range(width)], dtype=torch.int16, device=\\\"cuda\\\").unsqueeze(0).repeat(2, 1)\\n    out = kernel.run(vals); ref = kernel.reference(vals)\\n    eq = torch.equal(out, ref); mismatches += (not eq)\\n    results.append({\\\"case\\\": \\\"alternating\\\", \\\"width\\\": width, \\\"equal\\\": eq, \\\"max_abs\\\": int(out.abs().max())})\\n\\n# nonzero storage offset contiguous view\\nbase = torch.randint(-32768, 32768, (70,), dtype=torch.int16, device=\\\"cuda\\\")\\nx = base[5:5+64].contiguous().view(1, 64)\\nout = kernel.run(x); ref = kernel.reference(x)\\neq = torch.equal(out, ref); mismatches += (not eq)\\nresults.append({\\\"case\\\": \\\"storage_offset\\\", \\\"equal\\\": eq, \\\"offset\\\": x.storage_offset()})\\n\\n# batch boundary B=128\\nx = torch.randint(-32768, 32768, (128, 64), dtype=torch.int16, device=\\\"cuda\\\")\\nout = kernel.run(x); ref = kernel.reference(x)\\neq = torch.equal(out, ref); mismatches += (not eq)\\nresults.append({\\\"case\\\": \\\"batch128\\\", \\\"equal\\\": eq})\\n\\n# input preserved?\\nx0 = kernel.make_inputs()[0]; xc = x0.clone()\\nkernel.run(x0)\\nresults.append({\\\"case\\\": \\\"input_preserved\\\", \\\"equal\\\": torch.equal(x0, xc)})\\nprint(json.dumps({\\\"mismatches\\\": mismatches, \\\"results\\\": results}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792287111,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 704,
+    "prompt_tokens": 11328,
+    "total_tokens": 12032,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4644,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

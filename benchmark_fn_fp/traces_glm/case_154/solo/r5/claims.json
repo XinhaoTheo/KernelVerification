@@ -1,0 +1,77 @@
+[
+  {
+    "created_at": "2026-10-18T06:54:30Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T06:56:07Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "a3db1941cbc1636a7aa135ff5728a8a39e992eca3bdbf39d060a7f06b4766a09"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "38564d0a752185634598f4d4e20be673614da021c05246ab3472593b3f1db6e3"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "7c7d47e2201e5ecf2829ece2b0f6da691614ae1dc84f6b894cc6a4627432d572"
+            }
+          ],
+          "cases": "random sweeps at scales 65504/30000/1/1e-4/6.1e-5 (262144 components each), extreme magnitude quotient, subnormals, tricky-value grid (6400), make_inputs example (8186), single row",
+          "duration_s": 4.805118,
+          "exit_code": 0,
+          "expected_signal": "componentwise tolerance violations > 0 somewhere in the contract domain",
+          "explanation": "FP16 components are exact in FP32, so all products are exact; only the c*c+d*d sum and the final division round (~2^-24 relative each), far below the 5e-7 relative tolerance. Max possible quotient (~6e23) is finite in FP32.",
+          "json_parse_error": null,
+          "json_result": {
+            "total_violations": 0
+          },
+          "stderr": "",
+          "stdout": "random_scale_65504.0 {'violations': 0, 'components': 262144, 'worst_err_over_tol': 0.3228548920061426, 'detail': {}}\nrandom_scale_30000.0 {'violations': 0, 'components': 262144, 'worst_err_over_tol': 0.3093541606663196, 'detail': {}}\nrandom_scale_1.0 {'violations': 0, 'components': 262144, 'worst_err_over_tol': 0.28097268884663895, 'detail': {}}\nrandom_scale_0.0001 {'violations': 0, 'components': 262144, 'worst_err_over_tol': 0.2723149874306375, 'detail': {}}\nrandom_scale_6.1e-05 {'violations': 0, 'components': 262144, 'worst_err_over_tol': 0.11455531655776889, 'detail': {}}\nextreme_magnitude {'violations': 0, 'components': 2000, 'worst_err_over_tol': 0.005594312156421028, 'detail': {}}\nsubnormals {'violations': 0, 'components': 2000, 'worst_err_over_tol': 0.032393828634006944, 'detail': {}}\ngrid {'violations': 0, 'components': 6400, 'worst_err_over_tol': 0.1614415065945246, 'detail': {}}\nmake_inputs_example {'violations': 0, 'components': 8186, 'worst_err_over_tol': 0.2846909212969141, 'detail': {}}\nsingle_row {'violations': 0, 'components': 2, 'worst_err_over_tol': 0.01986821485111534, 'detail': {}}\nTOTAL_VIOLATIONS 0\n{\"total_violations\": 0}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "total_violations": 0,
+          "worst_err_over_tol": 0.3229
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Comprehensive adversarial sweep (\u22481.6M components across extreme-magnitude randoms, structured cancellation, subnormals, extreme quotients, value grid, N=1) found zero componentwise tolerance violations; worst error was 0.32x the allowed tolerance. The hypothesized FP32 cancellation failure does not occur because products of FP16 values are exact in FP32.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel converts FP16 components to FP32 and computes real_numerator = a*c+b*d, imag_numerator = b*c-a*d and scale = c*c+d*d in FP32, then divides. Products of large FP16 values (|a*c| > 2^24) round in FP32 with absolute error up to ~hundreds; when the two products in a numerator nearly cancel (|ac| \u2248 |bd|) the computed quotient can be off by ~1e-6..1e-5 in absolute terms while the exact target is ~0, whose tolerance is only 1e-7. The contract explicitly permits every finite FP16 combination and requires each component to meet 1e-7 + 5e-7*|target|, so this is a defect if it occurs.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"EVERY combination of finite FP16 component values is legal\" and \"abs(actual - target) <= 1e-7 + 5e-7 * abs(target)\" ... \"Compare EACH output component separately against its mathematical value\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "\"Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.\""
+      }
+    ],
+    "scope_rationale": "The contract's public domain includes every finite FP16 component combination and requires the componentwise tolerance abs(actual-target) <= 1e-7 + 5e-7*abs(target); any internal precision is allowed only if it meets this requirement.",
+    "statement": "The FP32 intermediate precision in the Triton kernel violates the componentwise tolerance (1e-7 + 5e-7*|target|) on adversarial inputs where the numerator products (a*c + b*d or b*c - a*d) catastrophically cancel while components are large FP16 values.",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T06:56:07Z"
+  }
+]

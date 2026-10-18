@@ -1,0 +1,1467 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_127",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise FP16-to-FP32 error-function approximation.\n\nOriginal Triton adaptation of the Abramowitz--Stegun five-coefficient formula.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _erf_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    t = tl.div_rn(1.0, 1.0 + 0.3275911 * magnitude)\n    polynomial = 1.06141 * t - 1.45315\n    polynomial = polynomial * t + 1.42141\n    polynomial = polynomial * t - 0.28450\n    polynomial = polynomial * t + 0.25483\n    polynomial = polynomial * t\n    envelope = tl.exp(-(magnitude * magnitude))\n    value = 1.0 - polynomial * envelope\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating erf of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _erf_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate erf in FP64, then round the final result to FP32.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.erf(x.to(torch.float64)).to(torch.float32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the error function elementwise on stored FP16 input values and return\nFP32 output. The mathematical target is\n\n  target[i] = erf(x[i])\n            = (2/sqrt(pi)) * integral from 0 to x[i] of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - erf(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target erf is defined in real arithmetic on the exact stored input value;\nit is not defined by any specific polynomial or by an intermediate FP16\nrounding step. Polynomial, rational or other approximations are permitted\nif they meet this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates erf in FP64 and rounds the final result to FP32; it accepts CPU\ninputs. make_inputs() supplies examples only. This is an original Triton\nadaptation of the standard Abramowitz--Stegun five-coefficient error-function\nformula. It is a synthetic benchmark implementation, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_127",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T00:52:33Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:53:10Z",
+          "data": {
+            "argmax_x_kernel": 0.50830078125,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "78124603e1a828d4d2d5f4f9ddcc75ffab6647db3fc539553330d58002c67c92"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "c90f3b74c4d3687361851fd6b5bf3b75e160ca305e9718e1a2ac1ceefa0d0cc9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "9e6e04719d654be6d879c345f8c4ecc0a226415f7f25ca9d102f1c53b1b3f209"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f1b2e093b4f3f83a5b2d8c3d33c64e1f415d45c67ff95a1f1c325ff563c66310"
+              }
+            ],
+            "count_violating_1e-6_kernel": 1394,
+            "count_violating_1e-6_truncated_formula": 1060,
+            "duration_s": 6.330522,
+            "exit_code": 0,
+            "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x_formula": 0.496826171875,
+              "argmax_x_kernel": 0.50830078125,
+              "count_violating_1e-6_kernel": 1394,
+              "count_violating_1e-6_truncated_formula": 1060,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+              "midrange_violating_kernel_0.3_3": 1388,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+            "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+            "midrange_violating_kernel_0.3_3": 1388,
+            "n_values": 63488,
+            "stderr": "n = 63488\n",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"argmax_x_kernel\": 0.50830078125, \"count_violating_1e-6_kernel\": 1394, \"max_abs_err_truncated_formula_fp64_vs_exact\": 1.0627250756067852e-06, \"argmax_x_formula\": 0.496826171875, \"count_violating_1e-6_truncated_formula\": 1060, \"midrange_violating_kernel_0.3_3\": 1388, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63,488 finite FP16 values: kernel max abs error vs exact (FP64) erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 absolute tolerance; 1,388 of those fall in the predicted 0.3<|x|<3 mid-range. The truncated-coefficient formula evaluated alone in FP64 already violates on 1,060 values (max 1.0627e-6 at x\u22480.4968), confirming coefficient truncation is the decisive cause. Tolerance is absolute-only per contract, so this is a confirmed in-scope violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The kernel uses truncated constants 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 instead of the full A&S values; per-coefficient truncation errors up to ~4.6e-6 weighted by the Gaussian envelope can produce total error above 1e-6 in the region 0.3<|x|<3 where exp(-x^2) is still near 1, violating the fixed absolute tolerance.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6. The relative tolerance is zero\" and \"EVERY finite FP16 value is legal\" and \"it is not defined by any specific polynomial ... if they meet this fixed absolute tolerance throughout the entire legal domain.\""
+        }
+      ],
+      "scope_rationale": "The contract requires abs error <= 1e-6 for every element over every finite FP16 value; the truncated-coefficient A&S evaluation may exceed this in the mid-range, which is squarely inside the stated legal domain.",
+      "statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T00:53:10Z"
+    },
+    {
+      "created_at": "2026-10-18T00:52:33Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:53:10Z",
+          "data": {
+            "argmax_x": 0.0038356781005859375,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "38641ed7ec033cf8975e978262c40f849675024bbfc0fdc71b970e82c89c849e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "af1c0e661de6535e9b29dc4f966530e20ba319464f5f8fcfec5cffa2f9ed3b41"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "60a06306d0c8097e9cb0d61189e2bb914c48fd67ffa9a34cea29cc5a3dfac800"
+              }
+            ],
+            "count_eval_err_gt_1e-6": 0,
+            "count_eval_err_gt_1e-7": 17300,
+            "count_eval_err_gt_5e-7": 52,
+            "duration_s": 4.193142,
+            "exit_code": 0,
+            "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 0.0038356781005859375,
+              "count_eval_err_gt_1e-6": 0,
+              "count_eval_err_gt_1e-7": 17300,
+              "count_eval_err_gt_5e-7": 52,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+            "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+            "n_values": 63488,
+            "stderr": "",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_fp64_formula\": 6.067829398936908e-07, \"argmax_x\": 0.0038356781005859375, \"count_eval_err_gt_1e-6\": 0, \"count_eval_err_gt_1e-7\": 17300, \"count_eval_err_gt_5e-7\": 52, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Isolating the FP32 evaluation chain by comparing kernel output to the identical truncated-coefficient formula evaluated in FP64 over all 63,488 finite FP16 values: the evaluation-chain error never exceeds 1e-6 (max 6.068e-7, only 52 values above 5e-7). The truncated formula alone already violates the tolerance (1,060 values, max 1.0627e-6), so coefficient truncation \u2014 not the FP32 evaluation chain (div_rn/tl.exp/Horner with fusion off) \u2014 is what pushes the total above the 1e-6 bar.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "tl.exp compiles to fast GPU exp whose accuracy is ~1 ulp relative but can be worse; combined with Horner-chain rounding in FP32 this could push borderline cases over the 1e-6 bar even where coefficient error alone stays just under it.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6\" with relative tolerance zero, for every finite FP16 value in the frozen T4/Triton 3.4 environment."
+        }
+      ],
+      "scope_rationale": "The tolerance contract applies on the frozen T4/Triton 3.4 hardware, so the actual tl.exp accuracy there is part of the budget; error contributions add on top of coefficient truncation.",
+      "statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T00:53:10Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+      "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+      "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+      "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+      "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+      "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+      "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+    ],
+    "open_questions": [
+      "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+      "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+    ],
+    "risk_map": [
+      "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+      "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+      "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+      "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+      "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+    ],
+    "scope_notes": [
+      "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+      "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+      "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+      "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+        "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+        "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+        "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T00:52:24Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+        "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+        "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+        "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+      ],
+      "open_questions": [
+        "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+        "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+      ],
+      "risk_map": [
+        "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+        "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+        "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+        "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+        "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+      ],
+      "scope_notes": [
+        "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+        "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+        "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+        "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+      ],
+      "summary": "case_127: FP16->FP32 elementwise erf via truncated-coefficient Abramowitz-Stegun 7.1.26 approximation; contract demands absolute error <=1e-6 over all finite FP16 values, which is exhaustively enumerable.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_127",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_127"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_127"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_127"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_127",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 40.457335578000006,
+      "role": "describer",
+      "round": 2,
+      "text": "The artifact is fully loaded (kernel source, problem text, meta). I have enough context to record the description model for this FP16\u2192FP32 erf case without further reads.\n\nKey observations: the contract demands absolute error \u2264 1e-6 against exact erf for **every finite FP16 value** (domain is exhaustively enumerable, ~65536 values), while the kernel implements the A&S 7.1.26 five-coefficient rational approximation with coefficients **truncated to 5\u20136 significant digits** (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) instead of the full-precision constants \u2014 the coefficient truncation errors (up to ~4.6e-6 each) cancel at x=0 but not generally, so mid-range |x| is the prime risk surface.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+              "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+              "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+              "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+              "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+              "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+              "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+            ],
+            "open_questions": [
+              "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+              "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+            ],
+            "risk_map": [
+              "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+              "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+              "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+              "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+              "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+            ],
+            "scope_notes": [
+              "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+              "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+              "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+              "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+            ],
+            "summary": "case_127: FP16->FP32 elementwise erf via truncated-coefficient Abramowitz-Stegun 7.1.26 approximation; contract demands absolute error <=1e-6 over all finite FP16 values, which is exhaustively enumerable."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 40.457,
+        "input_tokens": 6412,
+        "output_tokens": 3173
+      }
+    },
+    {
+      "duration_s": 9.681122717999997,
+      "role": "skeptic",
+      "round": 3,
+      "text": "I'll record the highest-risk claims tied to the stated 1e-6 absolute-tolerance contract over the exhaustive finite FP16 domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses truncated constants 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 instead of the full A&S values; per-coefficient truncation errors up to ~4.6e-6 weighted by the Gaussian envelope can produce total error above 1e-6 in the region 0.3<|x|<3 where exp(-x^2) is still near 1, violating the fixed absolute tolerance.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6. The relative tolerance is zero\" and \"EVERY finite FP16 value is legal\" and \"it is not defined by any specific polynomial ... if they meet this fixed absolute tolerance throughout the entire legal domain.\""
+              }
+            ],
+            "scope_rationale": "The contract requires abs error <= 1e-6 for every element over every finite FP16 value; the truncated-coefficient A&S evaluation may exceed this in the mid-range, which is squarely inside the stated legal domain.",
+            "statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "tl.exp compiles to fast GPU exp whose accuracy is ~1 ulp relative but can be worse; combined with Horner-chain rounding in FP32 this could push borderline cases over the 1e-6 bar even where coefficient error alone stays just under it.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6\" with relative tolerance zero, for every finite FP16 value in the frozen T4/Triton 3.4 environment."
+              }
+            ],
+            "scope_rationale": "The tolerance contract applies on the frozen T4/Triton 3.4 hardware, so the actual tl.exp accuracy there is part of the budget; error contributions add on top of coefficient truncation.",
+            "statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.681,
+        "input_tokens": 15703,
+        "output_tokens": 676
+      }
+    },
+    {
+      "duration_s": 15.450292015999999,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run two independent probes: an exhaustive FP16-domain sweep for c1 (kernel vs exact erf, with the truncated-coefficient FP64 formula error decomposed out), and for c2 the kernel vs the same truncated-coefficient formula evaluated in FP64 (isolating the FP32 evaluation-chain contribution). Both are independent, so I launch them together.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_127\")\nimport torch\nimport kernel as K\n\n# all finite FP16 values except +-inf/nan: keep those 65536 with finite bit patterns\nvals = torch.arange(65536, dtype=torch.int32)\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\nfinite = torch.isfinite(bits)\nxs = bits[finite]  # includes signed zeros, subnormals, +/-65504\nx_gpu = xs.to(torch.float16).to(\"cuda\")\nprint(\"n =\", x_gpu.numel(), file=sys.stderr)\n\nout = K.run(x_gpu)\nout64 = out.to(torch.float64).cpu()\n\nimport math\nref = torch.erf(xs)  # FP64 exact erf of the FP64 value of the stored FP16 number\n\n# truncated-coefficient formula evaluated in FP64 (isolates coefficient truncation)\nm = xs.abs()\nt = 1.0/(1.0+0.3275911*m)\np = 1.06141*t - 1.45315\np = p*t + 1.42141\np = p*t - 0.28450\np = p*t + 0.25483\np = p*t\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\n\nerr_total = (out64 - ref).abs()\nerr_coeff = (formula64 - ref).abs()\nmax_total, i1 = err_total.max(0)\nmax_coeff, i2 = err_coeff.max(0)\nviol = (err_total > 1e-6)\nviol_coeff = (err_coeff > 1e-6)\nprint(json.dumps({\n  \"n_values\": int(x_gpu.numel()),\n  \"max_abs_err_kernel_vs_exact_erf\": float(max_total),\n  \"argmax_x_kernel\": float(xs[i1]),\n  \"count_violating_1e-6_kernel\": int(viol.sum()),\n  \"max_abs_err_truncated_formula_fp64_vs_exact\": float(max_coeff),\n  \"argmax_x_formula\": float(xs[i2]),\n  \"count_violating_1e-6_truncated_formula\": int(viol_coeff.sum()),\n  \"midrange_violating_kernel_0.3_3\": int((viol & (m > 0.3) & (m < 3)).sum()),\n  \"tolerance\": 1e-6,\n}))\n",
+            "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_127\")\nimport torch\nimport kernel as K\n\nvals = torch.arange(65536, dtype=torch.int32)\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\nxs = bits[torch.isfinite(bits)]\nx_gpu = xs.to(torch.float16).to(\"cuda\")\n\nout = K.run(x_gpu)\nout64 = out.to(torch.float64).cpu()\n\n# same formula, same truncated coefficients, evaluated in FP64:\n# difference kernel vs this isolates the FP32 evaluation chain (div_rn, tl.exp, Horner, fusion off)\nm = xs.abs()\nt = 1.0/(1.0+0.3275911*m)\np = 1.06141*t - 1.45315\np = p*t + 1.42141\np = p*t - 0.28450\np = p*t + 0.25483\np = p*t\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\n\nerr_eval = (out64 - formula64).abs()\nerr_total = (out64 - torch.erf(xs)).abs()\nmax_eval, ie = err_eval.max(0)\nprint(json.dumps({\n  \"n_values\": int(x_gpu.numel()),\n  \"max_abs_err_kernel_vs_fp64_formula\": float(max_eval),\n  \"argmax_x\": float(xs[ie]),\n  \"count_eval_err_gt_1e-6\": int((err_eval > 1e-6).sum()),\n  \"count_eval_err_gt_1e-7\": int((err_eval > 1e-7).sum()),\n  \"count_eval_err_gt_5e-7\": int((err_eval > 5e-7).sum()),\n  \"max_abs_err_kernel_vs_exact_erf\": float(err_total.max()),\n  \"tolerance\": 1e-6,\n}))\n",
+            "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 15.45,
+        "input_tokens": 18901,
+        "output_tokens": 1254
+      }
+    },
+    {
+      "duration_s": 10.969220941000003,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes completed. The exhaustive FP16 sweep (63,488 finite values) shows the kernel exceeds the 1e-6 tolerance on 1,394 values (max 1.29e-6 near x\u22480.508, in the predicted mid-range), and the truncated-coefficient formula alone already violates on 1,060 values \u2014 confirming c1. The isolated FP32 evaluation-chain error never exceeds 1e-6 (max 6.07e-7), so it doesn't independently push the total over the bar \u2014 c2 is rebutted. Finalizing both now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "argmax_x_kernel": 0.50830078125,
+              "count_violating_1e-6_kernel": 1394,
+              "count_violating_1e-6_truncated_formula": 1060,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+              "midrange_violating_kernel_0.3_3": 1388,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Exhaustive sweep of all 63,488 finite FP16 values: kernel max abs error vs exact (FP64) erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 absolute tolerance; 1,388 of those fall in the predicted 0.3<|x|<3 mid-range. The truncated-coefficient formula evaluated alone in FP64 already violates on 1,060 values (max 1.0627e-6 at x\u22480.4968), confirming coefficient truncation is the decisive cause. Tolerance is absolute-only per contract, so this is a confirmed in-scope violation.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "argmax_x": 0.0038356781005859375,
+              "count_eval_err_gt_1e-6": 0,
+              "count_eval_err_gt_1e-7": 17300,
+              "count_eval_err_gt_5e-7": 52,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "event_id": "t9",
+            "status": "rebutted",
+            "summary": "Isolating the FP32 evaluation chain by comparing kernel output to the identical truncated-coefficient formula evaluated in FP64 over all 63,488 finite FP16 values: the evaluation-chain error never exceeds 1e-6 (max 6.068e-7, only 52 values above 5e-7). The truncated formula alone already violates the tolerance (1,060 values, max 1.0627e-6), so coefficient truncation \u2014 not the FP32 evaluation chain (div_rn/tl.exp/Horner with fusion off) \u2014 is what pushes the total above the 1e-6 bar.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.969,
+        "input_tokens": 25008,
+        "output_tokens": 887
+      }
+    },
+    {
+      "duration_s": 6.086428094999988,
+      "role": "skeptic",
+      "round": 6,
+      "text": "The exhaustive FP16-domain sweep is decisive: claim c1 is confirmed with a direct in-scope violation of the stated 1e-6 absolute tolerance (1,394 of 63,488 finite values exceed it, max error 1.29e-6), and c2 is cleanly rebutted by the isolation probe. Both claims are fully evidenced; nothing new or material is exposed that the existing claims don't cover.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: the exhaustive sweep over all 63,488 finite FP16 values decisively confirms in-scope claim c1 (kernel exceeds the contract's 1e-6 absolute tolerance on 1,394 values, max 1.2918e-6 at x\u22480.5083, with coefficient truncation shown as the cause since the truncated formula alone in FP64 already violates on 1,060 values), and the isolation probe rebuts c2 (FP32 evaluation-chain error never exceeds 1e-6, max 6.07e-7). The domain is exhaustively enumerable, so no further in-scope attack surface remains untested. No new claims needed.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.086,
+        "input_tokens": 33905,
+        "output_tokens": 286
+      }
+    },
+    {
+      "duration_s": 7.143869133999999,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: an exhaustive sweep of all 63,488 finite FP16 values shows the kernel violates the contract's hard 1e-6 absolute tolerance on 1,394 values (max 1.2918e-6), with coefficient truncation identified as the cause. No open claims, Skeptic signed off.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The problem.txt contract requires abs(actual[i] - erf(x[i])) <= 1e-6 for every element over every finite FP16 value, with relative tolerance zero. An exhaustive runtime sweep of all 63,488 finite FP16 values (probe t8) shows the kernel's max absolute error vs exact FP64 erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 tolerance \u2014 a direct, in-scope contract violation. The decomposition probe confirms the cause is the truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483): the same formula in FP64 already violates on 1,060 values (max 1.0627e-6). Claim c2 (FP32 evaluation chain independently pushing error over budget) is rebutted by probe t9 (max evaluation-chain error 6.07e-7, never exceeding 1e-6). The FP16 domain is exhaustively enumerable, so this evidence is globally decisive for the stated contract. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.144,
+        "input_tokens": 35017,
+        "output_tokens": 391
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T00:53:16Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: the exhaustive sweep over all 63,488 finite FP16 values decisively confirms in-scope claim c1 (kernel exceeds the contract's 1e-6 absolute tolerance on 1,394 values, max 1.2918e-6 at x\u22480.5083, with coefficient truncation shown as the cause since the truncated formula alone in FP64 already violates on 1,060 values), and the isolation probe rebuts c2 (FP32 evaluation-chain error never exceeds 1e-6, max 6.07e-7). The domain is exhaustively enumerable, so no further in-scope attack surface remains untested. No new claims needed.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_127"
+      },
+      "created_at": "2026-10-18T00:51:42Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_127",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise FP16-to-FP32 error-function approximation.\n\nOriginal Triton adaptation of the Abramowitz--Stegun five-coefficient formula.\nThis is a synthetic benchmark implementation, not a claimed historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _erf_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    magnitude = tl.abs(x)\n    t = tl.div_rn(1.0, 1.0 + 0.3275911 * magnitude)\n    polynomial = 1.06141 * t - 1.45315\n    polynomial = polynomial * t + 1.42141\n    polynomial = polynomial * t - 0.28450\n    polynomial = polynomial * t + 0.25483\n    polynomial = polynomial * t\n    envelope = tl.exp(-(magnitude * magnitude))\n    value = 1.0 - polynomial * envelope\n    value = tl.where(x < 0.0, -value, value)\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating erf of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _erf_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate erf in FP64, then round the final result to FP32.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.erf(x.to(torch.float64)).to(torch.float32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the error function elementwise on stored FP16 input values and return\nFP32 output. The mathematical target is\n\n  target[i] = erf(x[i])\n            = (2/sqrt(pi)) * integral from 0 to x[i] of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - erf(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target erf is defined in real arithmetic on the exact stored input value;\nit is not defined by any specific polynomial or by an intermediate FP16\nrounding step. Polynomial, rational or other approximations are permitted\nif they meet this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates erf in FP64 and rounds the final result to FP32; it accepts CPU\ninputs. make_inputs() supplies examples only. This is an original Triton\nadaptation of the standard Abramowitz--Stegun five-coefficient error-function\nformula. It is a synthetic benchmark implementation, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_127",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_127"
+      },
+      "created_at": "2026-10-18T00:51:42Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the error function elementwise on stored FP16 input values and return\nFP32 output. The mathematical target is\n\n  target[i] = erf(x[i])\n            = (2/sqrt(pi)) * integral from 0 to x[i] of exp(-t*t) dt.\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - erf(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target erf is defined in real arithmetic on the exact stored input value;\nit is not defined by any specific polynomial or by an intermediate FP16\nrounding step. Polynomial, rational or other approximations are permitted\nif they meet this fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nevaluates erf in FP64 and rounds the final result to FP32; it accepts CPU\ninputs. make_inputs() supplies examples only. This is an original Triton\nadaptation of the standard Abramowitz--Stegun five-coefficient error-function\nformula. It is a synthetic benchmark implementation, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_127",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_127"
+      },
+      "created_at": "2026-10-18T00:51:42Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_127",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2914
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1978
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_127",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T00:51:42Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_127",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+          "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+          "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+          "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+          "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+          "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+          "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+        ],
+        "open_questions": [
+          "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+          "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+        ],
+        "risk_map": [
+          "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+          "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+          "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+          "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+          "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+        ],
+        "scope_notes": [
+          "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+          "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+          "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+          "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+        ],
+        "summary": "case_127: FP16->FP32 elementwise erf via truncated-coefficient Abramowitz-Stegun 7.1.26 approximation; contract demands absolute error <=1e-6 over all finite FP16 values, which is exhaustively enumerable."
+      },
+      "created_at": "2026-10-18T00:52:24Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+            "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+            "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+            "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+            "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+            "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+            "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+          ],
+          "open_questions": [
+            "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+            "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+          ],
+          "risk_map": [
+            "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+            "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+            "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+            "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+            "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+          ],
+          "scope_notes": [
+            "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+            "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+            "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+            "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Compute erf elementwise on stored FP16 input [N], 1<=N<=131072, return fresh finite FP32 tensor on x.device, preserving x.",
+            "Full legal domain: every finite FP16 value, including signed zeros, subnormals, and +/-65504; NaN/Inf excluded; contiguous strided CUDA tensor, ordinary mode, no autograd.",
+            "Hard correctness bar: abs(actual[i]-erf(x[i])) <= 1e-6 for every element, relative tolerance zero, signed zeros numerically equivalent; single verdict over the whole domain, not per-input.",
+            "erf target is real-arithmetic erf of the exact stored FP16 value; any approximation meeting the fixed absolute tolerance is acceptable; reference() = FP64 erf rounded to FP32 (accepts CPU).",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T00:52:24Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel _erf_kernel: grid-strided blocks of 256, mask-guarded loads, upcast FP16->FP32, computes A&S 7.1.26 rational approximation erf(x) = 1 - t*(a1 + t*(a2 + t*(a3 + t*(a4 + t*a5)))) * exp(-x^2) with t = 1/(1+0.3275911|x|).",
+            "Coefficients used are truncated to 5-6 significant digits: 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 (full A&S constants are 1.061405429, -1.453152027, 1.421413741, -0.284496736, 0.254829592); A&S formula's own intrinsic max abs error is ~1.5e-7.",
+            "Numerics detail: uses tl.div_rn (round-to-nearest divide), tl.exp for the Gaussian envelope, magnitude*magnitude in FP32 (65504^2 ~ 4.29e9 stays in FP32 range), sign restored via tl.where(x<0, -value, value) so x=-0.0 maps to +0.0 (zeros equivalent per contract).",
+            "run(): validates inputs, allocates fresh FP32 output, launches with num_warps=4, enable_fp_fusion=False, BLOCK=256; validate_inputs enforces the full public domain including finiteness, contiguity, dtype, and N bounds."
+          ],
+          "open_questions": [
+            "What is the empirically measured max abs error of the truncated-coefficient kernel vs FP64 reference over the exhaustive FP16 domain, and in which value range does the worst case fall?",
+            "Does Triton's tl.exp on T4 introduce error exceeding the budget in the envelope-dominant region on top of coefficient truncation error?"
+          ],
+          "risk_map": [
+            "Coefficient truncation is the dominant bug surface: per-coefficient rounding errors up to ~4.6e-6 cancel at x=0 (value forced to exact 0) but not elsewhere; combined with the ~1.5e-7 intrinsic A&S error and FP32 evaluation noise, the 1e-6 absolute tolerance may be exceeded for some finite FP16 x in roughly 0.3<|x|<3 where the Gaussian envelope is still near 1.",
+            "FP32 evaluation chain (div_rn, tl.exp, Horner polynomial) adds rounding error on top of coefficient error; tl.exp accuracy on T4 (Triton 3.4) is a separate contribution near the tolerance budget.",
+            "Large-magnitude tail: exp(-x^2) underflows to 0 for |x|>~9.9 giving erf=+/-1 exactly (correct within tolerance); 65504^2 does not overflow FP32, so the extreme tail is likely safe \u2014 but this is assumption, not verified evidence.",
+            "Subnormals: tiny |x| maps to erf near 0 within tolerance since value->0 continuously; signed zero handling gives +0.0 for x=-0.0, allowed by the contract's zero-equivalence clause.",
+            "Validation gaps: validate_inputs rejects non-contiguous inputs although the problem says 'dense, strided, contiguous', so no real gap; storage-offset views pass is_contiguous, so the kernel's flat indexing over the data pointer is consistent."
+          ],
+          "scope_notes": [
+            "The FP16 input domain is exhaustively enumerable (~65,536 finite values), so a single exhaustive sweep comparing kernel output to FP64 reference can decide the 1e-6 tolerance claim globally; no seed/distribution argument is needed.",
+            "Tolerance is absolute-only (rtol=0, atol=1e-6); metrics should be max abs error over the domain, not allclose defaults.",
+            "Out of scope: NaN/Inf inputs, N>131072, autograd, non-contiguous inputs, CPU execution of run(); reference() CPU path is in scope for building expected values.",
+            "Environment frozen at T4 / PyTorch 2.8.0 / Triton 3.4.0; hardware-level libdevice exp behavior applies."
+          ],
+          "summary": "case_127: FP16->FP32 elementwise erf via truncated-coefficient Abramowitz-Stegun 7.1.26 approximation; contract demands absolute error <=1e-6 over all finite FP16 values, which is exhaustively enumerable.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses truncated constants 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 instead of the full A&S values; per-coefficient truncation errors up to ~4.6e-6 weighted by the Gaussian envelope can produce total error above 1e-6 in the region 0.3<|x|<3 where exp(-x^2) is still near 1, violating the fixed absolute tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6. The relative tolerance is zero\" and \"EVERY finite FP16 value is legal\" and \"it is not defined by any specific polynomial ... if they meet this fixed absolute tolerance throughout the entire legal domain.\""
+          }
+        ],
+        "scope_rationale": "The contract requires abs error <= 1e-6 for every element over every finite FP16 value; the truncated-coefficient A&S evaluation may exceed this in the mid-range, which is squarely inside the stated legal domain.",
+        "statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1."
+      },
+      "created_at": "2026-10-18T00:52:33Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T00:52:33Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "The kernel uses truncated constants 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 instead of the full A&S values; per-coefficient truncation errors up to ~4.6e-6 weighted by the Gaussian envelope can produce total error above 1e-6 in the region 0.3<|x|<3 where exp(-x^2) is still near 1, violating the fixed absolute tolerance.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6. The relative tolerance is zero\" and \"EVERY finite FP16 value is legal\" and \"it is not defined by any specific polynomial ... if they meet this fixed absolute tolerance throughout the entire legal domain.\""
+          }
+        ],
+        "scope_rationale": "The contract requires abs error <= 1e-6 for every element over every finite FP16 value; the truncated-coefficient A&S evaluation may exceed this in the mid-range, which is squarely inside the stated legal domain.",
+        "statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1.",
+        "status": "open",
+        "updated_at": "2026-10-18T00:52:33Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.exp compiles to fast GPU exp whose accuracy is ~1 ulp relative but can be worse; combined with Horner-chain rounding in FP32 this could push borderline cases over the 1e-6 bar even where coefficient error alone stays just under it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6\" with relative tolerance zero, for every finite FP16 value in the frozen T4/Triton 3.4 environment."
+          }
+        ],
+        "scope_rationale": "The tolerance contract applies on the frozen T4/Triton 3.4 hardware, so the actual tl.exp accuracy there is part of the budget; error contributions add on top of coefficient truncation.",
+        "statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation."
+      },
+      "created_at": "2026-10-18T00:52:33Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-18T00:52:33Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "tl.exp compiles to fast GPU exp whose accuracy is ~1 ulp relative but can be worse; combined with Horner-chain rounding in FP32 this could push borderline cases over the 1e-6 bar even where coefficient error alone stays just under it.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6\" with relative tolerance zero, for every finite FP16 value in the frozen T4/Triton 3.4 environment."
+          }
+        ],
+        "scope_rationale": "The tolerance contract applies on the frozen T4/Triton 3.4 hardware, so the actual tl.exp accuracy there is part of the budget; error contributions add on top of coefficient truncation.",
+        "statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation.",
+        "status": "open",
+        "updated_at": "2026-10-18T00:52:33Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_127\")\nimport torch\nimport kernel as K\n\n# all finite FP16 values except +-inf/nan: keep those 65536 with finite bit patterns\nvals = torch.arange(65536, dtype=torch.int32)\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\nfinite = torch.isfinite(bits)\nxs = bits[finite]  # includes signed zeros, subnormals, +/-65504\nx_gpu = xs.to(torch.float16).to(\"cuda\")\nprint(\"n =\", x_gpu.numel(), file=sys.stderr)\n\nout = K.run(x_gpu)\nout64 = out.to(torch.float64).cpu()\n\nimport math\nref = torch.erf(xs)  # FP64 exact erf of the FP64 value of the stored FP16 number\n\n# truncated-coefficient formula evaluated in FP64 (isolates coefficient truncation)\nm = xs.abs()\nt = 1.0/(1.0+0.3275911*m)\np = 1.06141*t - 1.45315\np = p*t + 1.42141\np = p*t - 0.28450\np = p*t + 0.25483\np = p*t\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\n\nerr_total = (out64 - ref).abs()\nerr_coeff = (formula64 - ref).abs()\nmax_total, i1 = err_total.max(0)\nmax_coeff, i2 = err_coeff.max(0)\nviol = (err_total > 1e-6)\nviol_coeff = (err_coeff > 1e-6)\nprint(json.dumps({\n  \"n_values\": int(x_gpu.numel()),\n  \"max_abs_err_kernel_vs_exact_erf\": float(max_total),\n  \"argmax_x_kernel\": float(xs[i1]),\n  \"count_violating_1e-6_kernel\": int(viol.sum()),\n  \"max_abs_err_truncated_formula_fp64_vs_exact\": float(max_coeff),\n  \"argmax_x_formula\": float(xs[i2]),\n  \"count_violating_1e-6_truncated_formula\": int(viol_coeff.sum()),\n  \"midrange_violating_kernel_0.3_3\": int((viol & (m > 0.3) & (m < 3)).sum()),\n  \"tolerance\": 1e-6,\n}))\n",
+        "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6"
+      },
+      "created_at": "2026-10-18T00:52:55Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "78124603e1a828d4d2d5f4f9ddcc75ffab6647db3fc539553330d58002c67c92"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "c90f3b74c4d3687361851fd6b5bf3b75e160ca305e9718e1a2ac1ceefa0d0cc9"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "9e6e04719d654be6d879c345f8c4ecc0a226415f7f25ca9d102f1c53b1b3f209"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "f1b2e093b4f3f83a5b2d8c3d33c64e1f415d45c67ff95a1f1c325ff563c66310"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1.",
+        "cwd": "/root/cases/case_127",
+        "duration_s": 6.330522,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "78124603e1a828d4d2d5f4f9ddcc75ffab6647db3fc539553330d58002c67c92"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "c90f3b74c4d3687361851fd6b5bf3b75e160ca305e9718e1a2ac1ceefa0d0cc9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "9e6e04719d654be6d879c345f8c4ecc0a226415f7f25ca9d102f1c53b1b3f209"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f1b2e093b4f3f83a5b2d8c3d33c64e1f415d45c67ff95a1f1c325ff563c66310"
+              }
+            ],
+            "duration_s": 6.330522,
+            "exit_code": 0,
+            "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x_formula": 0.496826171875,
+              "argmax_x_kernel": 0.50830078125,
+              "count_violating_1e-6_kernel": 1394,
+              "count_violating_1e-6_truncated_formula": 1060,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+              "midrange_violating_kernel_0.3_3": 1388,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "stderr": "n = 63488\n",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"argmax_x_kernel\": 0.50830078125, \"count_violating_1e-6_kernel\": 1394, \"max_abs_err_truncated_formula_fp64_vs_exact\": 1.0627250756067852e-06, \"argmax_x_formula\": 0.496826171875, \"count_violating_1e-6_truncated_formula\": 1060, \"midrange_violating_kernel_0.3_3\": 1388, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "argmax_x_formula": 0.496826171875,
+          "argmax_x_kernel": 0.50830078125,
+          "count_violating_1e-6_kernel": 1394,
+          "count_violating_1e-6_truncated_formula": 1060,
+          "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+          "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+          "midrange_violating_kernel_0.3_3": 1388,
+          "n_values": 63488,
+          "tolerance": 1e-06
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "n = 63488\n",
+        "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"argmax_x_kernel\": 0.50830078125, \"count_violating_1e-6_kernel\": 1394, \"max_abs_err_truncated_formula_fp64_vs_exact\": 1.0627250756067852e-06, \"argmax_x_formula\": 0.496826171875, \"count_violating_1e-6_truncated_formula\": 1060, \"midrange_violating_kernel_0.3_3\": 1388, \"tolerance\": 1e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import sys, json\nsys.path.insert(0, \"/root/cases/case_127\")\nimport torch\nimport kernel as K\n\nvals = torch.arange(65536, dtype=torch.int32)\nbits = vals.to(torch.int16).view(torch.float16).to(torch.float64)\nxs = bits[torch.isfinite(bits)]\nx_gpu = xs.to(torch.float16).to(\"cuda\")\n\nout = K.run(x_gpu)\nout64 = out.to(torch.float64).cpu()\n\n# same formula, same truncated coefficients, evaluated in FP64:\n# difference kernel vs this isolates the FP32 evaluation chain (div_rn, tl.exp, Horner, fusion off)\nm = xs.abs()\nt = 1.0/(1.0+0.3275911*m)\np = 1.06141*t - 1.45315\np = p*t + 1.42141\np = p*t - 0.28450\np = p*t + 0.25483\np = p*t\nformula64 = torch.sign(xs)*(1.0 - p*torch.exp(-(m*m)))\n\nerr_eval = (out64 - formula64).abs()\nerr_total = (out64 - torch.erf(xs)).abs()\nmax_eval, ie = err_eval.max(0)\nprint(json.dumps({\n  \"n_values\": int(x_gpu.numel()),\n  \"max_abs_err_kernel_vs_fp64_formula\": float(max_eval),\n  \"argmax_x\": float(xs[ie]),\n  \"count_eval_err_gt_1e-6\": int((err_eval > 1e-6).sum()),\n  \"count_eval_err_gt_1e-7\": int((err_eval > 1e-7).sum()),\n  \"count_eval_err_gt_5e-7\": int((err_eval > 5e-7).sum()),\n  \"max_abs_err_kernel_vs_exact_erf\": float(err_total.max()),\n  \"tolerance\": 1e-6,\n}))\n",
+        "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values"
+      },
+      "created_at": "2026-10-18T00:52:59Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "38641ed7ec033cf8975e978262c40f849675024bbfc0fdc71b970e82c89c849e"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "af1c0e661de6535e9b29dc4f966530e20ba319464f5f8fcfec5cffa2f9ed3b41"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "60a06306d0c8097e9cb0d61189e2bb914c48fd67ffa9a34cea29cc5a3dfac800"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation.",
+        "cwd": "/root/cases/case_127",
+        "duration_s": 4.193142,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "38641ed7ec033cf8975e978262c40f849675024bbfc0fdc71b970e82c89c849e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "af1c0e661de6535e9b29dc4f966530e20ba319464f5f8fcfec5cffa2f9ed3b41"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "60a06306d0c8097e9cb0d61189e2bb914c48fd67ffa9a34cea29cc5a3dfac800"
+              }
+            ],
+            "duration_s": 4.193142,
+            "exit_code": 0,
+            "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 0.0038356781005859375,
+              "count_eval_err_gt_1e-6": 0,
+              "count_eval_err_gt_1e-7": 17300,
+              "count_eval_err_gt_5e-7": 52,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "stderr": "",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_fp64_formula\": 6.067829398936908e-07, \"argmax_x\": 0.0038356781005859375, \"count_eval_err_gt_1e-6\": 0, \"count_eval_err_gt_1e-7\": 17300, \"count_eval_err_gt_5e-7\": 52, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values",
+        "json_parse_error": null,
+        "json_result": {
+          "argmax_x": 0.0038356781005859375,
+          "count_eval_err_gt_1e-6": 0,
+          "count_eval_err_gt_1e-7": 17300,
+          "count_eval_err_gt_5e-7": 52,
+          "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+          "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+          "n_values": 63488,
+          "tolerance": 1e-06
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_fp64_formula\": 6.067829398936908e-07, \"argmax_x\": 0.0038356781005859375, \"count_eval_err_gt_1e-6\": 0, \"count_eval_err_gt_1e-7\": 17300, \"count_eval_err_gt_5e-7\": 52, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"tolerance\": 1e-06}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "argmax_x_kernel": 0.50830078125,
+          "count_violating_1e-6_kernel": 1394,
+          "count_violating_1e-6_truncated_formula": 1060,
+          "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+          "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+          "midrange_violating_kernel_0.3_3": 1388,
+          "n_values": 63488,
+          "tolerance": 1e-06
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Exhaustive sweep of all 63,488 finite FP16 values: kernel max abs error vs exact (FP64) erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 absolute tolerance; 1,388 of those fall in the predicted 0.3<|x|<3 mid-range. The truncated-coefficient formula evaluated alone in FP64 already violates on 1,060 values (max 1.0627e-6 at x\u22480.4968), confirming coefficient truncation is the decisive cause. Tolerance is absolute-only per contract, so this is a confirmed in-scope violation.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T00:53:10Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T00:52:33Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T00:53:10Z",
+              "data": {
+                "argmax_x_kernel": 0.50830078125,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "78124603e1a828d4d2d5f4f9ddcc75ffab6647db3fc539553330d58002c67c92"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "c90f3b74c4d3687361851fd6b5bf3b75e160ca305e9718e1a2ac1ceefa0d0cc9"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "9e6e04719d654be6d879c345f8c4ecc0a226415f7f25ca9d102f1c53b1b3f209"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "f1b2e093b4f3f83a5b2d8c3d33c64e1f415d45c67ff95a1f1c325ff563c66310"
+                  }
+                ],
+                "count_violating_1e-6_kernel": 1394,
+                "count_violating_1e-6_truncated_formula": 1060,
+                "duration_s": 6.330522,
+                "exit_code": 0,
+                "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "argmax_x_formula": 0.496826171875,
+                  "argmax_x_kernel": 0.50830078125,
+                  "count_violating_1e-6_kernel": 1394,
+                  "count_violating_1e-6_truncated_formula": 1060,
+                  "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+                  "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+                  "midrange_violating_kernel_0.3_3": 1388,
+                  "n_values": 63488,
+                  "tolerance": 1e-06
+                },
+                "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+                "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+                "midrange_violating_kernel_0.3_3": 1388,
+                "n_values": 63488,
+                "stderr": "n = 63488\n",
+                "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"argmax_x_kernel\": 0.50830078125, \"count_violating_1e-6_kernel\": 1394, \"max_abs_err_truncated_formula_fp64_vs_exact\": 1.0627250756067852e-06, \"argmax_x_formula\": 0.496826171875, \"count_violating_1e-6_truncated_formula\": 1060, \"midrange_violating_kernel_0.3_3\": 1388, \"tolerance\": 1e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63,488 finite FP16 values: kernel max abs error vs exact (FP64) erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 absolute tolerance; 1,388 of those fall in the predicted 0.3<|x|<3 mid-range. The truncated-coefficient formula evaluated alone in FP64 already violates on 1,060 values (max 1.0627e-6 at x\u22480.4968), confirming coefficient truncation is the decisive cause. Tolerance is absolute-only per contract, so this is a confirmed in-scope violation.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The kernel uses truncated constants 1.06141, -1.45315, 1.42141, -0.28450, 0.25483 instead of the full A&S values; per-coefficient truncation errors up to ~4.6e-6 weighted by the Gaussian envelope can produce total error above 1e-6 in the region 0.3<|x|<3 where exp(-x^2) is still near 1, violating the fixed absolute tolerance.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6. The relative tolerance is zero\" and \"EVERY finite FP16 value is legal\" and \"it is not defined by any specific polynomial ... if they meet this fixed absolute tolerance throughout the entire legal domain.\""
+            }
+          ],
+          "scope_rationale": "The contract requires abs error <= 1e-6 for every element over every finite FP16 value; the truncated-coefficient A&S evaluation may exceed this in the mid-range, which is squarely inside the stated legal domain.",
+          "statement": "The truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483) cause the kernel output to exceed the 1e-6 absolute tolerance against exact erf for some finite FP16 inputs in roughly 0.3<|x|<3, where the Gaussian envelope is still near 1.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T00:53:10Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:53:10Z",
+          "data": {
+            "argmax_x_kernel": 0.50830078125,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "78124603e1a828d4d2d5f4f9ddcc75ffab6647db3fc539553330d58002c67c92"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "c90f3b74c4d3687361851fd6b5bf3b75e160ca305e9718e1a2ac1ceefa0d0cc9"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "9e6e04719d654be6d879c345f8c4ecc0a226415f7f25ca9d102f1c53b1b3f209"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "f1b2e093b4f3f83a5b2d8c3d33c64e1f415d45c67ff95a1f1c325ff563c66310"
+              }
+            ],
+            "count_violating_1e-6_kernel": 1394,
+            "count_violating_1e-6_truncated_formula": 1060,
+            "duration_s": 6.330522,
+            "exit_code": 0,
+            "expected_signal": "max abs error of kernel output vs exact erf over all finite FP16 values, and whether it exceeds 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x_formula": 0.496826171875,
+              "argmax_x_kernel": 0.50830078125,
+              "count_violating_1e-6_kernel": 1394,
+              "count_violating_1e-6_truncated_formula": 1060,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+              "midrange_violating_kernel_0.3_3": 1388,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+            "max_abs_err_truncated_formula_fp64_vs_exact": 1.0627250756067852e-06,
+            "midrange_violating_kernel_0.3_3": 1388,
+            "n_values": 63488,
+            "stderr": "n = 63488\n",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"argmax_x_kernel\": 0.50830078125, \"count_violating_1e-6_kernel\": 1394, \"max_abs_err_truncated_formula_fp64_vs_exact\": 1.0627250756067852e-06, \"argmax_x_formula\": 0.496826171875, \"count_violating_1e-6_truncated_formula\": 1060, \"midrange_violating_kernel_0.3_3\": 1388, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63,488 finite FP16 values: kernel max abs error vs exact (FP64) erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 absolute tolerance; 1,388 of those fall in the predicted 0.3<|x|<3 mid-range. The truncated-coefficient formula evaluated alone in FP64 already violates on 1,060 values (max 1.0627e-6 at x\u22480.4968), confirming coefficient truncation is the decisive cause. Tolerance is absolute-only per contract, so this is a confirmed in-scope violation.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "argmax_x": 0.0038356781005859375,
+          "count_eval_err_gt_1e-6": 0,
+          "count_eval_err_gt_1e-7": 17300,
+          "count_eval_err_gt_5e-7": 52,
+          "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+          "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+          "n_values": 63488,
+          "tolerance": 1e-06
+        },
+        "event_id": "t9",
+        "status": "rebutted",
+        "summary": "Isolating the FP32 evaluation chain by comparing kernel output to the identical truncated-coefficient formula evaluated in FP64 over all 63,488 finite FP16 values: the evaluation-chain error never exceeds 1e-6 (max 6.068e-7, only 52 values above 5e-7). The truncated formula alone already violates the tolerance (1,060 values, max 1.0627e-6), so coefficient truncation \u2014 not the FP32 evaluation chain (div_rn/tl.exp/Horner with fusion off) \u2014 is what pushes the total above the 1e-6 bar.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T00:53:10Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T00:52:33Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T00:53:10Z",
+              "data": {
+                "argmax_x": 0.0038356781005859375,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "38641ed7ec033cf8975e978262c40f849675024bbfc0fdc71b970e82c89c849e"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "af1c0e661de6535e9b29dc4f966530e20ba319464f5f8fcfec5cffa2f9ed3b41"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "60a06306d0c8097e9cb0d61189e2bb914c48fd67ffa9a34cea29cc5a3dfac800"
+                  }
+                ],
+                "count_eval_err_gt_1e-6": 0,
+                "count_eval_err_gt_1e-7": 17300,
+                "count_eval_err_gt_5e-7": 52,
+                "duration_s": 4.193142,
+                "exit_code": 0,
+                "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values",
+                "json_parse_error": null,
+                "json_result": {
+                  "argmax_x": 0.0038356781005859375,
+                  "count_eval_err_gt_1e-6": 0,
+                  "count_eval_err_gt_1e-7": 17300,
+                  "count_eval_err_gt_5e-7": 52,
+                  "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+                  "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+                  "n_values": 63488,
+                  "tolerance": 1e-06
+                },
+                "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+                "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+                "n_values": 63488,
+                "stderr": "",
+                "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_fp64_formula\": 6.067829398936908e-07, \"argmax_x\": 0.0038356781005859375, \"count_eval_err_gt_1e-6\": 0, \"count_eval_err_gt_1e-7\": 17300, \"count_eval_err_gt_5e-7\": 52, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"tolerance\": 1e-06}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Isolating the FP32 evaluation chain by comparing kernel output to the identical truncated-coefficient formula evaluated in FP64 over all 63,488 finite FP16 values: the evaluation-chain error never exceeds 1e-6 (max 6.068e-7, only 52 values above 5e-7). The truncated formula alone already violates the tolerance (1,060 values, max 1.0627e-6), so coefficient truncation \u2014 not the FP32 evaluation chain (div_rn/tl.exp/Horner with fusion off) \u2014 is what pushes the total above the 1e-6 bar.",
+              "supports": "rebutted",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "tl.exp compiles to fast GPU exp whose accuracy is ~1 ulp relative but can be worse; combined with Horner-chain rounding in FP32 this could push borderline cases over the 1e-6 bar even where coefficient error alone stays just under it.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"Every output element must satisfy abs(actual[i] - erf(x[i])) <= 1e-6\" with relative tolerance zero, for every finite FP16 value in the frozen T4/Triton 3.4 environment."
+            }
+          ],
+          "scope_rationale": "The tolerance contract applies on the frozen T4/Triton 3.4 hardware, so the actual tl.exp accuracy there is part of the budget; error contributions add on top of coefficient truncation.",
+          "statement": "The FP32 evaluation chain in the Triton kernel (tl.div_rn, tl.exp for exp(-x^2), FP32 Horner evaluation with enable_fp_fusion=False) adds rounding error that pushes the total error above 1e-6 for some in-range FP16 inputs even independent of coefficient truncation.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T00:53:10Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T00:53:10Z",
+          "data": {
+            "argmax_x": 0.0038356781005859375,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "38641ed7ec033cf8975e978262c40f849675024bbfc0fdc71b970e82c89c849e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "af1c0e661de6535e9b29dc4f966530e20ba319464f5f8fcfec5cffa2f9ed3b41"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "60a06306d0c8097e9cb0d61189e2bb914c48fd67ffa9a34cea29cc5a3dfac800"
+              }
+            ],
+            "count_eval_err_gt_1e-6": 0,
+            "count_eval_err_gt_1e-7": 17300,
+            "count_eval_err_gt_5e-7": 52,
+            "duration_s": 4.193142,
+            "exit_code": 0,
+            "expected_signal": "isolate FP32 evaluation-chain error: kernel output minus the identical truncated-coefficient formula evaluated in FP64, over all finite FP16 values",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 0.0038356781005859375,
+              "count_eval_err_gt_1e-6": 0,
+              "count_eval_err_gt_1e-7": 17300,
+              "count_eval_err_gt_5e-7": 52,
+              "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+              "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+              "n_values": 63488,
+              "tolerance": 1e-06
+            },
+            "max_abs_err_kernel_vs_exact_erf": 1.2917548571911297e-06,
+            "max_abs_err_kernel_vs_fp64_formula": 6.067829398936908e-07,
+            "n_values": 63488,
+            "stderr": "",
+            "stdout": "{\"n_values\": 63488, \"max_abs_err_kernel_vs_fp64_formula\": 6.067829398936908e-07, \"argmax_x\": 0.0038356781005859375, \"count_eval_err_gt_1e-6\": 0, \"count_eval_err_gt_1e-7\": 17300, \"count_eval_err_gt_5e-7\": 52, \"max_abs_err_kernel_vs_exact_erf\": 1.2917548571911297e-06, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Isolating the FP32 evaluation chain by comparing kernel output to the identical truncated-coefficient formula evaluated in FP64 over all 63,488 finite FP16 values: the evaluation-chain error never exceeds 1e-6 (max 6.068e-7, only 52 values above 5e-7). The truncated formula alone already violates the tolerance (1,060 values, max 1.0627e-6), so coefficient truncation \u2014 not the FP32 evaluation chain (div_rn/tl.exp/Horner with fusion off) \u2014 is what pushes the total above the 1e-6 bar.",
+          "supports": "rebutted",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: the exhaustive sweep over all 63,488 finite FP16 values decisively confirms in-scope claim c1 (kernel exceeds the contract's 1e-6 absolute tolerance on 1,394 values, max 1.2918e-6 at x\u22480.5083, with coefficient truncation shown as the cause since the truncated formula alone in FP64 already violates on 1,060 values), and the isolation probe rebuts c2 (FP32 evaluation-chain error never exceeds 1e-6, max 6.07e-7). The domain is exhaustively enumerable, so no further in-scope attack surface remains untested. No new claims needed.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T00:53:16Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-10-18T00:53:16Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: the exhaustive sweep over all 63,488 finite FP16 values decisively confirms in-scope claim c1 (kernel exceeds the contract's 1e-6 absolute tolerance on 1,394 values, max 1.2918e-6 at x\u22480.5083, with coefficient truncation shown as the cause since the truncated formula alone in FP64 already violates on 1,060 values), and the isolation probe rebuts c2 (FP32 evaluation-chain error never exceeds 1e-6, max 6.07e-7). The domain is exhaustively enumerable, so no further in-scope attack surface remains untested. No new claims needed.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem.txt contract requires abs(actual[i] - erf(x[i])) <= 1e-6 for every element over every finite FP16 value, with relative tolerance zero. An exhaustive runtime sweep of all 63,488 finite FP16 values (probe t8) shows the kernel's max absolute error vs exact FP64 erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 tolerance \u2014 a direct, in-scope contract violation. The decomposition probe confirms the cause is the truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483): the same formula in FP64 already violates on 1,060 values (max 1.0627e-6). Claim c2 (FP32 evaluation chain independently pushing error over budget) is rebutted by probe t9 (max evaluation-chain error 6.07e-7, never exceeding 1e-6). The FP16 domain is exhaustively enumerable, so this evidence is globally decisive for the stated contract. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T00:53:24Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-18T00:53:24Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The problem.txt contract requires abs(actual[i] - erf(x[i])) <= 1e-6 for every element over every finite FP16 value, with relative tolerance zero. An exhaustive runtime sweep of all 63,488 finite FP16 values (probe t8) shows the kernel's max absolute error vs exact FP64 erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 tolerance \u2014 a direct, in-scope contract violation. The decomposition probe confirms the cause is the truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483): the same formula in FP64 already violates on 1,060 values (max 1.0627e-6). Claim c2 (FP32 evaluation chain independently pushing error over budget) is rebutted by probe t9 (max evaluation-chain error 6.07e-7, never exceeding 1e-6). The FP16 domain is exhaustively enumerable, so this evidence is globally decisive for the stated contract. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-18T00:53:24Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The problem.txt contract requires abs(actual[i] - erf(x[i])) <= 1e-6 for every element over every finite FP16 value, with relative tolerance zero. An exhaustive runtime sweep of all 63,488 finite FP16 values (probe t8) shows the kernel's max absolute error vs exact FP64 erf is 1.2918e-6 at x\u22480.5083, with 1,394 values exceeding the 1e-6 tolerance \u2014 a direct, in-scope contract violation. The decomposition probe confirms the cause is the truncated A&S coefficients (1.06141, -1.45315, 1.42141, -0.28450, 0.25483): the same formula in FP64 already violates on 1,060 values (max 1.0627e-6). Claim c2 (FP32 evaluation chain independently pushing error over budget) is rebutted by probe t9 (max evaluation-chain error 6.07e-7, never exceeding 1e-6). The FP16 domain is exhaustively enumerable, so this evidence is globally decisive for the stated contract. No open claims remain and the Skeptic recorded no new claims after reviewing all evidence.",
+    "verdict": "reject"
+  }
+}

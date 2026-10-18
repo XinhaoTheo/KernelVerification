@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-0407b0d2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a numerical comparison probe against the FP64 reference across all allowed widths and several input distributions, including FP16 extremes.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a0de7dcc50a7ee7b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nresults = {}\\nworst = 0.0\\nfail = False\\ncases = []\\nfor n in (64,128,256):\\n    # random\\n    g = torch.Generator().manual_seed(n)\\n    for name, mk in [\\n        (\\\"randn\\\", lambda: torch.randn((8,n), generator=g)),\\n        (\\\"extremes\\\", lambda: torch.where(torch.rand((8,n), generator=g)<0.5, torch.finfo(torch.float16).min, torch.finfo(torch.float16).max)),\\n        (\\\"subnormal\\\", lambda: (torch.rand((8,n), generator=g)*1e-7).to(torch.float16)),\\n        (\\\"mixed\\\", lambda: (torch.randn((8,n), generator=g)*1000).to(torch.float16)),\\n        (\\\"impulse\\\", lambda: torch.eye(8, n)[..., :n].clone()*0 + torch.zeros((8,n)).index_fill_(1, torch.tensor([0]), 65504.0)),\\n        (\\\"constant\\\", lambda: torch.full((8,n), 65504.0)),\\n    ]:\\n        v = mk().to(torch.float16).to(\\\"cuda\\\")\\n        out = k.run(v)\\n        ref = torch.fft.rfft(v.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n        ref = torch.stack((ref.real, ref.imag), dim=-1)\\n        diff = (out.to(torch.float64) - ref).abs()\\n        tol = 1e-4 + 1e-6*ref.abs()\\n        bad = (diff > tol).sum().item()\\n        md = diff.max().item()\\n        worst = max(worst, md / (tol.max().item() if tol.max()>0 else 1))\\n        err_idx = (diff/tol.clamp(min=1e-300)).max()\\n        ok = bool(torch.isfinite(out).all()) and bad==0\\n        cases.append({\\\"n\\\":n,\\\"case\\\":name,\\\"num_viol\\\":bad,\\\"max_abs_err\\\":diff.max().item(),\\\"max_ratio\\\":float(err_idx)})\\n        if bad>0 or not ok: fail=True\\nprint(json.dumps({\\\"cases\\\":cases,\\\"any_fail\\\":fail,\\\"worst_ratio\\\":worst}))\\n\", \"expected_signal\": \"violations of tolerance on any legal input\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe comparing run() against reference across widths, distributions, extreme values."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310076,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 586,
+    "prompt_tokens": 12416,
+    "total_tokens": 13002,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 16,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7808,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

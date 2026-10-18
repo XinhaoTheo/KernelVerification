@@ -1,0 +1,2217 @@
+{
+  "family": "affine_scan_pair",
+  "cases": {
+    "case_158": "trust",
+    "case_159": "reject"
+  },
+  "status": "completed",
+  "contract_frozen_before_screening": {
+    "operation": "two-component integer affine recurrence",
+    "matrix_dtype": "int8",
+    "matrix_values": [
+      -1,
+      0,
+      1
+    ],
+    "bias_dtype": "int16",
+    "initial_dtype": "int16",
+    "bias_and_initial_range": [
+      -32768,
+      32767
+    ],
+    "batch_range": [
+      1,
+      64
+    ],
+    "length_range": [
+      1,
+      32
+    ],
+    "output_dtype": "int64",
+    "output_shape": "[B,N,2]",
+    "atol": 0,
+    "rtol": 0,
+    "all_input_combinations_allowed": true,
+    "nonzero_offsets_and_input_aliasing_allowed": true
+  },
+  "candidate_plan": [
+    {
+      "case": "case_158",
+      "mechanism": "Eight-step local affine scans store each local prefix and one chunk summary. A Blelloch exclusive scan computes the incoming affine prefix for each chunk. The final kernel applies each local prefix to the incoming state. In the downsweep, the preceding prefix is followed by the left-subtree total."
+    },
+    {
+      "case": "case_159",
+      "mechanism": "The same algorithm reverses the two affine operands in the downsweep merge. The operation remains individually well-defined, but the ordered prefix is wrong when both operands are nonidentity and do not commute. For this four-chunk domain, a numerical defect can first appear at step index24."
+    }
+  ],
+  "selection_rule": "Keep both fixed implementations after independent CPU and GPU qualification. No model-guided mutation, tolerance change, input restriction or input-dependent labels. Record any shared implementation repairs before model calls.",
+  "provenance": {
+    "classification": "original synthetic Triton adaptation; not an upstream implementation or a claimed historical defect",
+    "checked_on": "2026-10-18",
+    "primary_sources": [
+      {
+        "url": "https://www.cs.cmu.edu/~guyb/papers/Ble93.pdf",
+        "observed": "Blelloch describes prefix scans, tree upsweep/downsweep and applications to recurrence equations."
+      },
+      {
+        "url": "https://github.com/triton-lang/triton/issues/2359",
+        "observed": "The original Triton issue reports incorrect operand order for a noncommutative affine cumulative moving average, especially at merge boundaries. This workload independently implements its own chunk tree and does not claim to reproduce that compiler defect."
+      },
+      {
+        "url": "https://triton-lang.org/main/python-api/generated/triton.language.associative_scan.html",
+        "observed": "The documented API accepts a tensor tuple and a JIT combine function for a scan."
+      }
+    ]
+  },
+  "oracle_plan": "Sequential Python arbitrary-precision integer recurrence. Cross-check public PyTorch sequential reference. Execute actual public source AST with an independent NumPy adapter, inspect tree prefixes, enumerate small noncommuting maps and legal shape addresses, and test actual GPU outputs, offsets, shared backing storage, preservation and fresh allocation.",
+  "whole_domain_control_argument": "Payload multiplication is multiplication of homogeneous3x3 affine matrices. The combine operation returns the right map after the left map. The local scan preserves temporal order. The upsweep holds each interval total at its right endpoint; the downsweep sends the incoming prefix to the left child and left-total-after-prefix to the right child. Identity padding is neutral. Final local maps act on each chunk's incoming state. Induction on the tree gives all sequential states. For t steps, matrix entries are at most2^(t-1) in magnitude and affine bias components at most32768*(2^t-1). Actual state magnitude is at most32768*(2^(t+1)-1). With t<=32 all are below2^48. In the four-lane upsweep, even discarded lane calculations compose at most32 steps; the downsweep composes at most24. Thus masked intermediate calculations also fit int64. All pointer offsets fit int32. Every kernel only reads the public inputs. The first stage writes valid local prefixes and one summary per chunk. Same-stream launches order scratch producers before consumers. The carry stage masks unused summary lanes to identity; the final stage masks the tail. The host allocates distinct output storage. Pointer-relative addressing handles legal offsets and shared input storage.",
+  "pre_qualification_hashes": {
+    "case_158": {
+      "kernel.py": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+      "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_159": {
+      "kernel.py": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84",
+      "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "history": [
+    {
+      "attempt": 1,
+      "kind": "CPU actual-source AST, independent Python-int oracle and public-reference cross-check",
+      "result": "passed",
+      "tests_per_case": 119,
+      "case_158_passed": 119,
+      "case_159_passed": 91,
+      "case_159_failed_elements": 3310,
+      "tree_prefix_checks": [
+        {
+          "case": "case_158",
+          "chunks": 1,
+          "prefixes_checked": 4,
+          "mismatches": 0
+        },
+        {
+          "case": "case_158",
+          "chunks": 2,
+          "prefixes_checked": 32,
+          "mismatches": 0
+        },
+        {
+          "case": "case_158",
+          "chunks": 4,
+          "prefixes_checked": 1024,
+          "mismatches": 0
+        },
+        {
+          "case": "case_159",
+          "chunks": 1,
+          "prefixes_checked": 4,
+          "mismatches": 0
+        },
+        {
+          "case": "case_159",
+          "chunks": 2,
+          "prefixes_checked": 32,
+          "mismatches": 0
+        },
+        {
+          "case": "case_159",
+          "chunks": 4,
+          "prefixes_checked": 1024,
+          "mismatches": 136
+        }
+      ],
+      "elapsed_seconds": 2.868,
+      "gpu_or_model_calls": false
+    },
+    {
+      "attempt": 2,
+      "kind": "Shared pre-model Triton pointer-shape compilation repair",
+      "recorded_at_utc": "2026-10-18T07:40:55.930410+00:00",
+      "failed_gpu_evidence": "qualification/r28.json",
+      "failed_gpu_evidence_sha256": "e24856b1e31f84e476f33a85a9dff40dc543419a6e895d065d4a509120e37fcc",
+      "reason": "Triton rejects a scalar SUMMARY pointer with block-shaped value and mask. All six summary stores now use a block-shaped address produced by adding0*lane. Only the final lane is active; the numeric address and recurrence are unchanged. Other stores already have block-shaped addresses.",
+      "change_in_both_kernels": "summary=(row*C+chunk)*6 -> summary=(row*C+chunk)*6+0*lane",
+      "old_public_hashes": {
+        "case_158": {
+          "kernel.py": "e3eeb11512b9b16513db9e62481b5463851f187b618faef470b052c7ba1ddced",
+          "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        },
+        "case_159": {
+          "kernel.py": "130a4ea605dd7d8c3aba67c3670dd533c3e23c4948a599370eec73b39266e25c",
+          "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        }
+      },
+      "new_public_hashes": {
+        "case_158": {
+          "kernel.py": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+          "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        },
+        "case_159": {
+          "kernel.py": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84",
+          "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+          "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+        }
+      },
+      "contract_or_expected_label_changes": false,
+      "model_calls_on_either_affine_case_before_repair": 0,
+      "cpu_qualification_passed": true,
+      "cpu_elapsed_seconds": 2.906,
+      "cpu_cases": {
+        "case_158": {
+          "tests_total": 119,
+          "tests_passed": 119,
+          "failed_elements": 0
+        },
+        "case_159": {
+          "tests_total": 119,
+          "tests_passed": 91,
+          "failed_elements": 3310
+        }
+      },
+      "gpu_requalification_required": true
+    }
+  ],
+  "structural_audit": {
+    "passed": true,
+    "affine_composition_checks": 144,
+    "exclusive_tree_checks": [
+      {
+        "case": "case_158",
+        "chunks": 1,
+        "prefixes_checked": 4,
+        "mismatches": 0
+      },
+      {
+        "case": "case_158",
+        "chunks": 2,
+        "prefixes_checked": 32,
+        "mismatches": 0
+      },
+      {
+        "case": "case_158",
+        "chunks": 4,
+        "prefixes_checked": 1024,
+        "mismatches": 0
+      },
+      {
+        "case": "case_159",
+        "chunks": 1,
+        "prefixes_checked": 4,
+        "mismatches": 0
+      },
+      {
+        "case": "case_159",
+        "chunks": 2,
+        "prefixes_checked": 32,
+        "mismatches": 0
+      },
+      {
+        "case": "case_159",
+        "chunks": 4,
+        "prefixes_checked": 1024,
+        "mismatches": 136
+      }
+    ],
+    "legal_shape_address_checks": 2048,
+    "state_magnitude_upper_bound": 281474976677888,
+    "matrix_partial_entry_upper_bound": 2147483648,
+    "bias_partial_magnitude_upper_bound": 140737488322560,
+    "source_correctness_argument": "Payload multiplication is multiplication of homogeneous3x3 affine matrices. The combine operation returns the right map after the left map. The local scan preserves temporal order. The upsweep holds each interval total at its right endpoint; the downsweep sends the incoming prefix to the left child and left-total-after-prefix to the right child. Identity padding is neutral. Final local maps act on each chunk's incoming state. Induction on the tree gives all sequential states.",
+    "integer_bound_argument": "For t steps, matrix entries are at most2^(t-1) in magnitude and affine bias components at most32768*(2^t-1). Actual state magnitude is at most32768*(2^(t+1)-1). With t<=32 all are below2^48. In the four-lane upsweep, even discarded lane calculations compose at most32 steps; the downsweep composes at most24. Thus masked intermediate calculations also fit int64. All pointer offsets fit int32.",
+    "storage_argument": "Every kernel only reads the public inputs. The first stage writes valid local prefixes and one summary per chunk. Same-stream launches order scratch producers before consumers. The carry stage masks unused summary lanes to identity; the final stage masks the tail. The host allocates distinct output storage. Pointer-relative addressing handles legal offsets and shared input storage.",
+    "scope": "Source algebra and integer/address bounds establish the control for the full public value domain. Enumerated operators and compiled GPU checks test those arguments; finite samples alone are not a proof over every input or GPU environment.",
+    "source_sha256": {
+      "case_158": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+      "case_159": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84"
+    }
+  },
+  "oracle_dependency_hashes": {
+    "affine_scan_pair.py": "2def6480dc1a23abe9f63fb831b34348beb54c2c118e62a58667995bbaa80618"
+  },
+  "frozen_simple_counterexample": {
+    "length": 25,
+    "batch": 1,
+    "initial": [
+      1,
+      2
+    ],
+    "bias": "all zero",
+    "matrix": "identity at every step except step0=[[1,1],[0,1]] and step16=[[1,0],[1,1]]",
+    "first_failed_step": 24,
+    "control_and_reference": [
+      3,
+      5
+    ],
+    "reject_candidate": [
+      4,
+      3
+    ],
+    "reason": "The fourth chunk must receive L(U(initial)), but the reversed downsweep supplies U(L(initial)). No floating-point approximation or invalid inputs are involved."
+  },
+  "model_evaluation_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "wave": "20261018_scan_winograd_realfft",
+    "first_pass_cases": [
+      "case_158",
+      "case_159",
+      "case_160",
+      "case_161",
+      "case_162",
+      "case_163"
+    ],
+    "first_pass_trials_per_case_arm": 1,
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "trial": "r1",
+    "model": "accounts/fireworks/models/glm-5p3",
+    "provider": "fireworks",
+    "reasoning_effort": "low",
+    "total_output_token_budget_per_case_arm": 32768,
+    "tool_turn_output_cap": 8192,
+    "solo_max_rounds": 10,
+    "debate_max_rounds": 4,
+    "debate_closeout_reserve": 8192,
+    "require_claim_scope_fields": true,
+    "frozen_environment": "NVIDIA T4; PyTorch2.8.0; Triton3.4.0; NumPy1.26.4",
+    "public_input_files": [
+      "kernel.py",
+      "problem.txt"
+    ],
+    "private_oracles_or_other_cases_visible": false,
+    "pre_evaluation_hashes": {
+      "case_158": {
+        "kernel.py": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+        "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      },
+      "case_159": {
+        "kernel.py": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84",
+        "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      }
+    },
+    "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+    "qualification_gate": "Actual GPU independent qualification must freeze each case before any paid model call.",
+    "retention": "Retain every result and all raw requests, responses, reasoning, usage, tool code, stdout/stderr and verdicts; never replace wrong answers.",
+    "pricing_checked_at": "2026-10-18",
+    "pricing_source": "https://fireworks.ai/models/fireworks/glm-5p3",
+    "input_usd_per_million": 1.4,
+    "output_usd_per_million": 4.4,
+    "pre_model_compilation_repair": "history attempt2; no change to case selection, expected labels, contract, budgets, prompts or replication plan"
+  },
+  "conditional_replication_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "trigger": "A valid wrong no-tools verdict in r1 and correct Solo and Debate verdicts with valid actual GPU evidence on permitted inputs. Audit evidence before selection.",
+    "selection": "Select at most three qualifying cases in increasing numeric case order; report every other case and every first-pass result separately.",
+    "fresh_trials": [
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "stop_rule": "Run all five fresh trials for every selected case, even if the separation disappears early. Do not edit source, contract, prompts, runtime or budget.",
+    "strict_success": "All five fresh trials must give a wrong no-tools verdict and correct tool verdicts with valid actual GPU evidence. Missing answers and abstentions do not count as correct.",
+    "scope": "Selected-case repeatability in this model and environment, not a population success rate or evidence that Debate outperforms Solo."
+  },
+  "model_evaluation_plan_revisions": [
+    {
+      "reason": "Retain the original pre-qualification plan before the shared compilation repair",
+      "plan": {
+        "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+        "wave": "20261018_scan_winograd_realfft",
+        "first_pass_cases": [
+          "case_158",
+          "case_159",
+          "case_160",
+          "case_161",
+          "case_162",
+          "case_163"
+        ],
+        "first_pass_trials_per_case_arm": 1,
+        "arms": [
+          "single_call",
+          "solo",
+          "debate"
+        ],
+        "trial": "r1",
+        "model": "accounts/fireworks/models/glm-5p3",
+        "provider": "fireworks",
+        "reasoning_effort": "low",
+        "total_output_token_budget_per_case_arm": 32768,
+        "tool_turn_output_cap": 8192,
+        "solo_max_rounds": 10,
+        "debate_max_rounds": 4,
+        "debate_closeout_reserve": 8192,
+        "require_claim_scope_fields": true,
+        "frozen_environment": "NVIDIA T4; PyTorch2.8.0; Triton3.4.0; NumPy1.26.4",
+        "public_input_files": [
+          "kernel.py",
+          "problem.txt"
+        ],
+        "private_oracles_or_other_cases_visible": false,
+        "pre_evaluation_hashes": {
+          "case_158": {
+            "kernel.py": "e3eeb11512b9b16513db9e62481b5463851f187b618faef470b052c7ba1ddced",
+            "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+            "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+          },
+          "case_159": {
+            "kernel.py": "130a4ea605dd7d8c3aba67c3670dd533c3e23c4948a599370eec73b39266e25c",
+            "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+            "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+          }
+        },
+        "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+        "qualification_gate": "Actual GPU independent qualification must freeze each case before any paid model call.",
+        "retention": "Retain every result and all raw requests, responses, reasoning, usage, tool code, stdout/stderr and verdicts; never replace wrong answers.",
+        "pricing_checked_at": "2026-10-18",
+        "pricing_source": "https://fireworks.ai/models/fireworks/glm-5p3",
+        "input_usd_per_million": 1.4,
+        "output_usd_per_million": 4.4
+      }
+    }
+  ],
+  "frozen_artifact_hashes": {
+    "case_158": {
+      "kernel.py": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+      "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_159": {
+      "kernel.py": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84",
+      "problem.txt": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "gpu_qualification": {
+    "status": "passed",
+    "evidence_file": "qualification/r29.json",
+    "cases": {
+      "case_158": {
+        "ground_truth": "trust",
+        "qualification_passed": true,
+        "kernel_sha256": "a3015a2ac295d0f143a6fb5338abaab35bcae33ae04ce294a0837a849ec9a3a7",
+        "problem_sha256": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+        "oracle_source_sha256": "2def6480dc1a23abe9f63fb831b34348beb54c2c118e62a58667995bbaa80618",
+        "family": "affine_scan_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r29.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      },
+      "case_159": {
+        "ground_truth": "reject",
+        "qualification_passed": true,
+        "kernel_sha256": "5d018e4f9387e31827969915baef453929000fd931a8baacf01455b87e3e0d84",
+        "problem_sha256": "f15d89e08ca39b4d28fd813816499a08ec72700878f1305518d2db49a218561a",
+        "oracle_source_sha256": "2def6480dc1a23abe9f63fb831b34348beb54c2c118e62a58667995bbaa80618",
+        "family": "affine_scan_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r29.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      }
+    }
+  },
+  "conditional_replication_selection": {
+    "selected_at_utc": "2026-10-18T07:49:38.021937+00:00",
+    "wave_selected_cases": [
+      "case_159",
+      "case_163"
+    ],
+    "selected_this_family": [
+      "case_159"
+    ],
+    "first_pass_decisions": [
+      {
+        "case": "case_158",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_159",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_160",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_161",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_162",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_163",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      }
+    ],
+    "reason": "Apply the frozen first-pass rule to all six cases after semantic review of actual GPU evidence. All five fresh repetitions will run for every selected case."
+  },
+  "model_calls_performed": 97,
+  "model_workflow_trials": 21,
+  "model_evaluation": {
+    "totals": {
+      "attempts": 6,
+      "outcomes": {
+        "correct": 5,
+        "wrong_verdict": 1
+      },
+      "audited_correct": 5,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 1.102751,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 12
+    },
+    "arms": {
+      "single_call": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 1,
+          "wrong_verdict": 1
+        },
+        "audited_correct": 1,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.050366,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "solo": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.289107,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 3
+      },
+      "debate": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.763278,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 9
+      }
+    },
+    "runs": [
+      {
+        "case": "case_158",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.024223,
+        "probes": 0,
+        "link": "traces_glm/case_158/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 3961,
+        "output_tokens": 4245,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_158",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.098205,
+        "probes": 1,
+        "link": "traces_glm/case_158/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 63037,
+        "output_tokens": 2262,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_158",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.320831,
+        "probes": 4,
+        "link": "traces_glm/case_158/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 203233,
+        "output_tokens": 8251,
+        "llm_api_calls": 7
+      },
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "wrong_verdict",
+        "usd": 0.026143,
+        "probes": 0,
+        "link": "traces_glm/case_159/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 3962,
+        "output_tokens": 4681,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.190902,
+        "probes": 2,
+        "link": "traces_glm/case_159/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 125368,
+        "output_tokens": 3497,
+        "llm_api_calls": 6
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.442447,
+        "probes": 5,
+        "link": "traces_glm/case_159/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 277675,
+        "output_tokens": 12205,
+        "llm_api_calls": 8
+      }
+    ]
+  },
+  "semantic_evidence_audit": [
+    {
+      "case": "case_158",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Accept without execution. Reasoning initially confuses Blelloch with Hillis-Steele and repeatedly reverses composition notation, but resolves it by tracing all four chunk entries: compose(parent_prefix,left_total) applies the earlier prefix first and the left subtree afterward. It checks local inclusive scan, identity padding, C=1 and the final carry application. Its final ordered-tree argument is correct. Integer bounds are qualitative rather than a formal full-domain calculation; independent author qualification supplies the precise bound. No runtime evidence was generated.",
+      "evidence": [
+        "traces_glm/case_158/single_call/r1/transcript.md",
+        "traces_glm/case_158/single_call/r1/response_thinking.txt",
+        "traces_glm/case_158/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_158",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with actual GPU probe t6:1582 calls and969544 output components match the independent sequential public reference exactly. The probe covers every N=1..32, several batch sizes, eight deterministic seeds, int16 extremes and some singular matrices. All generated inputs are legal. Its final full-domain language is too strong: finite samples do not disprove every possible defect, and no storage-offset, alias, preservation or fresh-output assertion was made. Half of its140 singular-pattern calls use ordinary random matrices rather than forced singular matrices. The actual kernel is accepted on the separate algebra/integer-bound qualification, not on exhaustive input testing by this arm.",
+      "evidence": [
+        "traces_glm/case_158/solo/r1/transcript.md",
+        "traces_glm/case_158/solo/r1/verdict.json",
+        "traces_glm/case_158/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_158/solo/r1/probes/t6_json_result.json"
+      ]
+    },
+    {
+      "case": "case_158",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with valid actual GPU comparisons. Probes t9,t11,t14 complete63 comparisons against the sequential reference with no mismatches: eight single-chunk lengths, the default case plus30 random shapes, and every length9..32 with all-ones, singular and random matrix rows. Failed probe t10 has an invalid tensor expansion before any candidate call and is retained; t14 repairs it. The final claim of full-range bias/initial coverage is too strong: t14 bias is restricted to[-30000,29999], and initial excludes32767. No input-preservation, output-freshness, offset or alias checks were executed. Finite samples support the result but do not establish all legal values; the separate author algebra/integer-bound qualification supplies that basis.",
+      "evidence": [
+        "traces_glm/case_158/debate/r1/transcript.md",
+        "traces_glm/case_158/debate/r1/verdict.json",
+        "traces_glm/case_158/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_158/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_158/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_158/debate/r1/probes/t10_stderr.txt",
+        "traces_glm/case_158/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_158/debate/r1/probes/t11_stdout.txt",
+        "traces_glm/case_158/debate/r1/probes/t14_probe.py",
+        "traces_glm/case_158/debate/r1/probes/t14_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The model derives that compose(L,R) applies L first then R, but approves compose(left_total,parent_prefix) in the downsweep. It repeatedly reasons from the familiar addition scan and the root identity prefix, then states an incorrect invariant for a right child with a nonidentity parent prefix. It never checks the four-chunk noncommuting case that would reverse the actual order. This is an incorrect temporal-order argument, not an explicit claim that associativity implies commutativity. The independent legal length25 shear example yields candidate[4,3] versus reference[3,5] at index24.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r1/transcript.md",
+        "traces_glm/case_159/single_call/r1/response_thinking.txt",
+        "traces_glm/case_159/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Reject from source reasoning. After initially recalling the commutative addition-scan formula, the model derives _compose(L,R)=R after L and traces four chunk summaries. It correctly finds that the fourth carry composes the third chunk before the preceding prefix, instead of afterward. It also distinguishes padded C4 with only three real chunks(N17..24), where the bad carry is unused, from four real chunks(N25..32), where it affects outputs. It generates no executed witness, but the ordered-tree argument diagnoses the actual source defect. This fresh repeat breaks strict all-five no-tool failure.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r2/transcript.md",
+        "traces_glm/case_159/single_call/r2/response_thinking.txt",
+        "traces_glm/case_159/single_call/r2/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r3",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The four-chunk hand trace explicitly computes combine(s2,s0s1)=s2s0s1, then reports the required s0s1s2 as if these orders were equal. It repeats this mistaken order later and invokes a familiar scan pattern. It also misnames the tree upsweep Hillis-Steele and understates matrix-growth bounds using Fibonacci growth, though int64 is in fact safe. No runtime evidence was generated.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r3/transcript.md",
+        "traces_glm/case_159/single_call/r3/response_thinking.txt",
+        "traces_glm/case_159/single_call/r3/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The model verifies the local affine composition, padding and C2 identity-root example, briefly invents an out-of-range gather due to a division mistake and corrects that mistake. It then assumes the familiar tree downsweep produces ordered exclusive prefixes without tracing the nonidentity prefix at C4. It describes the desired parent-prefix-then-left-subtree invariant but never compares it to the actual reversed _compose call. No execution or valid counterexample was generated.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r4/transcript.md",
+        "traces_glm/case_159/single_call/r4/response_thinking.txt",
+        "traces_glm/case_159/single_call/r4/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Reject from detailed source reasoning. The model eventually establishes that the fourth chunk gets M1*M0*M2 instead of M2*M1*M0 and constructs valid noncommuting2x2 summaries: M0 is swap, M1 is diag(1,0), and M2=[[0,0],[1,0]]. Their correct product is diag(0,1), while the candidate gives diag(1,0). Each summary can be realized by one legal step matrix and seven identities; zero biases and a nonzero initial state complete a legal counterexample. No code was executed. The reasoning repeatedly revisits notation and briefly uses commuting scalar examples before correcting itself. Final wording last8steps is only exact atN32; forN25..31 the fourth chunk has1..7valid steps.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r5/transcript.md",
+        "traces_glm/case_159/single_call/r5/response_thinking.txt",
+        "traces_glm/case_159/single_call/r5/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "single_call",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The model traces C4 but explicitly turns compose(P2,P01) into P0P1P2, losing the noncommutative temporal order. It later correctly derives that _compose applies its first payload before its second, yet never reconciles that rule with the earlier fourth-carry trace. Local scan, padding, mask and pointer checks are otherwise reasonable. No executed evidence is produced. Across all five fresh no-tool trials, this leaves two correct Rejects and three wrong Accepts.",
+      "evidence": [
+        "traces_glm/case_159/single_call/r6/transcript.md",
+        "traces_glm/case_159/single_call/r6/response_thinking.txt",
+        "traces_glm/case_159/single_call/r6/verdict.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive legal GPU evidence. Probe t7 finds a mismatch, and t8 reproduces B64,N25,seed1025 against the sequential reference with max absolute difference6531162. Additional comparisons fail for N25..32 at B4 and at N25 for several batches and seeds. This establishes an implementation defect and localizes it to four chunks, but the model does not derive the swapped downsweep operands. Coverage and counts are overstated: t8 makes55 comparisons, stores54 keys after one duplicate, and reports29 scalar-false entries while excluding one nested failing result; there are30 failing stored results and31 failing calls. The claim that failure is independent of B and seed is not established by these samples. The first probe uses unseeded Python shape selection; the decisive follow-up is deterministically seeded.",
+      "evidence": [
+        "traces_glm/case_159/solo/r1/transcript.md",
+        "traces_glm/case_159/solo/r1/verdict.json",
+        "traces_glm/case_159/solo/r1/probes/t7_probe.py",
+        "traces_glm/case_159/solo/r1/probes/t7_json_result.json",
+        "traces_glm/case_159/solo/r1/probes/t8_probe.py",
+        "traces_glm/case_159/solo/r1/probes/t8_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU probe t6. It makes143 comparisons against the sequential public reference;38 mismatch. A deterministic B1,N25,seed25 input has max difference108796; other saved examples include B7,N25 max difference1525066. The first128-call sweep covers B1,2,3,7, not B64, because seed ranges0..3; later edge checks do include B64. The reported approximately1.5million maximum is only the largest displayed example, not a recorded global maximum across all143 comparisons. Source and input contracts are unchanged, and the saved counterexamples are decisive.",
+      "evidence": [
+        "traces_glm/case_159/solo/r2/transcript.md",
+        "traces_glm/case_159/solo/r2/verdict.json",
+        "traces_glm/case_159/solo/r2/probes/t6_probe.py",
+        "traces_glm/case_159/solo/r2/probes/t6_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU probe t6. It makes512 deterministic randomized comparisons plus two extreme structured comparisons. All128 randomized cases at N25..32 fail; all384 randomized cases at N<=24 pass. Both structured N32 cases also pass, including zero and all-ones matrices. The final answer incorrectly groups all386 passing cases under N<=24 and claims every N25..32 case failed. The correct interpretation is that the128 randomized long-sequence cases failed, while commuting structured cases can pass. A saved B7,N25,seed0 example has max difference15048937. Actual GPU outputs are compared to a separate sequential CPU reference.",
+      "evidence": [
+        "traces_glm/case_159/solo/r3/transcript.md",
+        "traces_glm/case_159/solo/r3/verdict.json",
+        "traces_glm/case_159/solo/r3/probes/t6_probe.py",
+        "traces_glm/case_159/solo/r3/probes/t6_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r4",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU probe t6:96 seeded random comparisons,14 extreme constant-matrix comparisons and two growth comparisons. All24 randomized cases at N25..32 fail, including two components at B1,N25 and704 at B64,N32. The16 structured comparisons pass. All comparisons use the sequential public reference and exact equality. The phrase full in-scope domain overstates sampling: only B1,7,64 are used in the random sweep, and source defect is localized to the four-chunk carry regime without deriving the reversed operands. Counterexamples remain decisive.",
+      "evidence": [
+        "traces_glm/case_159/solo/r4/transcript.md",
+        "traces_glm/case_159/solo/r4/verdict.json",
+        "traces_glm/case_159/solo/r4/probes/t6_probe.py",
+        "traces_glm/case_159/solo/r4/probes/t6_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive legal actual GPU probe t6. It performs96 seeded random comparisons across every N1..32 at B1,7,64, plus20 B16,N32 comparisons with mixed random matrices and extreme int16 bias/initial. All24 random long-sequence cases and all20 extreme long-sequence cases fail, giving44/116 mismatches. All candidate calls use allowed matrix entries{-1,0,1} and a sequential public reference. The final prose says any int8 matrix, which is broader than the actual contract; the failing inputs themselves are legal. The extreme loop seed labels are iteration numbers, not reseeding values: one generator seeded1 advances through all20 calls, so reproducibility requires the full probe. No failed execution or unsupported rejection evidence was found.",
+      "evidence": [
+        "traces_glm/case_159/solo/r5/transcript.md",
+        "traces_glm/case_159/solo/r5/verdict.json",
+        "traces_glm/case_159/solo/r5/probes/t6_probe.py",
+        "traces_glm/case_159/solo/r5/probes/t6_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "solo",
+      "trial": "r6",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive legal actual GPU evidence. Completed t8 compares128 B1 cases to a sequential CPU reference and finds32 mismatches, one per mode at each N25..32, first at step24. It saves actual/reference values, for example-16909 versus1269774 at N25 random mode. t7 prints a completed384-comparison sweep with96 mismatches and maximum difference103790318100480 before a later bad offset assertion aborts; that partial output supports the stated aggregate. t6 previously aborts after its sweep because the CPU reference receives a noncontiguous view. t7 slices the first half at offset0 then copies to CUDA, so its nonzero-offset assertion is false. The completed t8 counterexamples establish Reject independently of either failed offset test. All-ones matrices can still produce noncommuting affine maps because the biases vary; zero-mat mode only zeros one matrix entry. References to an exhaustive sweep describe selected shapes/modes, not all values.",
+      "evidence": [
+        "traces_glm/case_159/solo/r6/transcript.md",
+        "traces_glm/case_159/solo/r6/verdict.json",
+        "traces_glm/case_159/solo/r6/probes/t6_probe.py",
+        "traces_glm/case_159/solo/r6/probes/t6_stderr.txt",
+        "traces_glm/case_159/solo/r6/probes/t7_probe.py",
+        "traces_glm/case_159/solo/r6/probes/t7_stdout.txt",
+        "traces_glm/case_159/solo/r6/probes/t7_stderr.txt",
+        "traces_glm/case_159/solo/r6/probes/t8_probe.py",
+        "traces_glm/case_159/solo/r6/probes/t8_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive legal GPU evidence. t10 executes64 seeded comparisons and finds16 failures, eight each atN25 andN32, with first failed step24. Independent t15 completes162 comparisons and reports27 mismatches, including every N25..28 at B1 andB64 in the saved examples; all inputs used in completed comparisons satisfy the public domain. t9 first shows40 local-chunk comparisons pass. This supports the inter-chunk failure but the final answer does not identify the exact swapped operands. Final wording incorrectly attributes all16 t10 failures toN25 and calls index24 the last step of the last chunk; it is the first step of the fourth chunk. t15 does not actually test nonzero GPU offsets or input aliasing: CPU offset views are copied to separate CUDA allocations. Its alleged singular matrix is identity. Failed t11 has a reference-arity error after one candidate call; failed t14 aborts on an out-of-bounds initial view after earlier comparisons. Both failed scripts are retained. These coverage defects do not weaken the completed legal counterexamples.",
+      "evidence": [
+        "traces_glm/case_159/debate/r1/transcript.md",
+        "traces_glm/case_159/debate/r1/verdict.json",
+        "traces_glm/case_159/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_159/debate/r1/probes/t9_json_result.json",
+        "traces_glm/case_159/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_159/debate/r1/probes/t10_json_result.json",
+        "traces_glm/case_159/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_159/debate/r1/probes/t11_stderr.txt",
+        "traces_glm/case_159/debate/r1/probes/t14_probe.py",
+        "traces_glm/case_159/debate/r1/probes/t14_stderr.txt",
+        "traces_glm/case_159/debate/r1/probes/t15_probe.py",
+        "traces_glm/case_159/debate/r1/probes/t15_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive legal actual GPU probe t19:160 comparisons against the sequential reference, including128 randomized cases and32 all-ones extreme cases. All32 randomized configurations at N25..32 fail; B64,N32 has662 mismatched components. The extreme constant-map cases pass, consistent with commuting summaries. t26 also executes a genuinely nonzero-offset contiguous GPU input and matches the reference at N10. The workflow spends several probes on harness errors: t9/t10 lack torch imports, t11 catches the same import errors, t20/t25 mix CPU and GPU tensors, and t21 removes the batch dimension from the intended offset view. The isolated API probe also has malformed expected packing and gathers pointers rather than loaded values, but these lines were not reached. The final verdict appropriately leaves that API claim inconclusive and relies on valid end-to-end counterexamples.",
+      "evidence": [
+        "traces_glm/case_159/debate/r2/transcript.md",
+        "traces_glm/case_159/debate/r2/verdict.json",
+        "traces_glm/case_159/debate/r2/probes/t19_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t19_json_result.json",
+        "traces_glm/case_159/debate/r2/probes/t26_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t26_json_result.json",
+        "traces_glm/case_159/debate/r2/probes/t9_stderr.txt",
+        "traces_glm/case_159/debate/r2/probes/t10_stderr.txt",
+        "traces_glm/case_159/debate/r2/probes/t11_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t11_json_result.json",
+        "traces_glm/case_159/debate/r2/probes/t20_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t20_stderr.txt",
+        "traces_glm/case_159/debate/r2/probes/t21_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t21_json_result.json",
+        "traces_glm/case_159/debate/r2/probes/t25_probe.py",
+        "traces_glm/case_159/debate/r2/probes/t25_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with decisive actual GPU probes on legal deterministic inputs. t9 cycles three noncommuting matrices at B8,N32 and finds104/512 failed components, max difference199959. t10 checks one B5 input at every N1..32 and finds eight failing lengths25..32, with243 failed components in total; earlier lengths pass. t11 confirms ordinary tensor flags and one correct N16 execution. All34 comparisons execute successfully. The verdict accurately reports these samples and identifies the four-chunk carry regime, although it does not pinpoint the reversed downsweep call. No invalid probes or material evidence exaggerations were found.",
+      "evidence": [
+        "traces_glm/case_159/debate/r3/transcript.md",
+        "traces_glm/case_159/debate/r3/verdict.json",
+        "traces_glm/case_159/debate/r3/probes/t9_probe.py",
+        "traces_glm/case_159/debate/r3/probes/t9_json_result.json",
+        "traces_glm/case_159/debate/r3/probes/t10_probe.py",
+        "traces_glm/case_159/debate/r3/probes/t10_json_result.json",
+        "traces_glm/case_159/debate/r3/probes/t11_probe.py",
+        "traces_glm/case_159/debate/r3/probes/t11_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r4",
+      "verdict": "needs_more_evidence",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Abstention, not a correct Reject. No runtime probe was executed. The first describer and skeptic responses each reached8192 output tokens and their proposed actions were discarded. A further skeptic call used6992 tokens to record a source-order claim, after which reserved closeout began; its describer response also truncated at1200 tokens. Total recorded output was25261 tokens across six calls, with313 seconds of LLM time. The source rationale identifies reversed downsweep operands but falsely says observable failure starts atN17; the incorrect fourth carry is unused untilN25. Judge retains the unresolved claim and abstains. This is a reasoning-budget and workflow allocation failure, not infrastructure failure.",
+      "evidence": [
+        "traces_glm/case_159/debate/r4/transcript.md",
+        "traces_glm/case_159/debate/r4/verdict.json",
+        "traces_glm/case_159/debate/r4/tool_events.jsonl",
+        "traces_glm/case_159/debate/r4/run.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU counterexamples. t9 observes default B7,N32,seed0 failure with max difference4776312. t15 repeats that case and two B16,N32 cases, with66,159,162 failed components and maxima4776312,2158031,3133958. The reported first failed steps17/16 are a probe indexing bug: it uses flattened_index%N instead of (flattened_index//2)%N. Independent source-CPU and Python-int rechecking confirms all first failed steps are24; counts and maxima agree with the GPU output. t10 verifies six selected N9..24 cases. t11 fails after execution because CUDA int64 matrix multiplication is unsupported; t14 fails while viewing noncontiguous nonzero indices. Those failed probes are retained. The verdict is valid but its chunk2/start16-17 localization is wrong.",
+      "evidence": [
+        "traces_glm/case_159/debate/r5/transcript.md",
+        "traces_glm/case_159/debate/r5/verdict.json",
+        "traces_glm/case_159/debate/r5/probes/t9_probe.py",
+        "traces_glm/case_159/debate/r5/probes/t9_json_result.json",
+        "traces_glm/case_159/debate/r5/probes/t10_probe.py",
+        "traces_glm/case_159/debate/r5/probes/t10_json_result.json",
+        "traces_glm/case_159/debate/r5/probes/t11_probe.py",
+        "traces_glm/case_159/debate/r5/probes/t11_stderr.txt",
+        "traces_glm/case_159/debate/r5/probes/t14_probe.py",
+        "traces_glm/case_159/debate/r5/probes/t14_stderr.txt",
+        "traces_glm/case_159/debate/r5/probes/t15_probe.py",
+        "traces_glm/case_159/debate/r5/probes/t15_json_result.json"
+      ]
+    },
+    {
+      "case": "case_159",
+      "arm": "debate",
+      "trial": "r6",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with a valid targeted GPU counterexample and correct source diagnosis. Probe t7 uses upper shear matrices in chunks0/1/3 and lower shear matrices in chunk2, with seeded legal bias and initial values. The actual B2,N32 output agrees through step23 and differs at step24: first row actual[2668,498] versus reference[-13276,-11414], with32 failed components in the fourth chunk. Five further seeded B4,N32 cases have27,41,20,42,38 failed components. The agent correctly connects this to _compose(left_total,parent_prefix), which reverses the temporal order. All six candidate/reference comparisons complete successfully on legal inputs. No invalid probe or material localization error was found.",
+      "evidence": [
+        "traces_glm/case_159/debate/r6/transcript.md",
+        "traces_glm/case_159/debate/r6/verdict.json",
+        "traces_glm/case_159/debate/r6/probes/t7_probe.py",
+        "traces_glm/case_159/debate/r6/probes/t7_json_result.json"
+      ]
+    }
+  ],
+  "conditional_replication": {
+    "status": "completed",
+    "completed_at_utc": "2026-10-18T08:04:47.168017+00:00",
+    "selected_cases": [
+      "case_159"
+    ],
+    "results": {
+      "totals": {
+        "attempts": 15,
+        "outcomes": {
+          "correct": 11,
+          "wrong_verdict": 3,
+          "abstention": 1
+        },
+        "audited_correct": 11,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 2.965572,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 25
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 2,
+            "wrong_verdict": 3
+          },
+          "audited_correct": 2,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.142055,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.926783,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 8
+        },
+        "debate": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 4,
+            "abstention": 1
+          },
+          "audited_correct": 4,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 1.896734,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 17
+        }
+      },
+      "runs": [
+        {
+          "case": "case_159",
+          "arm": "single_call",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.025844,
+          "probes": 0,
+          "link": "traces_glm/case_159/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 3962,
+          "output_tokens": 4613,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_159",
+          "arm": "single_call",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.017955,
+          "probes": 0,
+          "link": "traces_glm/case_159/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 3962,
+          "output_tokens": 2820,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_159",
+          "arm": "single_call",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.01374,
+          "probes": 0,
+          "link": "traces_glm/case_159/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 3962,
+          "output_tokens": 1862,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_159",
+          "arm": "single_call",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.06591,
+          "probes": 0,
+          "link": "traces_glm/case_159/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 3962,
+          "output_tokens": 13719,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_159",
+          "arm": "single_call",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.018606,
+          "probes": 0,
+          "link": "traces_glm/case_159/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 3962,
+          "output_tokens": 2968,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_159",
+          "arm": "solo",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.104718,
+          "probes": 1,
+          "link": "traces_glm/case_159/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 66115,
+          "output_tokens": 2763,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_159",
+          "arm": "solo",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.107944,
+          "probes": 1,
+          "link": "traces_glm/case_159/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 69874,
+          "output_tokens": 2300,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_159",
+          "arm": "solo",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.104579,
+          "probes": 1,
+          "link": "traces_glm/case_159/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 67983,
+          "output_tokens": 2137,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_159",
+          "arm": "solo",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.138014,
+          "probes": 2,
+          "link": "traces_glm/case_159/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 90671,
+          "output_tokens": 2517,
+          "llm_api_calls": 5
+        },
+        {
+          "case": "case_159",
+          "arm": "solo",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.471528,
+          "probes": 3,
+          "link": "traces_glm/case_159/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 321142,
+          "output_tokens": 4984,
+          "llm_api_calls": 10
+        },
+        {
+          "case": "case_159",
+          "arm": "debate",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.701147,
+          "probes": 8,
+          "link": "traces_glm/case_159/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 448723,
+          "output_tokens": 16576,
+          "llm_api_calls": 12
+        },
+        {
+          "case": "case_159",
+          "arm": "debate",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.268709,
+          "probes": 3,
+          "link": "traces_glm/case_159/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 173131,
+          "output_tokens": 5983,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_159",
+          "arm": "debate",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "needs_more_evidence",
+          "outcome": "abstention",
+          "usd": 0.215709,
+          "probes": 0,
+          "link": "traces_glm/case_159/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 74686,
+          "output_tokens": 25261,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_159",
+          "arm": "debate",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.45573,
+          "probes": 5,
+          "link": "traces_glm/case_159/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 282477,
+          "output_tokens": 13696,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_159",
+          "arm": "debate",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.255439,
+          "probes": 1,
+          "link": "traces_glm/case_159/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 149111,
+          "output_tokens": 10610,
+          "llm_api_calls": 6
+        }
+      ]
+    },
+    "per_case": {
+      "case_159": {
+        "strict_five_repeat_passed": false,
+        "fresh": {
+          "totals": {
+            "attempts": 15,
+            "outcomes": {
+              "correct": 11,
+              "wrong_verdict": 3,
+              "abstention": 1
+            },
+            "audited_correct": 11,
+            "audit_issue_attempts": 0,
+            "recorded_api_estimate_usd": 2.965572,
+            "unknown_cost_attempts": 0,
+            "partial_cost_attempts": 0,
+            "probes": 25
+          },
+          "arms": {
+            "single_call": {
+              "attempts": 5,
+              "outcomes": {
+                "correct": 2,
+                "wrong_verdict": 3
+              },
+              "audited_correct": 2,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.142055,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 0
+            },
+            "solo": {
+              "attempts": 5,
+              "outcomes": {
+                "correct": 5
+              },
+              "audited_correct": 5,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.926783,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 8
+            },
+            "debate": {
+              "attempts": 5,
+              "outcomes": {
+                "correct": 4,
+                "abstention": 1
+              },
+              "audited_correct": 4,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 1.896734,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 17
+            }
+          },
+          "runs": [
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.025844,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 4613,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.017955,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 2820,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.01374,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 1862,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.06591,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 13719,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.018606,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 2968,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.104718,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 66115,
+              "output_tokens": 2763,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.107944,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 69874,
+              "output_tokens": 2300,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.104579,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 67983,
+              "output_tokens": 2137,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.138014,
+              "probes": 2,
+              "link": "traces_glm/case_159/solo/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 90671,
+              "output_tokens": 2517,
+              "llm_api_calls": 5
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.471528,
+              "probes": 3,
+              "link": "traces_glm/case_159/solo/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 321142,
+              "output_tokens": 4984,
+              "llm_api_calls": 10
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.701147,
+              "probes": 8,
+              "link": "traces_glm/case_159/debate/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 448723,
+              "output_tokens": 16576,
+              "llm_api_calls": 12
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.268709,
+              "probes": 3,
+              "link": "traces_glm/case_159/debate/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 173131,
+              "output_tokens": 5983,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "needs_more_evidence",
+              "outcome": "abstention",
+              "usd": 0.215709,
+              "probes": 0,
+              "link": "traces_glm/case_159/debate/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 74686,
+              "output_tokens": 25261,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.45573,
+              "probes": 5,
+              "link": "traces_glm/case_159/debate/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 282477,
+              "output_tokens": 13696,
+              "llm_api_calls": 8
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.255439,
+              "probes": 1,
+              "link": "traces_glm/case_159/debate/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 149111,
+              "output_tokens": 10610,
+              "llm_api_calls": 6
+            }
+          ]
+        },
+        "including_initial": {
+          "totals": {
+            "attempts": 18,
+            "outcomes": {
+              "wrong_verdict": 4,
+              "correct": 13,
+              "abstention": 1
+            },
+            "audited_correct": 13,
+            "audit_issue_attempts": 0,
+            "recorded_api_estimate_usd": 3.625064,
+            "unknown_cost_attempts": 0,
+            "partial_cost_attempts": 0,
+            "probes": 32
+          },
+          "arms": {
+            "single_call": {
+              "attempts": 6,
+              "outcomes": {
+                "wrong_verdict": 4,
+                "correct": 2
+              },
+              "audited_correct": 2,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.168198,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 0
+            },
+            "solo": {
+              "attempts": 6,
+              "outcomes": {
+                "correct": 6
+              },
+              "audited_correct": 6,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 1.117685,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 10
+            },
+            "debate": {
+              "attempts": 6,
+              "outcomes": {
+                "correct": 5,
+                "abstention": 1
+              },
+              "audited_correct": 5,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 2.339181,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 22
+            }
+          },
+          "runs": [
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.026143,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 4681,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.025844,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 4613,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.017955,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 2820,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.01374,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 1862,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.06591,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 13719,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "single_call",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.018606,
+              "probes": 0,
+              "link": "traces_glm/case_159/single_call/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 3962,
+              "output_tokens": 2968,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.190902,
+              "probes": 2,
+              "link": "traces_glm/case_159/solo/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 125368,
+              "output_tokens": 3497,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.104718,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 66115,
+              "output_tokens": 2763,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.107944,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 69874,
+              "output_tokens": 2300,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.104579,
+              "probes": 1,
+              "link": "traces_glm/case_159/solo/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 67983,
+              "output_tokens": 2137,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.138014,
+              "probes": 2,
+              "link": "traces_glm/case_159/solo/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 90671,
+              "output_tokens": 2517,
+              "llm_api_calls": 5
+            },
+            {
+              "case": "case_159",
+              "arm": "solo",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.471528,
+              "probes": 3,
+              "link": "traces_glm/case_159/solo/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 321142,
+              "output_tokens": 4984,
+              "llm_api_calls": 10
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.442447,
+              "probes": 5,
+              "link": "traces_glm/case_159/debate/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 277675,
+              "output_tokens": 12205,
+              "llm_api_calls": 8
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.701147,
+              "probes": 8,
+              "link": "traces_glm/case_159/debate/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 448723,
+              "output_tokens": 16576,
+              "llm_api_calls": 12
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.268709,
+              "probes": 3,
+              "link": "traces_glm/case_159/debate/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 173131,
+              "output_tokens": 5983,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "needs_more_evidence",
+              "outcome": "abstention",
+              "usd": 0.215709,
+              "probes": 0,
+              "link": "traces_glm/case_159/debate/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 74686,
+              "output_tokens": 25261,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.45573,
+              "probes": 5,
+              "link": "traces_glm/case_159/debate/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 282477,
+              "output_tokens": 13696,
+              "llm_api_calls": 8
+            },
+            {
+              "case": "case_159",
+              "arm": "debate",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.255439,
+              "probes": 1,
+              "link": "traces_glm/case_159/debate/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 149111,
+              "output_tokens": 10610,
+              "llm_api_calls": 6
+            }
+          ]
+        }
+      }
+    },
+    "protocol_audit": [
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "single_call",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "solo",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_159",
+        "arm": "debate",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      }
+    ],
+    "cost_scope": "Conservative model API estimate from captured usage; excludes Modal GPU charges. This is not an invoice.",
+    "interpretation": "Selected follow-ups are reported separately. Correct verdicts do not validate all explanations or coverage claims. These workflows do not isolate tool access from additional reasoning."
+  },
+  "post_evaluation_reporting": {
+    "issue": "Concurrent no-tool batches r2 and r3 have the same timestamp-based original_trial. Distinct directories and API response IDs establish independent calls.",
+    "resolution": "Only colliding report groups are separated by canonical local trial; original trace metadata and raw responses are unchanged. Future generated batch IDs gain a UUID suffix after all evaluation calls were complete.",
+    "evidence": [
+      {
+        "case": "case_159",
+        "trial": "r2",
+        "recorded_original_trial": "run_20261018T074942_226805Z",
+        "response_id": "chatcmpl-6408eb02"
+      },
+      {
+        "case": "case_159",
+        "trial": "r3",
+        "recorded_original_trial": "run_20261018T074942_226805Z",
+        "response_id": "chatcmpl-d5120140"
+      }
+    ]
+  }
+}

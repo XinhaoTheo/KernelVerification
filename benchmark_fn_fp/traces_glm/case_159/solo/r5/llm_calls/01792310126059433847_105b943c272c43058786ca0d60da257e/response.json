@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-1313c4c1",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive probe over the legal domain (all N from 1 to 32, several batch sizes, random inputs, plus extreme int16 values) comparing kernel output to the sequential reference.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-be0808628f8a48da",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_159\\\")\\nimport kernel\\n\\nresults = []\\ndef check(B, N, seed, tag):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(seed)\\n    matrix = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8).cuda()\\n    bias = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16).cuda()\\n    initial = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16).cuda()\\n    out = kernel.run(matrix, bias, initial)\\n    ref = kernel.reference(matrix, bias, initial)\\n    ok = torch.equal(out, ref)\\n    results.append({\\\"B\\\": B, \\\"N\\\": N, \\\"seed\\\": seed, \\\"tag\\\": tag, \\\"match\\\": bool(ok)})\\n    return ok\\n\\nfails = []\\n# all N 1..32 with a couple of B values\\nfor N in range(1, 33):\\n    for B, seed in ((1, N), (7, 1000+N), (64, 5000+N)):\\n        if not check(B, N, seed, \\\"sweep\\\"):\\n            fails.append((B, N, seed))\\n# extreme values\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1)\\nfor seed in range(20):\\n    N = 32\\n    B = 16\\n    matrix = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8).cuda()\\n    bias = torch.full((B, N, 2), 32767, dtype=torch.int16).cuda(); bias[:, :, 0] = -32768\\n    initial = torch.full((B, 2), -32768, dtype=torch.int16).cuda()\\n    out = kernel.run(matrix, bias, initial)\\n    ref = kernel.reference(matrix, bias, initial)\\n    if not torch.equal(out, ref):\\n        fails.append((B, N, seed, \\\"extreme\\\"))\\n        results.append({\\\"B\\\": B, \\\"N\\\": N, \\\"seed\\\": seed, \\\"tag\\\": \\\"extreme\\\", \\\"match\\\": False})\\n    else:\\n        results.append({\\\"B\\\": B, \\\"N\\\": N, \\\"seed\\\": seed, \\\"tag\\\": \\\"extreme\\\", \\\"match\\\": True})\\n\\nn_total = len(results)\\nn_match = sum(1 for r in results if r[\\\"match\\\"])\\nprint(json.dumps({\\\"n_total\\\": n_total, \\\"n_match\\\": n_match, \\\"fails\\\": [str(f) for f in fails]}))\", \"expected_signal\": \"exact equality across all tested legal inputs\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe testing many B,N combinations and random inputs, comparing run vs reference exactly."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310126,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 677,
+    "prompt_tokens": 13742,
+    "total_tokens": 14419,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 18,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 9046,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

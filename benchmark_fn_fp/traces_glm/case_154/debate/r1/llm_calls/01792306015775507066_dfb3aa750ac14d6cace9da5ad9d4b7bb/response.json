@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-96ad3a27",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two independent runtime probes: one targeting catastrophic cancellation (c1) with an extreme-magnitude cancellation case, and one searching for accumulated-roundoff violations (c2) over randomized mild-cancellation/skewed inputs.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b412f6439f358636",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\nrows = []\\n# Catastrophic cancellation cases with large-magnitude terms\\n# (a*c) ~ -(b*d): e.g. a=65504,b=65504,c=65504,d=-65504 -> a*c=4.29e9, b*d=-4.29e9\\ncands = [\\n    (65504.0, 65504.0, 65504.0, -65504.0),\\n    (65504.0, 1.0, 65504.0, -1.0),        # a*c = 65504, b*d = -1 -> real num = 65503\\n    (-1.0, 65504.0, 65504.0, 1.0),        # b*c=4.29e9, a*d=-1 -> imag num ~4.29e9\\n    (65504.0, -65504.0, 65504.0, -65504.0),  # imag num: b*c - a*d = -4.29e9 - (-4.29e9) = 0 exact cancel\\n    (30000.0, 30000.0, 30000.0, -30000.0),\\n    (65504.0, 65504.0, 30000.0, -30000.0),   # a*c=1.965e9, b*d=-1.965e9\\n    (1000.0, 1000.0, 1000.0, -1000.0),\\n]\\nfor a,b,c,d in cands:\\n    rows.append([a,b,c,d])\\n\\nnum = torch.tensor([[r[0],r[1]] for r in rows], dtype=torch.float16, device=dev)\\nden = torch.tensor([[r[2],r[3]] for r in rows], dtype=torch.float16, device=dev)\\ntry:\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    tol = 1e-7 + 5e-7*ref.abs()\\n    err = (out.double()-ref.double()).abs()\\n    fail = err > tol\\n    print(json.dumps({\\n        \\\"n_rows\\\": len(rows),\\n        \\\"rows\\\": rows,\\n        \\\"out\\\": out.cpu().tolist(),\\n        \\\"ref\\\": ref.cpu().tolist(),\\n        \\\"err\\\": err.cpu().tolist(),\\n        \\\"tol\\\": tol.cpu().tolist(),\\n        \\\"fail\\\": fail.cpu().tolist(),\\n        \\\"any_fail\\\": bool(fail.any())\\n    }))\\nexcept Exception as e:\\n    print(json.dumps({\\\"error\\\": str(e)}))\\n\", \"expected_signal\": \"componentwise error exceeds 1e-7+5e-7*|target| for a cancellation-heavy row\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a112e900dfaceb25",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\nworst = None\\nworst_info = None\\nfails = 0\\ntrials = 0\\nfor t in range(200):\\n    n = 4096\\n    # mixture: uniform-log magnitudes over full FP16 range incl. subnormals, skewed denominators\\n    def samp():\\n        e = torch.empty(n,2).uniform_(-20, 15, generator=g)  # ~1e-20..3e15 -> clamp to fp16 later\\n        x = torch.sign(torch.empty(n,2).uniform_(-1,1,generator=g)) * (2.0**e)\\n        return x.to(torch.float16)\\n    num = samp()\\n    den = samp()\\n    # ensure denominator rows nonzero\\n    z = (den == 0).all(dim=1)\\n    den[z,0] = 1.0\\n    # occasional adversarial skewed denominators: one component ~1e5x the other\\n    if t % 4 == 0:\\n        m = torch.randperm(n, generator=g)[: n//2]\\n        den[m,1] = (den[m,0].float()*1e-4).to(torch.float16)\\n    num = num.to(dev); den = den.to(dev)\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    err = (out.double()-ref.double()).abs()\\n    tol = 1e-7 + 5e-7*ref.abs()\\n    f = err > tol\\n    trials += 1\\n    if bool(f.any()):\\n        fails += 1\\n    rel = (err / tol)\\n    mx = float(rel.max())\\n    if worst is None or mx > worst:\\n        worst = mx\\n        idx = torch.unravel_index(rel.argmax(), rel.shape)\\n        worst_info = {\\n            \\\"worst_ratio\\\": mx,\\n            \\\"row\\\": int(idx[0]), \\\"comp\\\": int(idx[1]),\\n            \\\"num_row\\\": num.cpu()[idx[0]].tolist(),\\n            \\\"den_row\\\": den.cpu()[idx[0]].tolist(),\\n            \\\"out\\\": out.cpu()[idx[0]].tolist(),\\n            \\\"ref\\\": ref.cpu()[idx[0]].tolist(),\\n            \\\"err\\\": float(err.cpu()[idx[0],idx[1]]),\\n            \\\"tol\\\": float(tol.cpu()[idx[0],idx[1]]),\\n        }\\nprint(json.dumps({\\\"trials\\\": trials, \\\"trials_with_fail\\\": fails,\\n                  \\\"worst_err_over_tol\\\": worst, \\\"worst_case\\\": worst_info}))\\n\", \"expected_signal\": \"some trial has componentwise error exceeding its tolerance (ratio > 1)\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two probes: c1 catastrophic cancellation case, c2 mild accumulation search."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306017,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1352,
+    "prompt_tokens": 19035,
+    "total_tokens": 20387,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 16,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

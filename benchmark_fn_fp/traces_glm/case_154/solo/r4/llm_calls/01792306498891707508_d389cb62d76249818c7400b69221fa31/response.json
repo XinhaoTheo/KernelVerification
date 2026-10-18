@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-aa045044",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe keeps failing on sampler artifacts (all-zero denominator rows when tiny magnitudes round to zero). I'll sanitize inputs in the check function so legal-but-nonzero rows only are used, and rerun.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a9cd7f82385967d4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, itertools\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n\\ndef fp64_ref(num, den):\\n    a, b = num.to(torch.float64).unbind(1); c, d = den.to(torch.float64).unbind(1)\\n    s = c*c + d*d\\n    return torch.stack(((a*c+b*d)/s, (b*c-a*d)/s), 1)\\n\\ndef check(num, den, label, results):\\n    num = num.to(dev); den = den.to(dev)\\n    keep = (den != 0).any(1) & torch.isfinite(num).all(1) & torch.isfinite(den).all(1)\\n    num, den = num[keep], den[keep]\\n    out = k.run(num, den)\\n    tgt = fp64_ref(num, den)\\n    tol = 1e-7 + 5e-7*torch.abs(tgt)\\n    err = (out.to(torch.float64) - tgt).abs()\\n    viol = (err > tol)\\n    r = {\\\"n\\\": num.shape[0], \\\"violations\\\": int(viol.sum()),\\n         \\\"max_ratio_err_over_tol\\\": float((err/tol).max()),\\n         \\\"finite\\\": bool(torch.isfinite(out).all())}\\n    if viol.any():\\n        i = int((err/tol).argmax())\\n        r[\\\"worst_row\\\"] = [float(num[i,0]), float(num[i,1]), float(den[i,0]), float(den[i,1]), float(out[i,0]), float(out[i,1]), float(tgt[i,0]), float(tgt[i,1]), float(err[i]/tol[i])]\\n    results[label] = r\\n    return results\\n\\nresults = {}\\nnum, den = k.make_inputs(dev)\\nresults = check(num, den, \\\"random_4093\\\", results)\\n\\ng = torch.Generator().manual_seed(1)\\nn = 131072\\ndef rand_fp16(n, g, exp_lo=-24, exp_hi=14):\\n    e = torch.empty(n,2,dtype=torch.float64).uniform_(exp_lo, exp_hi, generator=g)\\n    m = torch.empty(n,2,dtype=torch.float64).uniform_(-1,1, generator=g)\\n    t = (m * 10.0**e).to(torch.float16)\\n    t[~torch.isfinite(t)] = 0.0\\n    return t.to(dev)\\n\\nfor trial in range(3):\\n    results = check(rand_fp16(n,g), rand_fp16(n,g), f\\\"scaled_full_range_{trial}\\\", results)\\n\\n# exact cancellation: numerator = i * conj-ish so a*c+b*d ~ 0\\nc_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nd_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nden2 = torch.stack([c_, d_],1).to(torch.float16).to(dev)\\nnum2 = torch.stack([d_, -c_],1).to(torch.float16).to(dev)\\nresults = check(num2, den2, \\\"cancelled_numerator\\\", results)\\n\\n# extreme cancellation\\ne_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nnum3 = torch.stack([65504.0*torch.ones(n), (65504.0*e_)],1).to(torch.float16).to(dev)\\nden3 = torch.stack([(65504.0*e_), -65504.0*torch.ones(n)],1).to(torch.float16).to(dev)\\nresults = check(num3, den3, \\\"extreme_cancellation\\\", results)\\n\\n# grids\\nvals = [0.0, -0.0, 5.96e-8, 2.98e-8, 6.1e-5, 1.0, -1.0, 65504.0, -65504.0]\\ncombos = list(itertools.product(vals, vals))\\ndeng = torch.tensor(combos, dtype=torch.float16)\\nfor base in [0.0, 5.96e-8, 6.1e-5, 1.0, 2048.0, 65504.0]:\\n    numg = torch.tensor([[base, base]]*len(combos), dtype=torch.float16)\\n    results = check(numg.to(dev), deng.to(dev), f\\\"allpairs_num_{base}\\\", results)\\n    results = check(deng.to(dev), numg.to(dev), f\\\"allpairs_den_{base}\\\", results)\\n# all-pairs x all-pairs small brute force\\nsmall = torch.tensor(combos, dtype=torch.float16)\\nnn = small.repeat(len(combos),1); dd = small.tile((len(combos),1))\\nresults = check(nn.to(dev), dd.to(dev), \\\"allpairs_x_allpairs\\\", results)\\n\\n# subnormal/big mixes\\nsub = torch.empty(n,2, dtype=torch.float64).uniform_(-6e-8, 6e-8, generator=g).to(torch.float16).to(dev)\\nbig = rand_fp16(n, g, exp_lo=11, exp_hi=14)\\nresults = check(big, sub, \\\"big_over_subnormal\\\", results)\\nresults = check(sub, big, \\\"subnormal_over_big\\\", results)\\nresults = check(sub.clone(), sub.clone(), \\\"subnormal_over_subnormal\\\", results)\\n\\n# denominator axis-aligned\\nz = torch.zeros(100000, dtype=torch.float16); o = torch.ones(100000, dtype=torch.float16)\\nrn = torch.randn(100000,2, dtype=torch.float16)\\nresults = check(rn.to(dev), torch.stack([o, z],1).to(dev), \\\"den_real_axis\\\", results)\\nresults = check(rn.to(dev), torch.stack([z, o],1).to(dev), \\\"den_imag_axis\\\", results)\\n\\n# inputs preserved\\nnum4, den4 = k.make_inputs(dev, size=777, seed=3)\\nn0, d0 = num4.clone(), den4.clone()\\nout = k.run(num4, den4)\\nresults[\\\"inputs_preserved\\\"] = bool(torch.equal(num4, n0) and torch.equal(den4, d0))\\nresults[\\\"out_fresh\\\"] = out.shape == (777,2) and out.dtype == torch.float32 and out.device == num4.device\\n\\nprint(json.dumps(results, indent=1))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Sampler produces zero rows (tiny exponents rounding to 0). Fix: ensure nonzero denominators, e.g. clip minimum magnitude to smallest normal FP16 (6.1e-5) or resample. Rerun probe with sanitization in check: replace all-zero denominator rows."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306499,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1537,
+    "prompt_tokens": 22067,
+    "total_tokens": 23604,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 59,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 9161,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-cc8eedc2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "t11 ran successfully with 0 mismatches at r=31, so c3 is rebutted. The c1 and c2 probes failed on input-construction bugs (multipliers below 2^30, and int32-overflowing tensor literals) — I'll relaunch corrected versions and finalize all three.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-92b261d86d2aa9a5",
+            "function": {
+              "arguments": "{\"data\": {\"mismatches\": 0, \"n_rows\": 512, \"r_values\": [31, 30], \"shift_counts_int64\": [62, 61], \"tested_extremes\": [\"a=-2147483648,m=2147483647,r=31\", \"a=2147483647,m=2147483647,r=31\", \"a=-2147483647\", \"a=2147483646\"]}, \"event_id\": \"t11\", \"status\": \"rebutted\", \"summary\": \"Probe with r=31 (int64 shift by 62, bias shift 61) on 512 rows of random full-range int32 accumulators plus forced extremes (a=INT32_MIN, INT32_MAX with m=2^31-1) shows 0 mismatches vs reference; Triton 3.4.0 handles the 62-bit shift edge correctly, contradicting c3.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a262d64919fa44d2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_156\\\")\\nimport kernel as K\\ndev = \\\"cuda\\\"\\n# Negative AND positive exact-halfway products with legal m in [2^30, 2^31-1].\\n# With m = 2^30 and a = -(2j+1)*2^r, a*m = -(2j+1)*2^(30+r), quotient = -(2j+1)/2 (exact negative half-integer).\\ncases = []\\nms = [1 << 30, (1 << 30) + 1, (1 << 31) - 1]\\nfor r in range(0, 32):\\n    for j in range(0, 60):\\n        a = -(2 * j + 1) * (1 << r)\\n        if not (-(1 << 31) <= a <= (1 << 31) - 1):\\n            continue\\n        for m in ms:\\n            # product = a*m; halfway iff a*m = odd * 2^(30+r)\\n            P = a * m\\n            if P % (1 << (30 + r)) == 0 and (P // (1 << (30 + r))) % 2 != 0:\\n                cases.append((a, m, r))\\n        # positive halfway\\n        a2 = (2 * j + 1) * (1 << r)\\n        if -(1 << 31) <= a2 <= (1 << 31) - 1:\\n            for m in ms:\\n                P = a2 * m\\n                if P % (1 << (30 + r)) == 0 and (P // (1 << (30 + r))) % 2 != 0:\\n                    cases.append((a2, m, r))\\ncases = list(dict.fromkeys(cases))\\nC = len(cases)\\nacc = torch.tensor([c[0] for c in cases], dtype=torch.int64).to(torch.int32).to(dev).reshape(1, C)\\nmul = torch.tensor([c[1] for c in cases], dtype=torch.int64).to(torch.int32).to(dev)\\nrsh = torch.tensor([c[2] for c in cases], dtype=torch.int32).to(dev)\\nzp = torch.zeros(C, dtype=torch.int32, device=dev)\\nout = K.run(acc, mul, rsh, zp)\\nref = K.reference(acc, mul, rsh, zp)\\nmism = (out != ref).sum().item()\\ndetail = []\\nfor i, (a, m, r) in enumerate(cases):\\n    q = a * m / (1 << (31 + r))\\n    R = (a * m + (1 << (30 + r))) >> (31 + r)\\n    if out[0, i].item() != ref[0, i].item():\\n        detail.append({\\\"a\\\": a, \\\"m\\\": m, \\\"r\\\": r, \\\"quotient\\\": q, \\\"kernel\\\": out[0, i].item(), \\\"ref\\\": ref[0, i].item(), \\\"math_floor_R\\\": R})\\nprint(json.dumps({\\\"metric\\\": \\\"exact_int8_equality_on_exact_halfway_cases\\\",\\n  \\\"n_cases\\\": C, \\\"mismatches\\\": mism, \\\"mismatch_detail\\\": detail[:20],\\n  \\\"sample\\\": [{\\\"a\\\": c[0], \\\"m\\\": c[1], \\\"r\\\": c[2], \\\"quotient\\\": c[0]*c[1]/(1<<(31+c[2])),\\n              \\\"R\\\": (c[0]*c[1]+(1<<(30+c[2])))>>(31+c[2]), \\\"kernel\\\": out[0,i].item()}\\n             for i, c in enumerate(cases[:8])]}))\", \"expected_signal\": \"kernel output equals reference on all negative/positive exact-halfway cases (R from arithmetic floor shift)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b544f3a7ba84856d",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_156\\\")\\nimport kernel as K\\ndev = \\\"cuda\\\"\\nm_max = (1 << 31) - 1\\n# Build valid int32 a values via int64 then cast, avoiding tensor overflow errors.\\n# Target R in 250..400 (spanning the [-255,255] preclamp boundary): R = a*m/2^(31+r) ~ a (r=0, m~2^31).\\na_list = list(range(240, 401, 2)) + [-x for x in range(240, 401, 2)]\\nextremes = [-(1 << 31), (1 << 31) - 1, -(1 << 31) + 1, (1 << 31) - 2]\\na_list = a_list + extremes\\na_t = torch.tensor(a_list, dtype=torch.int64)\\nassert ((a_t >= -(1 << 31)) & (a_t <= (1 << 31) - 1)).all()\\nacc = a_t.to(torch.int32).to(dev).reshape(len(a_list), 1)\\nC = 1\\nmul = torch.full((C,), m_max, dtype=torch.int32, device=dev)\\nres = {}\\nfor z in [-128, 127, 0, 50]:\\n    for r in [0, 1, 2]:\\n        rsh = torch.full((C,), r, dtype=torch.int32, device=dev)\\n        zp = torch.full((C,), z, dtype=torch.int32, device=dev)\\n        out = K.run(acc, mul, rsh, zp)\\n        ref = K.reference(acc, mul, rsh, zp)\\n        mism = (out != ref).sum().item()\\n        bad = (out != ref).nonzero().flatten().tolist()\\n        detail = []\\n        for i in bad[:5]:\\n            a = a_list[i]\\n            R = (a * m_max + (1 << (30 + r))) >> (31 + r)\\n            detail.append({\\\"a\\\": a, \\\"R\\\": R, \\\"z\\\": z, \\\"kernel\\\": out[i, 0].item(), \\\"ref\\\": ref[i, 0].item()})\\n        res[f\\\"z{z}_r{r}\\\"] = {\\\"mismatches\\\": mism, \\\"n\\\": len(a_list), \\\"mismatch_detail\\\": detail}\\nallm = sum(v[\\\"mismatches\\\"] for v in res.values())\\nprint(json.dumps({\\\"metric\\\": \\\"exact_int8_equality_preclamp_band_and_extremes\\\",\\n  \\\"a_range\\\": \\\"240..400 step2 + negatives + int32 extremes\\\", \\\"m\\\": m_max,\\n  \\\"total_mismatches\\\": allm, \\\"per_config\\\": res}))\", \"expected_signal\": \"kernel equals reference across R boundary band (|R| 240..400) and int32 extremes for multiple z and r\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "t9 and t10 failed due to bad input construction (t9: m values below 2^30, t10: int32 overflow in torch.tensor). t11 succeeded, 0 mismatches → c3 rebutted.\n\nFix c1: need a*m = -(2k+1)*2^(30+r) with m in [2^30, 2^31-1]. Let m = 3*2^30? Too big. m must be ≥2^30. Choose m = 2^30 + odd? Need product a*m divisible by 2^(30+r) with odd quotient. Simplest: r chosen so 30+r small. E.g., r=0: want a*m = -3*2^30. m=2^30, a=-3 → quotient -1.5. r=1: a*m=-3*2^31: m=2^30, a=-6 → -1.5. Generally m=2^30, a=-3*2^r works for any r in [0,31]. Also odd multiples: a=-(2k+1)*2^r for various k, m=2^30. Also can use other m: m=(3*2^30)? exceeds. m = 5*2^29 = 2.5*2^30... = 5*2^29 < 2^31-1, ≥2^30. Fine: a*m = odd*2^(31+r) etc. Keep simple: m=2^30 and 3*2^30? no. Use m=2^30 and m=(2^30)+2^30? Just use m=2^30 for a=-(2j+1)*2^r, j up to ~200, r in 0..31. Also positive halves.\n\nFix c2: avoid torch.tensor overflow: build via int64 tensor then .to(int32). t10 bug: a_list included values like 2*(1<<31)-1 = 2^32-1 which overflows int32. Fix: use valid int32 values. Target R in 256..383: R = a*m/2^(31+r). With m=2^31-1, r=0: R≈a/2 roughly? R = a*m/2^31 ≈ a*0.99999. So a=257..383 gives R≈a. Set a in [250..400], r=0 and r=1, z=-128 and +127, m=2^31-1. Plus extremes ±2^31 boundary values.\n\nDo both probes now and finalize t11 for c3 (rebutted)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306189,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2348,
+    "prompt_tokens": 31107,
+    "total_tokens": 33455,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 573,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

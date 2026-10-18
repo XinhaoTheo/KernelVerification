@@ -1,0 +1,1563 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_135",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise bounded normalization using refined reciprocal square root.\n\nOriginal synthetic Triton implementation of x/sqrt(1+x*x), the first\ncomponent of a normalized vector (x, 1). Not an upstream historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _normalize_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    squared_length = 1.0 + x * x\n    # Approximate the reciprocal square root from its exponent and mantissa.\n    encoding = squared_length.to(tl.int32, bitcast=True)\n    initial = 0x5F3759DF - (encoding >> 1)\n    inverse_length = initial.to(tl.float32, bitcast=True)\n    half_squared_length = 0.5 * squared_length\n    for _ in tl.static_range(2):\n        inverse_length = inverse_length * (\n            1.5 - half_squared_length * (inverse_length * inverse_length))\n    value = x * inverse_length\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return the FP32 first coordinate of each normalized vector (x, 1).\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _normalize_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical normalization in FP64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return value / torch.sqrt(1.0 + value * value)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (8.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute bounded normalization elementwise on stored FP16 values, returning\nFP32 output. The mathematical target is the first component of the unit\nvector in the direction (x[i], 1):\n\n  target[i] = x[i] / sqrt(1 + x[i] * x[i]).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - target[i]) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular inverse-square-root seed, number of refinement steps, or\nintermediate rounding is part of the mathematical target. Approximate\nreciprocal square roots and algebraic rewrites are permitted if they satisfy\nthis fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a direct FP64 square root and division and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Vector normalization is common\nin graphics and numerical computing. This original synthetic Triton\nimplementation uses an integer-bit reciprocal-square-root seed followed by\nNewton refinement; it is not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_135",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:05:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:43Z",
+          "data": {
+            "argmax_x": 1640.0,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6a83fa4a8177efd0148332b490c84af24852ba8bdf16e1c4605f7e454352fd4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "cf883d5160b64abe9138bab1d4b77192307724da8452b8da0ad5d55ddea99d7a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "70bb66086306b58762168f2f656ab8d4124c8185ff037ead7378ee008b8251a9"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "7e2040b92fc3310a9a347eeb4abaaf43802c8be10d69b67dbbf47f4cf953f476"
+              }
+            ],
+            "duration_s": 6.138966,
+            "exit_code": 0,
+            "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 1640.0,
+              "max_abs_err": 4.701679674146142e-06,
+              "num_inputs": 63488,
+              "num_violations": 20050,
+              "out_at_worst": 0.9999951124191284,
+              "ref_at_worst": 0.9999998140988026,
+              "tolerance": 1e-06,
+              "worst_x_abs": 1640.0
+            },
+            "max_abs_err": 4.701679674146142e-06,
+            "num_inputs": 63488,
+            "num_violations": 20050,
+            "out_at_worst": 0.9999951124191284,
+            "ref_at_worst": 0.9999998140988026,
+            "stderr": "num_finite 63488\n",
+            "stdout": "{\"num_inputs\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"argmax_x\": 1640.0, \"worst_x_abs\": 1640.0, \"num_violations\": 20050, \"out_at_worst\": 0.9999951124191284, \"ref_at_worst\": 0.9999998140988026}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Dense sweep of all 63488 finite FP16 values: max absolute error vs FP64 reference is 4.70e-6 (>1e-6), with 20050 violating inputs. Worst at x=1640. Claim confirmed: the seed+2-Newton-iteration path exceeds the 1e-6 absolute tolerance for many legal inputs.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The Quake seed 0x5F3759DF has up to ~3.4% relative error depending on the mantissa of s; two Newton iterations give roughly 4.4e-7 relative error on average but the worst-case seed error (and FP32 rounding inside the iteration) can push the final relative error above 1e-6, which for output magnitude near 1 becomes an absolute violation. Estimation is insufficient; a dense sweep of all 61440 finite nonzero FP16 values is needed.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value including extrema +/-65504; correctness is one verdict over the whole domain."
+        }
+      ],
+      "scope_rationale": "The contract requires abs error <= 1e-6 for every finite FP16 value including +/-65504 where output magnitude is ~1, so any input in the legal domain (e.g. a worst-mantissa value or x=65504) is an in-scope decisive test.",
+      "statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T01:05:43Z"
+    },
+    {
+      "created_at": "2026-10-18T01:05:16Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:43Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "879f32cd0b0d290ac6d57993b05f70d9a1be4980ac1299661bc9379cfd7cf466"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6da786338691c69bbf93cabaa1750671421bee1340f645877c083f7cc6bde1a0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "88b6d9e8abb6bcd9c443d0e1b93cd480703ce9177042ebe3213edc2e00c22f20"
+              }
+            ],
+            "duration_s": 4.260588,
+            "exit_code": 0,
+            "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+            "extrema_errs": [
+              4.291417894708438e-06,
+              4.291417894708438e-06,
+              1.3888890038060708e-10,
+              1.3888890038060708e-10
+            ],
+            "extrema_inputs": [
+              65504.0,
+              -65504.0,
+              60000.0,
+              -60000.0
+            ],
+            "json_parse_error": null,
+            "json_result": {
+              "extrema_errs": [
+                4.291417894708438e-06,
+                4.291417894708438e-06,
+                1.3888890038060708e-10,
+                1.3888890038060708e-10
+              ],
+              "extrema_inputs": [
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "large_range_max_abs_err": 4.64898206942177e-06,
+              "large_range_violations_gt_1e-6": 1168,
+              "large_range_worst_x": 52672.0,
+              "tolerance": 1e-06
+            },
+            "large_range_max_abs_err": 4.64898206942177e-06,
+            "large_range_violations_gt_1e-6": 1168,
+            "large_range_worst_x": 52672.0,
+            "stderr": "",
+            "stdout": "{\"extrema_errs\": [4.291417894708438e-06, 4.291417894708438e-06, 1.3888890038060708e-10, 1.3888890038060708e-10], \"extrema_inputs\": [65504.0, -65504.0, 60000.0, -60000.0], \"large_range_max_abs_err\": 4.64898206942177e-06, \"large_range_violations_gt_1e-6\": 1168, \"large_range_worst_x\": 52672.0, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "At x=\u00b165504 the absolute error is 4.29e-6, exceeding the 1e-6 tolerance; across a 30000-65504 range, 1168 of 2001 inputs violate tolerance with max error 4.65e-6. The FP32 intermediate path plus rsqrt approximation fails at the extrema as claimed.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "For x=65504, x*x=4294070016 which requires 33 bits and rounds in FP32 (ulp 512 at that scale), and the +1 is fully absorbed; the kernel then computes rsqrt of a rounded s, and the resulting rsqrt error (~2.4e-4 relative ulp effect combined with Newton error) may exceed the fixed 1e-6 absolute budget, unlike a fused higher-precision path.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "The target is defined in real arithmetic on the exact stored input value, and extrema +/-65504 are explicitly legal inputs within the 1e-6 absolute tolerance."
+        }
+      ],
+      "scope_rationale": "+/-65504 is explicitly in the stated legal domain, and the contract defines the target in real arithmetic on the exact stored FP16 value, so FP32 intermediate rounding at x=65504 counts against the tolerance.",
+      "statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T01:05:43Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+      "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+      "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+      "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+      "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+      "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+      "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+      "reference() validates with require_cuda=False and computes in FP64.",
+      "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+    ],
+    "open_questions": [
+      "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+      "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+      "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+    ],
+    "risk_map": [
+      "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+      "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+      "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+      "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+      "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+      "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+    ],
+    "scope_notes": [
+      "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+      "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+      "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+      "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+        "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+        "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+        "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+        "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T01:05:06Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+        "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+        "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+        "reference() validates with require_cuda=False and computes in FP64.",
+        "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+      ],
+      "open_questions": [
+        "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+        "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+        "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+      ],
+      "risk_map": [
+        "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+        "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+        "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+        "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+        "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+        "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+      ],
+      "scope_notes": [
+        "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+        "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+        "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+        "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+      ],
+      "summary": "Initial description of case_135: elementwise bounded normalization x/sqrt(1+x^2) on FP16 input with FP32 output, implemented in Triton via an integer-bit rsqrt seed (0x5F3759DF) plus exactly two Newton iterations, under a strict fixed 1e-6 absolute tolerance over the entire finite FP16 domain.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_135",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_135"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_135"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_135"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_135",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 31.740359184,
+      "role": "describer",
+      "round": 2,
+      "text": "I've reviewed the artifact context (problem text and full kernel source). This is a bounded normalization `x/sqrt(1+x\u00b2)` implemented via a Quake-style bit-trick reciprocal square root with two Newton iterations, under a strict fixed 1e-6 absolute tolerance across the whole finite FP16 domain. I'll record the structured description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+              "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+              "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+              "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+              "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+              "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+              "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+              "reference() validates with require_cuda=False and computes in FP64.",
+              "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+            ],
+            "open_questions": [
+              "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+              "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+              "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+            ],
+            "risk_map": [
+              "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+              "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+              "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+              "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+              "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+              "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+            ],
+            "scope_notes": [
+              "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+              "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+              "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+              "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+            ],
+            "summary": "Initial description of case_135: elementwise bounded normalization x/sqrt(1+x^2) on FP16 input with FP32 output, implemented in Triton via an integer-bit rsqrt seed (0x5F3759DF) plus exactly two Newton iterations, under a strict fixed 1e-6 absolute tolerance over the entire finite FP16 domain."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 31.74,
+        "input_tokens": 6433,
+        "output_tokens": 2055
+      }
+    },
+    {
+      "duration_s": 9.766223257,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The risk map centers on numeric accuracy against a tight fixed 1e-6 absolute tolerance. I'll record the highest-risk, directly testable claims tied to the stated domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The Quake seed 0x5F3759DF has up to ~3.4% relative error depending on the mantissa of s; two Newton iterations give roughly 4.4e-7 relative error on average but the worst-case seed error (and FP32 rounding inside the iteration) can push the final relative error above 1e-6, which for output magnitude near 1 becomes an absolute violation. Estimation is insufficient; a dense sweep of all 61440 finite nonzero FP16 values is needed.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value including extrema +/-65504; correctness is one verdict over the whole domain."
+              }
+            ],
+            "scope_rationale": "The contract requires abs error <= 1e-6 for every finite FP16 value including +/-65504 where output magnitude is ~1, so any input in the legal domain (e.g. a worst-mantissa value or x=65504) is an in-scope decisive test.",
+            "statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "For x=65504, x*x=4294070016 which requires 33 bits and rounds in FP32 (ulp 512 at that scale), and the +1 is fully absorbed; the kernel then computes rsqrt of a rounded s, and the resulting rsqrt error (~2.4e-4 relative ulp effect combined with Newton error) may exceed the fixed 1e-6 absolute budget, unlike a fused higher-precision path.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "The target is defined in real arithmetic on the exact stored input value, and extrema +/-65504 are explicitly legal inputs within the 1e-6 absolute tolerance."
+              }
+            ],
+            "scope_rationale": "+/-65504 is explicitly in the stated legal domain, and the contract defines the target in real arithmetic on the exact stored FP16 value, so FP32 intermediate rounding at x=65504 counts against the tolerance.",
+            "statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.766,
+        "input_tokens": 18000,
+        "output_tokens": 713
+      }
+    },
+    {
+      "duration_s": 9.951720107,
+      "role": "experimenter",
+      "round": 4,
+      "text": "Both open claims are independent numeric-accuracy claims. I'll launch two probes together: c1 with a dense sweep of all 61440 finite FP16 values (including subnormals, zeros, and extrema), and c2 focused on the extrema \u00b165504.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/cases/case_135\")\nimport kernel\n\n# all finite FP16 values\nbits = np.arange(65536, dtype=np.uint16)\nvals = bits.view(np.float16)\nfinite = np.isfinite(vals)\nx = torch.from_numpy(vals[finite].copy()).to(\"cuda\")\nprint(\"num_finite\", x.numel(), file=sys.stderr)\n\nout = kernel.run(x)\nref = x.to(torch.float64) / torch.sqrt(1.0 + x.to(torch.float64) * x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nmaxi = int(err.argmax())\nprint(json.dumps({\n    \"num_inputs\": int(x.numel()),\n    \"max_abs_err\": float(err.max()),\n    \"tolerance\": 1e-6,\n    \"argmax_x\": float(x[maxi].item()),\n    \"worst_x_abs\": float(abs(x[maxi].item())),\n    \"num_violations\": int((err > 1e-6).sum()),\n    \"out_at_worst\": float(out[maxi].item()),\n    \"ref_at_worst\": float(ref[maxi].item())\n}))\n",
+            "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_135\")\nimport kernel\n\nx = torch.tensor([65504.0, -65504.0, 60000.0, -60000.0], dtype=torch.float16, device=\"cuda\")\nout = kernel.run(x)\nxd = x.to(torch.float64)\nref = xd / torch.sqrt(1.0 + xd * xd)\nerr = (out.to(torch.float64) - ref).abs()\n# also examine a range of large values\nxs = torch.linspace(30000, 65504, 2001, dtype=torch.float32).to(torch.float16).to(\"cuda\")\nout2 = kernel.run(xs)\nxd2 = xs.to(torch.float64)\nref2 = xd2 / torch.sqrt(1.0 + xd2 * xd2)\nerr2 = (out2.to(torch.float64) - ref2).abs()\nprint(json.dumps({\n    \"extrema_errs\": [float(e) for e in err],\n    \"extrema_inputs\": [float(v) for v in x],\n    \"large_range_max_abs_err\": float(err2.max()),\n    \"large_range_violations_gt_1e-6\": int((err2 > 1e-6).sum()),\n    \"large_range_worst_x\": float(xs[int(err2.argmax())].item()),\n    \"tolerance\": 1e-6\n}))\n",
+            "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+            "timeout_s": 300
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 9.952,
+        "input_tokens": 21238,
+        "output_tokens": 800
+      }
+    },
+    {
+      "duration_s": 6.988832064999997,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes completed and both show clear tolerance violations. Finalizing evidence now.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "argmax_x": 1640.0,
+              "max_abs_err": 4.701679674146142e-06,
+              "num_inputs": 63488,
+              "num_violations": 20050,
+              "out_at_worst": 0.9999951124191284,
+              "ref_at_worst": 0.9999998140988026,
+              "tolerance": 1e-06
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Dense sweep of all 63488 finite FP16 values: max absolute error vs FP64 reference is 4.70e-6 (>1e-6), with 20050 violating inputs. Worst at x=1640. Claim confirmed: the seed+2-Newton-iteration path exceeds the 1e-6 absolute tolerance for many legal inputs.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "extrema_errs": [
+                4.291417894708438e-06,
+                4.291417894708438e-06,
+                1.3888890038060708e-10,
+                1.3888890038060708e-10
+              ],
+              "extrema_inputs": [
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "large_range_max_abs_err": 4.64898206942177e-06,
+              "large_range_violations_gt_1e-6": 1168,
+              "large_range_worst_x": 52672.0,
+              "tolerance": 1e-06
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "At x=\u00b165504 the absolute error is 4.29e-6, exceeding the 1e-6 tolerance; across a 30000-65504 range, 1168 of 2001 inputs violate tolerance with max error 4.65e-6. The FP32 intermediate path plus rsqrt approximation fails at the extrema as claimed.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.989,
+        "input_tokens": 26423,
+        "output_tokens": 521
+      }
+    },
+    {
+      "duration_s": 3.580432915000003,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both claims are confirmed with decisive in-scope evidence: a dense sweep of all 63,488 finite FP16 values shows max absolute error 4.70e-6 (>1e-6) with 20,050 violations, including at the explicitly legal extrema \u00b165504. No new claims needed.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: both in-scope claims (c1, c2) are confirmed by exhaustive dense-sweep probe evidence over the entire finite FP16 domain, showing max abs error 4.70e-6 (>1e-6 tolerance) with 20,050 violating inputs including the explicitly legal extrema \u00b165504. The evidence is exhaustive and decisive; no additional testable in-scope problems remain uncovered.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.58,
+        "input_tokens": 34412,
+        "output_tokens": 201
+      }
+    },
+    {
+      "duration_s": 7.551479790999991,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: an exhaustive dense sweep of all 63,488 finite FP16 values shows max absolute error 4.70e-6 against the FP64 reference, with 20,050 inputs violating the contract's fixed 1e-6 absolute tolerance, including the explicitly legal extrema \u00b165504 (error 4.29e-6). The contract explicitly requires abs(actual-target) \u2264 1e-6 for every finite FP16 value, and permits approximations only if they meet this tolerance throughout the domain \u2014 so this is a direct contract violation, not an acceptable rounding deviation. Both confirmed claims are in-scope with problem.txt as the operative contract (no test.py exists). Skeptic has signed off. I'll record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "The contract (problem.txt, the operative artifact since no test.py/get_inputs exists) requires abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance for EVERY finite FP16 value, defining the target in real arithmetic on the exact stored input. An exhaustive dense-sweep probe of all 63,488 finite FP16 values measured max absolute error 4.70e-6 vs the FP64 reference, with 20,050 violating inputs (worst at x=1640, output magnitude ~1). A second probe confirms the explicitly legal extrema x=\u00b165504 each violate with 4.29e-6 error, and 1,168 of 2,001 large-|x| inputs exceed tolerance. The contract permits approximate rsqrt only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 the Quake seed + exactly 2 Newton iterations does not, so this is a genuine defect rather than an acceptable approximation/rounding deviation. Both confirmed claims (c1, c2) are in_scope with scope evidence citing the stated input domain (extrema \u00b165504 explicitly legal). Skeptic reviewed the final evidence and recorded no new claims. No unresolved claims remain.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.551,
+        "input_tokens": 35192,
+        "output_tokens": 458
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T01:05:47Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: both in-scope claims (c1, c2) are confirmed by exhaustive dense-sweep probe evidence over the entire finite FP16 domain, showing max abs error 4.70e-6 (>1e-6 tolerance) with 20,050 violating inputs including the explicitly legal extrema \u00b165504. The evidence is exhaustive and decisive; no additional testable in-scope problems remain uncovered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_135"
+      },
+      "created_at": "2026-10-18T01:04:33Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_135",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise bounded normalization using refined reciprocal square root.\n\nOriginal synthetic Triton implementation of x/sqrt(1+x*x), the first\ncomponent of a normalized vector (x, 1). Not an upstream historical defect.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _normalize_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    squared_length = 1.0 + x * x\n    # Approximate the reciprocal square root from its exponent and mantissa.\n    encoding = squared_length.to(tl.int32, bitcast=True)\n    initial = 0x5F3759DF - (encoding >> 1)\n    inverse_length = initial.to(tl.float32, bitcast=True)\n    half_squared_length = 0.5 * squared_length\n    for _ in tl.static_range(2):\n        inverse_length = inverse_length * (\n            1.5 - half_squared_length * (inverse_length * inverse_length))\n    value = x * inverse_length\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return the FP32 first coordinate of each normalized vector (x, 1).\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _normalize_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate the mathematical normalization in FP64.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return value / torch.sqrt(1.0 + value * value)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (8.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute bounded normalization elementwise on stored FP16 values, returning\nFP32 output. The mathematical target is the first component of the unit\nvector in the direction (x[i], 1):\n\n  target[i] = x[i] / sqrt(1 + x[i] * x[i]).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - target[i]) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular inverse-square-root seed, number of refinement steps, or\nintermediate rounding is part of the mathematical target. Approximate\nreciprocal square roots and algebraic rewrites are permitted if they satisfy\nthis fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a direct FP64 square root and division and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Vector normalization is common\nin graphics and numerical computing. This original synthetic Triton\nimplementation uses an integer-bit reciprocal-square-root seed followed by\nNewton refinement; it is not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_135",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_135"
+      },
+      "created_at": "2026-10-18T01:04:33Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute bounded normalization elementwise on stored FP16 values, returning\nFP32 output. The mathematical target is the first component of the unit\nvector in the direction (x[i], 1):\n\n  target[i] = x[i] / sqrt(1 + x[i] * x[i]).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - target[i]) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular inverse-square-root seed, number of refinement steps, or\nintermediate rounding is part of the mathematical target. Approximate\nreciprocal square roots and algebraic rewrites are permitted if they satisfy\nthis fixed absolute tolerance throughout the entire legal domain.\nCorrectness is one verdict for the implementation, not a verdict per input,\ninput distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a direct FP64 square root and division and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Vector normalization is common\nin graphics and numerical computing. This original synthetic Triton\nimplementation uses an integer-bit reciprocal-square-root seed followed by\nNewton refinement; it is not a claim of an upstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_135",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_135"
+      },
+      "created_at": "2026-10-18T01:04:33Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_135",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3030
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2091
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_135",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:04:33Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_135",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+          "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+          "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+          "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+          "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+          "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+          "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+          "reference() validates with require_cuda=False and computes in FP64.",
+          "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+        ],
+        "open_questions": [
+          "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+          "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+          "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+        ],
+        "risk_map": [
+          "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+          "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+          "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+          "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+          "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+          "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+        ],
+        "scope_notes": [
+          "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+          "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+          "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+          "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+        ],
+        "summary": "Initial description of case_135: elementwise bounded normalization x/sqrt(1+x^2) on FP16 input with FP32 output, implemented in Triton via an integer-bit rsqrt seed (0x5F3759DF) plus exactly two Newton iterations, under a strict fixed 1e-6 absolute tolerance over the entire finite FP16 domain."
+      },
+      "created_at": "2026-10-18T01:05:06Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+            "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+            "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+            "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+            "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+            "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+            "reference() validates with require_cuda=False and computes in FP64.",
+            "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+          ],
+          "open_questions": [
+            "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+            "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+            "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+          ],
+          "risk_map": [
+            "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+            "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+            "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+            "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+            "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+            "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+            "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+            "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+            "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Target: out[i] = x[i]/sqrt(1+x[i]^2), first component of the unit vector (x,1), computed in real arithmetic on the exact stored FP16 value, returned as fresh FP32 [N] on x.device.",
+            "Fixed absolute tolerance abs(actual-target) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value: signed zeros, subnormals, and extrema +/-65504; NaN/inf excluded. One verdict for the whole domain, not per input.",
+            "Input domain: 1-D contiguous strided FP16 CUDA tensor, N in [1,131072], ordinary torch.Tensor, no grad/inference/neg/conj flags, contiguous views with nonzero storage offsets legal, no autograd, input must be preserved.",
+            "Approximate rsqrt and algebraic rewrites are permitted; no specific seed, iteration count, or intermediate rounding is part of the contract. reference() is FP64 and CPU-tolerant; make_inputs() is illustrative only (8*randn does not cover the full legal domain, e.g. rarely subnormals/extrema).",
+            "Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T01:05:06Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Triton kernel (_normalize_kernel): loads FP16 x (masked, other=0.0), upcasts to FP32, computes s=1+x*x in FP32, then bitcast-to-int32 Quake seed 0x5F3759DF - (encoding>>1), bitcast back to FP32, and performs exactly 2 Newton-Raphson refinements of the reciprocal square root, then stores x*inv as FP32.",
+            "Grid: triton.cdiv(n,256) programs of BLOCK=256 with index<N masking, so all N in [1,131072] including non-multiples of 256 are covered; output allocated fresh FP32; enable_fp_fusion=False so 1+x*x is separate from the bitcast read.",
+            "run() calls validate_inputs() (enforcing the full domain: dtype/shape/contiguity/finiteness/flags), launches inside torch.cuda.device(x.device), returns the FP32 output.",
+            "reference() validates with require_cuda=False and computes in FP64.",
+            "All intermediate arithmetic is FP32: x*x is exact for FP16 inputs (FP32 has enough mantissa for the 11-bit FP16 mantissa squared), but 1+x*x and the Newton iteration introduce FP32 rounding, and the seed+2-iteration rsqrt has relative error on the order of ~5e-6 (seed ~3.4% -> ~0.17% after 1 iter -> ~4.4e-7 relative after 2? depends on Triton rounding; the classic result is ~4.4e-7 relative) which is then multiplied by x."
+          ],
+          "open_questions": [
+            "What is the empirically measured max absolute error of the kernel over a dense sweep of the FP16 domain (including extrema and subnormals), and how close is it to the 1e-6 boundary?",
+            "Do Triton 3.4 / T4 codegen choices (fusion disabled at the launch level only vs. per-op, rsqrt approximations, rounding of 1+x*x at 4.29e9) alter the error budget relative to the FP64 reference?",
+            "Does FP32 rounding of 1+x*x for large |x| (where the +1 can be absorbed by an ulp of 512) contribute measurably given the reference is defined in real arithmetic on the exact FP16 value?"
+          ],
+          "risk_map": [
+            "Accuracy of the rsqrt approximation: the classic 0x5F3759DF seed has ~3.4% relative error; after 2 Newton iterations this is roughly 4.4e-7 relative (quadratic: 3.4e-2 -> 1.7e-3*... -> ~4.4e-7), which may seem inside tolerance, but the final product x*inv is stored as FP32 with its own rounding, and near-tolerance margins for |x| large (output magnitude ~1) make 1e-6 absolute tight; the exact worst-case error over the full FP16 domain needs measurement, not estimation.",
+            "Worst-case Newton behavior: the seed's relative error varies with the mantissa of s=1+x^2; Newton refinement is quadratic only near the root, and for s just above 1 (small |x|) the seed is near-optimal, but for s near 4.3e9 (x=65504) the bit-trick seed error pattern differs; 2 iterations may not uniformly stay within the margin for every one of the 65536 legal inputs.",
+            "FP32 intermediate rounding: 1+x*x computed in FP32 is inexact (e.g. x=65504 gives x*x=4294070016 which rounds in FP32); the contract defines the target on the exact stored FP16 value in real arithmetic, so intermediate FP32 error counts against the 1e-6 budget (though it is ~1e-7 relative, small relative to the Newton error).",
+            "Bitcast path: encoding = squared_length.to(tl.int32, bitcast=True) then integer shift and subtraction must not be affected by Triton constant folding or fp_fusion; enable_fp_fusion=False is set at launch, which mitigates this but Skeptic should verify no fusion of 1.0 + x*x alters the bit pattern.",
+            "Output rounding: final value = x*inv in FP32 gives one extra rounding step; combined Newton + FP32 rounding must still be <= 1e-6 absolute for outputs near magnitude 1.",
+            "Domain coverage of probes: make_inputs (8*randn) rarely produces subnormals or \u00b165504; benign random probes are weak evidence for this contract since failure modes are distribution-dependent (extremes, small x)."
+          ],
+          "scope_notes": [
+            "In scope: every finite FP16 input value, including signed zeros (output ~0), subnormals (target ~x, tiny), and \u00b165504 (target ~\u00b10.9999999998); sizes 1..131072 including non-multiples of 256; contiguous views with nonzero storage offset must still be validated as contiguous and handled.",
+            "Out of scope: NaN/inf inputs (validate_inputs rejects), non-FP16 dtypes, N>131072 or N=0, non-contiguous/subclassed/autograd tensors, CPU execution of run(), autograd support, concurrent external writes.",
+            "The tolerance is fixed absolute 1e-6 with zero relative tolerance, so large-magnitude outputs (~1) and tiny outputs (~1e-8, trivially passing) stress different parts of the error budget; the binding case is large |x|.",
+            "Frozen environment T4/PyTorch2.8/Triton3.4; correctness is a single whole-implementation verdict."
+          ],
+          "summary": "Initial description of case_135: elementwise bounded normalization x/sqrt(1+x^2) on FP16 input with FP32 output, implemented in Triton via an integer-bit rsqrt seed (0x5F3759DF) plus exactly two Newton iterations, under a strict fixed 1e-6 absolute tolerance over the entire finite FP16 domain.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "The Quake seed 0x5F3759DF has up to ~3.4% relative error depending on the mantissa of s; two Newton iterations give roughly 4.4e-7 relative error on average but the worst-case seed error (and FP32 rounding inside the iteration) can push the final relative error above 1e-6, which for output magnitude near 1 becomes an absolute violation. Estimation is insufficient; a dense sweep of all 61440 finite nonzero FP16 values is needed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value including extrema +/-65504; correctness is one verdict over the whole domain."
+          }
+        ],
+        "scope_rationale": "The contract requires abs error <= 1e-6 for every finite FP16 value including +/-65504 where output magnitude is ~1, so any input in the legal domain (e.g. a worst-mantissa value or x=65504) is an in-scope decisive test.",
+        "statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input."
+      },
+      "created_at": "2026-10-18T01:05:16Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T01:05:16Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "The Quake seed 0x5F3759DF has up to ~3.4% relative error depending on the mantissa of s; two Newton iterations give roughly 4.4e-7 relative error on average but the worst-case seed error (and FP32 rounding inside the iteration) can push the final relative error above 1e-6, which for output magnitude near 1 becomes an absolute violation. Estimation is insufficient; a dense sweep of all 61440 finite nonzero FP16 values is needed.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value including extrema +/-65504; correctness is one verdict over the whole domain."
+          }
+        ],
+        "scope_rationale": "The contract requires abs error <= 1e-6 for every finite FP16 value including +/-65504 where output magnitude is ~1, so any input in the legal domain (e.g. a worst-mantissa value or x=65504) is an in-scope decisive test.",
+        "statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input.",
+        "status": "open",
+        "updated_at": "2026-10-18T01:05:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "For x=65504, x*x=4294070016 which requires 33 bits and rounds in FP32 (ulp 512 at that scale), and the +1 is fully absorbed; the kernel then computes rsqrt of a rounded s, and the resulting rsqrt error (~2.4e-4 relative ulp effect combined with Newton error) may exceed the fixed 1e-6 absolute budget, unlike a fused higher-precision path.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The target is defined in real arithmetic on the exact stored input value, and extrema +/-65504 are explicitly legal inputs within the 1e-6 absolute tolerance."
+          }
+        ],
+        "scope_rationale": "+/-65504 is explicitly in the stated legal domain, and the contract defines the target in real arithmetic on the exact stored FP16 value, so FP32 intermediate rounding at x=65504 counts against the tolerance.",
+        "statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema."
+      },
+      "created_at": "2026-10-18T01:05:16Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-18T01:05:16Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "For x=65504, x*x=4294070016 which requires 33 bits and rounds in FP32 (ulp 512 at that scale), and the +1 is fully absorbed; the kernel then computes rsqrt of a rounded s, and the resulting rsqrt error (~2.4e-4 relative ulp effect combined with Newton error) may exceed the fixed 1e-6 absolute budget, unlike a fused higher-precision path.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "The target is defined in real arithmetic on the exact stored input value, and extrema +/-65504 are explicitly legal inputs within the 1e-6 absolute tolerance."
+          }
+        ],
+        "scope_rationale": "+/-65504 is explicitly in the stated legal domain, and the contract defines the target in real arithmetic on the exact stored FP16 value, so FP32 intermediate rounding at x=65504 counts against the tolerance.",
+        "statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema.",
+        "status": "open",
+        "updated_at": "2026-10-18T01:05:16Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, numpy as np, json, sys\nsys.path.insert(0, \"/root/cases/case_135\")\nimport kernel\n\n# all finite FP16 values\nbits = np.arange(65536, dtype=np.uint16)\nvals = bits.view(np.float16)\nfinite = np.isfinite(vals)\nx = torch.from_numpy(vals[finite].copy()).to(\"cuda\")\nprint(\"num_finite\", x.numel(), file=sys.stderr)\n\nout = kernel.run(x)\nref = x.to(torch.float64) / torch.sqrt(1.0 + x.to(torch.float64) * x.to(torch.float64))\nerr = (out.to(torch.float64) - ref).abs()\nmaxi = int(err.argmax())\nprint(json.dumps({\n    \"num_inputs\": int(x.numel()),\n    \"max_abs_err\": float(err.max()),\n    \"tolerance\": 1e-6,\n    \"argmax_x\": float(x[maxi].item()),\n    \"worst_x_abs\": float(abs(x[maxi].item())),\n    \"num_violations\": int((err > 1e-6).sum()),\n    \"out_at_worst\": float(out[maxi].item()),\n    \"ref_at_worst\": float(ref[maxi].item())\n}))\n",
+        "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T01:05:32Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "6a83fa4a8177efd0148332b490c84af24852ba8bdf16e1c4605f7e454352fd4a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "cf883d5160b64abe9138bab1d4b77192307724da8452b8da0ad5d55ddea99d7a"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "70bb66086306b58762168f2f656ab8d4124c8185ff037ead7378ee008b8251a9"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "7e2040b92fc3310a9a347eeb4abaaf43802c8be10d69b67dbbf47f4cf953f476"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input.",
+        "cwd": "/root/cases/case_135",
+        "duration_s": 6.138966,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6a83fa4a8177efd0148332b490c84af24852ba8bdf16e1c4605f7e454352fd4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "cf883d5160b64abe9138bab1d4b77192307724da8452b8da0ad5d55ddea99d7a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "70bb66086306b58762168f2f656ab8d4124c8185ff037ead7378ee008b8251a9"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "7e2040b92fc3310a9a347eeb4abaaf43802c8be10d69b67dbbf47f4cf953f476"
+              }
+            ],
+            "duration_s": 6.138966,
+            "exit_code": 0,
+            "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 1640.0,
+              "max_abs_err": 4.701679674146142e-06,
+              "num_inputs": 63488,
+              "num_violations": 20050,
+              "out_at_worst": 0.9999951124191284,
+              "ref_at_worst": 0.9999998140988026,
+              "tolerance": 1e-06,
+              "worst_x_abs": 1640.0
+            },
+            "stderr": "num_finite 63488\n",
+            "stdout": "{\"num_inputs\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"argmax_x\": 1640.0, \"worst_x_abs\": 1640.0, \"num_violations\": 20050, \"out_at_worst\": 0.9999951124191284, \"ref_at_worst\": 0.9999998140988026}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+        "json_parse_error": null,
+        "json_result": {
+          "argmax_x": 1640.0,
+          "max_abs_err": 4.701679674146142e-06,
+          "num_inputs": 63488,
+          "num_violations": 20050,
+          "out_at_worst": 0.9999951124191284,
+          "ref_at_worst": 0.9999998140988026,
+          "tolerance": 1e-06,
+          "worst_x_abs": 1640.0
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "num_finite 63488\n",
+        "stdout": "{\"num_inputs\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"argmax_x\": 1640.0, \"worst_x_abs\": 1640.0, \"num_violations\": 20050, \"out_at_worst\": 0.9999951124191284, \"ref_at_worst\": 0.9999998140988026}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_135\")\nimport kernel\n\nx = torch.tensor([65504.0, -65504.0, 60000.0, -60000.0], dtype=torch.float16, device=\"cuda\")\nout = kernel.run(x)\nxd = x.to(torch.float64)\nref = xd / torch.sqrt(1.0 + xd * xd)\nerr = (out.to(torch.float64) - ref).abs()\n# also examine a range of large values\nxs = torch.linspace(30000, 65504, 2001, dtype=torch.float32).to(torch.float16).to(\"cuda\")\nout2 = kernel.run(xs)\nxd2 = xs.to(torch.float64)\nref2 = xd2 / torch.sqrt(1.0 + xd2 * xd2)\nerr2 = (out2.to(torch.float64) - ref2).abs()\nprint(json.dumps({\n    \"extrema_errs\": [float(e) for e in err],\n    \"extrema_inputs\": [float(v) for v in x],\n    \"large_range_max_abs_err\": float(err2.max()),\n    \"large_range_violations_gt_1e-6\": int((err2 > 1e-6).sum()),\n    \"large_range_worst_x\": float(xs[int(err2.argmax())].item()),\n    \"tolerance\": 1e-6\n}))\n",
+        "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+        "timeout_s": 300
+      },
+      "created_at": "2026-10-18T01:05:36Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "879f32cd0b0d290ac6d57993b05f70d9a1be4980ac1299661bc9379cfd7cf466"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "6da786338691c69bbf93cabaa1750671421bee1340f645877c083f7cc6bde1a0"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "88b6d9e8abb6bcd9c443d0e1b93cd480703ce9177042ebe3213edc2e00c22f20"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema.",
+        "cwd": "/root/cases/case_135",
+        "duration_s": 4.260588,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "879f32cd0b0d290ac6d57993b05f70d9a1be4980ac1299661bc9379cfd7cf466"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6da786338691c69bbf93cabaa1750671421bee1340f645877c083f7cc6bde1a0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "88b6d9e8abb6bcd9c443d0e1b93cd480703ce9177042ebe3213edc2e00c22f20"
+              }
+            ],
+            "duration_s": 4.260588,
+            "exit_code": 0,
+            "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+            "json_parse_error": null,
+            "json_result": {
+              "extrema_errs": [
+                4.291417894708438e-06,
+                4.291417894708438e-06,
+                1.3888890038060708e-10,
+                1.3888890038060708e-10
+              ],
+              "extrema_inputs": [
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "large_range_max_abs_err": 4.64898206942177e-06,
+              "large_range_violations_gt_1e-6": 1168,
+              "large_range_worst_x": 52672.0,
+              "tolerance": 1e-06
+            },
+            "stderr": "",
+            "stdout": "{\"extrema_errs\": [4.291417894708438e-06, 4.291417894708438e-06, 1.3888890038060708e-10, 1.3888890038060708e-10], \"extrema_inputs\": [65504.0, -65504.0, 60000.0, -60000.0], \"large_range_max_abs_err\": 4.64898206942177e-06, \"large_range_violations_gt_1e-6\": 1168, \"large_range_worst_x\": 52672.0, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 300
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+        "json_parse_error": null,
+        "json_result": {
+          "extrema_errs": [
+            4.291417894708438e-06,
+            4.291417894708438e-06,
+            1.3888890038060708e-10,
+            1.3888890038060708e-10
+          ],
+          "extrema_inputs": [
+            65504.0,
+            -65504.0,
+            60000.0,
+            -60000.0
+          ],
+          "large_range_max_abs_err": 4.64898206942177e-06,
+          "large_range_violations_gt_1e-6": 1168,
+          "large_range_worst_x": 52672.0,
+          "tolerance": 1e-06
+        },
+        "sandbox": {
+          "cpu_limit_s": 330,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"extrema_errs\": [4.291417894708438e-06, 4.291417894708438e-06, 1.3888890038060708e-10, 1.3888890038060708e-10], \"extrema_inputs\": [65504.0, -65504.0, 60000.0, -60000.0], \"large_range_max_abs_err\": 4.64898206942177e-06, \"large_range_violations_gt_1e-6\": 1168, \"large_range_worst_x\": 52672.0, \"tolerance\": 1e-06}\n",
+        "timed_out": false,
+        "timeout_s": 300,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "argmax_x": 1640.0,
+          "max_abs_err": 4.701679674146142e-06,
+          "num_inputs": 63488,
+          "num_violations": 20050,
+          "out_at_worst": 0.9999951124191284,
+          "ref_at_worst": 0.9999998140988026,
+          "tolerance": 1e-06
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Dense sweep of all 63488 finite FP16 values: max absolute error vs FP64 reference is 4.70e-6 (>1e-6), with 20050 violating inputs. Worst at x=1640. Claim confirmed: the seed+2-Newton-iteration path exceeds the 1e-6 absolute tolerance for many legal inputs.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T01:05:43Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:05:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:05:43Z",
+              "data": {
+                "argmax_x": 1640.0,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "6a83fa4a8177efd0148332b490c84af24852ba8bdf16e1c4605f7e454352fd4a"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "cf883d5160b64abe9138bab1d4b77192307724da8452b8da0ad5d55ddea99d7a"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "70bb66086306b58762168f2f656ab8d4124c8185ff037ead7378ee008b8251a9"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "7e2040b92fc3310a9a347eeb4abaaf43802c8be10d69b67dbbf47f4cf953f476"
+                  }
+                ],
+                "duration_s": 6.138966,
+                "exit_code": 0,
+                "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+                "json_parse_error": null,
+                "json_result": {
+                  "argmax_x": 1640.0,
+                  "max_abs_err": 4.701679674146142e-06,
+                  "num_inputs": 63488,
+                  "num_violations": 20050,
+                  "out_at_worst": 0.9999951124191284,
+                  "ref_at_worst": 0.9999998140988026,
+                  "tolerance": 1e-06,
+                  "worst_x_abs": 1640.0
+                },
+                "max_abs_err": 4.701679674146142e-06,
+                "num_inputs": 63488,
+                "num_violations": 20050,
+                "out_at_worst": 0.9999951124191284,
+                "ref_at_worst": 0.9999998140988026,
+                "stderr": "num_finite 63488\n",
+                "stdout": "{\"num_inputs\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"argmax_x\": 1640.0, \"worst_x_abs\": 1640.0, \"num_violations\": 20050, \"out_at_worst\": 0.9999951124191284, \"ref_at_worst\": 0.9999998140988026}\n",
+                "timed_out": false,
+                "timeout_s": 300,
+                "tolerance": 1e-06
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Dense sweep of all 63488 finite FP16 values: max absolute error vs FP64 reference is 4.70e-6 (>1e-6), with 20050 violating inputs. Worst at x=1640. Claim confirmed: the seed+2-Newton-iteration path exceeds the 1e-6 absolute tolerance for many legal inputs.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The Quake seed 0x5F3759DF has up to ~3.4% relative error depending on the mantissa of s; two Newton iterations give roughly 4.4e-7 relative error on average but the worst-case seed error (and FP32 rounding inside the iteration) can push the final relative error above 1e-6, which for output magnitude near 1 becomes an absolute violation. Estimation is insufficient; a dense sweep of all 61440 finite nonzero FP16 values is needed.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance, for EVERY finite FP16 value including extrema +/-65504; correctness is one verdict over the whole domain."
+            }
+          ],
+          "scope_rationale": "The contract requires abs error <= 1e-6 for every finite FP16 value including +/-65504 where output magnitude is ~1, so any input in the legal domain (e.g. a worst-mantissa value or x=65504) is an in-scope decisive test.",
+          "statement": "The Quake seed plus exactly two Newton iterations does not achieve 1e-6 absolute accuracy for some finite FP16 input values (output magnitude ~1 cases such as large |x|), i.e. max |out - x/sqrt(1+x^2)| > 1e-6 for at least one legal input.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T01:05:43Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:43Z",
+          "data": {
+            "argmax_x": 1640.0,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "6a83fa4a8177efd0148332b490c84af24852ba8bdf16e1c4605f7e454352fd4a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "cf883d5160b64abe9138bab1d4b77192307724da8452b8da0ad5d55ddea99d7a"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "70bb66086306b58762168f2f656ab8d4124c8185ff037ead7378ee008b8251a9"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "7e2040b92fc3310a9a347eeb4abaaf43802c8be10d69b67dbbf47f4cf953f476"
+              }
+            ],
+            "duration_s": 6.138966,
+            "exit_code": 0,
+            "expected_signal": "max absolute error over all finite FP16 values vs FP64 reference, compared to 1e-6",
+            "json_parse_error": null,
+            "json_result": {
+              "argmax_x": 1640.0,
+              "max_abs_err": 4.701679674146142e-06,
+              "num_inputs": 63488,
+              "num_violations": 20050,
+              "out_at_worst": 0.9999951124191284,
+              "ref_at_worst": 0.9999998140988026,
+              "tolerance": 1e-06,
+              "worst_x_abs": 1640.0
+            },
+            "max_abs_err": 4.701679674146142e-06,
+            "num_inputs": 63488,
+            "num_violations": 20050,
+            "out_at_worst": 0.9999951124191284,
+            "ref_at_worst": 0.9999998140988026,
+            "stderr": "num_finite 63488\n",
+            "stdout": "{\"num_inputs\": 63488, \"max_abs_err\": 4.701679674146142e-06, \"tolerance\": 1e-06, \"argmax_x\": 1640.0, \"worst_x_abs\": 1640.0, \"num_violations\": 20050, \"out_at_worst\": 0.9999951124191284, \"ref_at_worst\": 0.9999998140988026}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Dense sweep of all 63488 finite FP16 values: max absolute error vs FP64 reference is 4.70e-6 (>1e-6), with 20050 violating inputs. Worst at x=1640. Claim confirmed: the seed+2-Newton-iteration path exceeds the 1e-6 absolute tolerance for many legal inputs.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "extrema_errs": [
+            4.291417894708438e-06,
+            4.291417894708438e-06,
+            1.3888890038060708e-10,
+            1.3888890038060708e-10
+          ],
+          "extrema_inputs": [
+            65504.0,
+            -65504.0,
+            60000.0,
+            -60000.0
+          ],
+          "large_range_max_abs_err": 4.64898206942177e-06,
+          "large_range_violations_gt_1e-6": 1168,
+          "large_range_worst_x": 52672.0,
+          "tolerance": 1e-06
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "At x=\u00b165504 the absolute error is 4.29e-6, exceeding the 1e-6 tolerance; across a 30000-65504 range, 1168 of 2001 inputs violate tolerance with max error 4.65e-6. The FP32 intermediate path plus rsqrt approximation fails at the extrema as claimed.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T01:05:43Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:05:16Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:05:43Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "879f32cd0b0d290ac6d57993b05f70d9a1be4980ac1299661bc9379cfd7cf466"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "6da786338691c69bbf93cabaa1750671421bee1340f645877c083f7cc6bde1a0"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "88b6d9e8abb6bcd9c443d0e1b93cd480703ce9177042ebe3213edc2e00c22f20"
+                  }
+                ],
+                "duration_s": 4.260588,
+                "exit_code": 0,
+                "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+                "extrema_errs": [
+                  4.291417894708438e-06,
+                  4.291417894708438e-06,
+                  1.3888890038060708e-10,
+                  1.3888890038060708e-10
+                ],
+                "extrema_inputs": [
+                  65504.0,
+                  -65504.0,
+                  60000.0,
+                  -60000.0
+                ],
+                "json_parse_error": null,
+                "json_result": {
+                  "extrema_errs": [
+                    4.291417894708438e-06,
+                    4.291417894708438e-06,
+                    1.3888890038060708e-10,
+                    1.3888890038060708e-10
+                  ],
+                  "extrema_inputs": [
+                    65504.0,
+                    -65504.0,
+                    60000.0,
+                    -60000.0
+                  ],
+                  "large_range_max_abs_err": 4.64898206942177e-06,
+                  "large_range_violations_gt_1e-6": 1168,
+                  "large_range_worst_x": 52672.0,
+                  "tolerance": 1e-06
+                },
+                "large_range_max_abs_err": 4.64898206942177e-06,
+                "large_range_violations_gt_1e-6": 1168,
+                "large_range_worst_x": 52672.0,
+                "stderr": "",
+                "stdout": "{\"extrema_errs\": [4.291417894708438e-06, 4.291417894708438e-06, 1.3888890038060708e-10, 1.3888890038060708e-10], \"extrema_inputs\": [65504.0, -65504.0, 60000.0, -60000.0], \"large_range_max_abs_err\": 4.64898206942177e-06, \"large_range_violations_gt_1e-6\": 1168, \"large_range_worst_x\": 52672.0, \"tolerance\": 1e-06}\n",
+                "timed_out": false,
+                "timeout_s": 300,
+                "tolerance": 1e-06
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "At x=\u00b165504 the absolute error is 4.29e-6, exceeding the 1e-6 tolerance; across a 30000-65504 range, 1168 of 2001 inputs violate tolerance with max error 4.65e-6. The FP32 intermediate path plus rsqrt approximation fails at the extrema as claimed.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "For x=65504, x*x=4294070016 which requires 33 bits and rounds in FP32 (ulp 512 at that scale), and the +1 is fully absorbed; the kernel then computes rsqrt of a rounded s, and the resulting rsqrt error (~2.4e-4 relative ulp effect combined with Newton error) may exceed the fixed 1e-6 absolute budget, unlike a fused higher-precision path.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "The target is defined in real arithmetic on the exact stored input value, and extrema +/-65504 are explicitly legal inputs within the 1e-6 absolute tolerance."
+            }
+          ],
+          "scope_rationale": "+/-65504 is explicitly in the stated legal domain, and the contract defines the target in real arithmetic on the exact stored FP16 value, so FP32 intermediate rounding at x=65504 counts against the tolerance.",
+          "statement": "FP32 rounding of squared_length = 1.0 + x*x for large |x| (e.g. x = 65504) contributes error that, combined with the rsqrt approximation, pushes the final absolute error past 1e-6 at the extrema.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T01:05:43Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:43Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "879f32cd0b0d290ac6d57993b05f70d9a1be4980ac1299661bc9379cfd7cf466"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6da786338691c69bbf93cabaa1750671421bee1340f645877c083f7cc6bde1a0"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "88b6d9e8abb6bcd9c443d0e1b93cd480703ce9177042ebe3213edc2e00c22f20"
+              }
+            ],
+            "duration_s": 4.260588,
+            "exit_code": 0,
+            "expected_signal": "absolute error at x=\u00b165504 and large |x| range vs 1e-6 tolerance",
+            "extrema_errs": [
+              4.291417894708438e-06,
+              4.291417894708438e-06,
+              1.3888890038060708e-10,
+              1.3888890038060708e-10
+            ],
+            "extrema_inputs": [
+              65504.0,
+              -65504.0,
+              60000.0,
+              -60000.0
+            ],
+            "json_parse_error": null,
+            "json_result": {
+              "extrema_errs": [
+                4.291417894708438e-06,
+                4.291417894708438e-06,
+                1.3888890038060708e-10,
+                1.3888890038060708e-10
+              ],
+              "extrema_inputs": [
+                65504.0,
+                -65504.0,
+                60000.0,
+                -60000.0
+              ],
+              "large_range_max_abs_err": 4.64898206942177e-06,
+              "large_range_violations_gt_1e-6": 1168,
+              "large_range_worst_x": 52672.0,
+              "tolerance": 1e-06
+            },
+            "large_range_max_abs_err": 4.64898206942177e-06,
+            "large_range_violations_gt_1e-6": 1168,
+            "large_range_worst_x": 52672.0,
+            "stderr": "",
+            "stdout": "{\"extrema_errs\": [4.291417894708438e-06, 4.291417894708438e-06, 1.3888890038060708e-10, 1.3888890038060708e-10], \"extrema_inputs\": [65504.0, -65504.0, 60000.0, -60000.0], \"large_range_max_abs_err\": 4.64898206942177e-06, \"large_range_violations_gt_1e-6\": 1168, \"large_range_worst_x\": 52672.0, \"tolerance\": 1e-06}\n",
+            "timed_out": false,
+            "timeout_s": 300,
+            "tolerance": 1e-06
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "At x=\u00b165504 the absolute error is 4.29e-6, exceeding the 1e-6 tolerance; across a 30000-65504 range, 1168 of 2001 inputs violate tolerance with max error 4.65e-6. The FP32 intermediate path plus rsqrt approximation fails at the extrema as claimed.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: both in-scope claims (c1, c2) are confirmed by exhaustive dense-sweep probe evidence over the entire finite FP16 domain, showing max abs error 4.70e-6 (>1e-6 tolerance) with 20,050 violating inputs including the explicitly legal extrema \u00b165504. The evidence is exhaustive and decisive; no additional testable in-scope problems remain uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T01:05:47Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-10-18T01:05:47Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: both in-scope claims (c1, c2) are confirmed by exhaustive dense-sweep probe evidence over the entire finite FP16 domain, showing max abs error 4.70e-6 (>1e-6 tolerance) with 20,050 violating inputs including the explicitly legal extrema \u00b165504. The evidence is exhaustive and decisive; no additional testable in-scope problems remain uncovered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact since no test.py/get_inputs exists) requires abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance for EVERY finite FP16 value, defining the target in real arithmetic on the exact stored input. An exhaustive dense-sweep probe of all 63,488 finite FP16 values measured max absolute error 4.70e-6 vs the FP64 reference, with 20,050 violating inputs (worst at x=1640, output magnitude ~1). A second probe confirms the explicitly legal extrema x=\u00b165504 each violate with 4.29e-6 error, and 1,168 of 2,001 large-|x| inputs exceed tolerance. The contract permits approximate rsqrt only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 the Quake seed + exactly 2 Newton iterations does not, so this is a genuine defect rather than an acceptable approximation/rounding deviation. Both confirmed claims (c1, c2) are in_scope with scope evidence citing the stated input domain (extrema \u00b165504 explicitly legal). Skeptic reviewed the final evidence and recorded no new claims. No unresolved claims remain.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T01:05:54Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-18T01:05:54Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract (problem.txt, the operative artifact since no test.py/get_inputs exists) requires abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance for EVERY finite FP16 value, defining the target in real arithmetic on the exact stored input. An exhaustive dense-sweep probe of all 63,488 finite FP16 values measured max absolute error 4.70e-6 vs the FP64 reference, with 20,050 violating inputs (worst at x=1640, output magnitude ~1). A second probe confirms the explicitly legal extrema x=\u00b165504 each violate with 4.29e-6 error, and 1,168 of 2,001 large-|x| inputs exceed tolerance. The contract permits approximate rsqrt only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 the Quake seed + exactly 2 Newton iterations does not, so this is a genuine defect rather than an acceptable approximation/rounding deviation. Both confirmed claims (c1, c2) are in_scope with scope evidence citing the stated input domain (extrema \u00b165504 explicitly legal). Skeptic reviewed the final evidence and recorded no new claims. No unresolved claims remain.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-18T01:05:54Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract (problem.txt, the operative artifact since no test.py/get_inputs exists) requires abs(actual[i]-target[i]) <= 1e-6 with zero relative tolerance for EVERY finite FP16 value, defining the target in real arithmetic on the exact stored input. An exhaustive dense-sweep probe of all 63,488 finite FP16 values measured max absolute error 4.70e-6 vs the FP64 reference, with 20,050 violating inputs (worst at x=1640, output magnitude ~1). A second probe confirms the explicitly legal extrema x=\u00b165504 each violate with 4.29e-6 error, and 1,168 of 2,001 large-|x| inputs exceed tolerance. The contract permits approximate rsqrt only \"if they satisfy this fixed absolute tolerance throughout the entire legal domain\" \u2014 the Quake seed + exactly 2 Newton iterations does not, so this is a genuine defect rather than an acceptable approximation/rounding deviation. Both confirmed claims (c1, c2) are in_scope with scope evidence citing the stated input domain (extrema \u00b165504 explicitly legal). Skeptic reviewed the final evidence and recorded no new claims. No unresolved claims remain.",
+    "verdict": "reject"
+  }
+}

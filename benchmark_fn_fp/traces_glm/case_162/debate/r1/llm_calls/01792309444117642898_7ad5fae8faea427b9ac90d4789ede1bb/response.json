@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-d27e8427",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Launching the corrected c3 probe (FP16-extreme magnitudes) and the c4 probe (nonzero storage-offset views) together — they're independent.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ad77b5f153e3d62e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_162/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\ndef make(pattern, B, N):\\n    if pattern == \\\"all\\\":\\n        return torch.full((B, N), 65504.0, dtype=torch.float16)\\n    if pattern == \\\"alt\\\":\\n        return torch.tensor([65504.0, -65504.0]*(N//2)*B, dtype=torch.float16).reshape(B, N)\\n    if pattern == \\\"randext\\\":\\n        g = torch.Generator(device=\\\"cpu\\\").manual_seed(5)\\n        return (torch.randn(B, N, generator=g).sign() * 65504.0).to(torch.float16)\\n    if pattern == \\\"mix\\\":\\n        g = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\n        return (torch.randn(B, N, generator=g).to(torch.float16) * 65504.0).clamp(-65504, 65504).to(torch.float16)\\nfor N in (64, 128, 256):\\n    for pattern in (\\\"all\\\", \\\"alt\\\", \\\"randext\\\", \\\"mix\\\"):\\n        vals = make(pattern, 4, N).cuda()\\n        out = k.run(vals)\\n        ref = torch.fft.rfft(vals.double().cpu(), dim=1)\\n        refc = torch.stack((ref.real, ref.imag), dim=-1).cuda()\\n        tol = 1e-4 + 1e-6*refc.abs()\\n        err = (out.double() - refc).abs()\\n        results[f\\\"{pattern}_N{N}\\\"] = {\\n            \\\"max_abs_err\\\": err.max().item(),\\n            \\\"tol_violations\\\": int((err > tol).sum()),\\n            \\\"nonfinite_out\\\": bool((~torch.isfinite(out)).any()),\\n            \\\"max_out_mag\\\": out.abs().max().item(),\\n        }\\nprint(json.dumps(results))\", \"expected_signal\": \"tolerance violations (err > 1e-4+1e-6*|ref|) on extreme-magnitude FP16 inputs across patterns and N\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bddfa8f4a83eb6ba",
+            "function": {
+              "arguments": "{\"claim_id\": \"c4\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_162/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\nresults = {}\\nfor N in (64, 128, 256):\\n    for offset in (3, 17, 257):\\n        B = 4\\n        g = torch.Generator(device=\\\"cpu\\\").manual_seed(offset)\\n        base = torch.randn(offset + B * N, generator=g).to(torch.float16).cuda()\\n        vals = base[offset:offset + B*N].reshape(B, N)  # contiguous view, nonzero storage_offset\\n        assert vals.is_contiguous() and vals.storage_offset() == offset\\n        try:\\n            out = k.run(vals)\\n        except Exception as e:\\n            results[f\\\"N{N}_off{offset}\\\"] = {\\\"exception\\\": repr(e)}\\n            continue\\n        ref = torch.fft.rfft(vals.double().cpu(), dim=1)\\n        refc = torch.stack((ref.real, ref.imag), dim=-1).cuda()\\n        tol = 1e-4 + 1e-6*refc.abs()\\n        err = (out.double() - refc).abs()\\n        results[f\\\"N{N}_off{offset}\\\"] = {\\n            \\\"max_abs_err\\\": err.max().item(),\\n            \\\"tol_violations\\\": int((err > tol).sum()),\\n            \\\"nonfinite_out\\\": bool((~torch.isfinite(out)).any()),\\n            \\\"input_preserved\\\": bool(torch.equal(vals, base[offset:offset + B*N].reshape(B, N))),\\n        }\\nprint(json.dumps(results))\", \"expected_signal\": \"run on contiguous views with nonzero storage_offset either raises or exceeds tolerance vs FP64 rfft reference\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two probes: corrected c3 (extreme magnitudes) and c4 (storage offset views). Independent."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309447,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 939,
+    "prompt_tokens": 47334,
+    "total_tokens": 48273,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 23,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7089,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,1455 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_141",
+    "has_error": null,
+    "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+    "passed": null,
+    "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_141",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T02:13:37Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:22Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "f82bf5b135187357ce2b1426f41aacbc0191997f95e919a24187319d722a3584"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "7dde4455d958d93637fedd3eaced389fb6d1512c9bf4494a48d8b0ac81573c24"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "802960150eb2e20d269fa03f2a8ba0701d969ebaee9181dc9f1ad34dc62ce52f"
+              }
+            ],
+            "bad_example_index_3435973841": {
+              "col": 4294967295,
+              "col_ref": 6,
+              "row": 490853406,
+              "row_ref": 490853405
+            },
+            "checked": 4294967296,
+            "duration_s": 27.381822,
+            "exit_code": 0,
+            "expected_signal": "mismatch count 0 if exact",
+            "first_mismatch_value": 3435921408,
+            "json_parse_error": null,
+            "json_result": {
+              "bad_examples": [
+                [
+                  3435973841,
+                  490853406,
+                  4294967295,
+                  490853405,
+                  6
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  4294967295,
+                  490853406,
+                  6
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  4294967295,
+                  490853407,
+                  6
+                ],
+                [
+                  3436052486,
+                  490864641,
+                  4294967295,
+                  490864640,
+                  6
+                ],
+                [
+                  3436052493,
+                  490864642,
+                  4294967295,
+                  490864641,
+                  6
+                ],
+                [
+                  3436052500,
+                  490864643,
+                  4294967295,
+                  490864642,
+                  6
+                ]
+              ],
+              "checked": 4294967296,
+              "first_mismatches": [
+                [
+                  3435921408,
+                  11235
+                ],
+                [
+                  3436052480,
+                  18724
+                ],
+                [
+                  3436183552,
+                  18725
+                ],
+                [
+                  3436314624,
+                  18724
+                ],
+                [
+                  3436445696,
+                  18725
+                ],
+                [
+                  3436576768,
+                  18724
+                ],
+                [
+                  3436707840,
+                  18725
+                ],
+                [
+                  3436838912,
+                  18725
+                ],
+                [
+                  3436969984,
+                  18724
+                ],
+                [
+                  3437101056,
+                  18725
+                ]
+              ],
+              "metric": "exact elementwise equality vs int64 division over full uint32 domain",
+              "num_mismatch_chunks": 6554,
+              "special_ok": false
+            },
+            "mismatch_chunk_count": 6554,
+            "special_extremes_ok": false,
+            "stderr": "",
+            "stdout": "{'checked': 4294967296, 'mismatch_chunks': [(3435921408, 11235), (3436052480, 18724), (3436183552, 18725), (3436314624, 18724), (3436445696, 18725), (3436576768, 18724), (3436707840, 18725), (3436838912, 18725), (3436969984, 18724), (3437101056, 18725)], 'num_mismatch_chunks': 6554, 'bad_examples': [(3435973841, 490853406, 4294967295, 490853405, 6), (3435973848, 490853407, 4294967295, 490853406, 6), (3435973855, 490853408, 4294967295, 490853407, 6), (3436052486, 490864641, 4294967295, 490864640, 6), (3436052493, 490864642, 4294967295, 490864641, 6), (3436052500, 490864643, 4294967295, 490864642, 6)], 'special_ok': False, 'special': [0, 1, 6, 7, 8, 2147483647, 2147483648, 2147483654, 4294967288, 4294967289, 4294967290, 4294967295, 4294967292, 4294967291, 4294967293], 'special_out': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566756, 4294967295], [613566756, 1]], 'special_ref': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566755, 6], [613566756, 1]]}\n{\"metric\": \"exact elementwise equality vs int64 division over full uint32 domain\", \"checked\": 4294967296, \"num_mismatch_chunks\": 6554, \"first_mismatches\": [[3435921408, 11235], [3436052480, 18724], [3436183552, 18725], [3436314624, 18724], [3436445696, 18725], [3436576768, 18724], [3436707840, 18725], [3436838912, 18725], [3436969984, 18724], [3437101056, 18725]], \"bad_examples\": [[3435973841, 490853406, 4294967295, 490853405, 6], [3435973848, 490853407, 4294967295, 490853406, 6], [3435973855, 490853408, 4294967295, 490853407, 6], [3436052486, 490864641, 4294967295, 490864640, 6], [3436052493, 490864642, 4294967295, 490864641, 6], [3436052500, 490864643, 4294967295, 490864642, 6]], \"special_ok\": false}\n",
+            "timed_out": false,
+            "timeout_s": 600
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 4294967296 uint32 values on GPU: 6554 chunks (first at 3435921408 \u2248 0xCCCCCD00) contain mismatches. Quotient is off by one for large values, producing col = 4294967295 (underflowed remainder) instead of correct col in [0,6]. Special extreme values also fail (e.g. 4294967291 \u2192 col 4294967295, ref col 6).",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel uses a fixed-point multiplier; if SHIFT/MULTIPLIER don't give exact floor division by 7 for values up to 4294967295, some index would get a wrong row/col.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295; every coordinate must equal the mathematical target EXACTLY."
+        }
+      ],
+      "scope_rationale": "Contract requires exact row/col for every legal uint32 value, so a wrong quotient at any legal value violates it.",
+      "statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T02:14:22Z"
+    },
+    {
+      "created_at": "2026-10-18T02:14:32Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:38Z",
+          "data": {
+            "bad_example_index_3435973841": {
+              "col": 4294967295,
+              "col_ref": 6,
+              "row": 490853406,
+              "row_ref": 490853405
+            },
+            "checked": 4294967296,
+            "first_mismatch_value": 3435921408,
+            "mismatch_chunk_count": 6554,
+            "special_extremes_ok": false
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive GPU sweep of all 4294967296 uint32 values (tool event t6): 6554 mismatch chunks start at 3435921408. E.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6 \u2014 the reciprocal-multiply quotient with _SHIFT=34 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating col in [0,6] and 7*row+col = index. Extreme 4294967291 also fails.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "t6 showed the fixed-point quotient with _SHIFT=34 is off by one for large dividends (first mismatch at 3435921408), producing col=4294967295 instead of values in [0,6].",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], and 7*row+col must equal the original index."
+        }
+      ],
+      "scope_rationale": "Contract requires exact row/col for every legal uint32 value including large ones like 3435973841 and 4294967291, which the probe shows produce wrong results.",
+      "statement": "The kernel's reciprocal-multiply division produces incorrect row/col for some legal uint32 values (e.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6), violating the exactness requirement.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T02:14:41Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_141",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_141",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 10.635919021,
+      "role": "solo",
+      "round": 2,
+      "text": "I'll verify the reciprocal-division math is exact across the full uint32 domain, including extrema, with a GPU probe.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel uses a fixed-point multiplier; if SHIFT/MULTIPLIER don't give exact floor division by 7 for values up to 4294967295, some index would get a wrong row/col.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295; every coordinate must equal the mathematical target EXACTLY."
+              }
+            ],
+            "scope_rationale": "Contract requires exact row/col for every legal uint32 value, so a wrong quotient at any legal value violates it.",
+            "statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.636,
+        "input_tokens": 8994,
+        "output_tokens": 664
+      }
+    },
+    {
+      "duration_s": 12.699948072999998,
+      "role": "solo",
+      "round": 3,
+      "text": "The interesting suspect here: `_SHIFT = 31 + 3 = 34` uses the classic ceil-multiplier trick but with one bit less shift than the standard 32+s requirement for full uint32 range \u2014 this often fails for large dividends. I'll probe the entire uint32 domain in chunks of 131072 on the real GPU, comparing against exact int64 division.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport kernel as K\n\nCH = 131072\ntotal = 1 << 32\nmismatches = []\nchecked = 0\nbad_examples = []\nfor base in range(0, total, CH):\n    n = min(CH, total - base)\n    idx = torch.arange(base, base + n, dtype=torch.int64).to(torch.uint32).cuda()\n    out = K.run(idx)\n    vals = idx.to(torch.int64)\n    ref = torch.stack((vals // 7, vals % 7), dim=1).to(torch.uint32)\n    if not torch.equal(out, ref):\n        bad = (out != ref).any(dim=1)\n        nb = int(bad.sum())\n        mismatches.append((base, nb))\n        if len(bad_examples) < 5:\n            bidx = bad.nonzero()[:3].flatten()\n            for j in bidx.tolist():\n                bad_examples.append((int(idx[j]), int(out[j,0]), int(out[j,1]), int(ref[j,0]), int(ref[j,1])))\n    checked += n\n\n# also targeted extremes: multiples of 7 and neighbors near max\nspecial = torch.tensor([0,1,6,7,8,2**31-1,2**31,2**31+6,2**32-8,2**32-7,2**32-6,2**32-1,\n                        7*(2**32//7), 7*(2**32//7)-1, 7*(2**32//7)+1], dtype=torch.int64).to(torch.uint32).cuda()\nouts = K.run(special)\nrefs = torch.stack((special.to(torch.int64)//7, special.to(torch.int64)%7), dim=1).to(torch.uint32)\nspecial_ok = torch.equal(outs, refs)\n\nprint({\"checked\": checked, \"mismatch_chunks\": mismatches[:10], \"num_mismatch_chunks\": len(mismatches),\n       \"bad_examples\": bad_examples, \"special_ok\": special_ok,\n       \"special\": special.cpu().tolist(), \"special_out\": outs.cpu().tolist(), \"special_ref\": refs.cpu().tolist()})\nimport json\nprint(json.dumps({\"metric\":\"exact elementwise equality vs int64 division over full uint32 domain\",\"checked\":checked,\n \"num_mismatch_chunks\":len(mismatches),\"first_mismatches\":mismatches[:10],\"bad_examples\":bad_examples,\"special_ok\":special_ok}))\n",
+            "expected_signal": "mismatch count 0 if exact",
+            "timeout_s": 600
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.7,
+        "input_tokens": 10053,
+        "output_tokens": 1043
+      }
+    },
+    {
+      "duration_s": 4.744652502000001,
+      "role": "solo",
+      "round": 4,
+      "text": "The exhaustive GPU probe checked all 2^32 uint32 values: 6554 mismatch chunks beginning at ~2^31.5; e.g. index 3435973841 produced row 490853406 (should be 490853405), and col 4294967295 (should be 6) \u2014 a clear off-by-one in the fixed-point quotient causing a negative remainder stored as huge uint32. This violates the exact-division contract. I'll record the evidence and reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "bad_example_index_3435973841": {
+                "col": 4294967295,
+                "col_ref": 6,
+                "row": 490853406,
+                "row_ref": 490853405
+              },
+              "checked": 4294967296,
+              "first_mismatch_value": 3435921408,
+              "mismatch_chunk_count": 6554,
+              "special_extremes_ok": false
+            },
+            "event_id": "t6",
+            "status": "rebutted",
+            "summary": "Exhaustive sweep of all 4294967296 uint32 values on GPU: 6554 chunks (first at 3435921408 \u2248 0xCCCCCD00) contain mismatches. Quotient is off by one for large values, producing col = 4294967295 (underflowed remainder) instead of correct col in [0,6]. Special extreme values also fail (e.g. 4294967291 \u2192 col 4294967295, ref col 6).",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.745,
+        "input_tokens": 15988,
+        "output_tokens": 431
+      }
+    },
+    {
+      "duration_s": 5.847227762999999,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive GPU sweep (event t6) proved the reciprocal-multiply division is inexact for large uint32 values (first mismatch at 3435921408; 4294967291 \u2192 col 4294967295 instead of 6), violating the contract's exactness requirement over the full declared domain. All claims are resolved; I'll record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 (in_scope, backed by contract quote \"EVERY unsigned 32-bit value is legal... EXACTLY\") was rebutted by an exhaustive GPU probe (tool event t6) covering all 2^32 uint32 values in 131072-element chunks, exactly matching the contract's max N. Mismatches begin at index 3435921408 (0xCCCCCC00 range): e.g. index 3435973841 yields row 490853406 / col 4294967295 instead of the correct row 490853405 / col 6 \u2014 the fixed-point quotient with _SHIFT=34, _MULTIPLIER=(2^34+6)//7 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32. Targeted extremes also fail (4294967291 \u2192 col 4294967295). This violates the contract's requirement that row/col equal the mathematical targets exactly for every legal uint32 index, so the kernel is rejected.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.847,
+        "input_tokens": 24306,
+        "output_tokens": 475
+      }
+    },
+    {
+      "duration_s": 4.322893272000002,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive probe (t6) proved the kernel is inexact, but the verdict needs a confirmed defect claim. I'll record the defect claim, attach the t6 evidence, confirm it, then reject.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "t6 showed the fixed-point quotient with _SHIFT=34 is off by one for large dividends (first mismatch at 3435921408), producing col=4294967295 instead of values in [0,6].",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], and 7*row+col must equal the original index."
+              }
+            ],
+            "scope_rationale": "Contract requires exact row/col for every legal uint32 value including large ones like 3435973841 and 4294967291, which the probe shows produce wrong results.",
+            "statement": "The kernel's reciprocal-multiply division produces incorrect row/col for some legal uint32 values (e.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6), violating the exactness requirement."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.323,
+        "input_tokens": 25189,
+        "output_tokens": 389
+      }
+    },
+    {
+      "duration_s": 5.428355786000012,
+      "role": "solo",
+      "round": 7,
+      "text": "I'll attach the existing t6 evidence to claim c2, confirm it, then record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "data": {
+              "bad_example_index_3435973841": {
+                "col": 4294967295,
+                "col_ref": 6,
+                "row": 490853406,
+                "row_ref": 490853405
+              },
+              "checked": 4294967296,
+              "first_mismatch_value": 3435921408,
+              "mismatch_chunk_count": 6554,
+              "special_extremes_ok": false
+            },
+            "kind": "runtime_probe",
+            "summary": "Exhaustive GPU sweep of all 4294967296 uint32 values (tool event t6): 6554 mismatch chunks start at 3435921408. E.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6 \u2014 the reciprocal-multiply quotient with _SHIFT=34 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating col in [0,6] and 7*row+col = index. Extreme 4294967291 also fails.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          },
+          "tool": "append_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.428,
+        "input_tokens": 26570,
+        "output_tokens": 348
+      }
+    },
+    {
+      "duration_s": 3.212864203999999,
+      "role": "solo",
+      "round": 8,
+      "text": "Claim c2 now has confirming evidence; I'll mark it confirmed and record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c2",
+            "status": "confirmed"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.213,
+        "input_tokens": 27839,
+        "output_tokens": 55
+      }
+    },
+    {
+      "duration_s": 5.7573952560000095,
+      "role": "solo",
+      "round": 9,
+      "text": "Claim c2 is confirmed, in-scope, and contract-backed. Recording the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c2"
+            ],
+            "reason": "Claim c2 (in_scope, with contract scope evidence \"EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], 7*row+col = index\") is confirmed by an exhaustive GPU probe (tool event t6) that swept all 4294967296 uint32 values in 131072-element chunks against exact int64 division. 6554 mismatch chunks begin at index 3435921408; e.g. index 3435973841 returns row 490853406 / col 4294967295 instead of row 490853405 / col 6, and extreme 4294967291 also returns col 4294967295. The kernel's fixed-point quotient (_SHIFT=34, _MULTIPLIER=(2^34+6)//7) is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating the contract's exactness, col-in-[0,6], and 7*row+col=index invariants. The kernel is rejected.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.757,
+        "input_tokens": 28354,
+        "output_tokens": 342
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_141",
+        "has_error": null,
+        "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+        "passed": null,
+        "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_141",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t2",
+      "output": {
+        "content": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_141",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_141",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3125
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2050
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_141",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_141",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel uses a fixed-point multiplier; if SHIFT/MULTIPLIER don't give exact floor division by 7 for values up to 4294967295, some index would get a wrong row/col.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295; every coordinate must equal the mathematical target EXACTLY."
+          }
+        ],
+        "scope_rationale": "Contract requires exact row/col for every legal uint32 value, so a wrong quotient at any legal value violates it.",
+        "statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly."
+      },
+      "created_at": "2026-10-18T02:13:37Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T02:13:37Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel uses a fixed-point multiplier; if SHIFT/MULTIPLIER don't give exact floor division by 7 for values up to 4294967295, some index would get a wrong row/col.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295; every coordinate must equal the mathematical target EXACTLY."
+          }
+        ],
+        "scope_rationale": "Contract requires exact row/col for every legal uint32 value, so a wrong quotient at any legal value violates it.",
+        "statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly.",
+        "status": "open",
+        "updated_at": "2026-10-18T02:13:37Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport kernel as K\n\nCH = 131072\ntotal = 1 << 32\nmismatches = []\nchecked = 0\nbad_examples = []\nfor base in range(0, total, CH):\n    n = min(CH, total - base)\n    idx = torch.arange(base, base + n, dtype=torch.int64).to(torch.uint32).cuda()\n    out = K.run(idx)\n    vals = idx.to(torch.int64)\n    ref = torch.stack((vals // 7, vals % 7), dim=1).to(torch.uint32)\n    if not torch.equal(out, ref):\n        bad = (out != ref).any(dim=1)\n        nb = int(bad.sum())\n        mismatches.append((base, nb))\n        if len(bad_examples) < 5:\n            bidx = bad.nonzero()[:3].flatten()\n            for j in bidx.tolist():\n                bad_examples.append((int(idx[j]), int(out[j,0]), int(out[j,1]), int(ref[j,0]), int(ref[j,1])))\n    checked += n\n\n# also targeted extremes: multiples of 7 and neighbors near max\nspecial = torch.tensor([0,1,6,7,8,2**31-1,2**31,2**31+6,2**32-8,2**32-7,2**32-6,2**32-1,\n                        7*(2**32//7), 7*(2**32//7)-1, 7*(2**32//7)+1], dtype=torch.int64).to(torch.uint32).cuda()\nouts = K.run(special)\nrefs = torch.stack((special.to(torch.int64)//7, special.to(torch.int64)%7), dim=1).to(torch.uint32)\nspecial_ok = torch.equal(outs, refs)\n\nprint({\"checked\": checked, \"mismatch_chunks\": mismatches[:10], \"num_mismatch_chunks\": len(mismatches),\n       \"bad_examples\": bad_examples, \"special_ok\": special_ok,\n       \"special\": special.cpu().tolist(), \"special_out\": outs.cpu().tolist(), \"special_ref\": refs.cpu().tolist()})\nimport json\nprint(json.dumps({\"metric\":\"exact elementwise equality vs int64 division over full uint32 domain\",\"checked\":checked,\n \"num_mismatch_chunks\":len(mismatches),\"first_mismatches\":mismatches[:10],\"bad_examples\":bad_examples,\"special_ok\":special_ok}))\n",
+        "expected_signal": "mismatch count 0 if exact",
+        "timeout_s": 600
+      },
+      "created_at": "2026-10-18T02:14:17Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "f82bf5b135187357ce2b1426f41aacbc0191997f95e919a24187319d722a3584"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "7dde4455d958d93637fedd3eaced389fb6d1512c9bf4494a48d8b0ac81573c24"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "802960150eb2e20d269fa03f2a8ba0701d969ebaee9181dc9f1ad34dc62ce52f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly.",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 27.381822,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "f82bf5b135187357ce2b1426f41aacbc0191997f95e919a24187319d722a3584"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "7dde4455d958d93637fedd3eaced389fb6d1512c9bf4494a48d8b0ac81573c24"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "802960150eb2e20d269fa03f2a8ba0701d969ebaee9181dc9f1ad34dc62ce52f"
+              }
+            ],
+            "duration_s": 27.381822,
+            "exit_code": 0,
+            "expected_signal": "mismatch count 0 if exact",
+            "json_parse_error": null,
+            "json_result": {
+              "bad_examples": [
+                [
+                  3435973841,
+                  490853406,
+                  4294967295,
+                  490853405,
+                  6
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  4294967295,
+                  490853406,
+                  6
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  4294967295,
+                  490853407,
+                  6
+                ],
+                [
+                  3436052486,
+                  490864641,
+                  4294967295,
+                  490864640,
+                  6
+                ],
+                [
+                  3436052493,
+                  490864642,
+                  4294967295,
+                  490864641,
+                  6
+                ],
+                [
+                  3436052500,
+                  490864643,
+                  4294967295,
+                  490864642,
+                  6
+                ]
+              ],
+              "checked": 4294967296,
+              "first_mismatches": [
+                [
+                  3435921408,
+                  11235
+                ],
+                [
+                  3436052480,
+                  18724
+                ],
+                [
+                  3436183552,
+                  18725
+                ],
+                [
+                  3436314624,
+                  18724
+                ],
+                [
+                  3436445696,
+                  18725
+                ],
+                [
+                  3436576768,
+                  18724
+                ],
+                [
+                  3436707840,
+                  18725
+                ],
+                [
+                  3436838912,
+                  18725
+                ],
+                [
+                  3436969984,
+                  18724
+                ],
+                [
+                  3437101056,
+                  18725
+                ]
+              ],
+              "metric": "exact elementwise equality vs int64 division over full uint32 domain",
+              "num_mismatch_chunks": 6554,
+              "special_ok": false
+            },
+            "stderr": "",
+            "stdout": "{'checked': 4294967296, 'mismatch_chunks': [(3435921408, 11235), (3436052480, 18724), (3436183552, 18725), (3436314624, 18724), (3436445696, 18725), (3436576768, 18724), (3436707840, 18725), (3436838912, 18725), (3436969984, 18724), (3437101056, 18725)], 'num_mismatch_chunks': 6554, 'bad_examples': [(3435973841, 490853406, 4294967295, 490853405, 6), (3435973848, 490853407, 4294967295, 490853406, 6), (3435973855, 490853408, 4294967295, 490853407, 6), (3436052486, 490864641, 4294967295, 490864640, 6), (3436052493, 490864642, 4294967295, 490864641, 6), (3436052500, 490864643, 4294967295, 490864642, 6)], 'special_ok': False, 'special': [0, 1, 6, 7, 8, 2147483647, 2147483648, 2147483654, 4294967288, 4294967289, 4294967290, 4294967295, 4294967292, 4294967291, 4294967293], 'special_out': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566756, 4294967295], [613566756, 1]], 'special_ref': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566755, 6], [613566756, 1]]}\n{\"metric\": \"exact elementwise equality vs int64 division over full uint32 domain\", \"checked\": 4294967296, \"num_mismatch_chunks\": 6554, \"first_mismatches\": [[3435921408, 11235], [3436052480, 18724], [3436183552, 18725], [3436314624, 18724], [3436445696, 18725], [3436576768, 18724], [3436707840, 18725], [3436838912, 18725], [3436969984, 18724], [3437101056, 18725]], \"bad_examples\": [[3435973841, 490853406, 4294967295, 490853405, 6], [3435973848, 490853407, 4294967295, 490853406, 6], [3435973855, 490853408, 4294967295, 490853407, 6], [3436052486, 490864641, 4294967295, 490864640, 6], [3436052493, 490864642, 4294967295, 490864641, 6], [3436052500, 490864643, 4294967295, 490864642, 6]], \"special_ok\": false}\n",
+            "timed_out": false,
+            "timeout_s": 600
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "mismatch count 0 if exact",
+        "json_parse_error": null,
+        "json_result": {
+          "bad_examples": [
+            [
+              3435973841,
+              490853406,
+              4294967295,
+              490853405,
+              6
+            ],
+            [
+              3435973848,
+              490853407,
+              4294967295,
+              490853406,
+              6
+            ],
+            [
+              3435973855,
+              490853408,
+              4294967295,
+              490853407,
+              6
+            ],
+            [
+              3436052486,
+              490864641,
+              4294967295,
+              490864640,
+              6
+            ],
+            [
+              3436052493,
+              490864642,
+              4294967295,
+              490864641,
+              6
+            ],
+            [
+              3436052500,
+              490864643,
+              4294967295,
+              490864642,
+              6
+            ]
+          ],
+          "checked": 4294967296,
+          "first_mismatches": [
+            [
+              3435921408,
+              11235
+            ],
+            [
+              3436052480,
+              18724
+            ],
+            [
+              3436183552,
+              18725
+            ],
+            [
+              3436314624,
+              18724
+            ],
+            [
+              3436445696,
+              18725
+            ],
+            [
+              3436576768,
+              18724
+            ],
+            [
+              3436707840,
+              18725
+            ],
+            [
+              3436838912,
+              18725
+            ],
+            [
+              3436969984,
+              18724
+            ],
+            [
+              3437101056,
+              18725
+            ]
+          ],
+          "metric": "exact elementwise equality vs int64 division over full uint32 domain",
+          "num_mismatch_chunks": 6554,
+          "special_ok": false
+        },
+        "sandbox": {
+          "cpu_limit_s": 630,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{'checked': 4294967296, 'mismatch_chunks': [(3435921408, 11235), (3436052480, 18724), (3436183552, 18725), (3436314624, 18724), (3436445696, 18725), (3436576768, 18724), (3436707840, 18725), (3436838912, 18725), (3436969984, 18724), (3437101056, 18725)], 'num_mismatch_chunks': 6554, 'bad_examples': [(3435973841, 490853406, 4294967295, 490853405, 6), (3435973848, 490853407, 4294967295, 490853406, 6), (3435973855, 490853408, 4294967295, 490853407, 6), (3436052486, 490864641, 4294967295, 490864640, 6), (3436052493, 490864642, 4294967295, 490864641, 6), (3436052500, 490864643, 4294967295, 490864642, 6)], 'special_ok': False, 'special': [0, 1, 6, 7, 8, 2147483647, 2147483648, 2147483654, 4294967288, 4294967289, 4294967290, 4294967295, 4294967292, 4294967291, 4294967293], 'special_out': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566756, 4294967295], [613566756, 1]], 'special_ref': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566755, 6], [613566756, 1]]}\n{\"metric\": \"exact elementwise equality vs int64 division over full uint32 domain\", \"checked\": 4294967296, \"num_mismatch_chunks\": 6554, \"first_mismatches\": [[3435921408, 11235], [3436052480, 18724], [3436183552, 18725], [3436314624, 18724], [3436445696, 18725], [3436576768, 18724], [3436707840, 18725], [3436838912, 18725], [3436969984, 18724], [3437101056, 18725]], \"bad_examples\": [[3435973841, 490853406, 4294967295, 490853405, 6], [3435973848, 490853407, 4294967295, 490853406, 6], [3435973855, 490853408, 4294967295, 490853407, 6], [3436052486, 490864641, 4294967295, 490864640, 6], [3436052493, 490864642, 4294967295, 490864641, 6], [3436052500, 490864643, 4294967295, 490864642, 6]], \"special_ok\": false}\n",
+        "timed_out": false,
+        "timeout_s": 600,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "bad_example_index_3435973841": {
+            "col": 4294967295,
+            "col_ref": 6,
+            "row": 490853406,
+            "row_ref": 490853405
+          },
+          "checked": 4294967296,
+          "first_mismatch_value": 3435921408,
+          "mismatch_chunk_count": 6554,
+          "special_extremes_ok": false
+        },
+        "event_id": "t6",
+        "status": "rebutted",
+        "summary": "Exhaustive sweep of all 4294967296 uint32 values on GPU: 6554 chunks (first at 3435921408 \u2248 0xCCCCCD00) contain mismatches. Quotient is off by one for large values, producing col = 4294967295 (underflowed remainder) instead of correct col in [0,6]. Special extreme values also fail (e.g. 4294967291 \u2192 col 4294967295, ref col 6).",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T02:14:22Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T02:13:37Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T02:14:22Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "f82bf5b135187357ce2b1426f41aacbc0191997f95e919a24187319d722a3584"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "7dde4455d958d93637fedd3eaced389fb6d1512c9bf4494a48d8b0ac81573c24"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t6_json_result.json",
+                    "sha256": "802960150eb2e20d269fa03f2a8ba0701d969ebaee9181dc9f1ad34dc62ce52f"
+                  }
+                ],
+                "bad_example_index_3435973841": {
+                  "col": 4294967295,
+                  "col_ref": 6,
+                  "row": 490853406,
+                  "row_ref": 490853405
+                },
+                "checked": 4294967296,
+                "duration_s": 27.381822,
+                "exit_code": 0,
+                "expected_signal": "mismatch count 0 if exact",
+                "first_mismatch_value": 3435921408,
+                "json_parse_error": null,
+                "json_result": {
+                  "bad_examples": [
+                    [
+                      3435973841,
+                      490853406,
+                      4294967295,
+                      490853405,
+                      6
+                    ],
+                    [
+                      3435973848,
+                      490853407,
+                      4294967295,
+                      490853406,
+                      6
+                    ],
+                    [
+                      3435973855,
+                      490853408,
+                      4294967295,
+                      490853407,
+                      6
+                    ],
+                    [
+                      3436052486,
+                      490864641,
+                      4294967295,
+                      490864640,
+                      6
+                    ],
+                    [
+                      3436052493,
+                      490864642,
+                      4294967295,
+                      490864641,
+                      6
+                    ],
+                    [
+                      3436052500,
+                      490864643,
+                      4294967295,
+                      490864642,
+                      6
+                    ]
+                  ],
+                  "checked": 4294967296,
+                  "first_mismatches": [
+                    [
+                      3435921408,
+                      11235
+                    ],
+                    [
+                      3436052480,
+                      18724
+                    ],
+                    [
+                      3436183552,
+                      18725
+                    ],
+                    [
+                      3436314624,
+                      18724
+                    ],
+                    [
+                      3436445696,
+                      18725
+                    ],
+                    [
+                      3436576768,
+                      18724
+                    ],
+                    [
+                      3436707840,
+                      18725
+                    ],
+                    [
+                      3436838912,
+                      18725
+                    ],
+                    [
+                      3436969984,
+                      18724
+                    ],
+                    [
+                      3437101056,
+                      18725
+                    ]
+                  ],
+                  "metric": "exact elementwise equality vs int64 division over full uint32 domain",
+                  "num_mismatch_chunks": 6554,
+                  "special_ok": false
+                },
+                "mismatch_chunk_count": 6554,
+                "special_extremes_ok": false,
+                "stderr": "",
+                "stdout": "{'checked': 4294967296, 'mismatch_chunks': [(3435921408, 11235), (3436052480, 18724), (3436183552, 18725), (3436314624, 18724), (3436445696, 18725), (3436576768, 18724), (3436707840, 18725), (3436838912, 18725), (3436969984, 18724), (3437101056, 18725)], 'num_mismatch_chunks': 6554, 'bad_examples': [(3435973841, 490853406, 4294967295, 490853405, 6), (3435973848, 490853407, 4294967295, 490853406, 6), (3435973855, 490853408, 4294967295, 490853407, 6), (3436052486, 490864641, 4294967295, 490864640, 6), (3436052493, 490864642, 4294967295, 490864641, 6), (3436052500, 490864643, 4294967295, 490864642, 6)], 'special_ok': False, 'special': [0, 1, 6, 7, 8, 2147483647, 2147483648, 2147483654, 4294967288, 4294967289, 4294967290, 4294967295, 4294967292, 4294967291, 4294967293], 'special_out': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566756, 4294967295], [613566756, 1]], 'special_ref': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566755, 6], [613566756, 1]]}\n{\"metric\": \"exact elementwise equality vs int64 division over full uint32 domain\", \"checked\": 4294967296, \"num_mismatch_chunks\": 6554, \"first_mismatches\": [[3435921408, 11235], [3436052480, 18724], [3436183552, 18725], [3436314624, 18724], [3436445696, 18725], [3436576768, 18724], [3436707840, 18725], [3436838912, 18725], [3436969984, 18724], [3437101056, 18725]], \"bad_examples\": [[3435973841, 490853406, 4294967295, 490853405, 6], [3435973848, 490853407, 4294967295, 490853406, 6], [3435973855, 490853408, 4294967295, 490853407, 6], [3436052486, 490864641, 4294967295, 490864640, 6], [3436052493, 490864642, 4294967295, 490864641, 6], [3436052500, 490864643, 4294967295, 490864642, 6]], \"special_ok\": false}\n",
+                "timed_out": false,
+                "timeout_s": 600
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 4294967296 uint32 values on GPU: 6554 chunks (first at 3435921408 \u2248 0xCCCCCD00) contain mismatches. Quotient is off by one for large values, producing col = 4294967295 (underflowed remainder) instead of correct col in [0,6]. Special extreme values also fail (e.g. 4294967291 \u2192 col 4294967295, ref col 6).",
+              "supports": "rebutted",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel uses a fixed-point multiplier; if SHIFT/MULTIPLIER don't give exact floor division by 7 for values up to 4294967295, some index would get a wrong row/col.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295; every coordinate must equal the mathematical target EXACTLY."
+            }
+          ],
+          "scope_rationale": "Contract requires exact row/col for every legal uint32 value, so a wrong quotient at any legal value violates it.",
+          "statement": "The reciprocal-multiply division in _unflatten is exact for all uint32 values 0..4294967295, i.e. row and col match reference exactly.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T02:14:22Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:22Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "f82bf5b135187357ce2b1426f41aacbc0191997f95e919a24187319d722a3584"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "7dde4455d958d93637fedd3eaced389fb6d1512c9bf4494a48d8b0ac81573c24"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "802960150eb2e20d269fa03f2a8ba0701d969ebaee9181dc9f1ad34dc62ce52f"
+              }
+            ],
+            "bad_example_index_3435973841": {
+              "col": 4294967295,
+              "col_ref": 6,
+              "row": 490853406,
+              "row_ref": 490853405
+            },
+            "checked": 4294967296,
+            "duration_s": 27.381822,
+            "exit_code": 0,
+            "expected_signal": "mismatch count 0 if exact",
+            "first_mismatch_value": 3435921408,
+            "json_parse_error": null,
+            "json_result": {
+              "bad_examples": [
+                [
+                  3435973841,
+                  490853406,
+                  4294967295,
+                  490853405,
+                  6
+                ],
+                [
+                  3435973848,
+                  490853407,
+                  4294967295,
+                  490853406,
+                  6
+                ],
+                [
+                  3435973855,
+                  490853408,
+                  4294967295,
+                  490853407,
+                  6
+                ],
+                [
+                  3436052486,
+                  490864641,
+                  4294967295,
+                  490864640,
+                  6
+                ],
+                [
+                  3436052493,
+                  490864642,
+                  4294967295,
+                  490864641,
+                  6
+                ],
+                [
+                  3436052500,
+                  490864643,
+                  4294967295,
+                  490864642,
+                  6
+                ]
+              ],
+              "checked": 4294967296,
+              "first_mismatches": [
+                [
+                  3435921408,
+                  11235
+                ],
+                [
+                  3436052480,
+                  18724
+                ],
+                [
+                  3436183552,
+                  18725
+                ],
+                [
+                  3436314624,
+                  18724
+                ],
+                [
+                  3436445696,
+                  18725
+                ],
+                [
+                  3436576768,
+                  18724
+                ],
+                [
+                  3436707840,
+                  18725
+                ],
+                [
+                  3436838912,
+                  18725
+                ],
+                [
+                  3436969984,
+                  18724
+                ],
+                [
+                  3437101056,
+                  18725
+                ]
+              ],
+              "metric": "exact elementwise equality vs int64 division over full uint32 domain",
+              "num_mismatch_chunks": 6554,
+              "special_ok": false
+            },
+            "mismatch_chunk_count": 6554,
+            "special_extremes_ok": false,
+            "stderr": "",
+            "stdout": "{'checked': 4294967296, 'mismatch_chunks': [(3435921408, 11235), (3436052480, 18724), (3436183552, 18725), (3436314624, 18724), (3436445696, 18725), (3436576768, 18724), (3436707840, 18725), (3436838912, 18725), (3436969984, 18724), (3437101056, 18725)], 'num_mismatch_chunks': 6554, 'bad_examples': [(3435973841, 490853406, 4294967295, 490853405, 6), (3435973848, 490853407, 4294967295, 490853406, 6), (3435973855, 490853408, 4294967295, 490853407, 6), (3436052486, 490864641, 4294967295, 490864640, 6), (3436052493, 490864642, 4294967295, 490864641, 6), (3436052500, 490864643, 4294967295, 490864642, 6)], 'special_ok': False, 'special': [0, 1, 6, 7, 8, 2147483647, 2147483648, 2147483654, 4294967288, 4294967289, 4294967290, 4294967295, 4294967292, 4294967291, 4294967293], 'special_out': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566756, 4294967295], [613566756, 1]], 'special_ref': [[0, 0], [0, 1], [0, 6], [1, 0], [1, 1], [306783378, 1], [306783378, 2], [306783379, 1], [613566755, 3], [613566755, 4], [613566755, 5], [613566756, 3], [613566756, 0], [613566755, 6], [613566756, 1]]}\n{\"metric\": \"exact elementwise equality vs int64 division over full uint32 domain\", \"checked\": 4294967296, \"num_mismatch_chunks\": 6554, \"first_mismatches\": [[3435921408, 11235], [3436052480, 18724], [3436183552, 18725], [3436314624, 18724], [3436445696, 18725], [3436576768, 18724], [3436707840, 18725], [3436838912, 18725], [3436969984, 18724], [3437101056, 18725]], \"bad_examples\": [[3435973841, 490853406, 4294967295, 490853405, 6], [3435973848, 490853407, 4294967295, 490853406, 6], [3435973855, 490853408, 4294967295, 490853407, 6], [3436052486, 490864641, 4294967295, 490864640, 6], [3436052493, 490864642, 4294967295, 490864641, 6], [3436052500, 490864643, 4294967295, 490864642, 6]], \"special_ok\": false}\n",
+            "timed_out": false,
+            "timeout_s": 600
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 4294967296 uint32 values on GPU: 6554 chunks (first at 3435921408 \u2248 0xCCCCCD00) contain mismatches. Quotient is off by one for large values, producing col = 4294967295 (underflowed remainder) instead of correct col in [0,6]. Special extreme values also fail (e.g. 4294967291 \u2192 col 4294967295, ref col 6).",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 (in_scope, backed by contract quote \"EVERY unsigned 32-bit value is legal... EXACTLY\") was rebutted by an exhaustive GPU probe (tool event t6) covering all 2^32 uint32 values in 131072-element chunks, exactly matching the contract's max N. Mismatches begin at index 3435921408 (0xCCCCCC00 range): e.g. index 3435973841 yields row 490853406 / col 4294967295 instead of the correct row 490853405 / col 6 \u2014 the fixed-point quotient with _SHIFT=34, _MULTIPLIER=(2^34+6)//7 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32. Targeted extremes also fail (4294967291 \u2192 col 4294967295). This violates the contract's requirement that row/col equal the mathematical targets exactly for every legal uint32 index, so the kernel is rejected.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T02:14:28Z",
+      "id": "t8",
+      "output": {
+        "error": {
+          "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: status=rebutted, scope=in_scope",
+          "recoverable": true,
+          "type": "ValueError"
+        },
+        "error_type": "ValueError",
+        "event_id": "t8",
+        "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: status=rebutted, scope=in_scope",
+        "ok": false
+      },
+      "status": "error",
+      "tool": "record_verdict"
+    },
+    {
+      "args": {
+        "rationale": "t6 showed the fixed-point quotient with _SHIFT=34 is off by one for large dividends (first mismatch at 3435921408), producing col=4294967295 instead of values in [0,6].",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], and 7*row+col must equal the original index."
+          }
+        ],
+        "scope_rationale": "Contract requires exact row/col for every legal uint32 value including large ones like 3435973841 and 4294967291, which the probe shows produce wrong results.",
+        "statement": "The kernel's reciprocal-multiply division produces incorrect row/col for some legal uint32 values (e.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6), violating the exactness requirement."
+      },
+      "created_at": "2026-10-18T02:14:32Z",
+      "id": "t9",
+      "output": {
+        "created_at": "2026-10-18T02:14:32Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "t6 showed the fixed-point quotient with _SHIFT=34 is off by one for large dividends (first mismatch at 3435921408), producing col=4294967295 instead of values in [0,6].",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], and 7*row+col must equal the original index."
+          }
+        ],
+        "scope_rationale": "Contract requires exact row/col for every legal uint32 value including large ones like 3435973841 and 4294967291, which the probe shows produce wrong results.",
+        "statement": "The kernel's reciprocal-multiply division produces incorrect row/col for some legal uint32 values (e.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6), violating the exactness requirement.",
+        "status": "open",
+        "updated_at": "2026-10-18T02:14:32Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "data": {
+          "bad_example_index_3435973841": {
+            "col": 4294967295,
+            "col_ref": 6,
+            "row": 490853406,
+            "row_ref": 490853405
+          },
+          "checked": 4294967296,
+          "first_mismatch_value": 3435921408,
+          "mismatch_chunk_count": 6554,
+          "special_extremes_ok": false
+        },
+        "kind": "runtime_probe",
+        "summary": "Exhaustive GPU sweep of all 4294967296 uint32 values (tool event t6): 6554 mismatch chunks start at 3435921408. E.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6 \u2014 the reciprocal-multiply quotient with _SHIFT=34 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating col in [0,6] and 7*row+col = index. Extreme 4294967291 also fails.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "created_at": "2026-10-18T02:14:38Z",
+      "id": "t10",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-10-18T02:14:38Z",
+        "data": {
+          "bad_example_index_3435973841": {
+            "col": 4294967295,
+            "col_ref": 6,
+            "row": 490853406,
+            "row_ref": 490853405
+          },
+          "checked": 4294967296,
+          "first_mismatch_value": 3435921408,
+          "mismatch_chunk_count": 6554,
+          "special_extremes_ok": false
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Exhaustive GPU sweep of all 4294967296 uint32 values (tool event t6): 6554 mismatch chunks start at 3435921408. E.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6 \u2014 the reciprocal-multiply quotient with _SHIFT=34 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating col in [0,6] and 7*row+col = index. Extreme 4294967291 also fails.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "status": "confirmed"
+      },
+      "created_at": "2026-10-18T02:14:41Z",
+      "id": "t11",
+      "output": {
+        "created_at": "2026-10-18T02:14:32Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-10-18T02:14:38Z",
+            "data": {
+              "bad_example_index_3435973841": {
+                "col": 4294967295,
+                "col_ref": 6,
+                "row": 490853406,
+                "row_ref": 490853405
+              },
+              "checked": 4294967296,
+              "first_mismatch_value": 3435921408,
+              "mismatch_chunk_count": 6554,
+              "special_extremes_ok": false
+            },
+            "id": "c2.e1",
+            "kind": "runtime_probe",
+            "summary": "Exhaustive GPU sweep of all 4294967296 uint32 values (tool event t6): 6554 mismatch chunks start at 3435921408. E.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6 \u2014 the reciprocal-multiply quotient with _SHIFT=34 is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating col in [0,6] and 7*row+col = index. Extreme 4294967291 also fails.",
+            "supports": "confirmed",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "t6 showed the fixed-point quotient with _SHIFT=34 is off by one for large dividends (first mismatch at 3435921408), producing col=4294967295 instead of values in [0,6].",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], and 7*row+col must equal the original index."
+          }
+        ],
+        "scope_rationale": "Contract requires exact row/col for every legal uint32 value including large ones like 3435973841 and 4294967291, which the probe shows produce wrong results.",
+        "statement": "The kernel's reciprocal-multiply division produces incorrect row/col for some legal uint32 values (e.g. index 3435973841 yields row 490853406/col 4294967295 instead of 490853405/6), violating the exactness requirement.",
+        "status": "confirmed",
+        "updated_at": "2026-10-18T02:14:41Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Claim c2 (in_scope, with contract scope evidence \"EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], 7*row+col = index\") is confirmed by an exhaustive GPU probe (tool event t6) that swept all 4294967296 uint32 values in 131072-element chunks against exact int64 division. 6554 mismatch chunks begin at index 3435921408; e.g. index 3435973841 returns row 490853406 / col 4294967295 instead of row 490853405 / col 6, and extreme 4294967291 also returns col 4294967295. The kernel's fixed-point quotient (_SHIFT=34, _MULTIPLIER=(2^34+6)//7) is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating the contract's exactness, col-in-[0,6], and 7*row+col=index invariants. The kernel is rejected.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T02:14:47Z",
+      "id": "t12",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-18T02:14:47Z",
+        "decisive_claims": [
+          "c2"
+        ],
+        "reason": "Claim c2 (in_scope, with contract scope evidence \"EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], 7*row+col = index\") is confirmed by an exhaustive GPU probe (tool event t6) that swept all 4294967296 uint32 values in 131072-element chunks against exact int64 division. 6554 mismatch chunks begin at index 3435921408; e.g. index 3435973841 returns row 490853406 / col 4294967295 instead of row 490853405 / col 6, and extreme 4294967291 also returns col 4294967295. The kernel's fixed-point quotient (_SHIFT=34, _MULTIPLIER=(2^34+6)//7) is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating the contract's exactness, col-in-[0,6], and 7*row+col=index invariants. The kernel is rejected.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-18T02:14:47Z",
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "Claim c2 (in_scope, with contract scope evidence \"EVERY unsigned 32-bit value is legal, 0 through 4294967295 inclusive; every coordinate must equal the integer mathematical target EXACTLY, every col in [0,6], 7*row+col = index\") is confirmed by an exhaustive GPU probe (tool event t6) that swept all 4294967296 uint32 values in 131072-element chunks against exact int64 division. 6554 mismatch chunks begin at index 3435921408; e.g. index 3435973841 returns row 490853406 / col 4294967295 instead of row 490853405 / col 6, and extreme 4294967291 also returns col 4294967295. The kernel's fixed-point quotient (_SHIFT=34, _MULTIPLIER=(2^34+6)//7) is off by one for large dividends, and the negative remainder wraps to 4294967295 in uint32, violating the contract's exactness, col-in-[0,6], and 7*row+col=index invariants. The kernel is rejected.",
+    "verdict": "reject"
+  }
+}

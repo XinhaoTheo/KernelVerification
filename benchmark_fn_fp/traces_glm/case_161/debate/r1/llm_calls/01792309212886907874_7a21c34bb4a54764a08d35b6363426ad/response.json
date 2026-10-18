@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-3b43e310",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Launching three independent probes: c1 (adversarial extreme-value inputs vs an independent einsum oracle), c2 (asymmetric filters to test filter orientation), c3 (batch boundary sizes including partial blocks).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bed291c6e96f99f2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, '/root/cases/case_161')\\nimport kernel\\ndev='cuda'\\ndef oracle(t,f):\\n    x=t.to(torch.int64); w=f.to(torch.int64)\\n    # independent 9-term sum via unfold\\n    out=torch.zeros(x.shape[0],4,4,dtype=torch.int64,device=x.device)\\n    for i in range(3):\\n        for j in range(3):\\n            out+=x[:,i:i+4,j:j+4]*w[:,i,j,None,None]\\n    return out.to(torch.int32)\\nmism=0; total=0\\ngen=torch.Generator(device='cpu')\\ncases=[]\\n# adversarial: all +127, all -128, mixed signs, corners\\nfor vals in [(127,127),(-128,-128),(127,-128),(-128,127)]:\\n    t=torch.full((8,6,6),vals[0],dtype=torch.int8); f=torch.full((8,3,3),vals[1],dtype=torch.int8)\\n    cases.append((t,f))\\n# random extremes\\nt=torch.randint(-128,128,(512,6,6),generator=gen,dtype=torch.int8)\\nf=torch.randint(-128,128,(512,3,3),generator=gen,dtype=torch.int8)\\ncases.append((t,f))\\n# 2000 random batches of 16\\nt=torch.randint(-128,128,(2000,6,6),generator=gen,dtype=torch.int8)\\nf=torch.randint(-128,128,(2000,3,3),generator=gen,dtype=torch.int8)\\ncases.append((t,f))\\nfor t,f in cases:\\n    t=t.to(dev); f=f.to(dev)\\n    got=kernel.run(t,f)\\n    exp=oracle(t,f)\\n    m=(got!=exp).sum().item(); total+=got.numel(); mism+=m\\n    if m:\\n        idx=(got!=exp).nonzero()[0].tolist()\\n        print('MISMATCH sample', idx, got.flatten()[idx[0]].item(), exp.flatten()[idx[0]].item())\\nprint({'total_positions':total,'mismatches':mism})\\nimport json; print(json.dumps({'claim':'c1','total_positions':total,'mismatches':mism}))\", \"expected_signal\": \"nonzero mismatch count between kernel output and independent 9-term int64 oracle on adversarial extreme inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-957df66b8fee1482",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, '/root/cases/case_161')\\nimport kernel\\ndev='cuda'\\ndef oracle(t,f):\\n    x=t.to(torch.int64); w=f.to(torch.int64)\\n    out=torch.zeros(x.shape[0],4,4,dtype=torch.int64,device=x.device)\\n    for i in range(3):\\n        for j in range(3):\\n            out+=x[:,i:i+4,j:j+4]*w[:,i,j,None,None]\\n    return out.to(torch.int32)\\ngen=torch.Generator(device='cpu').manual_seed(1)\\nmism=0; total=0\\n# strongly asymmetric filters: one-hot basis filters at each of 9 positions\\nfor i in range(3):\\n    for j in range(3):\\n        f=torch.zeros(16,3,3,dtype=torch.int8); f[:,i,j]=127\\n        t=torch.randint(-128,128,(16,6,6),generator=gen,dtype=torch.int8)\\n        t=t.to(dev); f=f.to(dev)\\n        got=kernel.run(t,f); exp=oracle(t,f)\\n        m=(got!=exp).sum().item(); total+=got.numel(); mism+=m\\n        if m: print('asym mismatch at filter pos',(i,j),m)\\n# random asymmetric filters\\nt=torch.randint(-128,128,(512,6,6),generator=gen,dtype=torch.int8).to(dev)\\nf=torch.randint(-128,128,(512,3,3),generator=gen,dtype=torch.int8).to(dev)\\ngot=kernel.run(t,f); exp=oracle(t,f)\\nmism+=(got!=exp).sum().item(); total+=got.numel()\\n# explicit example from claim\\nt=torch.randint(-128,128,(4,6,6),generator=gen,dtype=torch.int8).to(dev)\\nf=torch.tensor([[127,0,0],[0,0,0],[0,0,-127]],dtype=torch.int8,device=dev).repeat(4,1,1)\\ngot=kernel.run(t,f); exp=oracle(t,f)\\nmism+=(got!=exp).sum().item(); total+=got.numel()\\nprint(json.dumps({'claim':'c2','total_positions':total,'mismatches':mism}))\", \"expected_signal\": \"mismatches on asymmetric-filter inputs if kernel computes convolution instead of correlation\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b5cfcfdb1229cfa7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, '/root/cases/case_161')\\nimport kernel\\ndev='cuda'\\ndef oracle(t,f):\\n    x=t.to(torch.int64); w=f.to(torch.int64)\\n    out=torch.zeros(x.shape[0],4,4,dtype=torch.int64,device=x.device)\\n    for i in range(3):\\n        for j in range(3):\\n            out+=x[:,i:i+4,j:j+4]*w[:,i,j,None,None]\\n    return out.to(torch.int32)\\ngen=torch.Generator(device='cpu').manual_seed(2)\\nmism=0; total=0; ok_batches=[]\\nfor B in [1,2,3,15,16,17,37,255,256,1000,2047,2048]:\\n    t=torch.randint(-128,128,(B,6,6),generator=gen,dtype=torch.int8)\\n    f=torch.randint(-128,128,(B,3,3),generator=gen,dtype=torch.int8)\\n    t=t.to(dev); f=f.to(dev)\\n    got=kernel.run(t,f); exp=oracle(t,f)\\n    m=(got!=exp).sum().item(); total+=got.numel(); mism+=m\\n    if m: print('batch',B,'mismatch',m)\\n    else: ok_batches.append(B)\\n    del got, exp, t, f; torch.cuda.empty_cache()\\nprint(json.dumps({'claim':'c3','batches_tested':[1,2,3,15,16,17,37,255,256,1000,2047,2048],'clean_batches':ok_batches,'total_positions':total,'mismatches':mism}))\", \"expected_signal\": \"mismatches at non-multiple-of-16 batch sizes indicating masking/indexing error\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (adversarial extremes vs direct oracle), c2 (asymmetric filter), c3 (batch boundary). All independent."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309215,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1535,
+    "prompt_tokens": 26439,
+    "total_tokens": 27974,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 31,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

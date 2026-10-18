@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-5ddd0ce2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe testing the kernel against the sequential reference across all N values (1–32) and various B, with extreme values included.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-954b681c751970b4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_159\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nmismatches = []\\ntests = 0\\nmaxdiff = 0\\n\\ndef make(B, N, seed, extreme=False):\\n    g = torch.Generator(\\\"cpu\\\").manual_seed(seed)\\n    m = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8)\\n    if extreme:\\n        b = torch.full((B, N, 2), -32768, dtype=torch.int16)\\n        i = torch.full((B, 2), 32767, dtype=torch.int16)\\n    else:\\n        b = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16)\\n        i = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16)\\n    return m.to(dev), b.to(dev), i.to(dev)\\n\\nfor N in range(1, 33):\\n    for seed in range(4):\\n        B = [1, 2, 3, 7, 64][seed % 5]\\n        m, b, i = make(B, N, seed * 977 + N)\\n        out = kernel.run(m, b, i)\\n        ref = kernel.reference(m, b, i)\\n        tests += 1\\n        if not torch.equal(out, ref):\\n            d = (out - ref).abs().max().item()\\n            maxdiff = max(maxdiff, d)\\n            mismatches.append({\\\"B\\\": B, \\\"N\\\": N, \\\"seed\\\": seed, \\\"maxdiff\\\": d})\\n\\n# extreme values & edge shapes\\nfor (B, N) in [(1,1),(1,32),(64,1),(64,32),(5,9),(5,17),(3,25)]:\\n    for ext in [False, True]:\\n        m, b, i = make(B, N, 1234 + B * 31 + N, extreme=ext)\\n        out = kernel.run(m, b, i)\\n        ref = kernel.reference(m, b, i)\\n        tests += 1\\n        if not torch.equal(out, ref):\\n            mismatches.append({\\\"B\\\": B, \\\"N\\\": N, \\\"extreme\\\": ext, \\\"maxdiff\\\": (out - ref).abs().max().item()})\\n\\n# deterministic adversarial: all-ones matrix amplifies, worst-case growth N=32\\nm = torch.ones(1, 32, 2, 2, dtype=torch.int8).to(dev)\\nb = torch.full((1, 32, 2), 32767, dtype=torch.int16).to(dev)\\ni = torch.full((1, 2), -32768, dtype=torch.int16).to(dev)\\nout = kernel.run(m, b, i); ref = kernel.reference(m, b, i)\\ntests += 1\\nif not torch.equal(out, ref):\\n    mismatches.append({\\\"adversarial_all_ones\\\": (out - ref).abs().max().item()})\\n\\nprint(json.dumps({\\\"tests\\\": tests, \\\"num_mismatches\\\": len(mismatches), \\\"mismatches\\\": mismatches[:5], \\\"metric\\\": \\\"exact torch.equal int64 vs sequential reference\\\"}))\\n\", \"expected_signal\": \"any nonzero mismatch count confirms the claim; zero mismatches over exhaustive N sweep plus extremes rebuts it\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run probe: exhaustive-ish random tests over many B,N combos vs reference, exact equality."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309807,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 811,
+    "prompt_tokens": 14022,
+    "total_tokens": 14833,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 18,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 9048,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

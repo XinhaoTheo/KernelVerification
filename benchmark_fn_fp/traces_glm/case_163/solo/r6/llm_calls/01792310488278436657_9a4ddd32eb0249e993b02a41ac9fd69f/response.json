@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-cb1f26bb",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Fixing the probe's sampling bug: I'll generate a large pool of finite FP16 bit patterns and fill each (256, n) case with modulo indexing.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-abdd52616d6aa6d0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nlines = []\\n\\ndef run_case(name, v):\\n    v = v.to(dev)\\n    ref = kernel.reference(v).double()\\n    out = kernel.run(v)\\n    err = (out.double() - ref).abs()\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    lines.append(json.dumps({\\\"case\\\": name, \\\"max_err\\\": err.max().item(),\\n                             \\\"rel_worst\\\": (err / tol).max().item(),\\n                             \\\"violations\\\": int(bad.sum()),\\n                             \\\"nonfinite\\\": int((~torch.isfinite(out)).sum())}))\\n    return bad\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\ntotal_bad = 0\\nfor n in (64, 128, 256):\\n    for b in (1, 7, 256):\\n        v = torch.randn((b, n), generator=g).to(torch.float16)\\n        total_bad += int(run_case(f\\\"rand_n{n}_b{b}\\\", v).sum())\\n\\nfor n in (64, 128, 256):\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16)\\n    v[1] = -65504.0\\n    v[2] = torch.linspace(-65504, 65504, n).to(torch.float16)\\n    total_bad += int(run_case(f\\\"extreme_n{n}\\\", v).sum())\\n\\nv = torch.zeros((4, 128), dtype=torch.float16)\\nv[0] = 6e-8\\nv[1] = -6e-8\\nv[2, 0] = -0.0\\nv[3] = torch.tensor([x * 6e-8 for x in range(128)]).to(torch.float16)\\ntotal_bad += int(run_case(\\\"subnormal_signedzero\\\", v).sum())\\n\\n# finite FP16 bit patterns (uniform over representable values), tile to size\\nraw = torch.arange(0, 65536, dtype=torch.int32)\\nbits = (raw & 0xFFFF).to(torch.int16).view(torch.float16)\\nfinite = bits[torch.isfinite(bits) & (torch.abs(bits) < float(\\\"inf\\\"))].clone()\\nfor n in (64, 128, 256):\\n    need = 256 * n\\n    reps = (need + finite.numel() - 1) // finite.numel()\\n    f = finite.repeat(reps)[:need].reshape(256, n)\\n    total_bad += int(run_case(f\\\"bitpattern_n{n}\\\", f).sum())\\n\\nv = ((torch.rand((256, 256), generator=g) * 2 - 1) * 65504).to(torch.float16)\\ntotal_bad += int(run_case(\\\"fullrange_n256_b256\\\", v).sum())\\n\\n# impulse / single-frequency signals\\nv = torch.zeros((4, 256), dtype=torch.float16)\\nfor i, freq in enumerate((1, 3, 5, 127)):\\n    v[i, freq] = 65504.0\\n    v[i, freq + 1] = -65504.0\\norig = v.clone()\\ntotal_bad += int(run_case(\\\"impulse_n256\\\", v).sum())\\nlines.append(json.dumps({\\\"input_preserved\\\": bool(torch.equal(orig, v))}))\\n\\no = kernel.run(v.to(dev))\\nlines.append(json.dumps({\\\"out_shape\\\": list(o.shape), \\\"out_dtype\\\": str(o.dtype),\\n                         \\\"out_contig\\\": o.is_contiguous(), \\\"out_device\\\": str(o.device)}))\\n\\nprint(\\\"\\\\n\\\".join(lines))\\nprint(json.dumps({\\\"TOTAL_VIOLATIONS\\\": total_bad}))\\n\", \"timeout_s\": 180}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Fix the probe: generate enough bit-pattern samples; keep it simple. Use modulo sampling to fill 256*n elements with finite values, or just tile."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310489,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 908,
+    "prompt_tokens": 19537,
+    "total_tokens": 20445,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 31,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7806,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

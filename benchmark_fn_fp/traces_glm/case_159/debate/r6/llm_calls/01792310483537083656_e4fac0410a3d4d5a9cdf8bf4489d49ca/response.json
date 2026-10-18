@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-74352091",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test c1 with a runtime probe: N=32 (4 chunks) with noncommuting chunk summaries, comparing run() to the sequential reference exactly.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b3067744732313cc",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_159\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\n# Crafted: chunk summaries noncommuting. Chunk 0&1 use matrix [[1,0],[0,1]]*2? entries must be -1/0/1.\\n# Use chunk0 matrix = [[1,1],[0,1]] each step (summary approx [[8?,..]]), chunk2 = [[1,0],[1,1]].\\n# Simpler: random inputs with several seeds, plus crafted.\\ndef crafted(N, B=2):\\n    g = torch.Generator().manual_seed(5)\\n    m = torch.zeros(B, N, 2, 2, dtype=torch.int8)\\n    m[:] = torch.tensor([[1,1],[0,1]], dtype=torch.int8)  # default A = [[1,1],[0,1]]\\n    for b in range(B):\\n        # steps 16..23 (chunk 2) use a noncommuting matrix\\n        for s in range(16, min(24, N)):\\n            m[b, s] = torch.tensor([[1,0],[1,1]], dtype=torch.int8)\\n    bias = torch.randint(-300, 300, (B, N, 2), generator=g, dtype=torch.int16)\\n    init = torch.randint(-300, 300, (B, 2), generator=g, dtype=torch.int16)\\n    return m.to(dev), bias.to(dev), init.to(dev)\\n\\nfails = {}\\ndef check(N, tag):\\n    m, b, i = crafted(N)\\n    out = K.run(m, b, i)\\n    ref = K.reference(m.cpu(), b.cpu(), i.cpu()).to(dev)\\n    ok = torch.equal(out, ref)\\n    if not ok:\\n        mism = (out != ref).any(dim=-1)  # [B,N]\\n        first = mism.nonzero()\\n        info = {\\\"first_mismatch_row_step\\\": [int(x) for x in first[0].tolist()] if len(first) else None,\\n                \\\"n_mismatch_elements\\\": int((out!=ref).sum().item()),\\n                \\\"out_step24\\\": out[0,24].tolist(), \\\"ref_step24\\\": ref[0,24].tolist(),\\n                \\\"out_step16\\\": out[0,16].tolist(), \\\"ref_step16\\\": ref[0,16].tolist()}\\n        fails[tag] = info\\n    return ok, out, ref\\n\\nok32, out32, ref32 = check(32, \\\"N32_crafted\\\")\\n# also random seeds at N=32 and other N for context\\nrand_fails = {}\\nfor seed in range(5):\\n    g = torch.Generator().manual_seed(seed)\\n    m = torch.randint(-1,2,(4,32,2,2), generator=g, dtype=torch.int8)\\n    b = torch.randint(-32768,32768,(4,32,2), generator=g, dtype=torch.int16)\\n    i = torch.randint(-32768,32768,(4,2), generator=g, dtype=torch.int16)\\n    m,b,i = m.to(dev), b.to(dev), i.to(dev)\\n    out = K.run(m,b,i); ref = K.reference(m.cpu(),b.cpu(),i.cpu()).to(dev)\\n    rand_fails[seed] = int((out!=ref).sum().item())\\n\\nimport json\\nprint(json.dumps({\\n  \\\"metric\\\": \\\"exact elementwise equality (atol=rtol=0) vs sequential int64 reference\\\",\\n  \\\"crafted_N32_exact_match\\\": ok32,\\n  \\\"crafted_fail_details\\\": fails,\\n  \\\"random_N32_mismatch_counts_by_seed\\\": rand_fails,\\n}))\\n\", \"expected_signal\": \"crafted N=32 noncommuting input mismatches reference in steps 24..31 (exact comparison), confirming down-sweep order bug\", \"timeout_s\": 180}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe: N=32 with crafted noncommuting chunks, compare run vs reference. Need deterministic input. Craft matrices per chunk: chunk summaries noncommuting. Use random with a fixed seed first — should surface mismatch. Also test other N values for a general check."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310484,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 942,
+    "prompt_tokens": 24035,
+    "total_tokens": 24977,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 56,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8323,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

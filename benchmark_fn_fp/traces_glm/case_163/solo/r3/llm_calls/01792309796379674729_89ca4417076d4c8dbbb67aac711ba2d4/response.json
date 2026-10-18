@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-472f0fcf",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe across all legal widths with several input distributions, comparing the kernel to the FP64 reference under the contract tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bac2d7afc7859be6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\ndef check(vals, label):\\n    out = k.run(vals.clone()).to(torch.float64)\\n    ref = k.reference(vals).to(vals.device)\\n    diff = (out - ref).abs()\\n    tol = 1e-4 + 1e-6*ref.abs()\\n    bad = diff > tol\\n    return {\\\"label\\\": label, \\\"shape\\\": list(vals.shape),\\n            \\\"max_abs_err\\\": float(diff.max()), \\\"num_violations\\\": int(bad.sum()),\\n            \\\"finite\\\": bool(torch.isfinite(out).all())}\\n\\nresults = []\\nfor n in (64, 128, 256):\\n    for seed in range(3):\\n        v = torch.randn((7, n), generator=torch.Generator().manual_seed(seed)).to(torch.float16).cuda()\\n        results.append(check(v, f\\\"randn n={n} seed={seed}\\\"))\\n    # extreme values\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16).cuda(); results.append(check(v, f\\\"maxval n={n}\\\"))\\n    v = torch.full((3, n), -65504.0, dtype=torch.float16).cuda(); results.append(check(v, f\\\"-maxval n={n}\\\"))\\n    v = torch.randn((5, n)).cuda().to(torch.float16) * 1000; results.append(check(v, f\\\"large-mix n={n}\\\"))\\n    # alternating / single spike / constant\\n    v = torch.zeros((2, n), dtype=torch.float16).cuda(); v[0,5]=1.0; v[1,:]=1.0\\n    results.append(check(v, f\\\"spike+const n={n}\\\"))\\n    v = (torch.arange(n, dtype=torch.float32) % 2 * 2 - 1).to(torch.float16).cuda().unsqueeze(0).repeat(2,1)\\n    results.append(check(v, f\\\"alternating n={n}\\\"))\\n# batch extremes\\nv = torch.randn((256, 128)).to(torch.float16).cuda(); results.append(check(v, \\\"B=256 n=128\\\"))\\nv = torch.randn((1, 256)).to(torch.float16).cuda(); results.append(check(v, \\\"B=1 n=256\\\"))\\n# nonzero storage offset\\nbase = torch.randn((256*300+13,), dtype=torch.float16).cuda()\\nv = base[13:13+7*128].view(7,128).contiguous().to(torch.float16).cuda()\\nv = base[13:13+7*128].clone().view(7,128)\\nresults.append(check(v, \\\"offset-clone n=128\\\"))\\n# input preservation\\nv = torch.randn((4,128)).to(torch.float16).cuda(); vc = v.clone(); _ = k.run(v)\\nresults.append({\\\"label\\\":\\\"input_preserved\\\", \\\"preserved\\\": bool(torch.equal(v, vc))})\\n\\nviol = [r for r in results if r.get(\\\"num_violations\\\",0) or not r.get(\\\"finite\\\", True)]\\nprint(json.dumps({\\\"results\\\": results, \\\"violations\\\": viol}, default=str))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe testing all widths with several distributions, compare against FP64 reference, tolerance 1e-4+1e-6*abs."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309797,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 786,
+    "prompt_tokens": 12871,
+    "total_tokens": 13657,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 30,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7808,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

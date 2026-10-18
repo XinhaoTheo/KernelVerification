@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-d7b5a3cb",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe errored on a `uniform_` half-range limit, so it tested nothing. I'll fix the generator (draw in FP32, then round to FP16) and rerun.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b50599007b430c0b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n\\ndef check(num, den, label):\\n    out = k.run(num.clone(), den.clone())\\n    ref = k.reference(num.cpu(), den.cpu()).to(dev)\\n    err = (out - ref).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    viol = err > tol\\n    n = int(viol.sum()); total = num.numel()\\n    ratio = (err / tol)\\n    worst = ratio.max().item()\\n    detail = {}\\n    if viol.any():\\n        i = int(ratio.argmax())\\n        r, cidx = divmod(i, 2)\\n        detail = {\\\"row\\\": r, \\\"comp\\\": cidx, \\\"num\\\": num[r].tolist(), \\\"den\\\": den[r].tolist(),\\n                  \\\"out\\\": out[r].tolist(), \\\"ref\\\": ref[r].tolist(),\\n                  \\\"err\\\": err.flatten()[i].item(), \\\"tol\\\": tol.flatten()[i].item()}\\n    print(label, {\\\"violations\\\": n, \\\"components\\\": total, \\\"worst_err_over_tol\\\": worst, \\\"detail\\\": detail})\\n    return n\\n\\ng = torch.Generator().manual_seed(0)\\ndef fp16_uniform(shape, lo, hi):\\n    return ((torch.rand(shape, generator=g) * (hi - lo) + lo)).to(torch.float16)\\n\\ntotal = 0\\n# structured catastrophic cancellation: b chosen so a*c + b*d ~ 0, large magnitudes\\nfor scale in (65504.0, 1024.0, 1.0):\\n    size = 20000\\n    c = fp16_uniform((size,), -scale, scale).to(torch.float64)\\n    d = fp16_uniform((size,), -scale, scale).to(torch.float64)\\n    a = fp16_uniform((size,), -scale, scale).to(torch.float64)\\n    b = (-a * c / d)\\n    b = b.to(torch.float16).to(torch.float64)\\n    num = torch.stack([a.to(torch.float16), b.to(torch.float16)], dim=1)\\n    den = torch.stack([c.to(torch.float16), d.to(torch.float16)], dim=1)\\n    z = (den == 0).all(dim=1)\\n    if z.any():\\n        den[z, 0] = torch.tensor(1.0, dtype=torch.float16)\\n    total += check(num.to(dev), den.to(dev), f\\\"structured_cancel_scale_{scale}\\\")\\n\\n# random sweeps at extreme magnitudes\\nfor scale in (65504.0, 30000.0, 1.0, 1e-4, 6.1e-5):\\n    num = (torch.randn(200000, 2, generator=g) * scale).to(torch.float16)\\n    den = (torch.randn(200000, 2, generator=g) * scale).to(torch.float16)\\n    z = (den == 0).all(dim=1); den[z, 0] = 1\\n    total += check(num.to(dev), den.to(dev), f\\\"random_scale_{scale}\\\")\\n\\n# extreme magnitude quotient\\nnum = torch.full((1000, 2), 65504.0, dtype=torch.float16)\\nden = torch.full((1000, 2), 6.1e-5, dtype=torch.float16); den[:, 1] = 5.96e-8\\ntotal += check(num.to(dev), den.to(dev), \\\"extreme_magnitude\\\")\\n\\n# sampled exhaustive grid of tricky values\\nvals = torch.tensor([0.0, -0.0, 6.1e-5, -6.1e-5, 1e-4, 0.001, -0.001, 1.0, -1.0, 1.5, -2.25,\\n                     100.0, -100.0, 1000.0, -1000.0, 30000.0, -30000.0, 65504.0, -65504.0,\\n                     65504.0/3], dtype=torch.float16)\\nA, B = torch.meshgrid(vals, vals, indexing=\\\"ij\\\")\\nnrows = torch.stack([A.flatten(), B.flatten()], dim=1)\\ndens = torch.tensor([[65504.0, -65504.0], [1.0, 6.1e-5], [30000.0, 30000.0], [-1000.0, 0.5],\\n                     [6.1e-5, 6.1e-5], [65504.0, 65504.0/3], [1.0, 1.0], [1.0, -1.0]], dtype=torch.float16)\\nnum = nrows.repeat(len(dens), 1).to(dev)\\nden = dens.repeat(len(nrows), 1).to(dev)\\ntotal += check(num, den, \\\"grid\\\")\\n\\n# make_inputs example\\nn, d = k.make_inputs()\\ntotal += check(n, d, \\\"make_inputs_example\\\")\\nprint(\\\"TOTAL_VIOLATIONS\\\", total)\\n\", \"expected_signal\": \"componentwise tolerance violations > 0 on some adversarial input\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe failed on uniform_ fp16 limit. Fix by generating in float32 then converting. Re-run probe with vectorized construction, avoiding uniform_ limit on fp16.\n\nSimpler: build c,d in fp32, convert to fp16. Let me write a cleaner probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306499,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1270,
+    "prompt_tokens": 15358,
+    "total_tokens": 16628,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 58,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6536,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

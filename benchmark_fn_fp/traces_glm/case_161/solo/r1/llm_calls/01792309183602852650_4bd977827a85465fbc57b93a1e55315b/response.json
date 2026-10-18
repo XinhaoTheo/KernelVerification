@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-942a0b11",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe comparing the kernel against the direct reference over many random INT8 batches, plus an exhaustive check on a small exhaustive-ish sweep.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b5d20f593d05d8c8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_161\\\")\\nimport kernel\\n\\nmismatch_total = 0\\nworst = None\\nfor seed in range(30):\\n    b = [1, 2, 3, 15, 16, 17, 32, 37, 100, 2048][seed % 10]\\n    t, f = kernel.make_inputs(device=\\\"cuda\\\", batch=b, seed=seed)\\n    out = kernel.run(t, f)\\n    ref = kernel.reference(t, f).to(torch.int32)\\n    if not torch.equal(out, ref):\\n        bad = (out != ref)\\n        n = int(bad.sum())\\n        mismatch_total += n\\n        idx = bad.nonzero()[0]\\n        if worst is None:\\n            worst = (seed, b, n, idx.tolist(), out[bad][0].item(), ref[bad][0].item())\\n\\nprint({\\\"mismatch_positions\\\": mismatch_total, \\\"worst\\\": worst})\\n\\n# Also a targeted zero/unit test: one-hot tiles and filters exercise every coefficient.\\ntorch.manual_seed(1)\\nbad = 0\\nfor ti in range(36):\\n    for fi in range(9):\\n        t = torch.zeros(1,6,6, dtype=torch.int8, device=\\\"cuda\\\"); t.view(-1)[ti] = 1\\n        f = torch.zeros(1,3,3, dtype=torch.int8, device=\\\"cuda\\\"); f.view(-1)[fi] = 1\\n        out = kernel.run(t, f); ref = kernel.reference(t, f)\\n        bad += int((out != ref).sum())\\n# extreme values\\nt, f = kernel.make_inputs(batch=37, seed=99)\\nt = torch.where(torch.rand_like(t.float())<0.5, torch.tensor(-128.,device=\\\"cuda\\\"), torch.tensor(127.,device=\\\"cuda\\\")).to(torch.int8)\\nf = torch.where(torch.rand_like(f.float())<0.5, torch.tensor(-128.,device=\\\"cuda\\\"), torch.tensor(127.,device=\\\"cuda\\\")).to(torch.int8)\\nout = kernel.run(t, f); ref = kernel.reference(t, f)\\nbad += int((out != ref).sum())\\nprint({\\\"unit_and_extreme_mismatches\\\": bad})\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309184,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 531,
+    "prompt_tokens": 15549,
+    "total_tokens": 16080,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 10867,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

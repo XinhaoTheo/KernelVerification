@@ -1,0 +1,709 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_163",
+    "has_error": null,
+    "kernel_code": "\"\"\"Synthetic packed real FFT using a radix-2 complex transform.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n# Cosine table for the first quadrant of a 256-point transform.\n_COSINE = (\n    1.0, 0.9996988186962042, 0.9987954562051724, 0.9972904566786902,\n    0.9951847266721969, 0.99247953459871, 0.989176509964781, 0.9852776423889412,\n    0.9807852804032304, 0.9757021300385286, 0.970031253194544, 0.9637760657954398,\n    0.9569403357322088, 0.9495281805930367, 0.9415440651830208, 0.9329927988347388,\n    0.9238795325112867, 0.9142097557035307, 0.9039892931234433, 0.8932243011955153,\n    0.881921264348355, 0.8700869911087115, 0.8577286100002721, 0.8448535652497071,\n    0.8314696123025452, 0.8175848131515837, 0.8032075314806449, 0.7883464276266062,\n    0.773010453362737, 0.7572088465064846, 0.7409511253549591, 0.7242470829514669,\n    0.7071067811865476, 0.6895405447370669, 0.6715589548470184, 0.6531728429537768,\n    0.6343932841636455, 0.6152315905806268, 0.5956993044924334, 0.5758081914178453,\n    0.5555702330196022, 0.5349976198870973, 0.5141027441932218, 0.49289819222978404,\n    0.47139673682599764, 0.4496113296546066, 0.4275550934302821, 0.40524131400498986,\n    0.3826834323650898, 0.35989503653498817, 0.33688985339222005, 0.31368174039889146,\n    0.2902846772544624, 0.26671275747489837, 0.2429801799032639, 0.2191012401568698,\n    0.19509032201612828, 0.17096188876030122, 0.14673047445536175, 0.1224106751992162,\n    0.0980171403295606, 0.07356456359966743, 0.049067674327418015, 0.024541228522912288,\n    0.0,\n)\n\n\n@triton.jit\ndef _reverse(index, LOG_M: tl.constexpr):\n    reversed_index = tl.full(index.shape, 0, tl.int32)\n    for bit in tl.static_range(LOG_M):\n        reversed_index = (reversed_index << 1) | ((index >> bit) & 1)\n    return reversed_index\n\n\n@triton.jit\ndef _twiddle(TABLE, phase):\n    folded = tl.minimum(phase, 128 - phase)\n    cosine = tl.load(TABLE + folded)\n    cosine = tl.where(phase <= 64, cosine, -cosine)\n    sine = tl.load(TABLE + tl.abs(64 - phase))\n    return cosine, -sine\n\n\n@triton.jit\ndef _realfft(X, TABLE, OUT, N: tl.constexpr, M: tl.constexpr, LOG_M: tl.constexpr):\n    row = tl.program_id(0)\n    k = tl.arange(0, M)\n    real = tl.load(X + row * N + 2 * k).to(tl.float64)\n    imag = tl.load(X + row * N + 2 * k + 1).to(tl.float64)\n    # Decimation in frequency leaves the complex transform in bit-reversed order.\n    for stage in tl.static_range(LOG_M):\n        width = M >> stage\n        half = width >> 1\n        left = k & ~half\n        right = k | half\n        ar = tl.gather(real, left, axis=0)\n        ai = tl.gather(imag, left, axis=0)\n        br = tl.gather(real, right, axis=0)\n        bi = tl.gather(imag, right, axis=0)\n        wr, wi = _twiddle(TABLE, (k & (half - 1)) * (256 // width))\n        dr = ar - br\n        di = ai - bi\n        lower = (k & half) == 0\n        real = tl.where(lower, ar + br, dr * wr - di * wi)\n        imag = tl.where(lower, ai + bi, dr * wi + di * wr)\n    address = _reverse(k, LOG_M)\n    partner = (-address) & (M - 1)\n    ar = tl.gather(real, address, axis=0)\n    ai = tl.gather(imag, address, axis=0)\n    br = tl.gather(real, partner, axis=0)\n    bi = tl.gather(imag, partner, axis=0)\n    # Reconstruct the real transform from the packed complex transform.\n    wr, wi = _twiddle(TABLE, k * (256 // N))\n    sr = ar + br\n    si = ai - bi\n    dr = ar - br\n    di = ai + bi\n    xr = 0.5 * (sr + (wr * di + wi * dr))\n    xi = 0.5 * (si - (wr * dr - wi * di))\n    tl.store(OUT + (row * (M + 1) + k) * 2, xr.to(tl.float32))\n    tl.store(OUT + (row * (M + 1) + k) * 2 + 1, xi.to(tl.float32))\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2, (ar - ai).to(tl.float32), mask=k == 0)\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2 + 1, 0.0, mask=k == 0)\n\n\ndef validate_inputs(values, require_cuda=True):\n    \"\"\"Validate the public domain. Nonzero storage offsets are permitted.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(values) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(values.layout == torch.strided and values.is_contiguous(), \"contiguous strided input required\")\n    require(not values.requires_grad and not values.is_inference(), \"ordinary non-gradient input required\")\n    require(not values.is_neg() and not values.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or values.is_cuda, \"CUDA input required by run\")\n    require(values.dtype == torch.float16, \"float16 input required\")\n    require(values.ndim == 2 and 1 <= values.shape[0] <= 256 and values.shape[1] in (64, 128, 256), \"shape must be [B,N], 1<=B<=256, N in {64,128,256}\")\n    require(bool(torch.isfinite(values).all()), \"all input values must be finite\")\n    return {\"valid\": True, \"batch\": values.shape[0], \"width\": values.shape[1]}\n\n\ndef run(values):\n    \"\"\"Return real and imaginary components in a fresh FP32 tensor.\"\"\"\n    validate_inputs(values)\n    batch, n = values.shape\n    m = n // 2\n    with torch.cuda.device(values.device):\n        table = torch.tensor(_COSINE, dtype=torch.float64, device=values.device)\n        output = torch.empty((batch, m + 1, 2), dtype=torch.float32, device=values.device)\n        _realfft[(batch,)](values, table, output, N=n, M=m, LOG_M=m.bit_length() - 1,\n                          num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(values):\n    \"\"\"A separate library transform in complex128, returned as FP64 components.\"\"\"\n    validate_inputs(values, require_cuda=False)\n    result = torch.fft.rfft(values.to(torch.float64), dim=1, norm=\"backward\")\n    return torch.stack((result.real, result.imag), dim=-1)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=128, seed=0):\n    \"\"\"Examples only; the contract includes every finite FP16 input.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randn((batch, width), generator=generator).to(torch.float16)\n    return (values.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\n\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\n\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_163",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T07:55:41Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T07:56:07Z",
+          "data": {
+            "altmax_all_N": "0 violations",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "2090c74cc07a83ead1774f009ac130368c72e29fcc926ec389ee640ecc86b536"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "b2892b6dda4cd1a9156504795d040631133d0d36fcd2147696661155d123515e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.125776,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "offset_view_N128": {
+              "max_err": 32.09,
+              "n_violations": 252
+            },
+            "randn_N128": {
+              "max_err": 34.68,
+              "n_violations": 630
+            },
+            "randn_N256": {
+              "max_err": 50.64,
+              "n_violations": 1270
+            },
+            "randn_N64": {
+              "max_err": 20.0,
+              "n_violations": 310
+            },
+            "stderr": "",
+            "stdout": "{\n \"randn_N64\": {\n  \"max_err\": 20.000054274758305,\n  \"n_violations\": 310,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N64\": {\n  \"max_err\": 1.5243111539615267e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N64\": {\n  \"max_err\": 124763.1636950332,\n  \"n_violations\": 122,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N128\": {\n  \"max_err\": 34.67978983463932,\n  \"n_violations\": 630,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N128\": {\n  \"max_err\": 2.0489094315994787e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N128\": {\n  \"max_err\": 128187.41796875,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N256\": {\n  \"max_err\": 50.64102965374376,\n  \"n_violations\": 1270,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N256\": {\n  \"max_err\": 3.064689627548353e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N256\": {\n  \"max_err\": 130299.01953125,\n  \"n_violations\": 508,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_like_N128\": {\n  \"max_err\": 31.51300827447308,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_view_N128\": {\n  \"max_err\": 32.089019177291654,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n }\n}\nANY_FAIL True\n",
+            "structural_checks": "shape/contig/dtype/input_preserved/fresh_storage all pass on every case",
+            "subnorm_all_N": "0 violations",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": "1e-4 + 1e-6*|exact|",
+            "zeros_all_N": "0 violations"
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across legal FP16 inputs at N=64/128/256, the kernel's output massively violates the contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*|exact|: e.g. randn N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs give max_err ~1.25e5-1.3e5. Subnormal, all-zero, and alternating-sign inputs pass, indicating a systematic indexing/twiddle error in the FFT that fails on generic inputs. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output, input preservation, offsets) all pass.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "A hand-rolled packed real FFT can have subtle indexing/twiddle errors that vanish on benign random inputs but fail on extreme-magnitude, alternating-sign, or subnormal-heavy inputs where absolute error can exceed 1e-4. Also nonzero storage offsets and input preservation must be honored.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact); every finite FP16 value is legal including signed zeros, subnormals, and both finite extremes; N in {64,128,256}, 1<=B<=256; nonzero storage offsets are legal; run must preserve the entire input storage and return separate output storage."
+        }
+      ],
+      "scope_rationale": "Contract requires DFT accuracy within 1e-4+1e-6|exact| for every finite FP16 input across N in {64,128,256}, plus input preservation and correct output format.",
+      "statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T07:56:07Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_163",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_163"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_163",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 24.858289448999997,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel looks like a plausible DIF radix-2 real-FFT. I'll record a failure hypothesis and test it numerically across the legal domain (all N values, extreme FP16 inputs, storage offsets, input preservation).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "A hand-rolled packed real FFT can have subtle indexing/twiddle errors that vanish on benign random inputs but fail on extreme-magnitude, alternating-sign, or subnormal-heavy inputs where absolute error can exceed 1e-4. Also nonzero storage offsets and input preservation must be honored.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact); every finite FP16 value is legal including signed zeros, subnormals, and both finite extremes; N in {64,128,256}, 1<=B<=256; nonzero storage offsets are legal; run must preserve the entire input storage and return separate output storage."
+              }
+            ],
+            "scope_rationale": "Contract requires DFT accuracy within 1e-4+1e-6|exact| for every finite FP16 input across N in {64,128,256}, plus input preservation and correct output format.",
+            "statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 24.858,
+        "input_tokens": 11227,
+        "output_tokens": 2355
+      }
+    },
+    {
+      "duration_s": 10.566777898999998,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run a numeric probe against the kernel covering all N values, extreme inputs, storage offsets, and input preservation.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_163/kernel.py\")\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\ndev = \"cuda\"\nresults = {}\ndef check(tag, values):\n    before = values.clone()\n    out = kernel.run(values)\n    ref = kernel.reference(values).to(torch.float64)\n    err = (out.to(torch.float64) - ref).abs()\n    tol = 1e-4 + 1e-6*ref.abs()\n    ok_shape = tuple(out.shape) == (values.shape[0], values.shape[1]//2+1, 2)\n    preserved = torch.equal(before, values)\n    results[tag] = {\n        \"max_err\": float(err.max()),\n        \"n_violations\": int((err > tol).sum()),\n        \"finite\": bool(torch.isfinite(out).all()),\n        \"shape_ok\": bool(ok_shape),\n        \"contig\": out.is_contiguous(),\n        \"dtype\": str(out.dtype),\n        \"input_preserved\": bool(preserved),\n        \"fresh_storage\": out.data_ptr() != values.data_ptr(),\n    }\n\nfor n in (64, 128, 256):\n    g = torch.Generator(device=\"cpu\").manual_seed(n)\n    v = torch.randn((5, n), generator=g).to(torch.float16).to(dev)\n    check(f\"randn_N{n}\", v)\n    # alternating signs at max magnitude\n    v = torch.where(torch.arange(n, device=dev) % 2 == 0,\n                    torch.full((n,), 65504., device=dev),\n                    torch.full((n,), -65504., device=dev)).to(torch.float16).unsqueeze(0).repeat(3,1)\n    check(f\"altmax_N{n}\", v)\n    # subnormals\n    v = (torch.randn((3, n), generator=torch.Generator().manual_seed(99)) * 6e-8).to(torch.float16).to(dev)\n    check(f\"subnorm_N{n}\", v)\n    # single spike (impulse)\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[0,7] = 65504.; v[1,3] = -1.0\n    check(f\"impulse_N{n}\", v)\n    # all signed zeros\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[1,:] = -0.0\n    check(f\"zeros_N{n}\", v)\n\n# storage offset: legal per contract\nbase = torch.randn((4, 128*2+4), generator=torch.Generator().manual_seed(5)).to(torch.float16).to(dev)\nv = base[1:3, 4:4+128].contiguous()\ncheck(\"offset_like_N128\", v)\nv2 = base.as_strided((2,128), (128,1), storage_offset=7)\ncheck(\"offset_view_N128\", v2)\n\nprint(json.dumps(results, indent=1))\nprint(\"ANY_FAIL\", any((not r[\"finite\"]) or r[\"n_violations\"]>0 or not r[\"shape_ok\"] or not r[\"contig\"] or not r[\"input_preserved\"] or not r[\"fresh_storage\"] for r in results.values()))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 10.567,
+        "input_tokens": 12803,
+        "output_tokens": 778
+      }
+    },
+    {
+      "duration_s": 7.082519097999999,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe (t6) shows large-scale violations even on ordinary random FP16 inputs \u2014 max errors of ~20\u2013130,000 with hundreds of tolerance violations across all three N values, while shape, contiguity, dtype, input preservation, and fresh storage are all fine. I'll finalize this evidence and record the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "altmax_all_N": "0 violations",
+              "offset_view_N128": {
+                "max_err": 32.09,
+                "n_violations": 252
+              },
+              "randn_N128": {
+                "max_err": 34.68,
+                "n_violations": 630
+              },
+              "randn_N256": {
+                "max_err": 50.64,
+                "n_violations": 1270
+              },
+              "randn_N64": {
+                "max_err": 20.0,
+                "n_violations": 310
+              },
+              "structural_checks": "shape/contig/dtype/input_preserved/fresh_storage all pass on every case",
+              "subnorm_all_N": "0 violations",
+              "tolerance": "1e-4 + 1e-6*|exact|",
+              "zeros_all_N": "0 violations"
+            },
+            "event_id": "t6",
+            "status": "confirmed",
+            "summary": "Across legal FP16 inputs at N=64/128/256, the kernel's output massively violates the contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*|exact|: e.g. randn N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs give max_err ~1.25e5-1.3e5. Subnormal, all-zero, and alternating-sign inputs pass, indicating a systematic indexing/twiddle error in the FFT that fails on generic inputs. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output, input preservation, offsets) all pass.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 7.083,
+        "input_tokens": 18335,
+        "output_tokens": 462
+      }
+    },
+    {
+      "duration_s": 6.311790344000002,
+      "role": "solo",
+      "round": 5,
+      "text": "The in-scope claim c1 is confirmed with runtime evidence (t6) showing massive tolerance violations on ordinary random FP16 inputs at all three legal N values, while structural requirements pass. That is decisive \u2014 I'll record the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.99,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Probe t6 (run_claim_probe, exit 0) compared kernel.run against the kernel's own FP64 rfft reference across the contract's legal domain (finite FP16, N in {64,128,256}, B up to 5). The contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) is massively violated on ordinary randn inputs: N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs show max_err ~1.25e5-1.3e5. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output on the input device, input preservation, nonzero storage offsets) all pass, and benign symmetric inputs (zeros, alternating signs, subnormals) pass \u2014 indicating a systematic FFT indexing/twiddle error in the kernel's DIF/packing path that fails on generic inputs. Since the contract requires the DFT tolerance for every legal input and this fails on plain random inputs well inside the declared domain, the verdict is reject.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.312,
+        "input_tokens": 26502,
+        "output_tokens": 353
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-18T07:55:15Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_163",
+        "has_error": null,
+        "kernel_code": "\"\"\"Synthetic packed real FFT using a radix-2 complex transform.\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n# Cosine table for the first quadrant of a 256-point transform.\n_COSINE = (\n    1.0, 0.9996988186962042, 0.9987954562051724, 0.9972904566786902,\n    0.9951847266721969, 0.99247953459871, 0.989176509964781, 0.9852776423889412,\n    0.9807852804032304, 0.9757021300385286, 0.970031253194544, 0.9637760657954398,\n    0.9569403357322088, 0.9495281805930367, 0.9415440651830208, 0.9329927988347388,\n    0.9238795325112867, 0.9142097557035307, 0.9039892931234433, 0.8932243011955153,\n    0.881921264348355, 0.8700869911087115, 0.8577286100002721, 0.8448535652497071,\n    0.8314696123025452, 0.8175848131515837, 0.8032075314806449, 0.7883464276266062,\n    0.773010453362737, 0.7572088465064846, 0.7409511253549591, 0.7242470829514669,\n    0.7071067811865476, 0.6895405447370669, 0.6715589548470184, 0.6531728429537768,\n    0.6343932841636455, 0.6152315905806268, 0.5956993044924334, 0.5758081914178453,\n    0.5555702330196022, 0.5349976198870973, 0.5141027441932218, 0.49289819222978404,\n    0.47139673682599764, 0.4496113296546066, 0.4275550934302821, 0.40524131400498986,\n    0.3826834323650898, 0.35989503653498817, 0.33688985339222005, 0.31368174039889146,\n    0.2902846772544624, 0.26671275747489837, 0.2429801799032639, 0.2191012401568698,\n    0.19509032201612828, 0.17096188876030122, 0.14673047445536175, 0.1224106751992162,\n    0.0980171403295606, 0.07356456359966743, 0.049067674327418015, 0.024541228522912288,\n    0.0,\n)\n\n\n@triton.jit\ndef _reverse(index, LOG_M: tl.constexpr):\n    reversed_index = tl.full(index.shape, 0, tl.int32)\n    for bit in tl.static_range(LOG_M):\n        reversed_index = (reversed_index << 1) | ((index >> bit) & 1)\n    return reversed_index\n\n\n@triton.jit\ndef _twiddle(TABLE, phase):\n    folded = tl.minimum(phase, 128 - phase)\n    cosine = tl.load(TABLE + folded)\n    cosine = tl.where(phase <= 64, cosine, -cosine)\n    sine = tl.load(TABLE + tl.abs(64 - phase))\n    return cosine, -sine\n\n\n@triton.jit\ndef _realfft(X, TABLE, OUT, N: tl.constexpr, M: tl.constexpr, LOG_M: tl.constexpr):\n    row = tl.program_id(0)\n    k = tl.arange(0, M)\n    real = tl.load(X + row * N + 2 * k).to(tl.float64)\n    imag = tl.load(X + row * N + 2 * k + 1).to(tl.float64)\n    # Decimation in frequency leaves the complex transform in bit-reversed order.\n    for stage in tl.static_range(LOG_M):\n        width = M >> stage\n        half = width >> 1\n        left = k & ~half\n        right = k | half\n        ar = tl.gather(real, left, axis=0)\n        ai = tl.gather(imag, left, axis=0)\n        br = tl.gather(real, right, axis=0)\n        bi = tl.gather(imag, right, axis=0)\n        wr, wi = _twiddle(TABLE, (k & (half - 1)) * (256 // width))\n        dr = ar - br\n        di = ai - bi\n        lower = (k & half) == 0\n        real = tl.where(lower, ar + br, dr * wr - di * wi)\n        imag = tl.where(lower, ai + bi, dr * wi + di * wr)\n    address = _reverse(k, LOG_M)\n    partner = (-address) & (M - 1)\n    ar = tl.gather(real, address, axis=0)\n    ai = tl.gather(imag, address, axis=0)\n    br = tl.gather(real, partner, axis=0)\n    bi = tl.gather(imag, partner, axis=0)\n    # Reconstruct the real transform from the packed complex transform.\n    wr, wi = _twiddle(TABLE, k * (256 // N))\n    sr = ar + br\n    si = ai - bi\n    dr = ar - br\n    di = ai + bi\n    xr = 0.5 * (sr + (wr * di + wi * dr))\n    xi = 0.5 * (si - (wr * dr - wi * di))\n    tl.store(OUT + (row * (M + 1) + k) * 2, xr.to(tl.float32))\n    tl.store(OUT + (row * (M + 1) + k) * 2 + 1, xi.to(tl.float32))\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2, (ar - ai).to(tl.float32), mask=k == 0)\n    tl.store(OUT + (row * (M + 1) + M + 0 * k) * 2 + 1, 0.0, mask=k == 0)\n\n\ndef validate_inputs(values, require_cuda=True):\n    \"\"\"Validate the public domain. Nonzero storage offsets are permitted.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(values) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(values.layout == torch.strided and values.is_contiguous(), \"contiguous strided input required\")\n    require(not values.requires_grad and not values.is_inference(), \"ordinary non-gradient input required\")\n    require(not values.is_neg() and not values.is_conj(), \"logical view flags are outside this domain\")\n    require(not require_cuda or values.is_cuda, \"CUDA input required by run\")\n    require(values.dtype == torch.float16, \"float16 input required\")\n    require(values.ndim == 2 and 1 <= values.shape[0] <= 256 and values.shape[1] in (64, 128, 256), \"shape must be [B,N], 1<=B<=256, N in {64,128,256}\")\n    require(bool(torch.isfinite(values).all()), \"all input values must be finite\")\n    return {\"valid\": True, \"batch\": values.shape[0], \"width\": values.shape[1]}\n\n\ndef run(values):\n    \"\"\"Return real and imaginary components in a fresh FP32 tensor.\"\"\"\n    validate_inputs(values)\n    batch, n = values.shape\n    m = n // 2\n    with torch.cuda.device(values.device):\n        table = torch.tensor(_COSINE, dtype=torch.float64, device=values.device)\n        output = torch.empty((batch, m + 1, 2), dtype=torch.float32, device=values.device)\n        _realfft[(batch,)](values, table, output, N=n, M=m, LOG_M=m.bit_length() - 1,\n                          num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(values):\n    \"\"\"A separate library transform in complex128, returned as FP64 components.\"\"\"\n    validate_inputs(values, require_cuda=False)\n    result = torch.fft.rfft(values.to(torch.float64), dim=1, norm=\"backward\")\n    return torch.stack((result.real, result.imag), dim=-1)\n\n\ndef make_inputs(device=\"cuda\", batch=7, width=128, seed=0):\n    \"\"\"Examples only; the contract includes every finite FP16 input.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randn((batch, width), generator=generator).to(torch.float16)\n    return (values.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\n\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\n\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_163",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-18T07:55:15Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the unnormalized forward discrete Fourier transform of each real input row. For every row b and frequency k from 0 through N/2, the exact mathematical result is X[b,k] = sum(values[b,j] * exp(-2*pi*i*j*k/N), j=0..N-1). Return its real and imaginary components in this order, as a fresh contiguous torch.float32 tensor with shape [B,N/2+1,2] on the input device. Frequencies must be in their natural increasing order. There is no normalization factor.\n\nThe input is one ordinary contiguous strided CUDA torch.float16 tensor values with shape [B,N], where 1<=B<=256 and N is 64, 128, or 256. Every finite FP16 value is legal, including signed zeros, subnormal values, and both finite extremes. There is no restriction on the input distribution or frequency content. Nonzero storage offsets are legal. Inputs have no gradient, inference, conjugate, or negative-view flags. Calls use ordinary execution mode.\n\nFor each output component, require abs(actual-exact) <= 1e-4 + 1e-6*abs(exact). Both constants are exact decimal values. A nonfinite output is incorrect. The exact result above defines correctness; the supplied FP64 library reference is a comparison implementation, not a different mathematical specification. run must preserve the entire input storage and return separate output storage. The guarantee covers every legal input under the fixed NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0 environment. Performance is not part of this task.\n",
+        "entry": "case_163",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_163"
+      },
+      "created_at": "2026-10-18T07:55:15Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_163",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 6084
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1451
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_163",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T07:55:15Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_163",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "A hand-rolled packed real FFT can have subtle indexing/twiddle errors that vanish on benign random inputs but fail on extreme-magnitude, alternating-sign, or subnormal-heavy inputs where absolute error can exceed 1e-4. Also nonzero storage offsets and input preservation must be honored.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact); every finite FP16 value is legal including signed zeros, subnormals, and both finite extremes; N in {64,128,256}, 1<=B<=256; nonzero storage offsets are legal; run must preserve the entire input storage and return separate output storage."
+          }
+        ],
+        "scope_rationale": "Contract requires DFT accuracy within 1e-4+1e-6|exact| for every finite FP16 input across N in {64,128,256}, plus input preservation and correct output format.",
+        "statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output."
+      },
+      "created_at": "2026-10-18T07:55:41Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T07:55:41Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "A hand-rolled packed real FFT can have subtle indexing/twiddle errors that vanish on benign random inputs but fail on extreme-magnitude, alternating-sign, or subnormal-heavy inputs where absolute error can exceed 1e-4. Also nonzero storage offsets and input preservation must be honored.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact); every finite FP16 value is legal including signed zeros, subnormals, and both finite extremes; N in {64,128,256}, 1<=B<=256; nonzero storage offsets are legal; run must preserve the entire input storage and return separate output storage."
+          }
+        ],
+        "scope_rationale": "Contract requires DFT accuracy within 1e-4+1e-6|exact| for every finite FP16 input across N in {64,128,256}, plus input preservation and correct output format.",
+        "statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output.",
+        "status": "open",
+        "updated_at": "2026-10-18T07:55:41Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_163/kernel.py\")\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\ndev = \"cuda\"\nresults = {}\ndef check(tag, values):\n    before = values.clone()\n    out = kernel.run(values)\n    ref = kernel.reference(values).to(torch.float64)\n    err = (out.to(torch.float64) - ref).abs()\n    tol = 1e-4 + 1e-6*ref.abs()\n    ok_shape = tuple(out.shape) == (values.shape[0], values.shape[1]//2+1, 2)\n    preserved = torch.equal(before, values)\n    results[tag] = {\n        \"max_err\": float(err.max()),\n        \"n_violations\": int((err > tol).sum()),\n        \"finite\": bool(torch.isfinite(out).all()),\n        \"shape_ok\": bool(ok_shape),\n        \"contig\": out.is_contiguous(),\n        \"dtype\": str(out.dtype),\n        \"input_preserved\": bool(preserved),\n        \"fresh_storage\": out.data_ptr() != values.data_ptr(),\n    }\n\nfor n in (64, 128, 256):\n    g = torch.Generator(device=\"cpu\").manual_seed(n)\n    v = torch.randn((5, n), generator=g).to(torch.float16).to(dev)\n    check(f\"randn_N{n}\", v)\n    # alternating signs at max magnitude\n    v = torch.where(torch.arange(n, device=dev) % 2 == 0,\n                    torch.full((n,), 65504., device=dev),\n                    torch.full((n,), -65504., device=dev)).to(torch.float16).unsqueeze(0).repeat(3,1)\n    check(f\"altmax_N{n}\", v)\n    # subnormals\n    v = (torch.randn((3, n), generator=torch.Generator().manual_seed(99)) * 6e-8).to(torch.float16).to(dev)\n    check(f\"subnorm_N{n}\", v)\n    # single spike (impulse)\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[0,7] = 65504.; v[1,3] = -1.0\n    check(f\"impulse_N{n}\", v)\n    # all signed zeros\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[1,:] = -0.0\n    check(f\"zeros_N{n}\", v)\n\n# storage offset: legal per contract\nbase = torch.randn((4, 128*2+4), generator=torch.Generator().manual_seed(5)).to(torch.float16).to(dev)\nv = base[1:3, 4:4+128].contiguous()\ncheck(\"offset_like_N128\", v)\nv2 = base.as_strided((2,128), (128,1), storage_offset=7)\ncheck(\"offset_view_N128\", v2)\n\nprint(json.dumps(results, indent=1))\nprint(\"ANY_FAIL\", any((not r[\"finite\"]) or r[\"n_violations\"]>0 or not r[\"shape_ok\"] or not r[\"contig\"] or not r[\"input_preserved\"] or not r[\"fresh_storage\"] for r in results.values()))\n"
+      },
+      "created_at": "2026-10-18T07:55:59Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "2090c74cc07a83ead1774f009ac130368c72e29fcc926ec389ee640ecc86b536"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "b2892b6dda4cd1a9156504795d040631133d0d36fcd2147696661155d123515e"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output.",
+        "cwd": "/root/cases/case_163",
+        "duration_s": 8.125776,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "2090c74cc07a83ead1774f009ac130368c72e29fcc926ec389ee640ecc86b536"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "b2892b6dda4cd1a9156504795d040631133d0d36fcd2147696661155d123515e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.125776,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"randn_N64\": {\n  \"max_err\": 20.000054274758305,\n  \"n_violations\": 310,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N64\": {\n  \"max_err\": 1.5243111539615267e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N64\": {\n  \"max_err\": 124763.1636950332,\n  \"n_violations\": 122,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N128\": {\n  \"max_err\": 34.67978983463932,\n  \"n_violations\": 630,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N128\": {\n  \"max_err\": 2.0489094315994787e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N128\": {\n  \"max_err\": 128187.41796875,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N256\": {\n  \"max_err\": 50.64102965374376,\n  \"n_violations\": 1270,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N256\": {\n  \"max_err\": 3.064689627548353e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N256\": {\n  \"max_err\": 130299.01953125,\n  \"n_violations\": 508,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_like_N128\": {\n  \"max_err\": 31.51300827447308,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_view_N128\": {\n  \"max_err\": 32.089019177291654,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n }\n}\nANY_FAIL True\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"randn_N64\": {\n  \"max_err\": 20.000054274758305,\n  \"n_violations\": 310,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N64\": {\n  \"max_err\": 1.5243111539615267e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N64\": {\n  \"max_err\": 124763.1636950332,\n  \"n_violations\": 122,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N128\": {\n  \"max_err\": 34.67978983463932,\n  \"n_violations\": 630,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N128\": {\n  \"max_err\": 2.0489094315994787e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N128\": {\n  \"max_err\": 128187.41796875,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N256\": {\n  \"max_err\": 50.64102965374376,\n  \"n_violations\": 1270,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N256\": {\n  \"max_err\": 3.064689627548353e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N256\": {\n  \"max_err\": 130299.01953125,\n  \"n_violations\": 508,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_like_N128\": {\n  \"max_err\": 31.51300827447308,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_view_N128\": {\n  \"max_err\": 32.089019177291654,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n }\n}\nANY_FAIL True\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "altmax_all_N": "0 violations",
+          "offset_view_N128": {
+            "max_err": 32.09,
+            "n_violations": 252
+          },
+          "randn_N128": {
+            "max_err": 34.68,
+            "n_violations": 630
+          },
+          "randn_N256": {
+            "max_err": 50.64,
+            "n_violations": 1270
+          },
+          "randn_N64": {
+            "max_err": 20.0,
+            "n_violations": 310
+          },
+          "structural_checks": "shape/contig/dtype/input_preserved/fresh_storage all pass on every case",
+          "subnorm_all_N": "0 violations",
+          "tolerance": "1e-4 + 1e-6*|exact|",
+          "zeros_all_N": "0 violations"
+        },
+        "event_id": "t6",
+        "status": "confirmed",
+        "summary": "Across legal FP16 inputs at N=64/128/256, the kernel's output massively violates the contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*|exact|: e.g. randn N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs give max_err ~1.25e5-1.3e5. Subnormal, all-zero, and alternating-sign inputs pass, indicating a systematic indexing/twiddle error in the FFT that fails on generic inputs. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output, input preservation, offsets) all pass.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T07:56:07Z",
+      "id": "t7",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T07:55:41Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T07:56:07Z",
+              "data": {
+                "altmax_all_N": "0 violations",
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t6_probe.py",
+                    "sha256": "2090c74cc07a83ead1774f009ac130368c72e29fcc926ec389ee640ecc86b536"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t6_stdout.txt",
+                    "sha256": "b2892b6dda4cd1a9156504795d040631133d0d36fcd2147696661155d123515e"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t6_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 8.125776,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "offset_view_N128": {
+                  "max_err": 32.09,
+                  "n_violations": 252
+                },
+                "randn_N128": {
+                  "max_err": 34.68,
+                  "n_violations": 630
+                },
+                "randn_N256": {
+                  "max_err": 50.64,
+                  "n_violations": 1270
+                },
+                "randn_N64": {
+                  "max_err": 20.0,
+                  "n_violations": 310
+                },
+                "stderr": "",
+                "stdout": "{\n \"randn_N64\": {\n  \"max_err\": 20.000054274758305,\n  \"n_violations\": 310,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N64\": {\n  \"max_err\": 1.5243111539615267e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N64\": {\n  \"max_err\": 124763.1636950332,\n  \"n_violations\": 122,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N128\": {\n  \"max_err\": 34.67978983463932,\n  \"n_violations\": 630,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N128\": {\n  \"max_err\": 2.0489094315994787e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N128\": {\n  \"max_err\": 128187.41796875,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N256\": {\n  \"max_err\": 50.64102965374376,\n  \"n_violations\": 1270,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N256\": {\n  \"max_err\": 3.064689627548353e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N256\": {\n  \"max_err\": 130299.01953125,\n  \"n_violations\": 508,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_like_N128\": {\n  \"max_err\": 31.51300827447308,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_view_N128\": {\n  \"max_err\": 32.089019177291654,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n }\n}\nANY_FAIL True\n",
+                "structural_checks": "shape/contig/dtype/input_preserved/fresh_storage all pass on every case",
+                "subnorm_all_N": "0 violations",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": "1e-4 + 1e-6*|exact|",
+                "zeros_all_N": "0 violations"
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Across legal FP16 inputs at N=64/128/256, the kernel's output massively violates the contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*|exact|: e.g. randn N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs give max_err ~1.25e5-1.3e5. Subnormal, all-zero, and alternating-sign inputs pass, indicating a systematic indexing/twiddle error in the FFT that fails on generic inputs. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output, input preservation, offsets) all pass.",
+              "supports": "confirmed",
+              "tool_event_id": "t6"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "A hand-rolled packed real FFT can have subtle indexing/twiddle errors that vanish on benign random inputs but fail on extreme-magnitude, alternating-sign, or subnormal-heavy inputs where absolute error can exceed 1e-4. Also nonzero storage offsets and input preservation must be honored.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact); every finite FP16 value is legal including signed zeros, subnormals, and both finite extremes; N in {64,128,256}, 1<=B<=256; nonzero storage offsets are legal; run must preserve the entire input storage and return separate output storage."
+            }
+          ],
+          "scope_rationale": "Contract requires DFT accuracy within 1e-4+1e-6|exact| for every finite FP16 input across N in {64,128,256}, plus input preservation and correct output format.",
+          "statement": "The kernel's FFT output deviates from the exact DFT by more than 1e-4 + 1e-6*|exact| on some legal FP16 input (e.g. extreme magnitudes, alternating signs, subnormals), or mishandles legal nonzero storage offsets, or fails to preserve input storage / produce a fresh contiguous FP32 [B,N/2+1,2] output.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T07:56:07Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T07:56:07Z",
+          "data": {
+            "altmax_all_N": "0 violations",
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "2090c74cc07a83ead1774f009ac130368c72e29fcc926ec389ee640ecc86b536"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "b2892b6dda4cd1a9156504795d040631133d0d36fcd2147696661155d123515e"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 8.125776,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "offset_view_N128": {
+              "max_err": 32.09,
+              "n_violations": 252
+            },
+            "randn_N128": {
+              "max_err": 34.68,
+              "n_violations": 630
+            },
+            "randn_N256": {
+              "max_err": 50.64,
+              "n_violations": 1270
+            },
+            "randn_N64": {
+              "max_err": 20.0,
+              "n_violations": 310
+            },
+            "stderr": "",
+            "stdout": "{\n \"randn_N64\": {\n  \"max_err\": 20.000054274758305,\n  \"n_violations\": 310,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N64\": {\n  \"max_err\": 1.5243111539615267e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N64\": {\n  \"max_err\": 124763.1636950332,\n  \"n_violations\": 122,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N64\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N128\": {\n  \"max_err\": 34.67978983463932,\n  \"n_violations\": 630,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N128\": {\n  \"max_err\": 2.0489094315994787e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N128\": {\n  \"max_err\": 128187.41796875,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N128\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"randn_N256\": {\n  \"max_err\": 50.64102965374376,\n  \"n_violations\": 1270,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"altmax_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"subnorm_N256\": {\n  \"max_err\": 3.064689627548353e-06,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"impulse_N256\": {\n  \"max_err\": 130299.01953125,\n  \"n_violations\": 508,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"zeros_N256\": {\n  \"max_err\": 0.0,\n  \"n_violations\": 0,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_like_N128\": {\n  \"max_err\": 31.51300827447308,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n },\n \"offset_view_N128\": {\n  \"max_err\": 32.089019177291654,\n  \"n_violations\": 252,\n  \"finite\": true,\n  \"shape_ok\": true,\n  \"contig\": true,\n  \"dtype\": \"torch.float32\",\n  \"input_preserved\": true,\n  \"fresh_storage\": true\n }\n}\nANY_FAIL True\n",
+            "structural_checks": "shape/contig/dtype/input_preserved/fresh_storage all pass on every case",
+            "subnorm_all_N": "0 violations",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": "1e-4 + 1e-6*|exact|",
+            "zeros_all_N": "0 violations"
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Across legal FP16 inputs at N=64/128/256, the kernel's output massively violates the contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*|exact|: e.g. randn N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs give max_err ~1.25e5-1.3e5. Subnormal, all-zero, and alternating-sign inputs pass, indicating a systematic indexing/twiddle error in the FFT that fails on generic inputs. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output, input preservation, offsets) all pass.",
+          "supports": "confirmed",
+          "tool_event_id": "t6"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.99,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 (run_claim_probe, exit 0) compared kernel.run against the kernel's own FP64 rfft reference across the contract's legal domain (finite FP16, N in {64,128,256}, B up to 5). The contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) is massively violated on ordinary randn inputs: N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs show max_err ~1.25e5-1.3e5. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output on the input device, input preservation, nonzero storage offsets) all pass, and benign symmetric inputs (zeros, alternating signs, subnormals) pass \u2014 indicating a systematic FFT indexing/twiddle error in the kernel's DIF/packing path that fails on generic inputs. Since the contract requires the DFT tolerance for every legal input and this fails on plain random inputs well inside the declared domain, the verdict is reject.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T07:56:13Z",
+      "id": "t8",
+      "output": {
+        "confidence": 0.99,
+        "created_at": "2026-10-18T07:56:13Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Probe t6 (run_claim_probe, exit 0) compared kernel.run against the kernel's own FP64 rfft reference across the contract's legal domain (finite FP16, N in {64,128,256}, B up to 5). The contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) is massively violated on ordinary randn inputs: N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs show max_err ~1.25e5-1.3e5. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output on the input device, input preservation, nonzero storage offsets) all pass, and benign symmetric inputs (zeros, alternating signs, subnormals) pass \u2014 indicating a systematic FFT indexing/twiddle error in the kernel's DIF/packing path that fails on generic inputs. Since the contract requires the DFT tolerance for every legal input and this fails on plain random inputs well inside the declared domain, the verdict is reject.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.99,
+    "created_at": "2026-10-18T07:56:13Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probe t6 (run_claim_probe, exit 0) compared kernel.run against the kernel's own FP64 rfft reference across the contract's legal domain (finite FP16, N in {64,128,256}, B up to 5). The contract tolerance abs(actual-exact) <= 1e-4 + 1e-6*abs(exact) is massively violated on ordinary randn inputs: N=64 max_err 20.0 with 310 violations, N=128 max_err 34.7 with 630 violations, N=256 max_err 50.6 with 1270 violations; impulse inputs show max_err ~1.25e5-1.3e5. Structural requirements (fresh contiguous FP32 [B,N/2+1,2] output on the input device, input preservation, nonzero storage offsets) all pass, and benign symmetric inputs (zeros, alternating signs, subnormals) pass \u2014 indicating a systematic FFT indexing/twiddle error in the kernel's DIF/packing path that fails on generic inputs. Since the contract requires the DFT tolerance for every legal input and this fails on plain random inputs well inside the declared domain, the verdict is reject.",
+    "verdict": "reject"
+  }
+}

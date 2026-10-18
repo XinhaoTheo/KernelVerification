@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-e2559863",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an exhaustive sweep of every finite FP16 value against an FP64 reference, comparing to the kernel's actual GPU output.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9eb63cead8b20549",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_127\\\")\\nimport kernel\\n\\n# All finite FP16 bit patterns\\nbits = torch.arange(65536, dtype=torch.int64)\\nhf = bits.to(torch.uint16).view(torch.int16).to(torch.float16).view(-1)\\nfinite = torch.isfinite(hf)\\nx_all = hf[finite].cuda()\\n\\n# run in chunks to respect N<=131072 validation\\nref = torch.erf(x_all.to(torch.float64))\\nworst = 0.0; worst_x = 0.0; errs = []\\nfor i in range(0, x_all.numel(), 100000):\\n    out = kernel.run(x_all[i:i+100000])\\n    r = ref[i:i+100000].to(torch.float32).to(torch.float64)\\n    e = (out.to(torch.float64) - r).abs()\\n    m = e.max().item()\\n    if m > worst:\\n        worst = m; idx = i + e.argmax().item(); worst_x = x_all[idx].item()\\n    errs.append(e.max().item())\\n\\nover = 0\\n# count violations precisely\\nfor i in range(0, x_all.numel(), 100000):\\n    out = kernel.run(x_all[i:i+100000])\\n    r = ref[i:i+100000].to(torch.float32).to(torch.float64)\\n    over += int(((out.to(torch.float64) - r).abs() > 1e-6).sum().item())\\n\\nprint(json.dumps({\\\"metric\\\":\\\"max abs error vs FP64->FP32 erf over all finite FP16 values\\\",\\n \\\"num_tested\\\": x_all.numel(), \\\"max_abs_err\\\": worst, \\\"worst_x\\\": worst_x,\\n \\\"num_violations_over_1e-6\\\": over, \\\"tolerance\\\": 1e-6}))\\n\", \"expected_signal\": \"max abs error over all finite FP16 values exceeds or stays under 1e-6\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284720,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 476,
+    "prompt_tokens": 10197,
+    "total_tokens": 10673,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6227,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

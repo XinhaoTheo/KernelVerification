@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-28f0e54d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The previous probe crashed before reporting (int16 overflow from raw bit patterns above 32767). I'll re-run a corrected probe that prints per-case results incrementally and filters nonfinite FP16 patterns.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a9a860b8b9a1d5d4",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nlines = []\\n\\ndef run_case(name, v):\\n    v = v.to(dev)\\n    ref = kernel.reference(v).double()\\n    out = kernel.run(v)\\n    err = (out.double() - ref).abs()\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    lines.append(json.dumps({\\\"case\\\": name, \\\"max_err\\\": err.max().item(),\\n                             \\\"rel_worst\\\": (err / tol).max().item(),\\n                             \\\"violations\\\": int(bad.sum()),\\n                             \\\"nonfinite\\\": int((~torch.isfinite(out)).sum())}))\\n    return bad\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\ntotal_bad = 0\\nfor n in (64, 128, 256):\\n    for b in (1, 7, 256):\\n        v = torch.randn((b, n), generator=g).to(torch.float16)\\n        total_bad += int(run_case(f\\\"rand_n{n}_b{b}\\\", v).sum())\\n\\n# extreme magnitudes\\nfor n in (64, 128, 256):\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16)\\n    v[1] = -65504.0\\n    v[2] = torch.linspace(-65504, 65504, n).to(torch.float16)\\n    total_bad += int(run_case(f\\\"extreme_n{n}\\\", v).sum())\\n\\n# subnormals and signed zeros\\nv = torch.zeros((4, 128), dtype=torch.float16)\\nv[0] = 6e-8\\nv[1] = -6e-8\\nv[2, 0] = -0.0\\nv[3] = torch.tensor([x * 6e-8 for x in range(128)]).to(torch.float16)\\ntotal_bad += int(run_case(\\\"subnormal_signedzero\\\", v).sum())\\n\\n# adversarial finite bit patterns: sample raw uint16, keep finite only\\nraw = torch.arange(0, 65536, 97, dtype=torch.int32)\\nbits = torch.tensor(raw & 0xFFFF, dtype=torch.int16).view(torch.float16)\\nfinite = bits[torch.isfinite(bits) & (torch.abs(bits.view(torch.int16).to(torch.int32) & 0x7F80) != 0x7F80)] if False else bits[torch.isfinite(bits)]\\nfor n in (64, 128, 256):\\n    f = finite[: 256 * n].reshape(256, n)\\n    total_bad += int(run_case(f\\\"bitpattern_n{n}\\\", f).sum())\\n\\n# full-range random magnitudes\\nv = ((torch.rand((256, 256), generator=g) * 2 - 1) * 65504).to(torch.float16)\\ntotal_bad += int(run_case(\\\"fullrange_n256_b256\\\", v).sum())\\n\\n# single-frequency signals (exact integer twiddles) + input preservation check\\nv = torch.zeros((4, 256), dtype=torch.float16)\\nfor i, freq in enumerate((1, 3, 5, 127)):\\n    v[i, freq] = 65504.0\\n    v[i, freq + 1] = -65504.0\\norig = v.clone()\\ntotal_bad += int(run_case(\\\"impulse_n256\\\", v).sum())\\npres = bool(torch.equal(orig, v))\\nlines.append(json.dumps({\\\"input_preserved\\\": pres}))\\n\\n# output properties\\no = kernel.run(v.to(dev))\\nlines.append(json.dumps({\\\"out_shape\\\": list(o.shape), \\\"out_dtype\\\": str(o.dtype),\\n                         \\\"out_contig\\\": o.is_contiguous(), \\\"out_device\\\": str(o.device)}))\\n\\nprint(\\\"\\\\n\\\".join(lines))\\nprint(json.dumps({\\\"TOTAL_VIOLATIONS\\\": total_bad}))\\n\", \"timeout_s\": 120}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe crashed mid-way (int16 overflow, since 65536//97*97... vals up to 65441, >32767). Earlier cases ran before the crash but stdout empty (JSON printed at end). Re-run fixed probe: mask to finite values, print results incrementally."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310473,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 987,
+    "prompt_tokens": 16372,
+    "total_tokens": 17359,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 63,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7806,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

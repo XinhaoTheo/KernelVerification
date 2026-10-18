@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-ca1df810",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The claim is recorded and in scope. Now I'll run the decisive numeric probe: compare `run()` against the exact FP64 DFT across all allowed widths, batch sizes, and adversarial distributions (random, all-ones, FP16 extremes, subnormals, signed zeros, impulse rows).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8168e83bb348bd56",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_162\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ntol_a, tol_r = 1e-4, 1e-6\\nresults = []\\nworst = 0.0\\nworst_desc = \\\"\\\"\\n\\ndef check(desc, values):\\n    global worst, worst_desc\\n    before = values.clone()\\n    out = kernel.run(values)\\n    exact = kernel.reference(values.cpu()).to(dev)  # FP64 rfft stacked\\n    err = (out.double() - exact)\\n    tol = tol_a + tol_r * exact.abs()\\n    viol = (err.abs() > tol)\\n    maxratio = (err.abs() / tol).max().item()\\n    finite = bool(torch.isfinite(out).all())\\n    shape_ok = tuple(out.shape) == (values.shape[0], values.shape[1]//2 + 1, 2) and out.dtype == torch.float32 and out.is_contiguous()\\n    preserv = torch.equal(before, values)\\n    sep = out.data_ptr() != values.data_ptr()\\n    if maxratio > worst:\\n        worst, worst_desc = maxratio, desc\\n    results.append(dict(desc=desc, max_ratio=maxratio, violations=int(viol.sum()), finite=finite, shape_ok=shape_ok, input_preserved=preserv, separate_storage=sep))\\n    return out\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(0)\\nfor N in (64, 128, 256):\\n    for B in (1, 7, 256):\\n        v = torch.randn((B, N), generator=g).to(torch.float16).to(dev)\\n        check(f\\\"rand B={B} N={N}\\\", v)\\n# adversarial distributions\\nfor N in (64, 128, 256):\\n    B = 8\\n    v = torch.ones((B, N), dtype=torch.float16, device=dev); check(f\\\"ones N={N}\\\", v)\\n    v = torch.full((B, N), 65504.0, dtype=torch.float16, device=dev); check(f\\\"fp16max N={N}\\\", v)\\n    v = torch.full((B, N), -65504.0, dtype=torch.float16, device=dev); check(f\\\"fp16min N={N}\\\", v)\\n    v = torch.full((B, N), -0.0, dtype=torch.float16, device=dev); check(f\\\"negzero N={N}\\\", v)\\n    v = torch.full((B, N), 6e-8, dtype=torch.float16, device=dev); check(f\\\"subnormal N={N}\\\", v)\\n    # impulse rows\\n    v = torch.zeros((B, N), dtype=torch.float16, device=dev)\\n    for i in range(B):\\n        v[i, i * 7 % N] = 1.0\\n    check(f\\\"impulse N={N}\\\", v)\\n    # alternating / nyquist-dominant\\n    v = torch.tensor([((-1.0)**j) * 1000.0 for j in range(N)] * B, dtype=torch.float16, device=dev).reshape(B, N)\\n    check(f\\\"nyquist N={N}\\\", v)\\n    # fp16-extreme random\\n    v = torch.randn((B, N), generator=g).to(torch.float16)\\n    v = (v * 3e4).to(torch.float16).to(dev); check(f\\\"bigrand N={N}\\\", v)\\n    # random subnormal mix\\n    v = (torch.randn((B, N), generator=g) * 1e-7).to(torch.float16).to(dev); check(f\\\"tinyrand N={N}\\\", v)\\n\\nprint(json.dumps(dict(results=results, worst_ratio=worst, worst_case=worst_desc, any_violation=any(r[\\\"violations\\\"]>0 or not r[\\\"finite\\\"] or not r[\\\"shape_ok\\\"] or not r[\\\"input_preserved\\\"] or not r[\\\"separate_storage\\\"] for r in results)), indent=1))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run probe: test all widths, various inputs, compare against FP64 rfft (which computes the exact DFT to FP64 precision). Check tolerance. Also check output shape/dtype, storage preservation.\n\nPotential concerns: large values like FP16 max 65504 * 256 sum → up to ~1.6e7; absolute tolerance 1e-4 + 1e-6*|exact|; FP32 output rounding: 1.6e7 * 6e-8 ≈ 1. So storing as FP32 breaks the tolerance for large sums! Contract requires output as float32, but exact can be up to 1.6e7; 1e-6*1.6e7 = 16, FP32 relative eps 1.2e-7 → error ~2, within 16? Actually ulp of 1.6e7 in FP32 is 2, so error ≤1, fine. But for values near 1e-4 exact small... FP32 fine.\n\nHowever intermediate: FP16 max value 65504 across all entries, DFT sums up to 1.6e7 with exact arithmetic in FP64 — fine. But wait, tolerance 1e-4 absolute on small exact values while FFT computes in FP64 then rounds to FP32 — fine.\n\nRun probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309343,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1229,
+    "prompt_tokens": 12789,
+    "total_tokens": 14018,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 281,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7773,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

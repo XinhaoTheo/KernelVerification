@@ -1,0 +1,27 @@
+Key defect: dx formula in kernel uses tl.sum(m*x)/N where m = (dy*weight).to(tl.float32) — but dy*weight in fp16 computed... dy is fp16, weight fp16, product in Triton fp16? Triton promotes to fp32? Actually dy*weight both fp16 → result fp16 (Triton computes in same type). Then .to(tl.float32). That matches m = H16(dy*weight) cast to fp32. Good.
+
+h: kernel uses (x * r).to(tl.float16) — x is cast to fp32, r fp32, product fp32, rounded to fp16. But contract: h = H16(F32(x)*rstd) — matches. Then dw += dy * h_rounded → fp16 * fp16 → fp16 product, then accumulated to fp32? dw is fp32; dy*h is fp16, added to fp32 dw — accumulates fp16 product t = H16(dy*h)? Actually dy and h both fp16, product in Triton fp16 — matches t = H16(dy*h). Wait in row kernel: dw += dy * (x * r).to(tl.float16). dy fp16 * fp16 → fp16, cast to fp32 on add. Matches contract.
+
+dx: contract sums m*x in real arithmetic with m the rounded product cast. Kernel: dx = r * m; dx += r*(-(1/N)*r*r*tl.sum(m*x)*x). m is fp32, x fp32 → sum in fp32. Fine. dx stored as fp16? DX is fp16 (torch.empty_like(dy)) — store fp32 into fp16 tensor; Triton casts. Target dx tolerance vs reference dx64 (computed from m64 rounded values? Reference uses m64 = dy*weight in fp64 without fp16 rounding of product... hmm, reference itself treats m as fp16 product? dy,weight are fp16; dy*weight in torch fp16 → fp16, then cast fp64. Actually reference does (dy*weight) with fp16 tensors → fp16 result, then .to(float64). So reference includes H16 rounding of m. Kernel does the same. Good.
+
+But contract also wants dx stored fp16 — target dx computed... tolerance 0.002 absolute is generous, fp16 storage fine.
+
+Store dx: `tl.store(DX + ..., dx, mask)` — DX is fp16 pointer, dx fp32 → implicit cast allowed in Triton. Fine.
+
+Potential issue: reference dx64 uses m64 = rounded fp16 products; contract says sums in real arithmetic with m rounded. Kernel computes r*m etc in fp32 — fine within tolerance.
+
+Bug check: dx formula: contract dx = r*(m - x*r^2*sum(m*x)/N). Kernel: dx = r*m + r*(-(1/N)*r*r*sum*x) = r*(m - x*r^2*sum/N). ✓
+
+Block kernel strided loop: for start in range(pid*BR, M, programs*BR) — covers all rows exactly once across programs? Rows covered: start, start+BR... each program takes disjoint sets. ✓
+
+Row kernel: ROWS = cdiv(m, programs); start = pid*ROWS, stop = min(start+ROWS, M). Covers all. ✓
+
+Masked weight load: other=0.0, m=0 for padded cols, contributes 0 to sums. ✓
+
+partial.sum over programs — fine.
+
+One subtlety: reference dx64 uses m64 (with H16 rounding of dy*weight) — matches kernel. But kernel's dx differs from contract in that contract dx_target uses m rounded but everything else real arithmetic; kernel uses fp32, well within tolerance.
+
+Edge: enable_fp_fusion=False prevents fma — fine.
+
+Seems correct. Trust.

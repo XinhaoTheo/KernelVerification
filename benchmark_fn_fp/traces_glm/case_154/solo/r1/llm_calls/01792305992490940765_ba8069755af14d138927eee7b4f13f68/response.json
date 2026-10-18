@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-144da4e2",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a comprehensive probe testing the kernel against its FP64 reference across the adversarial domain: FP16 extrema, subnormals, signed zeros, and cancellation-prase cases.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a7483b5f1747867b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, os\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nfails = []\\ntol_a, tol_r = 1e-7, 5e-7\\n\\ndef check(name, num, den):\\n    num = num.to(dev); den = den.to(dev)\\n    out = kernel.run(num, den)\\n    ref = kernel.reference(num, den)  # FP64 on gpu -> fine\\n    ref = ref.cpu().double(); out = out.cpu().double()\\n    diff = (out - ref).abs()\\n    allowed = tol_a + tol_r * ref.abs()\\n    bad = diff > allowed\\n    nonfinite = ~torch.isfinite(out)\\n    nbad = int(bad.sum()); nnf = int(nonfinite.sum())\\n    if nbad or nnf:\\n        idx = (bad | nonfinite).nonzero()[:5]\\n        fails.append((name, nbad, nnf, out.flatten()[(bad|nonfinite).flatten().nonzero()[:5]].tolist(), ref.flatten()[(bad|nonfinite).flatten()[:5]].tolist()))\\n    return nbad, nnf, out.numel()\\n\\ntot = 0; badtot = 0\\n# 1. random sweeps\\nfor seed, size in [(0, 4093), (1, 131072), (2, 131072)]:\\n    g = torch.Generator().manual_seed(seed)\\n    num = torch.randn((size,2), generator=g).to(torch.float16)\\n    den = torch.randn((size,2), generator=g).to(torch.float16)\\n    den[(den==0).all(dim=1), 0] = 1\\n    nb, nf, n = check(f\\\"rand seed{seed} size{size}\\\", num, den); badtot += nb+nf; tot += n\\n\\n# 2. grid of special values incl. extrema, subnormals, signed zeros\\nspecial = torch.tensor([0.0,-0.0, 65504.0, -65504.0, 6.103515625e-05, -6.103515625e-05,\\n                       5.960464477539063e-08, -5.960464477539063e-08, 1.0, -1.0, 2048.0, 0.001, 300.0], dtype=torch.float16)\\nm = len(special)\\na, b = torch.meshgrid(special, special, indexing=\\\"ij\\\")\\nnum = torch.stack([a.reshape(-1), b.reshape(-1)], dim=1)\\nc, d = torch.meshgrid(special, special, indexing=\\\"ij\\\")\\nden = torch.stack([c.reshape(-1), d.reshape(-1)], dim=1)\\nzz = (den == 0).all(dim=1)\\nden[zz, 0] = 1.0  # contract forbids both zero\\nnum = num[~zz]; den = den[~zz]\\nnb, nf, n = check(\\\"special grid\\\", num, den); badtot += nb+nf; tot += n\\n\\n# 3. random with cancellation bias: numerator proportional to denominator\\nfor seed in range(5):\\n    g = torch.Generator().manual_seed(100+seed)\\n    size = 65536\\n    den = torch.randn((size,2), generator=g).to(torch.float16)\\n    k = torch.randn((size,1), generator=g).to(torch.float16)\\n    num = (den.double() * k.double()).to(torch.float16)  # nearly parallel -> small imag component\\n    zz = (den==0).all(dim=1); den[zz,0]=1.0; num=num[~zz]; den=den[~zz]\\n    nb, nf, n = check(f\\\"cancellation seed{seed}\\\", num, den); badtot += nb+nf; tot += n\\n\\n# 4. extreme scale ratios: numerator huge, denominator tiny subnormal\\ng = torch.Generator().manual_seed(7)\\nsize = 4096\\nnum = torch.empty((size,2)); num.uniform_(-65504, 65504, generator=g)\\nden = (torch.rand((size,2), generator=g) * 1e-7).to(torch.float16)  # subnormal region\\nden[(den==0).all(dim=1)] = torch.tensor([6e-8], dtype=torch.float16).item()\\nnum = num.to(torch.float16)\\nnb, nf, n = check(\\\"extreme ratio\\\", num, den); badtot += nb+nf; tot += n\\n\\n# 5. contiguous views with nonzero storage offset, shared storage\\nbase = torch.randn((10000, 2), dtype=torch.float16)\\nnumv = base[500:9000]\\ndenb = torch.randn((20000, 2), dtype=torch.float16)\\ndenv = denb[100:8100]\\ndenv[(denv==0).all(dim=1), 0] = 1\\nnb, nf, n = check(\\\"storage offset views\\\", numv, denv); badtot += nb+nf; tot += n\\n\\nprint({\\\"total_components\\\": tot, \\\"bad\\\": badtot, \\\"fail_cases\\\": fails if fails else None})\\n\", \"expected_signal\": \"componentwise tolerance violations on adversarial FP16 domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe testing adversarial cases: cancellation, extrema, subnormals, signed zeros. Also check imag sign conventions — kernel matches formulas. Potential issue: kernel computes in FP32 with FMA? enable_fp_fusion=False. FP32 arithmetic should give relative error ~1e-7, borderline with tolerance 5e-7 — likely fine.\n\nWrite probe covering: random large, all combos of special values grid (extremes ±65504, subnormals, zeros), random sampling, cancellation cases."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792305993,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1330,
+    "prompt_tokens": 11042,
+    "total_tokens": 12372,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 107,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6494,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

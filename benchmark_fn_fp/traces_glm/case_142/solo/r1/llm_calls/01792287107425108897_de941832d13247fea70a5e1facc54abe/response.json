@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-4ef7b07b",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll test the kernel against its own reference implementation across all three widths, with edge-case values (min/max int16, all values legal) to verify the exact sequency ordering and arithmetic.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b546ef48bd99a06c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_142\\\")\\nimport torch\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = []\\nfor width in (32, 64, 128):\\n    for batch in (1, 5):\\n        gen = torch.Generator(device=\\\"cpu\\\").manual_seed(width * 100 + batch)\\n        x = torch.randint(-32768, 32768, (batch, width), generator=gen, dtype=torch.int32).to(device=dev, dtype=torch.int16)\\n        # also extreme rows: all min, alternating extremes\\n        ext = torch.tensor([[32767]*width, [-32768]*width, [(-1)**i * 32767 for i in range(width)]], dtype=torch.int32).to(device=dev, dtype=torch.int16)\\n        if batch > 1:\\n            x = torch.cat([x, ext], dim=0)\\n        else:\\n            x = ext\\n        out = kernel.run(x)\\n        ref = kernel.reference(x)\\n        exact = torch.equal(out, ref)\\n        mismatches = (out != ref).sum().item() if not exact else 0\\n        # first mismatch detail\\n        detail = None\\n        if not exact:\\n            idx = (out != ref).nonzero()[0].tolist()\\n            detail = {\\\"first_mismatch\\\": idx, \\\"out\\\": out[tuple(idx)].item(), \\\"ref\\\": ref[tuple(idx)].item()}\\n        results.append({\\\"width\\\": width, \\\"batch\\\": x.shape[0], \\\"exact\\\": exact, \\\"mismatches\\\": mismatches, \\\"detail\\\": detail})\\n# also check input preserved and output properties on one case\\nx = kernel.make_inputs()[0]\\nxc = x.clone()\\nout = kernel.run(x)\\npres = torch.equal(x, xc)\\nok_props = out.dtype == torch.int32 and out.shape == x.shape and out.is_cuda\\nprint(json.dumps({\\\"results\\\": results, \\\"input_preserved\\\": pres, \\\"output_props_ok\\\": ok_props}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792287108,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 485,
+    "prompt_tokens": 11008,
+    "total_tokens": 11493,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6589,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

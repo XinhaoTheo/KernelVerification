@@ -1,0 +1,1605 @@
+{
+  "experiment": "componentwise_complex_division_2026-10-18",
+  "status": "completed",
+  "cases": [
+    "case_154",
+    "case_155"
+  ],
+  "family": "complex_pair",
+  "expected_labels": {
+    "case_154": "trust",
+    "case_155": "reject"
+  },
+  "expected_label_status": "Analytical control bound and an exact-rational failing witness; actual T4 qualification pending.",
+  "fixed_contract": {
+    "input_dtype": "float16",
+    "shape": "[N,2],1<=N<=131072",
+    "domain": "All finite FP16 component tuples, denominator not zero. No conditioning or distribution restriction.",
+    "output_dtype": "float32",
+    "comparison": "Each real and imaginary component independently",
+    "atol": 1e-07,
+    "rtol": 5e-07
+  },
+  "source_provenance": [
+    {
+      "project": "LAPACK",
+      "revision": "3.12.1 documentation accessed 2026-10-18",
+      "url": "https://www.netlib.org/lapack/explore-html/df/d90/dladiv_8f_source.html",
+      "symbols": [
+        "DLADIV",
+        "DLADIV1",
+        "DLADIV2"
+      ],
+      "relevance": "Primary implementation of robust real-arithmetic complex division using a dominant-component ratio; our short FP32/FMA version is synthetic and is not LAPACK code or an upstream bug."
+    },
+    {
+      "title": "A Robust Complex Division in Scilab",
+      "authors": [
+        "Michael Baudin",
+        "Robert L. Smith"
+      ],
+      "revision": "arXiv:1210.4539v2",
+      "url": "https://arxiv.org/abs/1210.4539v2",
+      "relevance": "Primary discussion of Smith division and robustness limitations; motivates checking numerical guarantees of adapted implementations."
+    }
+  ],
+  "construction": "Case154 uses direct FP32 products/sums/RN divisions. FP16 products are exact in FP32 and full-domain normal-range bounds yield relative error below1.789e-7. Case155 uses dominant-component Smith division with FP32 ratio and explicit FMAs; intermediate ratio error can survive cancellation even though FMA rounds only once. Both retain the identical public contract.",
+  "selection_rule": "Tolerance fixed before executing searches or model calls. Keep both candidates and every model outcome. Do not tune source, contract, input restrictions or tolerance using model responses.",
+  "limitations": [
+    "Componentwise accuracy is stricter than a single normwise relative bound; this is explicitly stated to every arm.",
+    "GPU numerical testing samples legal tuples, not all63488^4 combinations. Control acceptance also depends on a whole-domain floating-point bound and source binding.",
+    "No assertion that a no-tool model must miss the defect."
+  ],
+  "model_calls_performed": 106,
+  "gpu_calls_performed": false,
+  "cpu_audit": {
+    "passed": true,
+    "arithmetic": {
+      "passed": true,
+      "unit_roundoff": 5.960464477539063e-08,
+      "relative_error_upper_bound": 1.7881394853702744e-07,
+      "relative_error_bound_exact": "50331649/281474959933440",
+      "allowed_relative_error": 5e-07,
+      "proof": [
+        "Every finite binary16 value is an integer multiple of2^-24 and has at most11 significant binary bits. Its product with another binary16 value has at most22 significant bits, so conversion and product in FP32 are exact.",
+        "Every nonzero product is at least2^-48; all products have magnitude below2^32. A sum or difference of two products is either zero or at least2^-48, and its magnitude is below2^33. All exact and rounded nonzero products and sums are normal FP32 values; overflow and underflow do not occur.",
+        "For either component, write the exact numerator asP and the positive exact denominator asD. The direct kernel computes RN(RN(P)/RN(D)), with exactly formed products and with implicit FMA disabled. Thus the relative factor is(1+e1)*(1+e3)/(1+e2), where each|ei|<=u. A zeroP is computed exactly aszero.",
+        "The nonzero quotient's loose magnitude bounds2^-81 to2^81 remain inside the normal FP32 range, including the small roundoff factors. The maximum relative error is at most(1+u)^2/(1-u)-1<1.789e-7<5e-7. This proves the componentwise tolerance for every legal tuple, including severe cancellation.",
+        "The scalar proof is bound to the candidate source expressions. GPU tests check actual lowering, tails, offsets, input guards and separate storage; this is not a formal proof of all GPU execution behavior."
+      ]
+    },
+    "source_binding": {
+      "case_154": {
+        "kernel_sha256": "8123aa953ffa4a727b6a738d7a4e7a9152bc2628631a32f808dbfe283121cf15",
+        "expressions": {
+          "scale": "c * c + d * d",
+          "real_numerator": "a * c + b * d",
+          "imag_numerator": "b * c - a * d",
+          "real": "tl.div_rn(real_numerator, scale)",
+          "imag": "tl.div_rn(imag_numerator, scale)"
+        },
+        "implicit_fma_disabled": true
+      },
+      "case_155": {
+        "kernel_sha256": "bf9aecbf3136a776b16ee2bd136f22b86a8efbedeb94cadb9ad6abffaa07977c",
+        "expressions": {
+          "scale": "tl.fma(minor, ratio, major)",
+          "real_numerator": "tl.where(real_dominant, tl.fma(b, ratio, a), tl.fma(a, ratio, b))",
+          "imag_numerator": "tl.where(real_dominant, tl.fma(-a, ratio, b), tl.fma(b, ratio, -a))",
+          "real": "tl.div_rn(real_numerator, scale)",
+          "imag": "tl.div_rn(imag_numerator, scale)"
+        },
+        "implicit_fma_disabled": true
+      }
+    },
+    "public_reference_checks": [
+      {
+        "case": "case_154",
+        "rows": 513,
+        "public_reference_within_2_pow_minus_50_relative": true
+      },
+      {
+        "case": "case_155",
+        "rows": 513,
+        "public_reference_within_2_pow_minus_50_relative": true
+      }
+    ],
+    "cpu_rounding_witness": {
+      "numerator": [
+        1024,
+        -1536
+      ],
+      "denominator": [
+        3,
+        2
+      ],
+      "modeled_actual": [
+        -7.042517609079368e-06,
+        -512.0
+      ],
+      "exact_reference": [
+        "0",
+        "-512"
+      ],
+      "rounded_ratio": 0.6666666865348816,
+      "actual_gpu_evidence": false
+    },
+    "oracle": "Exact arbitrary-precision rational components from integer-scaled FP16 values. Comparisons use exact rational error and exact decimal tolerances.",
+    "indexing": "Program p covers indices256*p through256*p+255 with index<N masks. Each legal index reads2components from each input and writes2distinct output components. Maximum offset262143 is int32-safe. Nonzero input storage offsets are incorporated by the tensor pointer.",
+    "oracle_dependency_hashes": {
+      "complex_pair.py": "f1895145ec81e5e5210f1a37d5bb41918a68b652e6828188f586464823f5332d"
+    }
+  },
+  "model_evaluation_plan": {
+    "declared_at_utc": "2026-10-18T06:45:15.050617+00:00",
+    "wave": "20261018_crc_complex_requant",
+    "first_pass_cases": [
+      "case_152",
+      "case_153",
+      "case_154",
+      "case_155",
+      "case_156",
+      "case_157"
+    ],
+    "first_pass_trials_per_case_arm": 1,
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "trial": "r1",
+    "model": "accounts/fireworks/models/glm-5p3",
+    "provider": "fireworks",
+    "reasoning_effort": "low",
+    "total_output_token_budget_per_case_arm": 32768,
+    "tool_turn_output_cap": 8192,
+    "solo_max_rounds": 10,
+    "debate_max_rounds": 4,
+    "debate_closeout_reserve": 8192,
+    "require_claim_scope_fields": true,
+    "frozen_environment": "NVIDIA T4; PyTorch2.8.0; Triton3.4.0; NumPy1.26.4",
+    "public_input_files": [
+      "kernel.py",
+      "problem.txt"
+    ],
+    "private_oracles_or_other_cases_visible": false,
+    "pre_evaluation_hashes": {
+      "case_154": {
+        "kernel.py": "8123aa953ffa4a727b6a738d7a4e7a9152bc2628631a32f808dbfe283121cf15",
+        "problem.txt": "4efec889df485d031080a9f5f153ee70b58bf37fb6cf593978a8171629c314b8",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      },
+      "case_155": {
+        "kernel.py": "bf9aecbf3136a776b16ee2bd136f22b86a8efbedeb94cadb9ad6abffaa07977c",
+        "problem.txt": "4efec889df485d031080a9f5f153ee70b58bf37fb6cf593978a8171629c314b8",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      }
+    },
+    "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+    "qualification_gate": "Actual GPU independent qualification must freeze each case before any paid model call.",
+    "retention": "Retain every result and all raw requests, responses, reasoning, usage, tool code, stdout/stderr and verdicts; never replace wrong answers.",
+    "pricing_checked_at": "2026-10-18",
+    "pricing_source": "https://fireworks.ai/models/fireworks/glm-5p3",
+    "input_usd_per_million": 1.4,
+    "output_usd_per_million": 4.4
+  },
+  "conditional_replication_plan": {
+    "declared_at_utc": "2026-10-18T06:45:15.050617+00:00",
+    "trigger": "A valid wrong no-tools verdict in r1 and correct Solo and Debate verdicts with valid actual GPU evidence on permitted inputs. Audit evidence before selection.",
+    "selection": "Select at most three qualifying cases in increasing numeric case order; report every other case and every first-pass result separately.",
+    "fresh_trials": [
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "stop_rule": "Run all five fresh trials for every selected case, even if the separation disappears early. Do not edit source, contract, prompts, runtime or budget.",
+    "strict_success": "All five fresh trials must give a wrong no-tools verdict and correct tool verdicts with valid actual GPU evidence. Missing answers and abstentions do not count as correct.",
+    "scope": "Selected-case repeatability in this model and environment, not a population success rate or evidence that Debate outperforms Solo."
+  },
+  "gpu_qualification": {
+    "evidence_files": [
+      "qualification/r26.json"
+    ],
+    "cases": {
+      "case_154": {
+        "ground_truth": "trust",
+        "qualification_passed": true,
+        "kernel_sha256": "8123aa953ffa4a727b6a738d7a4e7a9152bc2628631a32f808dbfe283121cf15",
+        "problem_sha256": "4efec889df485d031080a9f5f153ee70b58bf37fb6cf593978a8171629c314b8",
+        "oracle_source_sha256": "f1895145ec81e5e5210f1a37d5bb41918a68b652e6828188f586464823f5332d",
+        "family": "complex_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r26.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      },
+      "case_155": {
+        "ground_truth": "reject",
+        "qualification_passed": true,
+        "kernel_sha256": "bf9aecbf3136a776b16ee2bd136f22b86a8efbedeb94cadb9ad6abffaa07977c",
+        "problem_sha256": "4efec889df485d031080a9f5f153ee70b58bf37fb6cf593978a8171629c314b8",
+        "oracle_source_sha256": "f1895145ec81e5e5210f1a37d5bb41918a68b652e6828188f586464823f5332d",
+        "family": "complex_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r26.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      }
+    },
+    "passed": true
+  },
+  "conditional_replication_selection": {
+    "selected_at_utc": "2026-10-18T06:50:36.272901+00:00",
+    "wave_selected_cases": [
+      "case_154"
+    ],
+    "selected_this_family": [
+      "case_154"
+    ],
+    "reason": "All six source-only first-pass verdicts are complete. Only case_154 is wrong. Its Solo and Debate verdicts are correct and have audited actual GPU numerical evidence. All other cases fail the predeclared wrong-no-tool selection condition.",
+    "evidence_review": "case_154 Solo t9 and Debate t8/t9/t18/t19 execute the actual candidate on legal inputs with public FP64 references. Coverage limits are retained; the independent arithmetic bound supplies the full-domain Accept basis.",
+    "repeat_driver_concurrent_trial_batches": 2,
+    "all_five_trials_required": true
+  },
+  "model_workflow_trials": 21,
+  "model_evaluation": {
+    "totals": {
+      "attempts": 6,
+      "outcomes": {
+        "wrong_verdict": 1,
+        "correct": 5
+      },
+      "audited_correct": 5,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 1.50383,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 18
+    },
+    "arms": {
+      "single_call": {
+        "attempts": 2,
+        "outcomes": {
+          "wrong_verdict": 1,
+          "correct": 1
+        },
+        "audited_correct": 1,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.026204,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "solo": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.35398,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 6
+      },
+      "debate": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 1.123646,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 12
+      }
+    },
+    "runs": [
+      {
+        "case": "case_154",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "wrong_verdict",
+        "usd": 0.014768,
+        "probes": 0,
+        "link": "traces_glm/case_154/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 1774,
+        "output_tokens": 2792,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_154",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.211199,
+        "probes": 4,
+        "link": "traces_glm/case_154/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 128030,
+        "output_tokens": 7263,
+        "llm_api_calls": 7
+      },
+      {
+        "case": "case_154",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.676962,
+        "probes": 6,
+        "link": "traces_glm/case_154/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 442395,
+        "output_tokens": 13093,
+        "llm_api_calls": 12
+      },
+      {
+        "case": "case_155",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.011436,
+        "probes": 0,
+        "link": "traces_glm/case_155/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 1867,
+        "output_tokens": 2005,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_155",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.142781,
+        "probes": 2,
+        "link": "traces_glm/case_155/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 74911,
+        "output_tokens": 8615,
+        "llm_api_calls": 5
+      },
+      {
+        "case": "case_155",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.446684,
+        "probes": 6,
+        "link": "traces_glm/case_155/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 284262,
+        "output_tokens": 11072,
+        "llm_api_calls": 7
+      }
+    ]
+  },
+  "semantic_evidence_audit": [
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "summary": "Wrong rejection. Claims cancellation amplifies FP32 product errors, but every finite FP16 product is exact in FP32. Its supposed b=65503 counterexample is outside the FP16 value domain (casts to65504). It also treats exponent bits as extra significand bits when asserting that65504*2^-24 must round. No tools or executed evidence.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r1/verdict.json",
+        "traces_glm/case_154/single_call/r1/response_thinking.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r2",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "output_tokens": 2824,
+      "summary": "Correct Accept without tools. Initially raises catastrophic cancellation, then recognizes that the FP16 products are exact in FP32 and severe cancellation yields an exactly representable difference; other additions have a small rounding error. It checks denominator range, correctly rounded division, masked lanes, offsets, shared read-only backing and fresh output. Intermediate reasoning repeatedly uses overly loose operand-scale error bounds before correcting itself, and estimates the smallest FP16 square ten times too small; neither alters the correct safe-range conclusion. The final argument is qualitative rather than the exact3u-style bound, but identifies the actual control mechanism. No runtime evidence.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r2/response_thinking.txt",
+        "traces_glm/case_154/single_call/r2/verdict.json",
+        "traces_glm/case_154/single_call/r2/usage.json"
+      ],
+      "valid_gpu_comparison": false,
+      "valid_reasoning": true
+    },
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r3",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "output_tokens": 581,
+      "summary": "Correct Accept without tools. The reasoning immediately identifies the decisive fact: each finite FP16 product needs at most22 significant bits, so both products are exact in FP32. Each sum then introduces at most one rounding, followed by div_rn. It checks FP16 extrema, minimum-subnormal squares2^-48, zero numerators, masked lanes and pointer indexing. This is the correct control mechanism, not a coincidentally correct label; the claimed error fits the author whole-domain bound. No runtime evidence.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r3/response_thinking.txt",
+        "traces_glm/case_154/single_call/r3/verdict.json",
+        "traces_glm/case_154/single_call/r3/usage.json"
+      ],
+      "valid_gpu_comparison": false,
+      "valid_reasoning": true
+    },
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_reasoning": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Accept without tools. The model first applies a loose operand-scale error estimate to cancellation. It then corrects the argument: the FP16 products are exact in FP32, and the subsequent sum rounds relative to its exact result. Including numerator addition, denominator addition and div_rn gives approximately3u, below the relative tolerance. It briefly uses65503, which is not representable in FP16, but does not retain that invalid trial value as a failing witness. Range estimates are loose; no real execution occurs.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r4/response_thinking.txt",
+        "traces_glm/case_154/single_call/r4/verdict.json"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r5",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_reasoning": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Accept without tools. The model initially confuses loss of relative accuracy from rounded operands with addition of exact FP16 products. It explicitly corrects this and recognizes exact products plus one rounded addition. Its final approximately2u estimate omits denominator rounding; including that term still gives the independent bound below5e-7. It checks finite range and storage-offset addressing from source. No actual GPU or CPU execution occurs.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r5/response_thinking.txt",
+        "traces_glm/case_154/single_call/r5/verdict.json"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "single_call",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_reasoning": true,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Accept without tools. The short response immediately identifies exact FP16 products in FP32, possible one-rounding errors in each sum, and correctly rounded division. It checks maximum-value range and masked lanes. Its approximate relative-error estimate is informal rather than the full3u bound, but it recognizes both numerator and denominator rounding and the correct mechanism. The response does not prove the entire tensor API or minimum-value range. No GPU or CPU execution occurs.",
+      "evidence": [
+        "traces_glm/case_154/single_call/r6/response_thinking.txt",
+        "traces_glm/case_154/single_call/r6/verdict.json"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with actual GPU numerical checks and a relevant exact-product argument. Successful t9 compared1,228,740 components with the public FP64 reference: zero failures/nonfinite outputs. It repaired t6/t7 shape errors and t8 rank error. Coverage claims overstate the probe: clones reset storage offsets and separate claimed shared storage; the special grid uses identical numerator/denominator; preservation checks only the last numerator. Sampled tuples do not cover the full legal domain. Source reasoning recognizes FP16 products are exact inFP32; full-domain label support comes from separate qualification/proof, not the finite sample alone.",
+      "evidence": [
+        "traces_glm/case_154/solo/r1/verdict.json",
+        "traces_glm/case_154/solo/r1/transcript.md",
+        "traces_glm/case_154/solo/r1/probes/t9_probe.py",
+        "traces_glm/case_154/solo/r1/probes/t9_stdout.txt",
+        "traces_glm/case_154/solo/r1/probes/t6_stderr.txt",
+        "traces_glm/case_154/solo/r1/probes/t7_stderr.txt",
+        "traces_glm/case_154/solo/r1/probes/t8_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r2",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance. SuccessfulGPUt7 compared2,457,600 legal rows to the publicFP64 reference with zero tolerance violations. It sampled positivefiniteFP16 encodings with randomsigns and generated structured tuples; this does not enumerate the four-component input domain. Reported worst_excess_ratio=-1 is the untouched no-failure sentinel, not a measured error/tolerance bound. The claimed adjacent-grid cancellation construction is inaccurate: u andv1 are adjacent, but the two subtracted factorsv1/v2 are not generally adjacent becausev2 is independently random. Source reasoning correctly notes allFP16 products are exactFP32 and subsequent RN sums/division admit a small relative bound. No offset/alias/backing-preservation/fresh-output checks in this successfulprobe. Prior t6 CPU/CUDA device mismatch retained.",
+      "evidence": [
+        "traces_glm/case_154/solo/r2/verdict.json",
+        "traces_glm/case_154/solo/r2/transcript.md",
+        "traces_glm/case_154/solo/r2/probes/t7_probe.py",
+        "traces_glm/case_154/solo/r2/probes/t7_stdout.txt",
+        "traces_glm/case_154/solo/r2/probes/t6_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r3",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with realGPUt7/t10 and publicFP64 references. t7 selected100,000 rows with strongest cancellation from4million CPU-generated candidates, then executed those100,000 rows (not all4million); zero failures, maximumerror/tolerance0.297902185, plus4,093 benign rows. t10 compared20,000 edge tuples and2,500 overlapping shared-storage rows with a real nonzero denominator offset: zero failures, maxima0.185716612 and0.242828182. It also checked preservation on a separate1,000-row pair. These are sampled checks, not exhaustive legal tuples or complete tensor behavior. Source reasoning correctly uses exactFP16 products, but its summary omits the denominator-sum rounding term; the independent qualification supplies the full bound. Earlier t6/t9 probes exceeded legalN and failed validation; retained. No explicit fresh-output/backing-guard check.",
+      "evidence": [
+        "traces_glm/case_154/solo/r3/verdict.json",
+        "traces_glm/case_154/solo/r3/transcript.md",
+        "traces_glm/case_154/solo/r3/probes/t7_probe.py",
+        "traces_glm/case_154/solo/r3/probes/t7_stdout.txt",
+        "traces_glm/case_154/solo/r3/probes/t10_probe.py",
+        "traces_glm/case_154/solo/r3/probes/t10_stdout.txt",
+        "traces_glm/case_154/solo/r3/probes/t6_stderr.txt",
+        "traces_glm/case_154/solo/r3/probes/t9_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with actualGPUt10 and an independent directFP64 formula. Successful comparisons cover884,211 legal rows across16 non-skipped groups, zero failures, maxerror/tolerance0.284690921; a separate777-row call checks inputpreservation and output shape/dtype/device. The full-domain claim is unsupported by this finite sample. Coverage defects: nominalbig samples use10**exponents11..14 then replace allFP16 infinities withzero, so big_over_subnormal actually haszero numerators and subnormal_over_big is skipped. allpairs_x_allpairs uses two identical repeat/tile sequences, not a Cartesian cross-product; subnormal_over_subnormal likewise divides eachvalue byitself. No fresh-storage pointer check despite the output_shape_dtype_fresh label, and no offsets/alias/backing-guard tests. Earlier t6 oversizedN,t7 nonfinite,t8 zero-denominator,t9 emptyinput errors retained. Source claim correctly cites exactFP16products and an approximately1.8e-7 relative bound.",
+      "evidence": [
+        "traces_glm/case_154/solo/r4/verdict.json",
+        "traces_glm/case_154/solo/r4/transcript.md",
+        "traces_glm/case_154/solo/r4/probes/t10_probe.py",
+        "traces_glm/case_154/solo/r4/probes/t10_stdout.txt",
+        "traces_glm/case_154/solo/r4/probes/t6_stderr.txt",
+        "traces_glm/case_154/solo/r4/probes/t7_stderr.txt",
+        "traces_glm/case_154/solo/r4/probes/t8_stderr.txt",
+        "traces_glm/case_154/solo/r4/probes/t9_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r5",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with actualGPUt9 publicFP64 comparisons:1,329,308 components, zero failures, maxerror/tolerance0.322854892. Earlier t8 successfully logged another120,000 structured-cancellation components before an oversized laterprobe failed; combined retained successful comparisons1,449,308 components, not approximately1.6million. Inputs for successful groups are legal afterclamping and zero-denominator repair. The3200-row grid cycles repeated numerator/denominator pairings rather than exhausting all400x8 combinations. No inputpreservation, fresh-storage, offsets or alias checks; cloning inputs cannot establish original preservation. Numerical source argument recognizes exactFP16products but finalreason omits numerator-sum rounding; its6e23 quotient maximum is a very loose upperbound, not actualmaximum. Earlier t6 FP16uniformrange,t7 nonfinite,t8 oversizedN errors retained. Finite samples support acceptance together with independent proof, not exhaustive verification.",
+      "evidence": [
+        "traces_glm/case_154/solo/r5/verdict.json",
+        "traces_glm/case_154/solo/r5/transcript.md",
+        "traces_glm/case_154/solo/r5/probes/t9_probe.py",
+        "traces_glm/case_154/solo/r5/probes/t9_stdout.txt",
+        "traces_glm/case_154/solo/r5/probes/t8_probe.py",
+        "traces_glm/case_154/solo/r5/probes/t8_stdout.txt",
+        "traces_glm/case_154/solo/r5/probes/t6_stderr.txt",
+        "traces_glm/case_154/solo/r5/probes/t7_stderr.txt",
+        "traces_glm/case_154/solo/r5/probes/t8_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "solo",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with actualGPUt10 and the unchanged publicFP64 reference. It compared298,248 components (149,124rows), zero violations/nonfinite outputs, maxerror/tolerance0.310417948. Tests include randomfinite-bit tuples afterfiltering,400 independentlychosen exponent-grid tuples,400 extreme tuples and4093example rows. The advertised cancellation-prone tuples are not selected by an actual cancellation criterion. EarlierGPUt6 uses28legalrows but casts the FP64 reference toFP32 beforecomparison; its reportedzero absoluteerror does not measure error against the mathematical target and is not independent decisive accuracy evidence. t10 corrects referenceprecision and is valid. t9 first failed on nonfinite generatedinputs and was repaired. No runtimeoffset/alias/preservation/fresh-output checks. Source explanation correctly notes exactFP16products, but saying the hypothesis was rebutted across the declared domain exceeds the finite numerical coverage; the independent source-bound proof supplies full-domain arithmetic support.",
+      "evidence": [
+        "traces_glm/case_154/solo/r6/verdict.json",
+        "traces_glm/case_154/solo/r6/transcript.md",
+        "traces_glm/case_154/solo/r6/probes/t10_probe.py",
+        "traces_glm/case_154/solo/r6/probes/t10_stdout.txt",
+        "traces_glm/case_154/solo/r6/probes/t6_probe.py",
+        "traces_glm/case_154/solo/r6/probes/t6_stdout.txt",
+        "traces_glm/case_154/solo/r6/probes/t9_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "summary": "Correct acceptance with actualGPUt8,t9,t18,t19 and the publicFP64 reference. Successful completed probes covered7+819200+1107600+7864320=9,791,127 rows (19,582,254 components), zero failures, maximumerror/tolerance0.340667489. This is sampled numerical evidence, not all legal tuples or all tensor behaviors; these probes did not check offsets, aliasing, input/backing preservation or fresh allocation. The intended cancellation generator clamps negative divisors to1e-30 and filters many rows, so its advertised cancellation coverage is incomplete. Earlier t12 supplied nonfinite inputs; t13 had dtype errors; both were repaired and retained. The final statement that FP16 products are exact in many cases is weaker than the actual all-FP16 exact-product fact. Independent qualification supplies the full-domain arithmetic bound.",
+      "evidence": [
+        "traces_glm/case_154/debate/r1/verdict.json",
+        "traces_glm/case_154/debate/r1/transcript.md",
+        "traces_glm/case_154/debate/r1/probes/t8_probe.py",
+        "traces_glm/case_154/debate/r1/probes/t8_stdout.txt",
+        "traces_glm/case_154/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_154/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_154/debate/r1/probes/t18_probe.py",
+        "traces_glm/case_154/debate/r1/probes/t18_stdout.txt",
+        "traces_glm/case_154/debate/r1/probes/t19_probe.py",
+        "traces_glm/case_154/debate/r1/probes/t19_stdout.txt",
+        "traces_glm/case_154/debate/r1/probes/t12_stderr.txt",
+        "traces_glm/case_154/debate/r1/probes/t13_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r2",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "correct_label": true,
+      "summary": "Correct Trust with3 actual GPU calls. t9 compares6 rows and t10 compares10 rows to the public FP64 mathematical reference using the required separate-component tolerance; all32 component comparisons pass. t11 runs6241 legal edge-grid rows and checks only finiteness of12482 outputs, not their accuracy; duplicate source literals become identical FP16 values. This is not a full-domain sweep. The t9 maximum-ratio log reports0 whenever there is no violation, so it is not a true error/tolerance maximum; the printed arrays give approximately0.0481644, not the final verdict claim around2e-5. t10 correctly reports0.000194215. Products are exact for FP16 operands, but numerator addition can also round; the final claim that only denominator addition and division round is too broad. None of these overclaims creates a failing input or changes the independently established fixed Accept label. No offset, alias, input-preservation or fresh-output tests are executed.",
+      "evidence": [
+        "traces_glm/case_154/debate/r2/verdict.json",
+        "traces_glm/case_154/debate/r2/probes/t9_probe.py",
+        "traces_glm/case_154/debate/r2/probes/t9_stdout.txt",
+        "traces_glm/case_154/debate/r2/probes/t10_probe.py",
+        "traces_glm/case_154/debate/r2/probes/t10_stdout.txt",
+        "traces_glm/case_154/debate/r2/probes/t11_probe.py",
+        "traces_glm/case_154/debate/r2/probes/t11_stdout.txt"
+      ],
+      "gpu_kernel_calls": 3,
+      "gpu_numeric_comparison_calls": 2,
+      "compared_scalar_outputs": 32,
+      "finiteness_only_scalar_outputs": 12482
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r3",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "correct_label": true,
+      "summary": "Correct Trust with3 valid GPU comparisons against the public FP64 reference: t8 has5 rows, t9 has2108 extreme/random rows, and t12 has3000 rows; all10226 component comparisons pass. t12 reports max error/tolerance0.243949512. Its final assertion of3000 genuine near-cancellation tuples is false: the initial14-value grid search finds zero tuples satisfying its0<relative cancellation<1e-3 condition, so the fallback executes without that predicate. Reconstructing the recorded deterministic fallback gives1825 unique tuples,448 exact cancellations and zero strict near-cancellation tuples. The data still supply valid finite numerical checks, not the claimed targeted stress coverage. This is not exhaustive verification of all FP16 quadruples or tensor layouts. No alias, nonzero-offset, input-preservation or fresh-output checks are executed.",
+      "evidence": [
+        "traces_glm/case_154/debate/r3/verdict.json",
+        "traces_glm/case_154/debate/r3/probes/t8_probe.py",
+        "traces_glm/case_154/debate/r3/probes/t8_stdout.txt",
+        "traces_glm/case_154/debate/r3/probes/t9_probe.py",
+        "traces_glm/case_154/debate/r3/probes/t9_stdout.txt",
+        "traces_glm/case_154/debate/r3/probes/t12_probe.py",
+        "traces_glm/case_154/debate/r3/probes/t12_stdout.txt"
+      ],
+      "gpu_kernel_calls": 3,
+      "gpu_numeric_comparison_calls": 3,
+      "compared_scalar_outputs": 10226,
+      "claimed_near_cancellation_rows": 3000,
+      "actual_strict_near_cancellation_rows": 0,
+      "actual_exact_cancellation_rows_in_fallback": 448,
+      "unique_fallback_tuples": 1825
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "correct_label": true,
+      "summary": "Correct Trust with6 real candidate GPU comparisons over84404 rows/168808 components, all finite and within the required componentwise tolerance; largest reported ratio0.300720829. t9 covers4 inputs including484 corner-pair rows,65536 normal-distribution rows with b=-a,8192 large-numerator/tiny-denominator rows and8192 large-denominator rows. Calling all65536 rows near-cancellation is too broad: denominators are independent random components, so b=-a alone does not make a*c+b*d small. The484-row corner input repeats/truncates selected denominator pairs and is not the full Cartesian product. t11 correctly tests identical input objects and overlapping contiguous views with genuine nonzero offsets; it snapshots and checks preservation only for the identical-object case, not the overlap backing storage, despite the final combined preservation claim. No output-allocation check is performed. Separately t10 runs a custom div_rn helper on1048576 FP32 divisions and finds exact agreement with an FP64-then-FP32 reference; this is evidence about the helper on sampled inputs, not additional executions of the candidate kernel or a complete correctly-rounded-division proof. Source product-precision reasoning plus bounded tests supports the fixed Accept result.",
+      "evidence": [
+        "traces_glm/case_154/debate/r4/verdict.json",
+        "traces_glm/case_154/debate/r4/probes/t9_probe.py",
+        "traces_glm/case_154/debate/r4/probes/t9_stdout.txt",
+        "traces_glm/case_154/debate/r4/probes/t10_probe.py",
+        "traces_glm/case_154/debate/r4/probes/t10_stdout.txt",
+        "traces_glm/case_154/debate/r4/probes/t11_probe.py",
+        "traces_glm/case_154/debate/r4/probes/t11_stdout.txt"
+      ],
+      "gpu_kernel_calls": 6,
+      "gpu_numeric_comparison_calls": 6,
+      "compared_scalar_outputs": 168808,
+      "separate_helper_gpu_calls": 1,
+      "separate_helper_scalar_divisions": 1048576
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r5",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "correct_label": true,
+      "summary": "Correct Trust with120 completed, reported candidate GPU comparisons covering1208994 rows/2417988 components against a separately written CPU FP64 implementation of the direct formula. t12 runs7 batches totaling699994 rows with no violations, max error/tolerance0.330897977; t13 runs109 fixed-denominator batches and4 mixed-extreme batches totaling509000 rows with no violations, max ratio0.239388278. The finite FP16 bank contains all63488 encodings, but drawing random tuples from that bank is not exhaustive verification of all quadruples. The99994-row targeted set solves d=-a*c/b before FP16 rounding;16914 cases replace nonfinite or zero ideal d with65504, so not all rows retain the intended cancellation property. t8 and t10 each execute one additional legal candidate call but crash before printing its numerical results; these two calls are not counted as confirmed passing comparisons. t9 exceeds the public row limit and t11 fails a size assertion before GPU execution. These are repaired probe construction/reporting failures, not kernel failures. No storage-offset, alias, preservation or independent-allocation checks occur.",
+      "evidence": [
+        "traces_glm/case_154/debate/r5/verdict.json",
+        "traces_glm/case_154/debate/r5/probes/t12_probe.py",
+        "traces_glm/case_154/debate/r5/probes/t12_stdout.txt",
+        "traces_glm/case_154/debate/r5/probes/t13_probe.py",
+        "traces_glm/case_154/debate/r5/probes/t13_stdout.txt",
+        "traces_glm/case_154/debate/r5/probes/t8_probe.py",
+        "traces_glm/case_154/debate/r5/probes/t8_stderr.txt",
+        "traces_glm/case_154/debate/r5/probes/t9_stderr.txt",
+        "traces_glm/case_154/debate/r5/probes/t10_probe.py",
+        "traces_glm/case_154/debate/r5/probes/t10_stderr.txt",
+        "traces_glm/case_154/debate/r5/probes/t11_stderr.txt"
+      ],
+      "gpu_kernel_calls": 122,
+      "gpu_numeric_comparison_calls_with_reported_results": 120,
+      "compared_scalar_outputs_with_reported_results": 2417988,
+      "additional_candidate_calls_without_reported_numeric_results": 2,
+      "targeted_rows_with_replaced_cancellation_value": 16914
+    },
+    {
+      "case": "case_154",
+      "arm": "debate",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "correct_label": true,
+      "summary": "Correct Trust with2 legal candidate GPU comparisons:98839 and98755 rows, totaling395188 component comparisons against the public FP64 reference, zero violations and max error/tolerance0.177364098. The final coverage description is materially overstated. Reconstructing each recorded deterministic300000-row full-bit-pattern CPU search finds zero selected nonzero cancellation tuples and zero selected exact-cancellation tuples; none of those random tuples reach the GPU. Actual GPU inputs come entirely from100000 random choices of the short extreme-value list, filtered for nonzero denominator, with39206 and39094 unique FP16 quadruples. The computed idx3keep cancellation filter is never used, and the source comment says dedupe but no deduplication occurs. Therefore these probes are finite extreme-grid samples, not full-finite-FP16 coverage or successful directed full-domain cancellation search. No nonzero-offset, alias, preservation or independent-allocation checks occur. Passing results are valid bounded evidence consistent with the independently established Accept label; they do not by themselves prove all legal inputs.",
+      "evidence": [
+        "traces_glm/case_154/debate/r6/verdict.json",
+        "traces_glm/case_154/debate/r6/probes/t8_probe.py",
+        "traces_glm/case_154/debate/r6/probes/t8_stdout.txt",
+        "traces_glm/case_154/debate/r6/probes/t9_probe.py",
+        "traces_glm/case_154/debate/r6/probes/t9_stdout.txt"
+      ],
+      "gpu_kernel_calls": 2,
+      "gpu_numeric_comparison_calls": 2,
+      "compared_scalar_outputs": 395188,
+      "full_bit_random_search_selected_rows": [
+        0,
+        0
+      ],
+      "full_bit_random_search_exact_cancellation_selected_rows": [
+        0,
+        0
+      ],
+      "unique_fp16_quadruples_per_probe": [
+        39206,
+        39094
+      ]
+    },
+    {
+      "case": "case_155",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "summary": "Correct rejection, with a legal proposed witness[-65472,65504]/[1000,999.5], but no executed evidence. Independent24-bit MPFR reconstruction gives realerror7.656381905e-7 versus allowed1.001880940e-7. Its final explanation incorrectly assigns a large-product ULP error to the fused multiply-add; FMA rounds the cancelled result, and the dominant error comes from the previously rounded ratio. Earlier reasoning notices ratio error but the final rationale confuses the mechanisms and treats an upper error bound as an observed error.",
+      "evidence": [
+        "traces_glm/case_155/single_call/r1/verdict.json",
+        "traces_glm/case_155/single_call/r1/response_thinking.txt"
+      ]
+    },
+    {
+      "case": "case_155",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Correct rejection with validGPUt6 inputs and publicFP64 reference; maximum error/tolerance12.772424 proves a legal failure. The final narrative conflates maximum absolute error6.510416679e-4 with the near-zero failing component: those maxima arise on different rows/components. CPU24 reconstruction identifies[1000,3000]/[7,21] imaginary output1.277242404e-6 versus exact0; [65504,65504]/[3,-3] has the largest absolute error but passes its relative tolerance. No separate per-componentGPUoutput was retained because focused t7 was blocked by the ledger before execution. The aggregate GPUcomparison still decisively establishes rejection.",
+      "evidence": [
+        "traces_glm/case_155/solo/r1/verdict.json",
+        "traces_glm/case_155/solo/r1/transcript.md",
+        "traces_glm/case_155/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_155/solo/r1/probes/t6_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_155",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "summary": "Correct rejection from actualGPUt13/t14 with legalFP16 values and independent directFP64 reference computations. t13 found99/600 failing components: numerator[65472,-65504], denominator[-0.9912109375,-0.99072265625], realactual-0.13595731556415558 versus exact rational-65536/484573=-0.1352448444300446, error0.000712471134111, allowed1.67622422215e-7, ratio4250.45244. t14 found7/8 rows failing and a simple witness[-29776,65504]/[11,5], realactual-0.10952218621969223 versus exact-8/73, ratio431.89433. Two earlier probes failed due to non-FP16 dtype; retained. t15 valid extreme/subnormal tests rebutted an overflow claim. A t14 passing row is printed as c2053 although FP16 stores2052; its oracle still used the actual cast input, and decisive witnesses are exactly representable. Source explanation correctly identifies ratio-rounding amplification.",
+      "evidence": [
+        "traces_glm/case_155/debate/r1/verdict.json",
+        "traces_glm/case_155/debate/r1/transcript.md",
+        "traces_glm/case_155/debate/r1/probes/t13_probe.py",
+        "traces_glm/case_155/debate/r1/probes/t13_stdout.txt",
+        "traces_glm/case_155/debate/r1/probes/t14_probe.py",
+        "traces_glm/case_155/debate/r1/probes/t14_stdout.txt",
+        "traces_glm/case_155/debate/r1/probes/t15_probe.py",
+        "traces_glm/case_155/debate/r1/probes/t15_stdout.txt",
+        "traces_glm/case_155/debate/r1/probes/t10_stderr.txt",
+        "traces_glm/case_155/debate/r1/probes/t11_stderr.txt"
+      ]
+    }
+  ],
+  "conditional_replication": {
+    "status": "completed",
+    "completed_at_utc": "2026-10-18T07:01:57.885304+00:00",
+    "selected_cases": [
+      "case_154"
+    ],
+    "results": {
+      "totals": {
+        "attempts": 15,
+        "outcomes": {
+          "correct": 15
+        },
+        "audited_correct": 15,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 2.846669,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 36
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.046892,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 1.271309,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 19
+        },
+        "debate": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 1.528468,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 17
+        }
+      },
+      "runs": [
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.014909,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 2824,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.00504,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 581,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.014223,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 2668,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.008974,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 1475,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.003746,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 287,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.140891,
+          "probes": 2,
+          "link": "traces_glm/case_154/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 74532,
+          "output_tokens": 8306,
+          "llm_api_calls": 5
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.269538,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 157346,
+          "output_tokens": 11194,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.285032,
+          "probes": 5,
+          "link": "traces_glm/case_154/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 169397,
+          "output_tokens": 10881,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.244014,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 137370,
+          "output_tokens": 11749,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.331834,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 198678,
+          "output_tokens": 12201,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.261043,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 166367,
+          "output_tokens": 6393,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.247481,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 153235,
+          "output_tokens": 7489,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.260625,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 163309,
+          "output_tokens": 7271,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.45009,
+          "probes": 6,
+          "link": "traces_glm/case_154/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 281387,
+          "output_tokens": 12761,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.309229,
+          "probes": 2,
+          "link": "traces_glm/case_154/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 162446,
+          "output_tokens": 18592,
+          "llm_api_calls": 6
+        }
+      ]
+    },
+    "strict_five_repeat_passed": false,
+    "protocol_audit": [
+      {
+        "arm": "single_call",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "single_call",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "solo",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "arm": "debate",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      }
+    ],
+    "cost_scope": "Conservative model API estimate from captured usage; excludes Modal GPU charges. This is not an invoice.",
+    "interpretation": "The follow-up case was selected after its first-pass gap. Keep fresh trials separate from the first pass. Correct verdicts do not validate all reasoning or coverage claims. This experiment does not isolate tool access from additional reasoning.",
+    "including_initial_selected_case": {
+      "totals": {
+        "attempts": 18,
+        "outcomes": {
+          "wrong_verdict": 1,
+          "correct": 17
+        },
+        "audited_correct": 17,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 3.749598,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 46
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 6,
+          "outcomes": {
+            "wrong_verdict": 1,
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.06166,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 6,
+          "outcomes": {
+            "correct": 6
+          },
+          "audited_correct": 6,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 1.482508,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 23
+        },
+        "debate": {
+          "attempts": 6,
+          "outcomes": {
+            "correct": 6
+          },
+          "audited_correct": 6,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 2.20543,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 23
+        }
+      },
+      "runs": [
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r1",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "wrong_verdict",
+          "usd": 0.014768,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 2792,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.014909,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 2824,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.00504,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 581,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.014223,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 2668,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.008974,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 1475,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "single_call",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.003746,
+          "probes": 0,
+          "link": "traces_glm/case_154/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 1774,
+          "output_tokens": 287,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r1",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.211199,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 128030,
+          "output_tokens": 7263,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.140891,
+          "probes": 2,
+          "link": "traces_glm/case_154/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 74532,
+          "output_tokens": 8306,
+          "llm_api_calls": 5
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.269538,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 157346,
+          "output_tokens": 11194,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.285032,
+          "probes": 5,
+          "link": "traces_glm/case_154/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 169397,
+          "output_tokens": 10881,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.244014,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 137370,
+          "output_tokens": 11749,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_154",
+          "arm": "solo",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.331834,
+          "probes": 4,
+          "link": "traces_glm/case_154/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 198678,
+          "output_tokens": 12201,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r1",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.676962,
+          "probes": 6,
+          "link": "traces_glm/case_154/debate/r1/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 442395,
+          "output_tokens": 13093,
+          "llm_api_calls": 12
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r2",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.261043,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 166367,
+          "output_tokens": 6393,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r3",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.247481,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 153235,
+          "output_tokens": 7489,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r4",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.260625,
+          "probes": 3,
+          "link": "traces_glm/case_154/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 163309,
+          "output_tokens": 7271,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r5",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.45009,
+          "probes": 6,
+          "link": "traces_glm/case_154/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 281387,
+          "output_tokens": 12761,
+          "llm_api_calls": 8
+        },
+        {
+          "case": "case_154",
+          "arm": "debate",
+          "trial": "r6",
+          "truth": "trust",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "correct",
+          "usd": 0.309229,
+          "probes": 2,
+          "link": "traces_glm/case_154/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 162446,
+          "output_tokens": 18592,
+          "llm_api_calls": 6
+        }
+      ]
+    }
+  }
+}

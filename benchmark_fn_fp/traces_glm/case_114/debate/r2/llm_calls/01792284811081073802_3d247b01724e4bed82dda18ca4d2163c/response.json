@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-48f5cf9f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The prior probe failed due to a Python bug: the `.to(dev)` reassignment inside a tuple loop didn't take effect, so the kernel launched on CPU tensors. I'll rerun with tensors properly created on CUDA.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-841fa1e7391ea51e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, math, importlib.util\\nimport torch\\nimport triton\\n\\nspec = importlib.util.spec_from_file_location(\\\"k114\\\", \\\"/root/cases/case_114/kernel.py\\\")\\nk114 = importlib.util.module_from_spec(spec); spec.loader.exec_module(k114)\\n\\ndev = \\\"cuda\\\"\\nB, QT, HQ, HK, D, PAGE = 1, 33, 2, 1, 64, 16\\nlength, window, P = 130, 50, 16\\n\\ng = torch.Generator().manual_seed(7)\\nq = (2*torch.rand((B, QT, HQ, D), generator=g)-1).half().to(dev)\\nk = torch.zeros((P, PAGE, HK, D), dtype=torch.float16, device=dev)\\nv = torch.zeros_like(k)\\ntable = torch.arange(P, dtype=torch.int32, device=dev).reshape(1, P)\\nlengths = torch.tensor([length], dtype=torch.int32, device=dev)\\n\\nlo = length - QT - window + 1  # 48\\nfor t in range(lo, length):\\n    p, s = t // PAGE, t % PAGE\\n    k[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\\n    v[p, s] = (2*torch.rand((HK, D), generator=g)-1).half()\\nk[:3] = float(\\\"nan\\\"); v[:3] = float(\\\"nan\\\")  # positions 0..47 NaN, expired for all queries\\n\\nb, qt, hq, d = q.shape\\npage, hk = k.shape[1:3]\\ngroup = hq // hk\\nbq = 16 // group\\nout = torch.empty_like(q)\\nk114._paged_attention[(triton.cdiv(qt, bq), hk, b)](\\n    q, k, v, table, lengths, out,\\n    QT=qt, HQ=hq, HK=hk, D=d, PAGE=page, TABLE_WIDTH=table.shape[1],\\n    GROUP=group, WINDOW=window, SCALE=1.0/math.sqrt(d), BQ=bq,\\n    num_warps=4, enable_fp_fusion=False,\\n)\\ntorch.cuda.synchronize()\\n\\nref = torch.empty(q.shape, dtype=torch.float64, device=dev)\\nfor bb in range(b):\\n    ctx = int(lengths[bb]) - qt\\n    for r in range(qt):\\n        end = ctx + r + 1\\n        begin = max(0, end - window)\\n        pos = torch.arange(begin, end, device=dev)\\n        mapped = table[bb, pos // page].long()\\n        kk = k[mapped, pos % page].double()\\n        vv = v[mapped, pos % page].double()\\n        for h in range(hq):\\n            kh = h // group\\n            s = (kk[:, kh] * q[bb, r, h].double()[None]).sum(-1) / math.sqrt(d)\\n            p_ = torch.softmax(s, dim=0)\\n            ref[bb, r, h] = (p_[:, None] * vv[:, kh]).sum(0)\\n\\nfinite = bool(torch.isfinite(out).all())\\nnan_rows = int(torch.isnan(out).any(dim=-1).sum().item())\\ndiff = (out.double() - ref).abs()\\ntol = 0.003 + 0.003 * ref.abs()\\nresult = {\\\"output_finite\\\": finite, \\\"nan_or_inf_elements\\\": nan_rows,\\n          \\\"max_abs_err\\\": float(diff.max()) if finite else None,\\n          \\\"tolerance_ratio\\\": float((diff / tol).max()) if finite else None,\\n          \\\"tol_pass\\\": bool(finite and (diff <= tol).all().item())}\\nprint(json.dumps(result))\\n\", \"expected_signal\": \"If contamination occurs, output contains NaN while FP64 reference is finite; otherwise finite and within 0.003 tolerance.\", \"timeout_s\": 240}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The probe failed: tensors weren't moved to CUDA because \"for t in (...): t = t.to(dev)\" doesn't reassign. Fix and rerun."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284813,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 941,
+    "prompt_tokens": 27271,
+    "total_tokens": 28212,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 33,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 12225,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

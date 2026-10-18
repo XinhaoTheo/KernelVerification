@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-f3c730c3",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a numeric probe against the kernel covering all N values, extreme inputs, storage offsets, and input preservation.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a7b520e6fc2c06ae",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport json, torch, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kernel\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nkernel = importlib.util.module_from_spec(spec); spec.loader.exec_module(kernel)\\ndev = \\\"cuda\\\"\\nresults = {}\\ndef check(tag, values):\\n    before = values.clone()\\n    out = kernel.run(values)\\n    ref = kernel.reference(values).to(torch.float64)\\n    err = (out.to(torch.float64) - ref).abs()\\n    tol = 1e-4 + 1e-6*ref.abs()\\n    ok_shape = tuple(out.shape) == (values.shape[0], values.shape[1]//2+1, 2)\\n    preserved = torch.equal(before, values)\\n    results[tag] = {\\n        \\\"max_err\\\": float(err.max()),\\n        \\\"n_violations\\\": int((err > tol).sum()),\\n        \\\"finite\\\": bool(torch.isfinite(out).all()),\\n        \\\"shape_ok\\\": bool(ok_shape),\\n        \\\"contig\\\": out.is_contiguous(),\\n        \\\"dtype\\\": str(out.dtype),\\n        \\\"input_preserved\\\": bool(preserved),\\n        \\\"fresh_storage\\\": out.data_ptr() != values.data_ptr(),\\n    }\\n\\nfor n in (64, 128, 256):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(n)\\n    v = torch.randn((5, n), generator=g).to(torch.float16).to(dev)\\n    check(f\\\"randn_N{n}\\\", v)\\n    # alternating signs at max magnitude\\n    v = torch.where(torch.arange(n, device=dev) % 2 == 0,\\n                    torch.full((n,), 65504., device=dev),\\n                    torch.full((n,), -65504., device=dev)).to(torch.float16).unsqueeze(0).repeat(3,1)\\n    check(f\\\"altmax_N{n}\\\", v)\\n    # subnormals\\n    v = (torch.randn((3, n), generator=torch.Generator().manual_seed(99)) * 6e-8).to(torch.float16).to(dev)\\n    check(f\\\"subnorm_N{n}\\\", v)\\n    # single spike (impulse)\\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[0,7] = 65504.; v[1,3] = -1.0\\n    check(f\\\"impulse_N{n}\\\", v)\\n    # all signed zeros\\n    v = torch.zeros((2, n), dtype=torch.float16, device=dev); v[1,:] = -0.0\\n    check(f\\\"zeros_N{n}\\\", v)\\n\\n# storage offset: legal per contract\\nbase = torch.randn((4, 128*2+4), generator=torch.Generator().manual_seed(5)).to(torch.float16).to(dev)\\nv = base[1:3, 4:4+128].contiguous()\\ncheck(\\\"offset_like_N128\\\", v)\\nv2 = base.as_strided((2,128), (128,1), storage_offset=7)\\ncheck(\\\"offset_view_N128\\\", v2)\\n\\nprint(json.dumps(results, indent=1))\\nprint(\\\"ANY_FAIL\\\", any((not r[\\\"finite\\\"]) or r[\\\"n_violations\\\"]>0 or not r[\\\"shape_ok\\\"] or not r[\\\"contig\\\"] or not r[\\\"input_preserved\\\"] or not r[\\\"fresh_storage\\\"] for r in results.values()))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe testing the kernel across all N values and input distributions."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310142,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 778,
+    "prompt_tokens": 12803,
+    "total_tokens": 13581,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 14,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7808,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

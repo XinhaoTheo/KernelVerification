@@ -1,0 +1,2617 @@
+{
+  "experiment": "packed_real_fft_layout_2026-10-18",
+  "status": "completed",
+  "cases": [
+    "case_162",
+    "case_163"
+  ],
+  "family": "realfft_pair",
+  "expected_labels": {
+    "case_162": "trust",
+    "case_163": "reject"
+  },
+  "expected_label_status": "Declared before any GPU or model evaluation. Control has a full-domain roundoff bound and complete impulse-basis operator checks. Defect has legal failing impulse inputs in source evaluation. GPU qualification remains required.",
+  "fixed_contract": {
+    "input_dtype": "float16",
+    "shape": "[B,N],1<=B<=256,N in {64,128,256}",
+    "domain": "Every finite FP16 input row, including signed zero, subnormals and finite extremes. No distribution or frequency restriction.",
+    "output_dtype": "float32",
+    "output_shape": "[B,N/2+1,2]",
+    "comparison": "Real and imaginary components of the exact unnormalized forward DFT, each with its own tolerance.",
+    "atol": 0.0001,
+    "rtol": 1e-06
+  },
+  "source_provenance": [
+    {
+      "project": "KISS FFT",
+      "revision": "131.1.0",
+      "url": "https://github.com/mborgerding/kissfft/blob/131.1.0/kiss_fftr.c",
+      "symbols": [
+        "kiss_fftr",
+        "kiss_fftr_alloc"
+      ],
+      "relevance": "Primary implementation of a half-length complex FFT followed by paired-frequency reconstruction of a real transform. Our kernel is a synthetic Triton implementation with a DIF transform and explicit output-layout composition, not a copied upstream bug."
+    },
+    {
+      "project": "CMSIS-DSP",
+      "revision": "v1.16.0 documentation",
+      "url": "https://arm-software.github.io/CMSIS-DSP/v1.16.0/group__RealFFT.html",
+      "relevance": "Primary documentation describes real input packing into a complex transform and subsequent extraction of the nonredundant spectrum."
+    }
+  ],
+  "construction": "Both kernels pack even samples as real components and odd samples as imaginary components, execute a radix-2 DIF complex FFT, and reconstruct the real spectrum. The DIF output uses bit-reversed frequency storage. Case162 reverses the negative logical frequency when locating the conjugate partner. Case163 instead negates the already reversed address. These two operations do not commute. Both kernels use the same full contract and differ by one address expression.",
+  "selection_rule": "Keep both fixed kernels and every model outcome. Do not change source, requirements, tolerances or legal inputs based on a model response. Input examples establish evidence about a kernel; they do not receive separate labels.",
+  "limitations": [
+    "The implementations are synthetic adaptations of standard real FFT methods, not historical upstream bug reproductions.",
+    "Complete impulse bases check frequency indexing and transform behavior on those inputs. Floating-point execution is not literally linear; full-domain acceptance uses the mathematical transform identity and FP64 roundoff bound. GPU tests do not exhaust all input tensors.",
+    "No assumption that source-only reasoning must miss a layout-composition defect. Older permutation cases have been solved without tools."
+  ],
+  "model_calls_performed": 93,
+  "gpu_calls_performed": false,
+  "cpu_audit": {
+    "passed": true,
+    "arithmetic": {
+      "passed": true,
+      "stage_bounds": [
+        {
+          "stage": 1,
+          "ideal_component_magnitude_bound": 262016.0,
+          "error_bound": 2.32716956816148e-10
+        },
+        {
+          "stage": 2,
+          "ideal_component_magnitude_bound": 1048064.0,
+          "error_bound": 1.861735654529184e-09
+        },
+        {
+          "stage": 3,
+          "ideal_component_magnitude_bound": 4192256.0,
+          "error_bound": 1.1170413927175105e-08
+        },
+        {
+          "stage": 4,
+          "ideal_component_magnitude_bound": 16769024.0,
+          "error_bound": 5.957554094493389e-08
+        },
+        {
+          "stage": 5,
+          "ideal_component_magnitude_bound": 67076096.0,
+          "error_bound": 2.9787770472466946e-07
+        },
+        {
+          "stage": 6,
+          "ideal_component_magnitude_bound": 268304384.0,
+          "error_bound": 1.4298129826784134e-06
+        },
+        {
+          "stage": 7,
+          "ideal_component_magnitude_bound": 1073217536.0,
+          "error_bound": 6.672460585832596e-06
+        }
+      ],
+      "pre_output_absolute_error_bound": 2.3830216377973557e-05,
+      "final_absolute_error_term": 2.383021779836514e-05,
+      "final_relative_error_term": 5.960464477539063e-08,
+      "proof": [
+        "The mathematical half-length radix-2 DIF transform is followed by the standard even/odd real-FFT reconstruction. DIF output index reverse(k) contains complex coefficient k. The reconstruction needs the conjugate of coefficient (-k) mod M, so the partner address is reverse((-k) mod M).",
+        "All finite binary16 inputs convert exactly to binary64. Each stored sine or cosine has magnitude at most1 and absolute error at mostu=2^-53, certified independently against MPFR roots.",
+        "Let R bound each exact intermediate component and E bound its absolute error. InitiallyR=65504,E=0. One butterfly gives newR=4R and newE=4E+32uR. This bounds two input errors, a rounded difference, both coefficient errors, two rounded products and a rounded sum. The sum branch has a smaller bound. E<R holds at every stage, so computed component magnitudes stay below2R.",
+        "There are at most7complex stages. Reconstruction forms a sum and difference of two coefficients, multiplies the difference by one root, adds, then divides by2. Its component error is at most3E+32uR. DC and Nyquist use simple sums and differences with smaller bounds.",
+        "All nonzero table values are multiples of2^-58. With at most8root multiplications and one exact factor1/2, nonzero intermediates are bounded below by2^-489; magnitudes are below2^35. Thus no FP64 underflow or overflow occurs. The FP32 store error is at mostu32*abs(value)+2^-126, allowing for a possible flush of a subnormal FP32 result. The resulting absolute and relative bounds are below the public1e-4 and1e-6tolerances.",
+        "This argument covers every finite FP16 row. Complete impulse bases check frequency indexing and the implemented transform on those inputs at each supported width. Floating-point execution is not literally linear, so basis tests alone do not prove all-input accuracy. The roundoff argument supplies that coverage; GPU tests separately check lowering and tensor behavior."
+      ]
+    },
+    "source_binding": {
+      "case_162": {
+        "kernel_sha256": "a62a2fef7f364103af396f9f45ad6cb6f272932b4d65aeb2d436e86a31db485e",
+        "partner_address": "_reverse(-k & M - 1, LOG_M)",
+        "implicit_fma_disabled": true
+      },
+      "case_163": {
+        "kernel_sha256": "240c767cba9e274f7f1d4968459d56e2d9779ed0db0c1845713fca1a48b9cfb4",
+        "partner_address": "-address & M - 1",
+        "implicit_fma_disabled": true
+      }
+    },
+    "root_table_audit": {
+      "coefficients": 65,
+      "max_absolute_error_upper_bound": 5.3683132708358134e-17,
+      "mpfr_precision": 256,
+      "high_precision_error_budget": 5.659799424266695e-73,
+      "passed": true
+    },
+    "cases": {
+      "case_162": {
+        "expected_label": "trust",
+        "basis_checks": [
+          {
+            "numeric_passed": true,
+            "finite": true,
+            "elements": 4224,
+            "definite_failures": 0,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.9739473106360492e-08,
+            "max_abs_error_upper_bound": 2.973950162474286e-08,
+            "max_error_tolerance_ratio": 0.0002945065394585944,
+            "max_reference_radius": 2.851838236353894e-14,
+            "witness": null,
+            "width": 64,
+            "style": "complete_impulse_basis",
+            "rows": 64,
+            "public_reference_within_contract": true
+          },
+          {
+            "numeric_passed": true,
+            "finite": true,
+            "elements": 16640,
+            "definite_failures": 0,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.9739473106360492e-08,
+            "max_abs_error_upper_bound": 2.9739530046452292e-08,
+            "max_error_tolerance_ratio": 0.0002945068209152038,
+            "max_reference_radius": 5.694009179394416e-14,
+            "witness": null,
+            "width": 128,
+            "style": "complete_impulse_basis",
+            "rows": 128,
+            "public_reference_within_contract": true
+          },
+          {
+            "numeric_passed": true,
+            "finite": true,
+            "elements": 66048,
+            "definite_failures": 0,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.9739473106360492e-08,
+            "max_abs_error_upper_bound": 2.9739586900564487e-08,
+            "max_error_tolerance_ratio": 0.0002945073839343173,
+            "max_reference_radius": 1.1379420398703922e-13,
+            "witness": null,
+            "width": 256,
+            "style": "complete_impulse_basis",
+            "rows": 256,
+            "public_reference_within_contract": true
+          }
+        ],
+        "passed": true
+      },
+      "case_163": {
+        "expected_label": "reject",
+        "basis_checks": [
+          {
+            "numeric_passed": false,
+            "finite": true,
+            "elements": 4224,
+            "definite_failures": 3782,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.0,
+            "max_abs_error_upper_bound": 2.0000000000000293,
+            "max_error_tolerance_ratio": 19801.98019802013,
+            "max_reference_radius": 2.851838236353894e-14,
+            "witness": {
+              "batch_row": 2,
+              "frequency": 1,
+              "component": "real",
+              "input_row": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "actual": 0.7866343855857849,
+              "reference_center": 0.9807852804032304,
+              "reference_radius": 2.851838236353894e-14,
+              "error_lower_bound": 0.19415089481741696,
+              "allowed_error_upper_bound": 0.00010098078528040345
+            },
+            "width": 64,
+            "style": "complete_impulse_basis",
+            "rows": 64,
+            "public_reference_within_contract": true
+          },
+          {
+            "numeric_passed": false,
+            "finite": true,
+            "elements": 16640,
+            "definite_failures": 15750,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.0,
+            "max_abs_error_upper_bound": 2.0000000000000577,
+            "max_error_tolerance_ratio": 19801.980198020417,
+            "max_reference_radius": 5.694009179394416e-14,
+            "witness": {
+              "batch_row": 2,
+              "frequency": 1,
+              "component": "real",
+              "input_row": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "actual": 0.8972856402397156,
+              "reference_center": 0.9951847266721969,
+              "reference_radius": 5.694009179394416e-14,
+              "error_lower_bound": 0.09789908643242438,
+              "allowed_error_upper_bound": 0.00010099518472667244
+            },
+            "width": 128,
+            "style": "complete_impulse_basis",
+            "rows": 128,
+            "public_reference_within_contract": true
+          },
+          {
+            "numeric_passed": false,
+            "finite": true,
+            "elements": 66048,
+            "definite_failures": 64262,
+            "interval_ambiguous_elements": 0,
+            "max_abs_error": 2.0,
+            "max_abs_error_upper_bound": 2.0000000000001146,
+            "max_error_tolerance_ratio": 19801.980198020992,
+            "max_reference_radius": 1.1379420398703922e-13,
+            "witness": {
+              "batch_row": 2,
+              "frequency": 1,
+              "component": "real",
+              "input_row": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "actual": 0.9497425556182861,
+              "reference_center": 0.9987954562051724,
+              "reference_radius": 1.1379420398703922e-13,
+              "error_lower_bound": 0.04905290058677247,
+              "allowed_error_upper_bound": 0.00010099879545620547
+            },
+            "width": 256,
+            "style": "complete_impulse_basis",
+            "rows": 256,
+            "public_reference_within_contract": true
+          }
+        ],
+        "passed": true
+      }
+    },
+    "oracle": "Independent direct DFT matrix, with256-bit MPFR roots and a conservative FP64 matrix-product error envelope.",
+    "scope": "Complete impulse bases check indexing and transform behavior on those inputs. Floating-point execution is not literally linear. The mathematical transform identity and roundoff bound cover all legal FP16 inputs for the control.",
+    "oracle_dependency_hashes": {
+      "realfft_pair.py": "1a87807a64d484b71a9a3fe1f1a1ef88f41827cdecb61a37c7015f0aa45f989a"
+    }
+  },
+  "pre_gpu_hashes": {
+    "case_162": {
+      "kernel.py": "a62a2fef7f364103af396f9f45ad6cb6f272932b4d65aeb2d436e86a31db485e",
+      "problem.txt": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    "case_163": {
+      "kernel.py": "240c767cba9e274f7f1d4968459d56e2d9779ed0db0c1845713fca1a48b9cfb4",
+      "problem.txt": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+      "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    }
+  },
+  "model_evaluation_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "wave": "20261018_scan_winograd_realfft",
+    "first_pass_cases": [
+      "case_158",
+      "case_159",
+      "case_160",
+      "case_161",
+      "case_162",
+      "case_163"
+    ],
+    "first_pass_trials_per_case_arm": 1,
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "trial": "r1",
+    "model": "accounts/fireworks/models/glm-5p3",
+    "provider": "fireworks",
+    "reasoning_effort": "low",
+    "total_output_token_budget_per_case_arm": 32768,
+    "tool_turn_output_cap": 8192,
+    "solo_max_rounds": 10,
+    "debate_max_rounds": 4,
+    "debate_closeout_reserve": 8192,
+    "require_claim_scope_fields": true,
+    "frozen_environment": "NVIDIA T4; PyTorch2.8.0; Triton3.4.0; NumPy1.26.4",
+    "public_input_files": [
+      "kernel.py",
+      "problem.txt"
+    ],
+    "private_oracles_or_other_cases_visible": false,
+    "pre_evaluation_hashes": {
+      "case_162": {
+        "kernel.py": "a62a2fef7f364103af396f9f45ad6cb6f272932b4d65aeb2d436e86a31db485e",
+        "problem.txt": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      },
+      "case_163": {
+        "kernel.py": "240c767cba9e274f7f1d4968459d56e2d9779ed0db0c1845713fca1a48b9cfb4",
+        "problem.txt": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+        "meta.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+      }
+    },
+    "verifier_sha256": "25882c44d1773a6dbbd01d9a50258b31384c143b14fccbfd288ef46f7ab379ab",
+    "qualification_gate": "Actual GPU independent qualification must freeze each case before any paid model call.",
+    "retention": "Retain every result and all raw requests, responses, reasoning, usage, tool code, stdout/stderr and verdicts; never replace wrong answers.",
+    "pricing_checked_at": "2026-10-18",
+    "pricing_source": "https://fireworks.ai/models/fireworks/glm-5p3",
+    "input_usd_per_million": 1.4,
+    "output_usd_per_million": 4.4
+  },
+  "conditional_replication_plan": {
+    "declared_at_utc": "2026-10-18T07:38:26.138157+00:00",
+    "trigger": "A valid wrong no-tools verdict in r1 and correct Solo and Debate verdicts with valid actual GPU evidence on permitted inputs. Audit evidence before selection.",
+    "selection": "Select at most three qualifying cases in increasing numeric case order; report every other case and every first-pass result separately.",
+    "fresh_trials": [
+      "r2",
+      "r3",
+      "r4",
+      "r5",
+      "r6"
+    ],
+    "arms": [
+      "single_call",
+      "solo",
+      "debate"
+    ],
+    "stop_rule": "Run all five fresh trials for every selected case, even if the separation disappears early. Do not edit source, contract, prompts, runtime or budget.",
+    "strict_success": "All five fresh trials must give a wrong no-tools verdict and correct tool verdicts with valid actual GPU evidence. Missing answers and abstentions do not count as correct.",
+    "scope": "Selected-case repeatability in this model and environment, not a population success rate or evidence that Debate outperforms Solo."
+  },
+  "private_oracle_revision_history": [
+    {
+      "timestamp_utc": "2026-10-18T07:39:03.192011+00:00",
+      "reason": "Independent review: outward-round subtraction before combining intervals, use conservative FP32 subnormal flush allowance, clarify basis tests do not establish floating-point linearity. Public kernels and requirements are unchanged.",
+      "previous_hashes": {
+        "realfft_pair.py": "d51a7a9389beb14f92401adece0cee8165d25ea23c91cc4581e9a8afe47dc648"
+      },
+      "new_hashes": {
+        "realfft_pair.py": "1a87807a64d484b71a9a3fe1f1a1ef88f41827cdecb61a37c7015f0aa45f989a"
+      },
+      "cpu_audit_passed": true
+    }
+  ],
+  "gpu_qualification": {
+    "status": "passed",
+    "evidence_file": "qualification/r28.json",
+    "cases": {
+      "case_162": {
+        "ground_truth": "trust",
+        "qualification_passed": true,
+        "kernel_sha256": "a62a2fef7f364103af396f9f45ad6cb6f272932b4d65aeb2d436e86a31db485e",
+        "problem_sha256": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+        "oracle_source_sha256": "1a87807a64d484b71a9a3fe1f1a1ef88f41827cdecb61a37c7015f0aa45f989a",
+        "family": "realfft_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r28.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      },
+      "case_163": {
+        "ground_truth": "reject",
+        "qualification_passed": true,
+        "kernel_sha256": "240c767cba9e274f7f1d4968459d56e2d9779ed0db0c1845713fca1a48b9cfb4",
+        "problem_sha256": "1fd1d3fc0f5a3ee211ff4b117125245d9c07777c92ee44447e066afbd10f439f",
+        "oracle_source_sha256": "1a87807a64d484b71a9a3fe1f1a1ef88f41827cdecb61a37c7015f0aa45f989a",
+        "family": "realfft_pair",
+        "environment": {
+          "gpu": "Tesla T4",
+          "compute_capability": [
+            7,
+            5
+          ],
+          "torch": "2.8.0+cu128",
+          "triton": "3.4.0",
+          "numpy": "1.26.4",
+          "python": "3.11.12"
+        },
+        "evidence_file": "qualification/r28.json",
+        "label_scope": "fixed implementation under the entire public contract; not per-input compliance"
+      }
+    },
+    "batch_note": "Both FFT cases completed all qualification plans successfully. The shared index write aborted because the unrelated affine family failed to compile. Root verified current public and oracle hashes against r28 and copied only these fully qualified FFT records; the affine failure remains retained and awaits repair."
+  },
+  "conditional_replication_selection": {
+    "selected_at_utc": "2026-10-18T07:49:38.023603+00:00",
+    "wave_selected_cases": [
+      "case_159",
+      "case_163"
+    ],
+    "selected_this_family": [
+      "case_163"
+    ],
+    "first_pass_decisions": [
+      {
+        "case": "case_158",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_159",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_160",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_161",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_162",
+        "eligible": false,
+        "outcomes": {
+          "single_call": "correct",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      },
+      {
+        "case": "case_163",
+        "eligible": true,
+        "outcomes": {
+          "single_call": "wrong_verdict",
+          "solo": "correct",
+          "debate": "correct"
+        },
+        "tool_evidence": {
+          "solo": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          },
+          "debate": {
+            "valid_decisive_evidence": true,
+            "valid_gpu_comparison": true
+          }
+        }
+      }
+    ],
+    "reason": "Apply the frozen first-pass rule to all six cases after semantic review of actual GPU evidence. All five fresh repetitions will run for every selected case."
+  },
+  "model_workflow_trials": 21,
+  "model_evaluation": {
+    "totals": {
+      "attempts": 6,
+      "outcomes": {
+        "correct": 5,
+        "wrong_verdict": 1
+      },
+      "audited_correct": 5,
+      "audit_issue_attempts": 0,
+      "recorded_api_estimate_usd": 1.480614,
+      "unknown_cost_attempts": 0,
+      "partial_cost_attempts": 0,
+      "probes": 12
+    },
+    "arms": {
+      "single_call": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 1,
+          "wrong_verdict": 1
+        },
+        "audited_correct": 1,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.05834,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 0
+      },
+      "solo": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 0.352587,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 3
+      },
+      "debate": {
+        "attempts": 2,
+        "outcomes": {
+          "correct": 2
+        },
+        "audited_correct": 2,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 1.069687,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 9
+      }
+    },
+    "runs": [
+      {
+        "case": "case_162",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.025671,
+        "probes": 0,
+        "link": "traces_glm/case_162/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 2908,
+        "output_tokens": 4909,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_162",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.15863,
+        "probes": 2,
+        "link": "traces_glm/case_162/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 93457,
+        "output_tokens": 6316,
+        "llm_api_calls": 5
+      },
+      {
+        "case": "case_162",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "trust",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "correct",
+        "usd": 0.750612,
+        "probes": 5,
+        "link": "traces_glm/case_162/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 493723,
+        "output_tokens": 13500,
+        "llm_api_calls": 12
+      },
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "trust",
+        "outcome": "wrong_verdict",
+        "usd": 0.032669,
+        "probes": 0,
+        "link": "traces_glm/case_163/single_call/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 2903,
+        "output_tokens": 6501,
+        "llm_api_calls": 1
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.193957,
+        "probes": 1,
+        "link": "traces_glm/case_163/solo/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 121073,
+        "output_tokens": 5558,
+        "llm_api_calls": 4
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r1",
+        "truth": "reject",
+        "status": "completed",
+        "verdict": "reject",
+        "outcome": "correct",
+        "usd": 0.319075,
+        "probes": 4,
+        "link": "traces_glm/case_163/debate/r1/transcript.md",
+        "audit_issues": [],
+        "input_tokens": 182927,
+        "output_tokens": 14313,
+        "llm_api_calls": 6
+      }
+    ]
+  },
+  "semantic_evidence_audit": [
+    {
+      "case": "case_162",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Accept without tools. The reasoning derives the packed real-FFT reconstruction, checks DIF bit-reversal and reverse((-k) mod M) partner indexing, bounds root-table addresses, and gives a plausible FP64-to-FP32 accuracy argument. It briefly makes arithmetic and quadrant mistakes but corrects them. No executed test or independently certified numerical bound is present.",
+      "evidence": [
+        "traces_glm/case_162/single_call/r1/response_thinking.txt",
+        "traces_glm/case_162/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_162",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with actual GPU sample evidence. Probe t6 crashes on an out-of-domain nonfinite bigrand input; t7 repairs generation and completes39 comparisons (not33 as claimed), covering156176 components at N64/128/256 and B1/7/8/256, with zero violations and worst error/tolerance ratio0.0583490003. The comparison uses the separate CPU FP64 library reference. Correct shape/dtype/contiguity, finite output and logical input equality are checked. No offset or backing-storage guard tests are present; separate data pointers are checked rather than storage pointers, and equality does not detect signed-zero bit changes. These finite samples support the label but do not prove the entire legal domain or rebut the existence of every possible counterexample.",
+      "evidence": [
+        "traces_glm/case_162/solo/r1/transcript.md",
+        "traces_glm/case_162/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_162/solo/r1/probes/t6_stderr.txt",
+        "traces_glm/case_162/solo/r1/probes/t7_probe.py",
+        "traces_glm/case_162/solo/r1/probes/t7_stdout.txt",
+        "traces_glm/case_162/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_162",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Accept with actual GPU sample evidence. t9 performs9 full-spectrum comparisons atB7; t10 separately checks15 Nyquist outputs and zero imaginary components; t19 performs12 finite-extreme comparisons atB4; t20 performs9 actual offset-view comparisons at offsets3/17/257. All supported widths are covered. There are22246 full-spectrum component comparisons plus30 Nyquist components, with no tolerance failures. t11 fails during input construction due to an incorrect reshape and provides no numerical evidence. t19 maximum absolute error is0.11341437 on large values, but every component passes the relative/absolute threshold. The final universal-accept wording exceeds these samples. In particular t20 input_preserved compares a view with the same live backing storage after execution, so it is a tautology and does not verify preservation; no before-copy, backing guard or fresh-storage comparison is present in these probes.",
+      "evidence": [
+        "traces_glm/case_162/debate/r1/transcript.md",
+        "traces_glm/case_162/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_162/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_162/debate/r1/probes/t10_probe.py",
+        "traces_glm/case_162/debate/r1/probes/t10_stdout.txt",
+        "traces_glm/case_162/debate/r1/probes/t11_stderr.txt",
+        "traces_glm/case_162/debate/r1/probes/t19_probe.py",
+        "traces_glm/case_162/debate/r1/probes/t19_stdout.txt",
+        "traces_glm/case_162/debate/r1/probes/t20_probe.py",
+        "traces_glm/case_162/debate/r1/probes/t20_stdout.txt",
+        "traces_glm/case_162/debate/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r1",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Incorrect Accept. It derives valid reconstruction formulas assuming the partner value is Z[M-k], but never checks that (-bit_reverse(k)) mod M differs from bit_reverse((-k) mod M). Most effort goes to signs, DIF butterflies and quadrant folding; it checks the partner only at k=0 where the two addresses agree. It also incorrectly simplifies DC to the even-sample sum in places. There is no executed counterexample or numerical comparison.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r1/response_thinking.txt",
+        "traces_glm/case_163/single_call/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r2",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The model explicitly checks the partner address but incorrectly equates modular negation with bitwise complement, omitting the +1 carry. It therefore claims that bit reversal commutes with negation and accepts the wrong address. Its later derivation repairs a separate imaginary-sign mistake, but never repairs the indexing identity. No execution was available. At M=32,k=1, reverse(-k mod M)=31 while -reverse(k) mod M=16.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r2/transcript.md",
+        "traces_glm/case_163/single_call/r2/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Reject. The reasoning eventually identifies the true noncommuting address operations after repeatedly considering and rejecting the false identity. The final explicit numerical example uses N=8, outside the legal widths, and is not a legal benchmark counterexample. Its general source diagnosis still applies at legal widths; verdict remains correct. Some intermediate statements and the final Z[M-1-k]-like description confuse modular negation with complement. No execution was available.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r3/transcript.md",
+        "traces_glm/case_163/single_call/r3/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r4",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. The model states that partner=(-address) mod M supplies Z[M-k], then verifies the real-FFT formula under that false premise. It later correctly explains the bit-reversed storage and the primary address, but never applies that explanation to the partner. Checks of DC, Nyquist, twiddles and FP64 precision do not address the wrong partner index. No execution.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r4/transcript.md",
+        "traces_glm/case_163/single_call/r4/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Correct Reject with a correct general source diagnosis and an explicit legal index check: M=32,k=1 needs partner31 but uses16. Its final numeric example is outside the input domain (N=8) and also wrong: packed z=[1,i,0,0] corresponds to x=[1,0,0,1,0,0,0,0], whose exact frequency1 real part is about0.2929, not1.707. The model confuses packed real positions several times. Retain the correct verdict and flag the invalid numerical witness separately. No execution.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r5/transcript.md",
+        "traces_glm/case_163/single_call/r5/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "single_call",
+      "trial": "r6",
+      "verdict": "trust",
+      "valid_decisive_evidence": false,
+      "valid_gpu_comparison": false,
+      "summary": "Wrong Accept. It initially paraphrases the partner as (-k) mod M and assumes the gathered value is Z[M-k], instead of following the actual (-address) expression in bit-reversed storage. Later it checks the actual expression only at k=0, where the addresses coincide. Correct formula, twiddle, DC/Nyquist and precision checks therefore leave the source indexing defect unexamined. No execution.",
+      "evidence": [
+        "traces_glm/case_163/single_call/r6/transcript.md",
+        "traces_glm/case_163/single_call/r6/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject supported by actual T4 comparisons. Solo initially says the mathematics checks out, then changes its decision after probe t6. The 42 completed legal comparisons include 24 failed checks and 157157 failed output components across all three widths; the three bigrand inputs contain nonfinite FP16 values and fail validation, so they are excluded. First seeded B1,N64 input has 62/66 failed components and maximum error14.4819643949. A deterministic impulse at input index5 also fails at every width, and the N256 ramp has maximum error10554.6749216. The final text incorrectly says62/130 and full legal domain: only B1,3,4,5,7,8,256 and selected inputs were tested. Actual offset views are tested; only logical input values are compared, not whole backing storage, signed-zero bits or fresh output allocation. The code defect is not isolated, but the legal failures are decisive.",
+      "evidence": [
+        "traces_glm/case_163/solo/r1/transcript.md",
+        "traces_glm/case_163/solo/r1/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r1/probes/t6_stdout.txt",
+        "traces_glm/case_163/solo/r1/probes/t6_json_result.json",
+        "traces_glm/case_163/solo/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject after initial source reasoning repeatedly says the algorithm is correct and assumes (-bit_reverse(k)) indexes the required partner. Probe t6 aborts on a CPU/CUDA device mismatch. Probe t7 aborts on nonfinite FP16 input made by randn*20000; neither aborted probe provides retained completed numerical evidence. Repaired t8 asserts finiteness and completes 20 legal comparisons (126,812 components), with 14 failed comparisons and 119,745 failed components. It uses a separately written CPU FP64 direct DFT and cross-checks the public library reference on one input to about9.9e-13. First N64,B1 comparison has62/66 failed components and maximum error20.33670063; the final62/130 denominator is wrong. A real offset view is tested. Input preservation and output separation checks use logical equality and data pointers, not whole-storage guards or storage pointers. Calling this full-domain coverage or an exact FP64 DFT overstates the evidence, but many large legal failures are decisive. Passing random subnormal inputs follows the absolute tolerance, not necessarily special symmetry.",
+      "evidence": [
+        "traces_glm/case_163/solo/r2/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r2/probes/t6_stderr.txt",
+        "traces_glm/case_163/solo/r2/probes/t7_probe.py",
+        "traces_glm/case_163/solo/r2/probes/t7_stderr.txt",
+        "traces_glm/case_163/solo/r2/probes/t8_probe.py",
+        "traces_glm/case_163/solo/r2/probes/t8_stdout.txt",
+        "traces_glm/case_163/solo/r2/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU evidence. Probe t6 completes 27 numerical comparisons and 50,792 components; 18 comparisons and 45,322 components fail the stated tolerance against the public FP64 DFT reference. All three widths fail on seeded random inputs and an index-5 unit impulse. For N=64, seed=0, 434/462 components fail with maximum absolute error22.48062915. Large-magnitude inputs remain finite and pass input validation; there is no invalid-input failure in this run. A separate call checks logical input preservation. The final claim of nonzero-offset execution is false: the offset view is replaced by a clone, and check() clones every input again before the candidate call. No shared-backing or fresh-output check is performed. Verdict and numerical counterexamples are valid; the source-level partner-address defect is not isolated.",
+      "evidence": [
+        "traces_glm/case_163/solo/r3/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r3/probes/t6_stdout.txt",
+        "traces_glm/case_163/solo/r3/probes/t6_stderr.txt",
+        "traces_glm/case_163/solo/r3/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r4",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal actual GPU probe t6. It makes18 comparisons at B8 across all three widths and six input styles, covering21,792 components. Nine comparisons and10,608 components fail the public componentwise tolerance against torch.fft.rfft in FP64. Seeded random rows already fail at N64 (496/528 components; maximum error22.21605954). Random finite FP16 extreme rows and mixed magnitudes also fail; constant rows and an impulse at index0 pass. No invalid probe occurs. The global worst_ratio metric divides maximum error by maximum tolerance and is not the maximum componentwise ratio. Final1.6e6 repeats this misleading aggregate; the recorded true per-component maximum is about7.122e9. Tiny random subnormal rows pass because their errors lie below the absolute tolerance; they are not all symmetric or zero. No input-preservation, storage-offset or separate-storage check is made. The partner-address cause is not isolated.",
+      "evidence": [
+        "traces_glm/case_163/solo/r4/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r4/probes/t6_stdout.txt",
+        "traces_glm/case_163/solo/r4/probes/t6_stderr.txt",
+        "traces_glm/case_163/solo/r4/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject. Initial reasoning explicitly calls the kernel likely correct and wrongly assumes (-reverse(k)) mod M gives Z[M-k]. Probe t6 then supplies decisive legal GPU failures:17 comparisons cover7,330 components;8 comparisons and3,596 components fail the tolerance against the public FP64 rfft reference. Seeded random inputs fail at all three widths, and deterministic impulses at indices7 and3 fail. A genuine contiguous view with storage_offset7 is executed; another offset-like input is copied first. Every comparison records correct shape/dtype/contiguity, finite output and logical input preservation. The claimed fresh_storage check compares data pointers rather than backing-storage pointers; it does not prove disjoint storage generally. Whole backing guards and signed-zero bit preservation are not checked. No invalid probe occurs. The stdout ends with ANY_FAIL True rather than JSON, but the successful process and complete captured comparison object support the verdict. The precise partner-address error is not isolated.",
+      "evidence": [
+        "traces_glm/case_163/solo/r5/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r5/probes/t6_stdout.txt",
+        "traces_glm/case_163/solo/r5/probes/t6_stderr.txt",
+        "traces_glm/case_163/solo/r5/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "solo",
+      "trial": "r6",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject after initial reasoning says the math looks right. Probe t6 aborts while constructing out-of-range Python integers as INT16; t7 aborts while reshaping656 retained encodings into256x64. Their result lists were never printed, so neither supplies completed numerical evidence. Repaired t8 executes18 legal comparisons covering305,042 components; all18 comparisons fail somewhere, with273,145 total failing components and no nonfinite outputs. Seeded random N64,B1 alone gives62/66 failures and maximum error15.38250179. The direct comparison uses the public FP64 rfft reference; it is a numerical reference, not an exact mathematical DFT. Finite bit patterns are enumerated in order (all63,488 finite encodings are included in the N256 input), not all possible rows or independent uniform samples. The so-called single-frequency signals are pairs of opposite adjacent impulses, not sinusoidal tones. Final input-storage-preserved claim is unsupported: run_case() copies CPU v to CUDA, but preservation compares unchanged CPU v with its CPU clone. Output properties are checked only on the final call, with no separate-storage or offset assertion. These scope errors do not affect the large valid numerical counterexamples. The exact partner-address cause is not isolated.",
+      "evidence": [
+        "traces_glm/case_163/solo/r6/probes/t6_probe.py",
+        "traces_glm/case_163/solo/r6/probes/t6_stderr.txt",
+        "traces_glm/case_163/solo/r6/probes/t7_probe.py",
+        "traces_glm/case_163/solo/r6/probes/t7_stderr.txt",
+        "traces_glm/case_163/solo/r6/probes/t8_probe.py",
+        "traces_glm/case_163/solo/r6/probes/t8_stdout.txt",
+        "traces_glm/case_163/solo/r6/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r1",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject supported by several legal actual GPU counterexamples. The describer initially asserts that negating the bit-reversed address gives Z[M-k], which is the central false assumption; numerical probes refute the implementation. t9 checks FP16-rounded tone inputs against their actual FP64 DFT, with maximum error/tolerance ratio1128839.1876, and deterministic impulse rows produce122/252/508 failing components atN64/128/256. t10 constructs nonfinite FP16 values and aborts; it is explicitly marked inconclusive and is not evidence of a defect. Repaired t15 asserts finite inputs and produces310/630/1270 failing components for mixed finite extremes, worst ratio244943147.2517. t11 uses real offset views, finds numerical failures, and checks unchanged whole backing storage and separate output pointers. The final defect location remains broad rather than isolating the partner expression, but legal numerical failures suffice for the fixed Reject label.",
+      "evidence": [
+        "traces_glm/case_163/debate/r1/transcript.md",
+        "traces_glm/case_163/debate/r1/probes/t9_probe.py",
+        "traces_glm/case_163/debate/r1/probes/t9_stdout.txt",
+        "traces_glm/case_163/debate/r1/probes/t9_stderr.txt",
+        "traces_glm/case_163/debate/r1/probes/t10_stderr.txt",
+        "traces_glm/case_163/debate/r1/probes/t11_probe.py",
+        "traces_glm/case_163/debate/r1/probes/t11_stdout.txt",
+        "traces_glm/case_163/debate/r1/probes/t15_probe.py",
+        "traces_glm/case_163/debate/r1/probes/t15_stdout.txt",
+        "traces_glm/case_163/debate/r1/verdict.json"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r2",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject after GPU evidence reverses the initial source assessment. The skeptic assumes that bit reversal commuting with complement makes the negated-address partner correct; this confuses modular negation with bitwise complement. t8 finds 116688 failed components across all 9 N/B combinations. At N=256, B=256, 65024 of 66048 components fail, with maximum error 65.0345. This probe unnecessarily downcasts the reference to FP32, but the failures are overwhelmingly larger than reference rounding. t9 retains an FP64 reference and finds 508 of 1032 violations across 4 finite N=256 rows, with maximum error 2654372.19893 and ratio 125235292.098. Constant positive and negative rows pass; mixed-sign and large-random rows fail. The final attribution to Triton gather semantics is unsupported because it does not isolate the source indexing defect. The t8 input-preservation check compares values to a clone made after execution, so it is a tautology. The t9 worst_location field incorrectly decodes the flattened index. No probe process failed.",
+      "evidence": [
+        "traces_glm/case_163/debate/r2/transcript.md",
+        "traces_glm/case_163/debate/r2/verdict.json",
+        "traces_glm/case_163/debate/r2/probes/t8_probe.py",
+        "traces_glm/case_163/debate/r2/probes/t8_stdout.txt",
+        "traces_glm/case_163/debate/r2/probes/t9_probe.py",
+        "traces_glm/case_163/debate/r2/probes/t9_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r3",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with legal GPU comparisons. Both describer and skeptic initially say the source mathematics checks out; tests then expose the defect. t9 compares B=4 random rows at every supported width to an FP64 library FFT. Every interior frequency has at least one failing component, with maximum absolute errors 21.35485, 31.24864 and 42.02158, and maximum error/tolerance ratio 366105.14. t11 independently checks finite structured rows; its subnormal ramp with signed zeros fails at N=256 (error 0.00032033254, ratio 3.2033), while the constant and alternating extreme rows pass. t10 verifies Nyquist outputs on a separate 18-row sample. The verdict is decisive without a precise diagnosis of the partner-address error. Its phrase that DC and Nyquist are exact is too broad: t9 has small, allowed FP32 rounding at N=256, whereas exact equality only occurs in the separate t10 sample. No failed probe process, illegal input or storage-preservation evidence appears.",
+      "evidence": [
+        "traces_glm/case_163/debate/r3/transcript.md",
+        "traces_glm/case_163/debate/r3/verdict.json",
+        "traces_glm/case_163/debate/r3/probes/t9_probe.py",
+        "traces_glm/case_163/debate/r3/probes/t9_stdout.txt",
+        "traces_glm/case_163/debate/r3/probes/t10_probe.py",
+        "traces_glm/case_163/debate/r3/probes/t10_stdout.txt",
+        "traces_glm/case_163/debate/r3/probes/t11_probe.py",
+        "traces_glm/case_163/debate/r3/probes/t11_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r4",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject from legal actual GPU comparisons. The source review raises several transform risks but does not isolate the partner-address error. t11 compares 8 random FP16 rows at each supported width to an FP64 library FFT and finds maximum error/tolerance ratios approximately 215000, 297000 and 436000. These legal failures are decisive. t12 separately verifies Nyquist values for 4 finite rows per width. The extreme-input probes t13 and t17 both fail because summing two large sinusoids creates nonfinite FP16 inputs; t17 fails its finite assertion before calling the kernel. The final decision correctly excludes these invalid probes and leaves that claim inconclusive. No offset, preservation or fresh-storage coverage is established by these probes.",
+      "evidence": [
+        "traces_glm/case_163/debate/r4/transcript.md",
+        "traces_glm/case_163/debate/r4/verdict.json",
+        "traces_glm/case_163/debate/r4/probes/t11_probe.py",
+        "traces_glm/case_163/debate/r4/probes/t11_stdout.txt",
+        "traces_glm/case_163/debate/r4/probes/t12_probe.py",
+        "traces_glm/case_163/debate/r4/probes/t12_stdout.txt",
+        "traces_glm/case_163/debate/r4/probes/t13_probe.py",
+        "traces_glm/case_163/debate/r4/probes/t13_stderr.txt",
+        "traces_glm/case_163/debate/r4/probes/t17_probe.py",
+        "traces_glm/case_163/debate/r4/probes/t17_stderr.txt"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r5",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject with both an explicit source diagnosis and legal GPU evidence. Before running a probe, the skeptic correctly identifies that reverse((-k) mod M) and (-reverse(k)) mod M differ. The small M=4 hand example explains the index algebra rather than serving as a legal tensor counterexample. Its ancillary assertion that reading A[k] twice makes both dr and di zero is wrong: di is twice the imaginary component. This does not invalidate the partner-address diagnosis. t7 then executes B=7 random FP16 inputs at N=64/128/256 against the FP64 reference and reports 434/882/1778 failed components, maximum absolute errors 22.48063/40.57976/53.83612. Every interior bin fails on at least one tested row; DC and Nyquist pass. No failed probe or illegal runtime input appears. Here tools confirm an already correct diagnosis, rather than reversing an acceptance judgment.",
+      "evidence": [
+        "traces_glm/case_163/debate/r5/transcript.md",
+        "traces_glm/case_163/debate/r5/verdict.json",
+        "traces_glm/case_163/debate/r5/probes/t7_probe.py",
+        "traces_glm/case_163/debate/r5/probes/t7_stdout.txt"
+      ]
+    },
+    {
+      "case": "case_163",
+      "arm": "debate",
+      "trial": "r6",
+      "verdict": "reject",
+      "valid_decisive_evidence": true,
+      "valid_gpu_comparison": true,
+      "summary": "Correct Reject supported by legal actual GPU failures. The skeptic first says the source mathematics checks out and focuses on compiler/gather and precision risks. t9 executes a finite B=4, N=128 input and reports maximum error 34.42998. Two attempted direct-DFT references fail: t10 has incompatible matrix shapes, and t11 mixes real and complex matrix dtypes. Repaired t13 uses the FP64 library FFT and finds 593/1206/2446 failed components at N=64/128/256 across impulses, tones and random inputs; DC/alternating/constant rows pass. Repaired t14 completes 6 finite rows per width and finds 124/252/508 failures, with worst error/tolerance ratio 326015459.08665. Successful run validation establishes that its unseeded large-random rows happened to be legal in these recorded executions. Uniform subnormal and constant-extreme rows should not be described as individually failing merely because their aggregate batch fails. The cosine-table comparison is against host math.cos, not a certified exact oracle. The final claim that gather semantics caused the failure is not isolated; nonetheless the legal numerical failures decisively support Reject. No input preservation, offset or fresh-storage checks are present.",
+      "evidence": [
+        "traces_glm/case_163/debate/r6/transcript.md",
+        "traces_glm/case_163/debate/r6/verdict.json",
+        "traces_glm/case_163/debate/r6/probes/t9_probe.py",
+        "traces_glm/case_163/debate/r6/probes/t9_stdout.txt",
+        "traces_glm/case_163/debate/r6/probes/t10_probe.py",
+        "traces_glm/case_163/debate/r6/probes/t10_stderr.txt",
+        "traces_glm/case_163/debate/r6/probes/t11_probe.py",
+        "traces_glm/case_163/debate/r6/probes/t11_stderr.txt",
+        "traces_glm/case_163/debate/r6/probes/t13_probe.py",
+        "traces_glm/case_163/debate/r6/probes/t13_stdout.txt",
+        "traces_glm/case_163/debate/r6/probes/t14_probe.py",
+        "traces_glm/case_163/debate/r6/probes/t14_stdout.txt"
+      ]
+    }
+  ],
+  "conditional_replication": {
+    "status": "completed",
+    "completed_at_utc": "2026-10-18T08:04:47.824443+00:00",
+    "selected_cases": [
+      "case_163"
+    ],
+    "results": {
+      "totals": {
+        "attempts": 15,
+        "outcomes": {
+          "wrong_verdict": 3,
+          "correct": 12
+        },
+        "audited_correct": 12,
+        "audit_issue_attempts": 0,
+        "recorded_api_estimate_usd": 2.761348,
+        "unknown_cost_attempts": 0,
+        "partial_cost_attempts": 0,
+        "probes": 25
+      },
+      "arms": {
+        "single_call": {
+          "attempts": 5,
+          "outcomes": {
+            "wrong_verdict": 3,
+            "correct": 2
+          },
+          "audited_correct": 2,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.134608,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 0
+        },
+        "solo": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 0.829735,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 10
+        },
+        "debate": {
+          "attempts": 5,
+          "outcomes": {
+            "correct": 5
+          },
+          "audited_correct": 5,
+          "audit_issue_attempts": 0,
+          "recorded_api_estimate_usd": 1.797005,
+          "unknown_cost_attempts": 0,
+          "partial_cost_attempts": 0,
+          "probes": 15
+        }
+      },
+      "runs": [
+        {
+          "case": "case_163",
+          "arm": "single_call",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.020085,
+          "probes": 0,
+          "link": "traces_glm/case_163/single_call/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 2903,
+          "output_tokens": 3641,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_163",
+          "arm": "single_call",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.039115,
+          "probes": 0,
+          "link": "traces_glm/case_163/single_call/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 2903,
+          "output_tokens": 7966,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_163",
+          "arm": "single_call",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.015434,
+          "probes": 0,
+          "link": "traces_glm/case_163/single_call/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 2903,
+          "output_tokens": 2584,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_163",
+          "arm": "single_call",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.041403,
+          "probes": 0,
+          "link": "traces_glm/case_163/single_call/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 2903,
+          "output_tokens": 8486,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_163",
+          "arm": "single_call",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "trust",
+          "outcome": "wrong_verdict",
+          "usd": 0.018571,
+          "probes": 0,
+          "link": "traces_glm/case_163/single_call/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 2903,
+          "output_tokens": 3297,
+          "llm_api_calls": 1
+        },
+        {
+          "case": "case_163",
+          "arm": "solo",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.240483,
+          "probes": 3,
+          "link": "traces_glm/case_163/solo/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 133368,
+          "output_tokens": 12220,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_163",
+          "arm": "solo",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.128737,
+          "probes": 1,
+          "link": "traces_glm/case_163/solo/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 86169,
+          "output_tokens": 1841,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_163",
+          "arm": "solo",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.110167,
+          "probes": 1,
+          "link": "traces_glm/case_163/solo/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 71091,
+          "output_tokens": 2418,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_163",
+          "arm": "solo",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.113785,
+          "probes": 1,
+          "link": "traces_glm/case_163/solo/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 68867,
+          "output_tokens": 3948,
+          "llm_api_calls": 4
+        },
+        {
+          "case": "case_163",
+          "arm": "solo",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.236563,
+          "probes": 4,
+          "link": "traces_glm/case_163/solo/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 143403,
+          "output_tokens": 8136,
+          "llm_api_calls": 7
+        },
+        {
+          "case": "case_163",
+          "arm": "debate",
+          "trial": "r2",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.306022,
+          "probes": 2,
+          "link": "traces_glm/case_163/debate/r2/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 188865,
+          "output_tokens": 9457,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_163",
+          "arm": "debate",
+          "trial": "r3",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.398143,
+          "probes": 3,
+          "link": "traces_glm/case_163/debate/r3/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 237176,
+          "output_tokens": 15022,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_163",
+          "arm": "debate",
+          "trial": "r4",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.474854,
+          "probes": 4,
+          "link": "traces_glm/case_163/debate/r4/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 276912,
+          "output_tokens": 19813,
+          "llm_api_calls": 9
+        },
+        {
+          "case": "case_163",
+          "arm": "debate",
+          "trial": "r5",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.253095,
+          "probes": 1,
+          "link": "traces_glm/case_163/debate/r5/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 142857,
+          "output_tokens": 12067,
+          "llm_api_calls": 6
+        },
+        {
+          "case": "case_163",
+          "arm": "debate",
+          "trial": "r6",
+          "truth": "reject",
+          "status": "completed",
+          "verdict": "reject",
+          "outcome": "correct",
+          "usd": 0.364891,
+          "probes": 5,
+          "link": "traces_glm/case_163/debate/r6/transcript.md",
+          "audit_issues": [],
+          "input_tokens": 215917,
+          "output_tokens": 14229,
+          "llm_api_calls": 7
+        }
+      ]
+    },
+    "per_case": {
+      "case_163": {
+        "strict_five_repeat_passed": false,
+        "fresh": {
+          "totals": {
+            "attempts": 15,
+            "outcomes": {
+              "wrong_verdict": 3,
+              "correct": 12
+            },
+            "audited_correct": 12,
+            "audit_issue_attempts": 0,
+            "recorded_api_estimate_usd": 2.761348,
+            "unknown_cost_attempts": 0,
+            "partial_cost_attempts": 0,
+            "probes": 25
+          },
+          "arms": {
+            "single_call": {
+              "attempts": 5,
+              "outcomes": {
+                "wrong_verdict": 3,
+                "correct": 2
+              },
+              "audited_correct": 2,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.134608,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 0
+            },
+            "solo": {
+              "attempts": 5,
+              "outcomes": {
+                "correct": 5
+              },
+              "audited_correct": 5,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.829735,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 10
+            },
+            "debate": {
+              "attempts": 5,
+              "outcomes": {
+                "correct": 5
+              },
+              "audited_correct": 5,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 1.797005,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 15
+            }
+          },
+          "runs": [
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.020085,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 3641,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.039115,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 7966,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.015434,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 2584,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.041403,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 8486,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.018571,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 3297,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.240483,
+              "probes": 3,
+              "link": "traces_glm/case_163/solo/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 133368,
+              "output_tokens": 12220,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.128737,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 86169,
+              "output_tokens": 1841,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.110167,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 71091,
+              "output_tokens": 2418,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.113785,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 68867,
+              "output_tokens": 3948,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.236563,
+              "probes": 4,
+              "link": "traces_glm/case_163/solo/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 143403,
+              "output_tokens": 8136,
+              "llm_api_calls": 7
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.306022,
+              "probes": 2,
+              "link": "traces_glm/case_163/debate/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 188865,
+              "output_tokens": 9457,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.398143,
+              "probes": 3,
+              "link": "traces_glm/case_163/debate/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 237176,
+              "output_tokens": 15022,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.474854,
+              "probes": 4,
+              "link": "traces_glm/case_163/debate/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 276912,
+              "output_tokens": 19813,
+              "llm_api_calls": 9
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.253095,
+              "probes": 1,
+              "link": "traces_glm/case_163/debate/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 142857,
+              "output_tokens": 12067,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.364891,
+              "probes": 5,
+              "link": "traces_glm/case_163/debate/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 215917,
+              "output_tokens": 14229,
+              "llm_api_calls": 7
+            }
+          ]
+        },
+        "including_initial": {
+          "totals": {
+            "attempts": 18,
+            "outcomes": {
+              "wrong_verdict": 4,
+              "correct": 14
+            },
+            "audited_correct": 14,
+            "audit_issue_attempts": 0,
+            "recorded_api_estimate_usd": 3.307049,
+            "unknown_cost_attempts": 0,
+            "partial_cost_attempts": 0,
+            "probes": 30
+          },
+          "arms": {
+            "single_call": {
+              "attempts": 6,
+              "outcomes": {
+                "wrong_verdict": 4,
+                "correct": 2
+              },
+              "audited_correct": 2,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 0.167277,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 0
+            },
+            "solo": {
+              "attempts": 6,
+              "outcomes": {
+                "correct": 6
+              },
+              "audited_correct": 6,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 1.023692,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 11
+            },
+            "debate": {
+              "attempts": 6,
+              "outcomes": {
+                "correct": 6
+              },
+              "audited_correct": 6,
+              "audit_issue_attempts": 0,
+              "recorded_api_estimate_usd": 2.11608,
+              "unknown_cost_attempts": 0,
+              "partial_cost_attempts": 0,
+              "probes": 19
+            }
+          },
+          "runs": [
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.032669,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 6501,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.020085,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 3641,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.039115,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 7966,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.015434,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 2584,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.041403,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 8486,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "single_call",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "trust",
+              "outcome": "wrong_verdict",
+              "usd": 0.018571,
+              "probes": 0,
+              "link": "traces_glm/case_163/single_call/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 2903,
+              "output_tokens": 3297,
+              "llm_api_calls": 1
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.193957,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 121073,
+              "output_tokens": 5558,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.240483,
+              "probes": 3,
+              "link": "traces_glm/case_163/solo/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 133368,
+              "output_tokens": 12220,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.128737,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 86169,
+              "output_tokens": 1841,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.110167,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 71091,
+              "output_tokens": 2418,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.113785,
+              "probes": 1,
+              "link": "traces_glm/case_163/solo/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 68867,
+              "output_tokens": 3948,
+              "llm_api_calls": 4
+            },
+            {
+              "case": "case_163",
+              "arm": "solo",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.236563,
+              "probes": 4,
+              "link": "traces_glm/case_163/solo/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 143403,
+              "output_tokens": 8136,
+              "llm_api_calls": 7
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r1",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.319075,
+              "probes": 4,
+              "link": "traces_glm/case_163/debate/r1/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 182927,
+              "output_tokens": 14313,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r2",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.306022,
+              "probes": 2,
+              "link": "traces_glm/case_163/debate/r2/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 188865,
+              "output_tokens": 9457,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r3",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.398143,
+              "probes": 3,
+              "link": "traces_glm/case_163/debate/r3/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 237176,
+              "output_tokens": 15022,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r4",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.474854,
+              "probes": 4,
+              "link": "traces_glm/case_163/debate/r4/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 276912,
+              "output_tokens": 19813,
+              "llm_api_calls": 9
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r5",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.253095,
+              "probes": 1,
+              "link": "traces_glm/case_163/debate/r5/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 142857,
+              "output_tokens": 12067,
+              "llm_api_calls": 6
+            },
+            {
+              "case": "case_163",
+              "arm": "debate",
+              "trial": "r6",
+              "truth": "reject",
+              "status": "completed",
+              "verdict": "reject",
+              "outcome": "correct",
+              "usd": 0.364891,
+              "probes": 5,
+              "link": "traces_glm/case_163/debate/r6/transcript.md",
+              "audit_issues": [],
+              "input_tokens": 215917,
+              "output_tokens": 14229,
+              "llm_api_calls": 7
+            }
+          ]
+        }
+      }
+    },
+    "protocol_audit": [
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "single_call",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "solo",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r2",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r3",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r4",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r5",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      },
+      {
+        "case": "case_163",
+        "arm": "debate",
+        "trial": "r6",
+        "initial_request_changes_from_r1": [
+          "/messages/1/content/state/tool_events/0/created_at",
+          "/messages/1/content/state/tool_events/1/created_at",
+          "/messages/1/content/state/tool_events/2/created_at",
+          "/messages/1/content/state/tool_events/3/created_at"
+        ],
+        "runtime_equal_to_r1": true
+      }
+    ],
+    "cost_scope": "Conservative model API estimate from captured usage; excludes Modal GPU charges. This is not an invoice.",
+    "interpretation": "Selected follow-ups are reported separately. Correct verdicts do not validate all explanations or coverage claims. These workflows do not isolate tool access from additional reasoning."
+  },
+  "post_evaluation_reporting": {
+    "issue": "Concurrent no-tool batches r2 and r3 have the same timestamp-based original_trial. Distinct directories and API response IDs establish independent calls.",
+    "resolution": "Only colliding report groups are separated by canonical local trial; original trace metadata and raw responses are unchanged. Future generated batch IDs gain a UUID suffix after all evaluation calls were complete.",
+    "evidence": [
+      {
+        "case": "case_163",
+        "trial": "r2",
+        "recorded_original_trial": "run_20261018T074942_226805Z",
+        "response_id": "chatcmpl-7e30330c"
+      },
+      {
+        "case": "case_163",
+        "trial": "r3",
+        "recorded_original_trial": "run_20261018T074942_226805Z",
+        "response_id": "chatcmpl-a920a8f3"
+      }
+    ]
+  }
+}

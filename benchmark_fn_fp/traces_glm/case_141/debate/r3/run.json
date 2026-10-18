@@ -1,0 +1,1605 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_141",
+    "has_error": null,
+    "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+    "passed": null,
+    "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_141",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T02:14:27Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "5c21eaef3b2df84931532bcf95367b5e55e8124031b8021e91f5ef2325423e14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "4b6bf42c7a6a9ba7db2ca2ca1977e81642a1f7d5515505d545b7be683e970f2b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "386971a5f3624215bd1fa6fd36589d663ed36affed202ce656d5c94cc5b43554"
+              }
+            ],
+            "duration_s": 7.393054,
+            "exit_code": 0,
+            "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference",
+            "json_parse_error": null,
+            "json_result": {
+              "example_uint32max": {
+                "kernel_row": 613566756,
+                "true_row": 613566756,
+                "value": 4294967295
+              },
+              "kernel_minus_true_quotient": [
+                1,
+                1,
+                1
+              ],
+              "mismatch_values": [
+                3435973841,
+                4294967284,
+                4294967291
+              ],
+              "n_tested": 27,
+              "row_mismatch_count": 3
+            },
+            "kernel_minus_true_quotient": [
+              1,
+              1,
+              1
+            ],
+            "mismatch_count": 3,
+            "mismatch_values": [
+              3435973841,
+              4294967284,
+              4294967291
+            ],
+            "n_tested": 27,
+            "note": "uint32 max 4294967295 itself was correct (row 613566756), but nearby high values with residue 6 mod 7 fail with +1",
+            "stderr": "",
+            "stdout": "{\"n_tested\": 27, \"row_mismatch_count\": 3, \"mismatch_values\": [3435973841, 4294967284, 4294967291], \"kernel_minus_true_quotient\": [1, 1, 1], \"example_uint32max\": {\"value\": 4294967295, \"kernel_row\": 613566756, \"true_row\": 613566756}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Residue-stratified probe found 3 of 27 tested in-domain uint32 values where kernel row = floor(v/7)+1, mismatching reference(): 3435973841, 4294967284, 4294967291 (all large values; the value 4294967295 itself happened to be correct). Confirms the reciprocal-trick overestimate claim.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Arithmetic: value*MULTIPLIER = value*2454267027 = value*(2^34+5)/7, so the shifted quotient equals floor(value/7 + 5*value/2^34). Near the uint32 top 5*value/2^34 approaches 1.25, so any large value with fractional part of value/7 close to 1 (e.g. value \u2261 6 mod 7) crosses the next integer. For value=4294967295: 5*value/2^34 \u2248 1.2499, frac = 6/7 \u2248 0.857, sum \u2248 2.107, floor of value/7 is 613566756.428, but the trick yields 613566757 \u2014 an off-by-one quotient violating the exact-equality contract. A runtime probe on a residue-stratified set of high values (value \u2265 ~3435973837, value \u2261 6 mod 7) vs reference() will confirm.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract states 'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... row[i] = floor(indices[i]/7)'. Any division method is allowed 'if it satisfies this exact requirement for every legal unsigned index', so an overestimate at large in-domain values is a contract violation."
+        }
+      ],
+      "scope_rationale": "The contract requires exact floor(v/7) and col in [0,6] with 7*row+col == v for every legal uint32 value including the extrema named above.",
+      "statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference().",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T02:14:59Z"
+    },
+    {
+      "created_at": "2026-10-18T02:14:27Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "6fba64e7feab71a43ae0db020b2f911ac1f2c8d7b4a72be33f37c8c222a46a2c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6e98ba7d10c7f44d0c278f6b65e0af4e1610088f7ecdbbf2db49f2b111e36245"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8743013ac255612bbe8a79973fc9200c3fbee412dc6860817da5fc40f29a8eb4"
+              }
+            ],
+            "bad_cols": [
+              4294967295,
+              4294967295
+            ],
+            "bad_rows": [
+              490853406,
+              613566756
+            ],
+            "bad_values": [
+              3435973841,
+              4294967291
+            ],
+            "duration_s": 4.896313,
+            "exit_code": 0,
+            "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values",
+            "json_parse_error": null,
+            "json_result": {
+              "bad_cols": [
+                4294967295,
+                4294967295
+              ],
+              "bad_rows": [
+                490853406,
+                613566756
+              ],
+              "bad_values": [
+                3435973841,
+                4294967291
+              ],
+              "n_tested": 14,
+              "uint32max_col": 3,
+              "uint32max_row": 613566756,
+              "violations": 2
+            },
+            "n_tested": 14,
+            "recompose_invariant_failures": 2,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 14, \"violations\": 2, \"bad_values\": [3435973841, 4294967291], \"bad_cols\": [4294967295, 4294967295], \"bad_rows\": [490853406, 613566756], \"uint32max_col\": 3, \"uint32max_row\": 613566756}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "violation_count": 2
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Output-invariant probe: 2 of 14 tested high values (3435973841, 4294967291) produced col = 4294967295 (unsigned wrap of true_col 6 minus 7) outside [0,6], and 7*row+col != original index. Confirms unsigned underflow wrap claim.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "remainder = value - 7*quotient computed in unsigned arithmetic (tl.uint64, stored as uint32); if quotient overestimates by 1, value - 7*quotient = true_col - 7, which is negative for true_col in 0..6 and wraps to huge values (e.g. 2^64-1 for true_col=6), then truncates to uint32 as 4294967289..4294967295. This breaks the contract's explicit invariants 'every col is in [0,6] and 7*row + col equals the original unsigned index', which are directly checkable output properties even without reference().",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract requires: 'In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.' These output invariants are stated as required behavior for every legal input."
+        }
+      ],
+      "scope_rationale": "The contract explicitly names the invariants col in [0,6] and 7*row+col == original index as required for every legal uint32 value; the candidate inputs are legal values.",
+      "statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T02:14:59Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+      "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+      "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+      "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+      "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+    ],
+    "kernel_model": [
+      "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+      "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+      "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+      "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+      "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+    ],
+    "open_questions": [
+      "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+      "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+    ],
+    "risk_map": [
+      "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+      "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+      "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+      "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+    ],
+    "scope_notes": [
+      "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+      "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+      "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+        "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+        "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+        "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+        "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "created_at": "2026-10-18T02:14:08Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+        "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+        "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+        "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+        "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+      ],
+      "open_questions": [
+        "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+        "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+      ],
+      "risk_map": [
+        "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+        "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+        "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+        "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+      ],
+      "scope_notes": [
+        "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+        "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+        "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+      ],
+      "summary": "Described case_141: uint32 index-to-(row,col) divmod by 7 via precomputed reciprocal multiplication (ceil(2^34/7), shift 34) in Triton; contract demands exact results for all uint32 values; residual 5 in the magic constant makes large-index quotient overestimate the top failure surface.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_141",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_141"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_141",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 41.296123263,
+      "role": "describer",
+      "round": 2,
+      "text": "I have full artifact context. The kernel uses a precomputed reciprocal-multiplication scheme (multiply by ceil(2^34/7), shift right 34) on a widened uint64 value. The key thing I can compute from the source: `_SHIFT = 34`, `_MULTIPLIER = ceil(2^34/7) = 2454267027`, and the residual `7*MULTIPLIER - 2^34 = 5`. With that residual, `n*MULTIPLIER >> 34` can overestimate `floor(n/7)` for large n whose fractional part `n/7 mod 1` is large enough, because `5n/2^34` reaches ~1.25 near the uint32 top. That's a concrete risk surface for Skeptic, and there are trivially representable counterexample candidates (n \u2248 3435973836+ with n \u2261 6 mod 7, and n = 4294967295 itself, where my arithmetic suggests floor is 613566756 but the trick may yield 613566757). I'll record the description model now.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": [
+              "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+              "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+              "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+              "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+              "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "kernel_model": [
+              "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+              "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+              "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+              "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+              "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+            ],
+            "open_questions": [
+              "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+              "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+            ],
+            "risk_map": [
+              "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+              "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+              "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+              "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+            ],
+            "scope_notes": [
+              "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+              "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+              "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+            ],
+            "summary": "Described case_141: uint32 index-to-(row,col) divmod by 7 via precomputed reciprocal multiplication (ceil(2^34/7), shift 34) in Triton; contract demands exact results for all uint32 values; residual 5 in the magic constant makes large-index quotient overestimate the top failure surface."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 41.296,
+        "input_tokens": 6437,
+        "output_tokens": 3122
+      }
+    },
+    {
+      "duration_s": 18.886050876999995,
+      "role": "skeptic",
+      "round": 3,
+      "text": "The description's arithmetic is directly checkable by hand: with MULTIPLIER = \u23082^34/7\u2309 = 2454267027, the value n\u00b7M \u2261 n/7 + 5n/2^34 (mod floor). For n = 4294967295, 5n/2^34 \u2248 1.25 and frac(n/7) = 6/7 \u2248 0.857, so the fractional excess \u2248 1.107 \u2265 1 \u2014 the shifted quotient is 613566757, one above the true floor 613566756. The contract explicitly requires every uint32 value be exact, so this is in-scope. I'll record the main claim plus its direct observable (corrupted col / recomposition invariant failure).",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Arithmetic: value*MULTIPLIER = value*2454267027 = value*(2^34+5)/7, so the shifted quotient equals floor(value/7 + 5*value/2^34). Near the uint32 top 5*value/2^34 approaches 1.25, so any large value with fractional part of value/7 close to 1 (e.g. value \u2261 6 mod 7) crosses the next integer. For value=4294967295: 5*value/2^34 \u2248 1.2499, frac = 6/7 \u2248 0.857, sum \u2248 2.107, floor of value/7 is 613566756.428, but the trick yields 613566757 \u2014 an off-by-one quotient violating the exact-equality contract. A runtime probe on a residue-stratified set of high values (value \u2265 ~3435973837, value \u2261 6 mod 7) vs reference() will confirm.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract states 'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... row[i] = floor(indices[i]/7)'. Any division method is allowed 'if it satisfies this exact requirement for every legal unsigned index', so an overestimate at large in-domain values is a contract violation."
+              }
+            ],
+            "scope_rationale": "The contract requires exact floor(v/7) and col in [0,6] with 7*row+col == v for every legal uint32 value including the extrema named above.",
+            "statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference()."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "remainder = value - 7*quotient computed in unsigned arithmetic (tl.uint64, stored as uint32); if quotient overestimates by 1, value - 7*quotient = true_col - 7, which is negative for true_col in 0..6 and wraps to huge values (e.g. 2^64-1 for true_col=6), then truncates to uint32 as 4294967289..4294967295. This breaks the contract's explicit invariants 'every col is in [0,6] and 7*row + col equals the original unsigned index', which are directly checkable output properties even without reference().",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires: 'In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.' These output invariants are stated as required behavior for every legal input."
+              }
+            ],
+            "scope_rationale": "The contract explicitly names the invariants col in [0,6] and 7*row+col == original index as required for every legal uint32 value; the candidate inputs are legal values.",
+            "statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.886,
+        "input_tokens": 16130,
+        "output_tokens": 1377
+      }
+    },
+    {
+      "duration_s": 12.777295377000002,
+      "role": "experimenter",
+      "round": 4,
+      "text": "I'll run two probes: one testing the kernel's quotient against reference on residue-stratified high uint32 values (c1), and one checking output invariants col\u2208[0,6] and 7*row+col==index on those same values (c2). These are independent, so I'll launch both together.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import json, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport torch, kernel\n\n# Build residue-stratified high values plus the uint32 max.\nvals = []\nvals.append(4294967295)  # uint32 max\n# high values congruent 0..6 mod 7\nfor r in range(7):\n    v = 4294967295 - ((4294967295 - r) % 7)  # largest value \u2261 r mod 7\n    vals.append(v)\n    vals.append(v - 7)\n    vals.append(3435973837 + ((r - 3435973837) % 7))\n    vals.append(3435973836 + ((r - 3435973836) % 7))\n# some middle benign values\nvals += [0, 1, 6, 7, 100, 2**32 - 7, 2**32 - 13]\nvals = sorted(set(vals))\nidx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = kernel.run(idx)\nref = kernel.reference(idx)\n\nout_i = out.to(torch.int64)\nref_i = ref.to(torch.int64)\nv64 = idx.to(torch.int64)\ntrue_q = v64 // 7\n\nrow_mismatch = (out_i[:, 0] != ref_i[:, 0])\ndiff = (out_i[:, 0] - ref_i[:, 0])[row_mismatch].tolist()\nbad_vals = v64[row_mismatch].tolist()\nkern_q = out_i[:, 0].tolist()\ntrueq = true_q.tolist()\n\nresult = {\n    \"n_tested\": len(vals),\n    \"row_mismatch_count\": int(row_mismatch.sum()),\n    \"mismatch_values\": bad_vals,\n    \"kernel_minus_true_quotient\": diff,\n    \"example_uint32max\": {\n        \"value\": 4294967295,\n        \"kernel_row\": kern_q[vals.index(4294967295)],\n        \"true_row\": 4294967295 // 7,\n    },\n}\nprint(json.dumps(result))",
+            "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import json, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport torch, kernel\n\nvals = [4294967295]\nfor r in range(7):\n    vals.append(4294967295 - ((4294967295 - r) % 7))\n    vals.append(3435973837 + ((r - 3435973837) % 7))\nvals = sorted(set(vals))\nidx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = kernel.run(idx)\nout_i = out.to(torch.int64)\nv64 = idx.to(torch.int64)\nrows, cols = out_i[:, 0], out_i[:, 1]\n\ncol_in_range = (cols >= 0) & (cols <= 6)\nrecompose = (7 * rows + cols) == v64\nbad = ~(col_in_range & recompose)\nresult = {\n    \"n_tested\": len(vals),\n    \"violations\": int(bad.sum()),\n    \"bad_values\": v64[bad].tolist(),\n    \"bad_cols\": cols[bad].tolist(),\n    \"bad_rows\": rows[bad].tolist(),\n    \"uint32max_col\": int(cols[vals.index(4294967295)]),\n    \"uint32max_row\": int(rows[vals.index(4294967295)]),\n}\nprint(json.dumps(result))",
+            "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.777,
+        "input_tokens": 20549,
+        "output_tokens": 992
+      }
+    },
+    {
+      "duration_s": 6.7686673280000065,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes returned confirming results: the kernel's row quotient is off by one for large values \u2261 6 mod 7 (3435973841, 4294967284, 4294967291), and the resulting cols wrap to 4294967295 with the recomposition invariant broken. I'll finalize both claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "kernel_minus_true_quotient": [
+                1,
+                1,
+                1
+              ],
+              "mismatch_count": 3,
+              "mismatch_values": [
+                3435973841,
+                4294967284,
+                4294967291
+              ],
+              "n_tested": 27,
+              "note": "uint32 max 4294967295 itself was correct (row 613566756), but nearby high values with residue 6 mod 7 fail with +1"
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Residue-stratified probe found 3 of 27 tested in-domain uint32 values where kernel row = floor(v/7)+1, mismatching reference(): 3435973841, 4294967284, 4294967291 (all large values; the value 4294967295 itself happened to be correct). Confirms the reciprocal-trick overestimate claim.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "bad_cols": [
+                4294967295,
+                4294967295
+              ],
+              "bad_rows": [
+                490853406,
+                613566756
+              ],
+              "bad_values": [
+                3435973841,
+                4294967291
+              ],
+              "n_tested": 14,
+              "recompose_invariant_failures": 2,
+              "violation_count": 2
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "Output-invariant probe: 2 of 14 tested high values (3435973841, 4294967291) produced col = 4294967295 (unsigned wrap of true_col 6 minus 7) outside [0,6], and 7*row+col != original index. Confirms unsigned underflow wrap claim.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 6.769,
+        "input_tokens": 26055,
+        "output_tokens": 589
+      }
+    },
+    {
+      "duration_s": 5.25495774800001,
+      "role": "skeptic",
+      "round": 6,
+      "text": "Both in-scope claims (c1: reciprocal-trick quotient overestimate; c2: unsigned col wrap / recomposition invariant failure) are confirmed by runtime probes on legal uint32 values. The evidence is decisive and no additional material problems are exposed; I'll record no new claims.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: c1 and c2 are both confirmed with in-scope runtime probe evidence (kernel row = floor(v/7)+1 for large values \u2261 6 mod 7, and col wraps to 4294967295 breaking the 7*row+col==index invariant). The new evidence raises no additional material, testable, in-scope problems not already covered.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.255,
+        "input_tokens": 33643,
+        "output_tokens": 188
+      }
+    },
+    {
+      "duration_s": 8.565978884999993,
+      "role": "judge",
+      "round": 7,
+      "text": "The evidence is decisive: two confirmed in-scope claims backed by runtime probes on legal uint32 values, the Skeptic has signed off with no new claims, and no open claims remain. The contract (problem.txt, the only artifact contract) explicitly requires exact floor(v/7) and the invariants col\u2208[0,6] and 7\u00b7row+col==v for every legal uint32 value \u2014 the reciprocal trick with residual 5 fails this at large values.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "Reject. The kernel's precomputed reciprocal division (MULTIPLIER = ceil(2^34/7) = 2454267027, SHIFT = 34, residual 5) is not exact across the full uint32 domain that problem.txt \u2014 the operative contract here, since no test.py/get_inputs exist \u2014 explicitly requires (\"EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive... Every coordinate must equal the integer mathematical target EXACTLY\"). Confirmed runtime probes (t8, t9) on legal, in-domain values show: (c1) for large values \u2261 6 mod 7 (3435973841, 4294967284, 4294967291), the kernel row equals floor(v/7)+1, mismatching the exact int64 reference; (c2) for failing values (3435973841, 4294967291) the stored col wraps in unsigned arithmetic to 4294967295, outside the contract-mandated [0,6], and 7\u00b7row+col != original index, violating the contract's explicit recomposition invariant. Both claims are in_scope with scope evidence citing the stated input domain. No contract clause accounts for this deviation \u2014 the contract permits any division method only \"if it satisfies this exact requirement for every legal unsigned index.\" Skeptic reviewed the latest evidence and found no new claims; no open claims remain. This is a genuine correctness defect, not a metric artifact or tolerance issue.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 8.566,
+        "input_tokens": 34584,
+        "output_tokens": 495
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-10-18T02:15:04Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: c1 and c2 are both confirmed with in-scope runtime probe evidence (kernel row = floor(v/7)+1 for large values \u2261 6 mod 7, and col wraps to 4294967295 breaking the 7*row+col==index invariant). The new evidence raises no additional material, testable, in-scope problems not already covered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_141",
+        "has_error": null,
+        "kernel_code": "\"\"\"Unsigned index-to-coordinate conversion by reciprocal multiplication.\n\nOriginal synthetic Triton adaptation of fast integer divmod techniques.\nThe output contains row/column coordinates for a width-seven layout.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n_DIVISOR = 7\n_SHIFT = 31 + (_DIVISOR - 1).bit_length()\n_MULTIPLIER = ((1 << _SHIFT) + _DIVISOR - 1) // _DIVISOR\n\n\n@triton.jit\ndef _unflatten(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr,\n               MULTIPLIER: tl.constexpr, SHIFT: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    value = tl.load(X + index, mask=active, other=0).to(tl.uint64)\n    quotient = (value * MULTIPLIER) >> SHIFT\n    remainder = value - quotient * 7\n    tl.store(OUT + 2 * index, quotient.to(tl.uint32), mask=active)\n    tl.store(OUT + 2 * index + 1, remainder.to(tl.uint32), mask=active)\n\n\ndef validate_inputs(indices, require_cuda=True):\n    \"\"\"Enforce the complete public domain, including uint32 extrema.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(indices) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(indices.layout == torch.strided and indices.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not indices.requires_grad and not indices.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not indices.is_neg() and not indices.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or indices.is_cuda, \"CUDA input required by run\")\n    require(indices.ndim == 1 and 1 <= indices.numel() <= 131072,\n            \"indices must have shape [N] with N in [1,131072]\")\n    require(indices.dtype == torch.uint32, \"uint32 input required\")\n    return {\"valid\": True, \"size\": indices.numel()}\n\n\ndef run(indices):\n    \"\"\"Return unsigned row/column coordinates in a fresh [N,2] tensor.\"\"\"\n    validate_inputs(indices)\n    n = indices.numel()\n    with torch.cuda.device(indices.device):\n        output = torch.empty((n, 2), dtype=torch.uint32, device=indices.device)\n        _unflatten[(triton.cdiv(n, 256),)](\n            indices, output, N=n, BLOCK=256, MULTIPLIER=_MULTIPLIER,\n            SHIFT=_SHIFT, num_warps=4)\n    return output\n\n\ndef reference(indices):\n    \"\"\"Exact direct integer division on an int64 widening of each uint32.\"\"\"\n    validate_inputs(indices, require_cuda=False)\n    values = indices.to(torch.int64)\n    rows = torch.div(values, 7, rounding_mode=\"floor\")\n    columns = torch.remainder(values, 7)\n    return torch.stack((rows, columns), dim=1).to(torch.uint32)\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience examples; all uint32 values belong to the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    values = torch.randint(0, 1 << 32, (size,), dtype=torch.int64,\n                           generator=generator).to(torch.uint32)\n    return (values.to(device),)\n",
+        "passed": null,
+        "problem_text": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_141",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t2",
+      "output": {
+        "content": "Decompose unsigned 32-bit linear indices into row and column coordinates\nfor a row-major layout with a fixed width of 7:\n\n  row[i] = floor(indices[i] / 7)\n  col[i] = indices[i] - 7 * row[i].\n\nInputs and complete public domain:\n- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.\n- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.\n  Indices are values to decompose, not offsets used to access a backing\n  matrix; no matrix allocation or additional index-range bound is implied.\n- indices is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. It has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This is not an autograd\n  operation.\n\nReturn a fresh torch.uint32 tensor [N,2] on indices.device, with columns\n[row, col], preserving the input and its backing storage. Every coordinate\nmust equal the integer mathematical target EXACTLY. Floating-point or\napproximate tolerances are not used. In particular, every col is in [0,6]\nand 7*row + col equals the original unsigned index in mathematical integers.\n\nAny division method is allowed, including reciprocal multiplication,\nbit operations and precomputed constants, if it satisfies this exact\nrequirement for every legal unsigned index. Correctness is one verdict\nfor the whole implementation; changing inputs only supplies evidence.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses direct int64 division and remainder; it accepts CPU inputs. make_inputs()\nis a convenience generator, not an input-domain restriction. Index-to-coordinate\nconversion and precomputed fast division are standard GPU indexing operations.\nThis is an original synthetic Triton adaptation of reciprocal-division\ntechniques, not a claim of an upstream historical bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_141",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_141"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_141",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3125
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 2050
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_141",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T02:13:25Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_141",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": [
+          "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+          "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+          "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+          "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+          "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "kernel_model": [
+          "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+          "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+          "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+          "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+          "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+        ],
+        "open_questions": [
+          "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+          "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+        ],
+        "risk_map": [
+          "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+          "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+          "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+          "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+        ],
+        "scope_notes": [
+          "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+          "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+          "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+        ],
+        "summary": "Described case_141: uint32 index-to-(row,col) divmod by 7 via precomputed reciprocal multiplication (ceil(2^34/7), shift 34) in Triton; contract demands exact results for all uint32 values; residual 5 in the magic constant makes large-index quotient overestimate the top failure surface."
+      },
+      "created_at": "2026-10-18T02:14:08Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+            "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+            "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+            "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+            "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "kernel_model": [
+            "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+            "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+            "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+            "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+            "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+          ],
+          "open_questions": [
+            "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+            "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+          ],
+          "risk_map": [
+            "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+            "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+            "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+            "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+          ],
+          "scope_notes": [
+            "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+            "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+            "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Decompose each unsigned 32-bit index v (0..4294967295) exactly: row = floor(v/7), col = v - 7*row, col in [0,6], 7*row+col == v in integer math.",
+            "Input: 1-D contiguous strided torch.uint32 tensor [N], 1<=N<=131072, on CUDA, ordinary Tensor, requires_grad=False, is_inference=False, is_neg=False, is_conj=False, non-inference mode; contiguous views with nonzero storage offsets are legal.",
+            "Output: fresh torch.uint32 [N,2] tensor on indices.device, columns [row, col]; input and its backing storage preserved; exact equality required (no tolerance).",
+            "Any division method is allowed if exact for every legal value; validate_inputs() enforces the domain and is called by run(); reference() uses int64 direct divmod and accepts CPU; make_inputs() is convenience only.",
+            "Single whole-implementation verdict; changing inputs only supplies evidence. Frozen env: T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "created_at": "2026-10-18T02:14:08Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Precomputes _SHIFT = 31 + bit_length(6) = 34 and _MULTIPLIER = ceil(2^34/7) = 2454267027 (lines 10-12); residual r = 7*MULTIPLIER - 2^34 = 5, so the reciprocal is inexact and the classic increment/error-bound condition is not visibly checked.",
+            "Kernel widens each uint32 to uint64 (line 20), computes quotient = (value * MULTIPLIER) >> 34 (line 21), remainder = value - 7*quotient (line 22); product fits in uint64 (max ~1.05e19 < 1.8e19), so no uint64 overflow at the multiply itself.",
+            "Output stores quotient then remainder into interleaved [row, col] slots of a fresh uint32 [N,2] tensor (lines 23-24); BLOCK=256, grid cdiv(n,256), masked loads/stores with other=0.",
+            "run() validates inputs, allocates output inside the input's CUDA device context, launches with constexpr N/BLOCK/MULTIPLIER/SHIFT, num_warps=4; reference() does exact int64 divmod and stacks to [N,2] uint32.",
+            "validate_inputs() mirrors the stated domain (type, layout, contiguity, flags, ndim, size range 1..131072, dtype uint32, CUDA); note torch.is_neg/is_conj on a uint32 tensor are benign no-op checks."
+          ],
+          "open_questions": [
+            "Does (value * MULTIPLIER) >> SHIFT actually produce floor(v/7)+1 for the candidate extrema values on the frozen environment, or does Triton's uint64 semantics alter the analysis? Needs runtime probe or Skeptic arithmetic confirmation.",
+            "Whether the shift choice 34 was intended to satisfy the exactness condition per some published table (i.e., whether this is a deliberate planted defect or an analysis error) should be confirmed with an explicit extremal probe."
+          ],
+          "risk_map": [
+            "Primary risk: reciprocal division overestimate. With residual r=5, floor(n*2454267027/2^34) = floor(n/7 + 5n/2^34). For n near the uint32 top, 5n/2^34 approaches 1.25, so for large n with frac(n/7) >= 1 - 5n/2^34, the computed quotient is floor(n/7)+1 (Hacker's-Delight increment condition appears violated). Candidate counterexamples: n = 4294967295 (arithmetic suggests trick yields 613566757 vs true 613566756) and large n \u2261 6 mod 7 with n >= ~3435973837. This is discrete-selection/integer-exact behavior: a single off-by-one quotient also corrupts col (col = n - 7*quotient can go negative in unsigned arithmetic, wrapping to huge uint32 values).",
+            "The int64 widening prevents uint32 truncation at the multiply, so the risk is purely the multiplier/shift error bound, not width overflow.",
+            "Skeptic should design evidence around extrema and residue-stratified values (n \u2261 0..6 mod 7 across the high range, uint32 max, values just above 2^34/5 boundary), not benign random middles where 5n/2^34 is small and errors cancel.",
+            "reference() itself is exact int64 divmod, so mismatch vs reference at extrema would be direct evidence; conversely passing make_inputs() random samples proves little because they hit the failure region with low density."
+          ],
+          "scope_notes": [
+            "In scope: all unsigned 32-bit values 0..4294967295, exactly, for any N in [1,131072]; no matrix backing implies no index-range bound beyond uint32.",
+            "Out of scope: FP tolerance comparisons (contract demands exact integers), CPU execution of run() (CUDA required), inference mode / subclass tensors / non-contiguous inputs, autograd behavior.",
+            "meta.json is empty ({}); no extra metadata to incorporate. Environment frozen: T4, PyTorch 2.8.0, Triton 3.4.0."
+          ],
+          "summary": "Described case_141: uint32 index-to-(row,col) divmod by 7 via precomputed reciprocal multiplication (ceil(2^34/7), shift 34) in Triton; contract demands exact results for all uint32 values; residual 5 in the magic constant makes large-index quotient overestimate the top failure surface.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Arithmetic: value*MULTIPLIER = value*2454267027 = value*(2^34+5)/7, so the shifted quotient equals floor(value/7 + 5*value/2^34). Near the uint32 top 5*value/2^34 approaches 1.25, so any large value with fractional part of value/7 close to 1 (e.g. value \u2261 6 mod 7) crosses the next integer. For value=4294967295: 5*value/2^34 \u2248 1.2499, frac = 6/7 \u2248 0.857, sum \u2248 2.107, floor of value/7 is 613566756.428, but the trick yields 613566757 \u2014 an off-by-one quotient violating the exact-equality contract. A runtime probe on a residue-stratified set of high values (value \u2265 ~3435973837, value \u2261 6 mod 7) vs reference() will confirm.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states 'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... row[i] = floor(indices[i]/7)'. Any division method is allowed 'if it satisfies this exact requirement for every legal unsigned index', so an overestimate at large in-domain values is a contract violation."
+          }
+        ],
+        "scope_rationale": "The contract requires exact floor(v/7) and col in [0,6] with 7*row+col == v for every legal uint32 value including the extrema named above.",
+        "statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference()."
+      },
+      "created_at": "2026-10-18T02:14:27Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-10-18T02:14:27Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Arithmetic: value*MULTIPLIER = value*2454267027 = value*(2^34+5)/7, so the shifted quotient equals floor(value/7 + 5*value/2^34). Near the uint32 top 5*value/2^34 approaches 1.25, so any large value with fractional part of value/7 close to 1 (e.g. value \u2261 6 mod 7) crosses the next integer. For value=4294967295: 5*value/2^34 \u2248 1.2499, frac = 6/7 \u2248 0.857, sum \u2248 2.107, floor of value/7 is 613566756.428, but the trick yields 613566757 \u2014 an off-by-one quotient violating the exact-equality contract. A runtime probe on a residue-stratified set of high values (value \u2265 ~3435973837, value \u2261 6 mod 7) vs reference() will confirm.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract states 'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... row[i] = floor(indices[i]/7)'. Any division method is allowed 'if it satisfies this exact requirement for every legal unsigned index', so an overestimate at large in-domain values is a contract violation."
+          }
+        ],
+        "scope_rationale": "The contract requires exact floor(v/7) and col in [0,6] with 7*row+col == v for every legal uint32 value including the extrema named above.",
+        "statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference().",
+        "status": "open",
+        "updated_at": "2026-10-18T02:14:27Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "remainder = value - 7*quotient computed in unsigned arithmetic (tl.uint64, stored as uint32); if quotient overestimates by 1, value - 7*quotient = true_col - 7, which is negative for true_col in 0..6 and wraps to huge values (e.g. 2^64-1 for true_col=6), then truncates to uint32 as 4294967289..4294967295. This breaks the contract's explicit invariants 'every col is in [0,6] and 7*row + col equals the original unsigned index', which are directly checkable output properties even without reference().",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires: 'In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.' These output invariants are stated as required behavior for every legal input."
+          }
+        ],
+        "scope_rationale": "The contract explicitly names the invariants col in [0,6] and 7*row+col == original index as required for every legal uint32 value; the candidate inputs are legal values.",
+        "statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails."
+      },
+      "created_at": "2026-10-18T02:14:27Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-10-18T02:14:27Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "remainder = value - 7*quotient computed in unsigned arithmetic (tl.uint64, stored as uint32); if quotient overestimates by 1, value - 7*quotient = true_col - 7, which is negative for true_col in 0..6 and wraps to huge values (e.g. 2^64-1 for true_col=6), then truncates to uint32 as 4294967289..4294967295. This breaks the contract's explicit invariants 'every col is in [0,6] and 7*row + col equals the original unsigned index', which are directly checkable output properties even without reference().",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires: 'In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.' These output invariants are stated as required behavior for every legal input."
+          }
+        ],
+        "scope_rationale": "The contract explicitly names the invariants col in [0,6] and 7*row+col == original index as required for every legal uint32 value; the candidate inputs are legal values.",
+        "statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails.",
+        "status": "open",
+        "updated_at": "2026-10-18T02:14:27Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import json, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport torch, kernel\n\n# Build residue-stratified high values plus the uint32 max.\nvals = []\nvals.append(4294967295)  # uint32 max\n# high values congruent 0..6 mod 7\nfor r in range(7):\n    v = 4294967295 - ((4294967295 - r) % 7)  # largest value \u2261 r mod 7\n    vals.append(v)\n    vals.append(v - 7)\n    vals.append(3435973837 + ((r - 3435973837) % 7))\n    vals.append(3435973836 + ((r - 3435973836) % 7))\n# some middle benign values\nvals += [0, 1, 6, 7, 100, 2**32 - 7, 2**32 - 13]\nvals = sorted(set(vals))\nidx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = kernel.run(idx)\nref = kernel.reference(idx)\n\nout_i = out.to(torch.int64)\nref_i = ref.to(torch.int64)\nv64 = idx.to(torch.int64)\ntrue_q = v64 // 7\n\nrow_mismatch = (out_i[:, 0] != ref_i[:, 0])\ndiff = (out_i[:, 0] - ref_i[:, 0])[row_mismatch].tolist()\nbad_vals = v64[row_mismatch].tolist()\nkern_q = out_i[:, 0].tolist()\ntrueq = true_q.tolist()\n\nresult = {\n    \"n_tested\": len(vals),\n    \"row_mismatch_count\": int(row_mismatch.sum()),\n    \"mismatch_values\": bad_vals,\n    \"kernel_minus_true_quotient\": diff,\n    \"example_uint32max\": {\n        \"value\": 4294967295,\n        \"kernel_row\": kern_q[vals.index(4294967295)],\n        \"true_row\": 4294967295 // 7,\n    },\n}\nprint(json.dumps(result))",
+        "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference"
+      },
+      "created_at": "2026-10-18T02:14:47Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "5c21eaef3b2df84931532bcf95367b5e55e8124031b8021e91f5ef2325423e14"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "4b6bf42c7a6a9ba7db2ca2ca1977e81642a1f7d5515505d545b7be683e970f2b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "386971a5f3624215bd1fa6fd36589d663ed36affed202ce656d5c94cc5b43554"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference().",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 7.393054,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "5c21eaef3b2df84931532bcf95367b5e55e8124031b8021e91f5ef2325423e14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "4b6bf42c7a6a9ba7db2ca2ca1977e81642a1f7d5515505d545b7be683e970f2b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "386971a5f3624215bd1fa6fd36589d663ed36affed202ce656d5c94cc5b43554"
+              }
+            ],
+            "duration_s": 7.393054,
+            "exit_code": 0,
+            "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference",
+            "json_parse_error": null,
+            "json_result": {
+              "example_uint32max": {
+                "kernel_row": 613566756,
+                "true_row": 613566756,
+                "value": 4294967295
+              },
+              "kernel_minus_true_quotient": [
+                1,
+                1,
+                1
+              ],
+              "mismatch_values": [
+                3435973841,
+                4294967284,
+                4294967291
+              ],
+              "n_tested": 27,
+              "row_mismatch_count": 3
+            },
+            "stderr": "",
+            "stdout": "{\"n_tested\": 27, \"row_mismatch_count\": 3, \"mismatch_values\": [3435973841, 4294967284, 4294967291], \"kernel_minus_true_quotient\": [1, 1, 1], \"example_uint32max\": {\"value\": 4294967295, \"kernel_row\": 613566756, \"true_row\": 613566756}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference",
+        "json_parse_error": null,
+        "json_result": {
+          "example_uint32max": {
+            "kernel_row": 613566756,
+            "true_row": 613566756,
+            "value": 4294967295
+          },
+          "kernel_minus_true_quotient": [
+            1,
+            1,
+            1
+          ],
+          "mismatch_values": [
+            3435973841,
+            4294967284,
+            4294967291
+          ],
+          "n_tested": 27,
+          "row_mismatch_count": 3
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n_tested\": 27, \"row_mismatch_count\": 3, \"mismatch_values\": [3435973841, 4294967284, 4294967291], \"kernel_minus_true_quotient\": [1, 1, 1], \"example_uint32max\": {\"value\": 4294967295, \"kernel_row\": 613566756, \"true_row\": 613566756}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "import json, sys\nsys.path.insert(0, \"/root/cases/case_141\")\nimport torch, kernel\n\nvals = [4294967295]\nfor r in range(7):\n    vals.append(4294967295 - ((4294967295 - r) % 7))\n    vals.append(3435973837 + ((r - 3435973837) % 7))\nvals = sorted(set(vals))\nidx = torch.tensor(vals, dtype=torch.uint32, device=\"cuda\")\nout = kernel.run(idx)\nout_i = out.to(torch.int64)\nv64 = idx.to(torch.int64)\nrows, cols = out_i[:, 0], out_i[:, 1]\n\ncol_in_range = (cols >= 0) & (cols <= 6)\nrecompose = (7 * rows + cols) == v64\nbad = ~(col_in_range & recompose)\nresult = {\n    \"n_tested\": len(vals),\n    \"violations\": int(bad.sum()),\n    \"bad_values\": v64[bad].tolist(),\n    \"bad_cols\": cols[bad].tolist(),\n    \"bad_rows\": rows[bad].tolist(),\n    \"uint32max_col\": int(cols[vals.index(4294967295)]),\n    \"uint32max_row\": int(rows[vals.index(4294967295)]),\n}\nprint(json.dumps(result))",
+        "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values"
+      },
+      "created_at": "2026-10-18T02:14:52Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "6fba64e7feab71a43ae0db020b2f911ac1f2c8d7b4a72be33f37c8c222a46a2c"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "6e98ba7d10c7f44d0c278f6b65e0af4e1610088f7ecdbbf2db49f2b111e36245"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "8743013ac255612bbe8a79973fc9200c3fbee412dc6860817da5fc40f29a8eb4"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails.",
+        "cwd": "/root/cases/case_141",
+        "duration_s": 4.896313,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "6fba64e7feab71a43ae0db020b2f911ac1f2c8d7b4a72be33f37c8c222a46a2c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6e98ba7d10c7f44d0c278f6b65e0af4e1610088f7ecdbbf2db49f2b111e36245"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8743013ac255612bbe8a79973fc9200c3fbee412dc6860817da5fc40f29a8eb4"
+              }
+            ],
+            "duration_s": 4.896313,
+            "exit_code": 0,
+            "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values",
+            "json_parse_error": null,
+            "json_result": {
+              "bad_cols": [
+                4294967295,
+                4294967295
+              ],
+              "bad_rows": [
+                490853406,
+                613566756
+              ],
+              "bad_values": [
+                3435973841,
+                4294967291
+              ],
+              "n_tested": 14,
+              "uint32max_col": 3,
+              "uint32max_row": 613566756,
+              "violations": 2
+            },
+            "stderr": "",
+            "stdout": "{\"n_tested\": 14, \"violations\": 2, \"bad_values\": [3435973841, 4294967291], \"bad_cols\": [4294967295, 4294967295], \"bad_rows\": [490853406, 613566756], \"uint32max_col\": 3, \"uint32max_row\": 613566756}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values",
+        "json_parse_error": null,
+        "json_result": {
+          "bad_cols": [
+            4294967295,
+            4294967295
+          ],
+          "bad_rows": [
+            490853406,
+            613566756
+          ],
+          "bad_values": [
+            3435973841,
+            4294967291
+          ],
+          "n_tested": 14,
+          "uint32max_col": 3,
+          "uint32max_row": 613566756,
+          "violations": 2
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n_tested\": 14, \"violations\": 2, \"bad_values\": [3435973841, 4294967291], \"bad_cols\": [4294967295, 4294967295], \"bad_rows\": [490853406, 613566756], \"uint32max_col\": 3, \"uint32max_row\": 613566756}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel_minus_true_quotient": [
+            1,
+            1,
+            1
+          ],
+          "mismatch_count": 3,
+          "mismatch_values": [
+            3435973841,
+            4294967284,
+            4294967291
+          ],
+          "n_tested": 27,
+          "note": "uint32 max 4294967295 itself was correct (row 613566756), but nearby high values with residue 6 mod 7 fail with +1"
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "Residue-stratified probe found 3 of 27 tested in-domain uint32 values where kernel row = floor(v/7)+1, mismatching reference(): 3435973841, 4294967284, 4294967291 (all large values; the value 4294967295 itself happened to be correct). Confirms the reciprocal-trick overestimate claim.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T02:14:59Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T02:14:27Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T02:14:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "5c21eaef3b2df84931532bcf95367b5e55e8124031b8021e91f5ef2325423e14"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "4b6bf42c7a6a9ba7db2ca2ca1977e81642a1f7d5515505d545b7be683e970f2b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "386971a5f3624215bd1fa6fd36589d663ed36affed202ce656d5c94cc5b43554"
+                  }
+                ],
+                "duration_s": 7.393054,
+                "exit_code": 0,
+                "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference",
+                "json_parse_error": null,
+                "json_result": {
+                  "example_uint32max": {
+                    "kernel_row": 613566756,
+                    "true_row": 613566756,
+                    "value": 4294967295
+                  },
+                  "kernel_minus_true_quotient": [
+                    1,
+                    1,
+                    1
+                  ],
+                  "mismatch_values": [
+                    3435973841,
+                    4294967284,
+                    4294967291
+                  ],
+                  "n_tested": 27,
+                  "row_mismatch_count": 3
+                },
+                "kernel_minus_true_quotient": [
+                  1,
+                  1,
+                  1
+                ],
+                "mismatch_count": 3,
+                "mismatch_values": [
+                  3435973841,
+                  4294967284,
+                  4294967291
+                ],
+                "n_tested": 27,
+                "note": "uint32 max 4294967295 itself was correct (row 613566756), but nearby high values with residue 6 mod 7 fail with +1",
+                "stderr": "",
+                "stdout": "{\"n_tested\": 27, \"row_mismatch_count\": 3, \"mismatch_values\": [3435973841, 4294967284, 4294967291], \"kernel_minus_true_quotient\": [1, 1, 1], \"example_uint32max\": {\"value\": 4294967295, \"kernel_row\": 613566756, \"true_row\": 613566756}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Residue-stratified probe found 3 of 27 tested in-domain uint32 values where kernel row = floor(v/7)+1, mismatching reference(): 3435973841, 4294967284, 4294967291 (all large values; the value 4294967295 itself happened to be correct). Confirms the reciprocal-trick overestimate claim.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Arithmetic: value*MULTIPLIER = value*2454267027 = value*(2^34+5)/7, so the shifted quotient equals floor(value/7 + 5*value/2^34). Near the uint32 top 5*value/2^34 approaches 1.25, so any large value with fractional part of value/7 close to 1 (e.g. value \u2261 6 mod 7) crosses the next integer. For value=4294967295: 5*value/2^34 \u2248 1.2499, frac = 6/7 \u2248 0.857, sum \u2248 2.107, floor of value/7 is 613566756.428, but the trick yields 613566757 \u2014 an off-by-one quotient violating the exact-equality contract. A runtime probe on a residue-stratified set of high values (value \u2265 ~3435973837, value \u2261 6 mod 7) vs reference() will confirm.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract states 'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... row[i] = floor(indices[i]/7)'. Any division method is allowed 'if it satisfies this exact requirement for every legal unsigned index', so an overestimate at large in-domain values is a contract violation."
+            }
+          ],
+          "scope_rationale": "The contract requires exact floor(v/7) and col in [0,6] with 7*row+col == v for every legal uint32 value including the extrema named above.",
+          "statement": "For large uint32 values (roughly value >= 3435973837 with value \u2261 6 mod 7, including value = 4294967295), the kernel's reciprocal trick (value * 2454267027) >> 34 returns floor(value/7) + 1 instead of floor(value/7), producing an exact mismatch against reference().",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T02:14:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "5c21eaef3b2df84931532bcf95367b5e55e8124031b8021e91f5ef2325423e14"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "4b6bf42c7a6a9ba7db2ca2ca1977e81642a1f7d5515505d545b7be683e970f2b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "386971a5f3624215bd1fa6fd36589d663ed36affed202ce656d5c94cc5b43554"
+              }
+            ],
+            "duration_s": 7.393054,
+            "exit_code": 0,
+            "expected_signal": "kernel row quotient equals floor(value/7)+1 for large values \u2261 6 mod 7, mismatching reference",
+            "json_parse_error": null,
+            "json_result": {
+              "example_uint32max": {
+                "kernel_row": 613566756,
+                "true_row": 613566756,
+                "value": 4294967295
+              },
+              "kernel_minus_true_quotient": [
+                1,
+                1,
+                1
+              ],
+              "mismatch_values": [
+                3435973841,
+                4294967284,
+                4294967291
+              ],
+              "n_tested": 27,
+              "row_mismatch_count": 3
+            },
+            "kernel_minus_true_quotient": [
+              1,
+              1,
+              1
+            ],
+            "mismatch_count": 3,
+            "mismatch_values": [
+              3435973841,
+              4294967284,
+              4294967291
+            ],
+            "n_tested": 27,
+            "note": "uint32 max 4294967295 itself was correct (row 613566756), but nearby high values with residue 6 mod 7 fail with +1",
+            "stderr": "",
+            "stdout": "{\"n_tested\": 27, \"row_mismatch_count\": 3, \"mismatch_values\": [3435973841, 4294967284, 4294967291], \"kernel_minus_true_quotient\": [1, 1, 1], \"example_uint32max\": {\"value\": 4294967295, \"kernel_row\": 613566756, \"true_row\": 613566756}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Residue-stratified probe found 3 of 27 tested in-domain uint32 values where kernel row = floor(v/7)+1, mismatching reference(): 3435973841, 4294967284, 4294967291 (all large values; the value 4294967295 itself happened to be correct). Confirms the reciprocal-trick overestimate claim.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "bad_cols": [
+            4294967295,
+            4294967295
+          ],
+          "bad_rows": [
+            490853406,
+            613566756
+          ],
+          "bad_values": [
+            3435973841,
+            4294967291
+          ],
+          "n_tested": 14,
+          "recompose_invariant_failures": 2,
+          "violation_count": 2
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Output-invariant probe: 2 of 14 tested high values (3435973841, 4294967291) produced col = 4294967295 (unsigned wrap of true_col 6 minus 7) outside [0,6], and 7*row+col != original index. Confirms unsigned underflow wrap claim.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T02:14:59Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T02:14:27Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T02:14:59Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "6fba64e7feab71a43ae0db020b2f911ac1f2c8d7b4a72be33f37c8c222a46a2c"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "6e98ba7d10c7f44d0c278f6b65e0af4e1610088f7ecdbbf2db49f2b111e36245"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "8743013ac255612bbe8a79973fc9200c3fbee412dc6860817da5fc40f29a8eb4"
+                  }
+                ],
+                "bad_cols": [
+                  4294967295,
+                  4294967295
+                ],
+                "bad_rows": [
+                  490853406,
+                  613566756
+                ],
+                "bad_values": [
+                  3435973841,
+                  4294967291
+                ],
+                "duration_s": 4.896313,
+                "exit_code": 0,
+                "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values",
+                "json_parse_error": null,
+                "json_result": {
+                  "bad_cols": [
+                    4294967295,
+                    4294967295
+                  ],
+                  "bad_rows": [
+                    490853406,
+                    613566756
+                  ],
+                  "bad_values": [
+                    3435973841,
+                    4294967291
+                  ],
+                  "n_tested": 14,
+                  "uint32max_col": 3,
+                  "uint32max_row": 613566756,
+                  "violations": 2
+                },
+                "n_tested": 14,
+                "recompose_invariant_failures": 2,
+                "stderr": "",
+                "stdout": "{\"n_tested\": 14, \"violations\": 2, \"bad_values\": [3435973841, 4294967291], \"bad_cols\": [4294967295, 4294967295], \"bad_rows\": [490853406, 613566756], \"uint32max_col\": 3, \"uint32max_row\": 613566756}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "violation_count": 2
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Output-invariant probe: 2 of 14 tested high values (3435973841, 4294967291) produced col = 4294967295 (unsigned wrap of true_col 6 minus 7) outside [0,6], and 7*row+col != original index. Confirms unsigned underflow wrap claim.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "remainder = value - 7*quotient computed in unsigned arithmetic (tl.uint64, stored as uint32); if quotient overestimates by 1, value - 7*quotient = true_col - 7, which is negative for true_col in 0..6 and wraps to huge values (e.g. 2^64-1 for true_col=6), then truncates to uint32 as 4294967289..4294967295. This breaks the contract's explicit invariants 'every col is in [0,6] and 7*row + col equals the original unsigned index', which are directly checkable output properties even without reference().",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Contract requires: 'In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.' These output invariants are stated as required behavior for every legal input."
+            }
+          ],
+          "scope_rationale": "The contract explicitly names the invariants col in [0,6] and 7*row+col == original index as required for every legal uint32 value; the candidate inputs are legal values.",
+          "statement": "For the same failing values, the stored col = value - 7*quotient underflows in unsigned arithmetic and wraps, so output cols fall outside [0,6] (e.g. col wraps to ~4294967289-4294967295 for true col 6) and the invariant 7*row + col == original index fails.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T02:14:59Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T02:14:59Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "6fba64e7feab71a43ae0db020b2f911ac1f2c8d7b4a72be33f37c8c222a46a2c"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6e98ba7d10c7f44d0c278f6b65e0af4e1610088f7ecdbbf2db49f2b111e36245"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "8743013ac255612bbe8a79973fc9200c3fbee412dc6860817da5fc40f29a8eb4"
+              }
+            ],
+            "bad_cols": [
+              4294967295,
+              4294967295
+            ],
+            "bad_rows": [
+              490853406,
+              613566756
+            ],
+            "bad_values": [
+              3435973841,
+              4294967291
+            ],
+            "duration_s": 4.896313,
+            "exit_code": 0,
+            "expected_signal": "cols outside [0,6] (wrapped to ~4294967289-4294967295) and 7*row+col != original index for large failing values",
+            "json_parse_error": null,
+            "json_result": {
+              "bad_cols": [
+                4294967295,
+                4294967295
+              ],
+              "bad_rows": [
+                490853406,
+                613566756
+              ],
+              "bad_values": [
+                3435973841,
+                4294967291
+              ],
+              "n_tested": 14,
+              "uint32max_col": 3,
+              "uint32max_row": 613566756,
+              "violations": 2
+            },
+            "n_tested": 14,
+            "recompose_invariant_failures": 2,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 14, \"violations\": 2, \"bad_values\": [3435973841, 4294967291], \"bad_cols\": [4294967295, 4294967295], \"bad_rows\": [490853406, 613566756], \"uint32max_col\": 3, \"uint32max_row\": 613566756}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "violation_count": 2
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Output-invariant probe: 2 of 14 tested high values (3435973841, 4294967291) produced col = 4294967295 (unsigned wrap of true_col 6 minus 7) outside [0,6], and 7*row+col != original index. Confirms unsigned underflow wrap claim.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "reason": "Final review: c1 and c2 are both confirmed with in-scope runtime probe evidence (kernel row = floor(v/7)+1 for large values \u2261 6 mod 7, and col wraps to 4294967295 breaking the 7*row+col==index invariant). The new evidence raises no additional material, testable, in-scope problems not already covered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-10-18T02:15:04Z",
+      "id": "t12",
+      "output": {
+        "created_at": "2026-10-18T02:15:04Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: c1 and c2 are both confirmed with in-scope runtime probe evidence (kernel row = floor(v/7)+1 for large values \u2261 6 mod 7, and col wraps to 4294967295 breaking the 7*row+col==index invariant). The new evidence raises no additional material, testable, in-scope problems not already covered.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "Reject. The kernel's precomputed reciprocal division (MULTIPLIER = ceil(2^34/7) = 2454267027, SHIFT = 34, residual 5) is not exact across the full uint32 domain that problem.txt \u2014 the operative contract here, since no test.py/get_inputs exist \u2014 explicitly requires (\"EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive... Every coordinate must equal the integer mathematical target EXACTLY\"). Confirmed runtime probes (t8, t9) on legal, in-domain values show: (c1) for large values \u2261 6 mod 7 (3435973841, 4294967284, 4294967291), the kernel row equals floor(v/7)+1, mismatching the exact int64 reference; (c2) for failing values (3435973841, 4294967291) the stored col wraps in unsigned arithmetic to 4294967295, outside the contract-mandated [0,6], and 7\u00b7row+col != original index, violating the contract's explicit recomposition invariant. Both claims are in_scope with scope evidence citing the stated input domain. No contract clause accounts for this deviation \u2014 the contract permits any division method only \"if it satisfies this exact requirement for every legal unsigned index.\" Skeptic reviewed the latest evidence and found no new claims; no open claims remain. This is a genuine correctness defect, not a metric artifact or tolerance issue.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T02:15:13Z",
+      "id": "t13",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-18T02:15:13Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "Reject. The kernel's precomputed reciprocal division (MULTIPLIER = ceil(2^34/7) = 2454267027, SHIFT = 34, residual 5) is not exact across the full uint32 domain that problem.txt \u2014 the operative contract here, since no test.py/get_inputs exist \u2014 explicitly requires (\"EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive... Every coordinate must equal the integer mathematical target EXACTLY\"). Confirmed runtime probes (t8, t9) on legal, in-domain values show: (c1) for large values \u2261 6 mod 7 (3435973841, 4294967284, 4294967291), the kernel row equals floor(v/7)+1, mismatching the exact int64 reference; (c2) for failing values (3435973841, 4294967291) the stored col wraps in unsigned arithmetic to 4294967295, outside the contract-mandated [0,6], and 7\u00b7row+col != original index, violating the contract's explicit recomposition invariant. Both claims are in_scope with scope evidence citing the stated input domain. No contract clause accounts for this deviation \u2014 the contract permits any division method only \"if it satisfies this exact requirement for every legal unsigned index.\" Skeptic reviewed the latest evidence and found no new claims; no open claims remain. This is a genuine correctness defect, not a metric artifact or tolerance issue.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-18T02:15:13Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "Reject. The kernel's precomputed reciprocal division (MULTIPLIER = ceil(2^34/7) = 2454267027, SHIFT = 34, residual 5) is not exact across the full uint32 domain that problem.txt \u2014 the operative contract here, since no test.py/get_inputs exist \u2014 explicitly requires (\"EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive... Every coordinate must equal the integer mathematical target EXACTLY\"). Confirmed runtime probes (t8, t9) on legal, in-domain values show: (c1) for large values \u2261 6 mod 7 (3435973841, 4294967284, 4294967291), the kernel row equals floor(v/7)+1, mismatching the exact int64 reference; (c2) for failing values (3435973841, 4294967291) the stored col wraps in unsigned arithmetic to 4294967295, outside the contract-mandated [0,6], and 7\u00b7row+col != original index, violating the contract's explicit recomposition invariant. Both claims are in_scope with scope evidence citing the stated input domain. No contract clause accounts for this deviation \u2014 the contract permits any division method only \"if it satisfies this exact requirement for every legal unsigned index.\" Skeptic reviewed the latest evidence and found no new claims; no open claims remain. This is a genuine correctness defect, not a metric artifact or tolerance issue.",
+    "verdict": "reject"
+  }
+}

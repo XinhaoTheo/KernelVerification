@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-4c37ae12",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The emulation mismatches I found earlier were hidden by INT8 saturation (raw R values ±1.4e9 clamp to ±127). The only fp64 error source is rounding of the product a·m (division by a power of two and the ±0.5 add are exact at these scales), and that error (~2^-53 of the product) can flip floor(x+0.5) only when the scaled value sits within ~2^-53 of a half-integer — which needs a large right shift (r≈31) so the scaled value is small and unsaturated. I'll search for such cases and verify them on the GPU kernel directly.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8374ea0b712ba931",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, sys\\nsys.path.insert(0, \\\"/root/cases/case_157\\\")\\nimport kernel\\n\\ndef kern_emul(a, m, r, z=0):\\n    pf = float(a) * float(m)           # fp64 product with rounding\\n    scaled = pf / float(1 << (31 + r)) # exact power-of-two division\\n    rounded = math.floor(scaled + 0.5)\\n    bounded = max(-255, min(255, rounded))\\n    return max(-128, min(127, bounded + z))\\n\\ndef exact(a, m, r, z=0):\\n    P = a * m\\n    R = (P + (1 << (30 + r))) >> (31 + r)\\n    return max(-128, min(127, R + z))\\n\\n# Search: r=31 -> scaled = a*m/2^62 in ~[-2,2]; half-integer boundary flips when\\n# a*m is within one product-ulp (2^9 near 2^61) of an odd multiple of 2^61.\\nrng = torch.Generator().manual_seed(7)\\nfound = []\\nfor trial in range(200000):\\n    a = int(torch.randint(-(1<<31), 1<<31, (1,), generator=rng).item())\\n    m = int(torch.randint(1<<30, 1<<31, (1,), generator=rng).item())\\n    for r in (30, 31):\\n        k, e = kern_emul(a, m, r), exact(a, m, r)\\n        if k != e:\\n            found.append((a, m, r, k, e))\\n            break\\n    if len(found) >= 8:\\n        break\\nprint(\\\"emulation mismatches found:\\\", len(found))\\nfor f in found[:8]: print(f)\\n\\n# verify on GPU with actual kernel\\nif found:\\n    vals = [f[0] for f in found]\\n    rs = [f[2] for f in found]\\n    ms = [f[1] for f in found]\\n    n = len(vals)\\n    # build per-channel params matching each case (channel index c uses m_c, r_c)\\n    acc = torch.tensor(vals, dtype=torch.int32, device=\\\"cuda\\\").view(n, 1)\\n    mult = torch.tensor(ms, dtype=torch.int32, device=\\\"cuda\\\")\\n    sh = torch.tensor(rs, dtype=torch.int32, device=\\\"cuda\\\")\\n    zp = torch.zeros(n, dtype=torch.int32, device=\\\"cuda\\\")\\n    out = kernel.run(acc, mult, sh, zp).cpu()\\n    ref = kernel.reference(acc, mult, sh, zp).cpu()\\n    print(\\\"kernel:\\\", out.flatten().tolist())\\n    print(\\\"ref   :\\\", ref.flatten().tolist())\\n    print(\\\"GPU mismatch:\\\", not torch.equal(out, ref))\\n    for i,(a,m,r,k,e) in enumerate(found):\\n        print(i, \\\"a=\\\",a,\\\"m=\\\",m,\\\"r=\\\",r,\\\"emul_k=\\\",k,\\\"exact=\\\",e,\\n              \\\"gpu_kernel=\\\",out[i,0].item(),\\\"gpu_ref=\\\",ref[i,0].item())\\nelse:\\n    # fallback: broad randomized GPU comparison focused on large r\\n    g = torch.Generator().manual_seed(11)\\n    a = torch.randint(-(1<<31), 1<<31, (4096, 257), generator=g, dtype=torch.int64).to(torch.int32).cuda()\\n    mm = torch.randint(1<<30, 1<<31, (257,), generator=g, dtype=torch.int64).to(torch.int32).cuda()\\n    rr = torch.randint(24, 32, (257,), generator=g, dtype=torch.int32).cuda()\\n    zz = torch.randint(-128, 128, (257,), generator=g, dtype=torch.int32).cuda()\\n    o = kernel.run(a, mm, rr, zz); rf = kernel.reference(a, mm, rr, zz)\\n    mism = (o != rf)\\n    print(\\\"random large-r mismatch:\\\", mism.sum().item(), \\\"/\\\", mism.numel())\\n\", \"expected_signal\": \"kernel run() vs reference() exact-integer mismatch on legal inputs with large r\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The emulation mismatches existed but were hidden by saturation (both clamp to ±255? no — R values ±1.47e9 → clamped to ±127? Wait, R was 1472506414, clamped to... bounded min 255 → then with z=0 clamps to 127). So my adversarial cases were bad choices — saturation hid the error. Need inputs where the raw scaled value is small yet fp64 inexact. Note: scaled = P/2^(31+r). When r=0, scaled ~ a/2 ~ huge → always saturates. To get inexactness in small scaled values, use large r (e.g. r=31: denominator 2^62, scaled = a*m/2^62 ≈ up to ~1). Then fp64 product rounding matters near .5 boundaries. Actually the key: div_rn(product, 2^k) is exact for exact product since dividing by power of two only changes exponent. So the only error is the product rounding: a*m in fp64 rounds to 53 bits, error up to 2^(62-53)=2^9 relative ulp. Then scaled = product/2^(62) has error ~2^9/2^62 = 2^-53. Near a .5 boundary of scaled, floor(scaled+0.5) could flip if exact scaled is exactly t+0.5 and fp64 rounds down → rounds to t instead of t+1. Exact halfway scaled means a*m = (2t+1)*2^(30+r)... For r=31, a*m = odd*2^61 → needs a*m divisible by 2^61, with a,m < 2^31 each, m ≥ 2^30: a*m = q*2^61. Take m = 2^30 (allowed), a odd? a*2^30 = q*2^61 → a = 2*q... so a even, a=2q. Then a*m=2^31 q... we need a*m = (2t+1)2^61 — but a*m ≤ ~2^62; (2t+1)2^61 with a=2q gives 2^31q = (2t+1)2^61 → q=(2t+1)2^30, a=2q=(2t+1)2^31 ≥ 2^31, out of range for t=0? a would need ≥ 2^31. Only t=0: a*m=2^61, a=2^31,2*m... a=2^31 not legal (max 2^31-1). Hmm.\n\nAlternative: fp64 rounding of the product can push scaled across .5 boundary even when scaled isn't exactly at boundary? No — rounding error ~2^-53 in scaled, and scaled is a multiple of 2^(30+r)/2^(31+r) = ... exact scaled = P/2^(31+r), P integer so scaled is a multiple of 2^-(31+r), which for r large is much smaller than 2^-53 spacing. So near-boundary values that are not exactly .5: exact scaled could be (2t+1)/2 + small delta where delta ≥ 2^-(31+r). With r=31, delta could be 2^-62 < fp64 error → flip possible. So cases: r large, a*m near (2t+1)*2^(30+r) + tiny multiple.\n\nAlso another error source: float(av)*float(m) — both exactly representable (int32 exact in fp64), product rounds. That's the sole error. div by power of 2 exact. floor(scaled+0.5): adding 0.5 rounds again but small.\n\nSo design: m = 2^31-1 (odd, large), r=31. P = a*m, exact scaled = P/2^62. Want P = (2t+1)*2^61 + small d where |d| < 2^9 (so fp64 rounding of P (ulp ~2^9 at 2^61 magnitude, wait 2^61 has ulp 2^61-52=2^9) can flip rounding. Exact scaled = (2t+1)/2 + d/2^62. If d>0, exact R = t+1. fp64 product rounds P to nearest multiple of 2^9 (magnitude near 2^61 → ulp 2^9). If rounded down by enough to cross... we need rounded P < (2t+1)2^61 - 2^(62)*0? floor(scaled+0.5) with rounded value: need rounded/2^62 + 0.5 < t+1, i.e. rounded < (2t+1)2^61. So d small positive, e.g. d=1: P=(2t+1)2^61+1, round-to-nearest gives (2t+1)2^61 (since 1 < ulp/2=256) → kernel rounds to t, exact rounds to t+1. \n\nNeed P = a*m with |a|<2^31, m odd in [2^30,2^31). P mod 2^61: choose a,m such that a*m = (2t+1)2^61 + 1 mod... actually we need exact equality a*m = (2t+1)*2^61 + 1. Since m odd and a odd gives odd product — but (2t+1)2^61+1 is odd. Good: pick a odd, m odd. E.g. m = 2^31-1, a: solve a*m = k*2^61 + 1 for integer k. Search: iterate a odd, compute a*m mod 2^61? We need exact equality with some (2t+1)2^61+1, i.e. (a*m - 1) divisible by 2^61 and (a*m-1)/2^61 odd. a*m ≤ (2^31-1)^2 ≈ 2^62, so a*m-1 ∈ [0, 2^62), t+1 up to 1 → (2t+1)2^61 ∈ {2^61} (t=0) since 3*2^61 > 2^62? 3*2^61 = 1.5*2^62 > max product (2^31-1)^2 < 2^62. So need a*m = 2^61 + 1. Solve a*(2^31-1) = 2^61+1 = (2^31+1)... 2^61+1 = (2^31+1)(2^31-1)+... let's check: (2^31-1)(2^31+1) = 2^62-1. Hmm. Need a*m = 2^61+1 with m in [2^30, 2^31). 2^61+1 factors? 2^61+1 is divisible by 3 (since 2^odd +1 divisible by 3): 2^61+1 = 3 * ... Does it have a factor in [2^30,2^31)? We can just brute force: for m in range, check (2^61+1) % m == 0 and quotient < 2^31. Or more flexible: any m odd, a such that a*m ≡ ... but exact scaled being at boundary+1 in units of 2^-62 requires P = (2t+1)2^61 + d with 0<d<256 (ulp=512 at 2^61? magnitude of P is ~2^61, ulp = 2^(61-52)=2^9=512, round-half: values within 256 below/above get affected). So P in ((2t+1)2^61, (2t+1)2^61+256) rounds down to (2t+1)2^61 (distance <256 rounds to nearest; tie at 256 rounds to even). Actually also P slightly below boundary, like P = (2t+1)2^61 - 1: exact scaled = (2t+1)/2 - 2^-62 → floor(+0.5) = t. fp64 rounds P to (2t+1)2^61 → gives t+1. Both directions possible.\n\nRather than theory-hunting, easier: brute-force scan on CPU emulating fp64: for random odd m, odd a with r=31, compute kernel emulation vs exact, find mismatch, then verify on GPU. But also note saturation: with r=31, scaled in ~[-2,2] region only if |a*m| < 2^63-ish; scaled = a*m/2^62 up to ~2. Values t ∈{-2..1}, fine with z offset to avoid clamping; z=0, values R in [-2,2] no clamp. Good.\n\nAlso there's the +0.5 addition rounding: scaled ~0.5, adding 0.5 exact (scaled has ulp 2^-52, sum fine). OK.\n\nAlso note div: product is exact power-of-two multiple scaling — exact. But wait: after rounding product to multiple of 512, dividing by 2^62: exponent shift, exact. Good.\n\nAlso consider the reference implementation in kernel.py uses int64: product a*m fits in int64 (max 2^62), bias 1<<(30+r) with r up to 31 → 1<<61, sum ≤ 2^62+2^61 < 2^63. OK.\n\nLet me write a probe: search over random a,m (odd), r=31 for emulation mismatch; then run kernel on found values, compare with kernel.reference. Also do a broader randomized large-r test on GPU directly comparing run vs reference, since emulation may differ from Triton fp64 (it shouldn't, but confirm on GPU).\n\nAlso possibility: Triton a.to(tl.float64) — fine.\n\nAlso there's another subtlety: `(tl.full((), 1, tl.int64) << (31 + r))` then to float64: 2^(31+31)=2^62 exact. Fine.\n\nLet me probe."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306174,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 3260,
+    "prompt_tokens": 15507,
+    "total_tokens": 18767,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 2221,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8303,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

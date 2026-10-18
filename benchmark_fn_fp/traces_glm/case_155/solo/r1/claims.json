@@ -1,0 +1,65 @@
+[
+  {
+    "created_at": "2026-10-18T06:47:10Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T06:48:11Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t6_probe.py",
+              "sha256": "86b54d2a02013f58f804955bb106474973f6ccc64c0c44a7bad0fb0c44cd11aa"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t6_stdout.txt",
+              "sha256": "0df4562895a6e2f668b88cf5a4666423cb401f0e9a6af072cf60e9aa3da00799"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t6_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+          ],
+          "case_A_worst_ratio": 12.772424042850616,
+          "case_D_max_ratio": 0.1335,
+          "case_E_max_ratio": 0.01277,
+          "duration_s": 6.168031,
+          "exit_code": 0,
+          "expected_signal": "err/tol ratio > 1 on cancellation rows",
+          "json_parse_error": "last stdout line is not JSON: Expecting value",
+          "json_result": null,
+          "stderr": "",
+          "stdout": "{\n  \"A\": {\n    \"err\": 0.0006510416678793263,\n    \"tol_min\": 1e-07,\n    \"worst_ratio\": 12.772424042850616\n  },\n  \"B\": {\n    \"err\": 0.0,\n    \"tol_min\": 1e-07,\n    \"ratio\": 0.0,\n    \"out\": [\n      [\n        0.0,\n        -1.0\n      ]\n    ],\n    \"ref\": [\n      [\n        0.0,\n        -1.0\n      ]\n    ]\n  },\n  \"C\": {\n    \"err\": 0.0,\n    \"ratio\": 0.0\n  },\n  \"D\": {\n    \"max_ratio\": 0.13350276869170963,\n    \"worst_row\": {\n      \"num\": [\n        60000.0,\n        60000.0\n      ],\n      \"den\": [\n        100.0,\n        60000.0\n      ],\n      \"out\": [\n        1.0016638040542603,\n        -0.9983305335044861\n      ],\n      \"ref\": [\n        1.001663884266988,\n        -0.9983305601928883\n      ],\n      \"err\": [\n        8.021272779323851e-08,\n        2.6688402265939715e-08\n      ]\n    }\n  },\n  \"E\": {\n    \"max_ratio\": 0.012772423892336097\n  }\n}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "violating_case": "A"
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Adversarial FP16 probe: Case A (numerator/denominator rows with large components and ratio-driven cancellation, e.g. num [65504,65504]/den [3,-3] and num [1000,3000]/den [7,21]) gives max abs error 6.51e-4 with err/tol ratio 12.77, exceeding the contract tolerance 1e-7 + 5e-7*|target| on fully legal finite FP16 inputs. Benign subnormal/tiny case (E) ratio 0.013 and large-scale grid (D) ratio 0.13 stay within tolerance, confirming the failure is specifically the ratio-rounding cancellation amplification.",
+        "supports": "confirmed",
+        "tool_event_id": "t6"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "solo",
+    "rationale": "The kernel computes ratio = minor/major as an FP32 rounded quotient (rel. error ~2^-24). In real_numerator/imag_numerator, that error is amplified by the magnitude of the cancelled term: with FP16 components up to 65504, numerator error ~65504*2^-24 \u2248 4e-3, and after dividing by scale (~|c|) the output component error can reach ~1e-4 or more while the true component is small, violating the per-component tolerance 1e-7 + 5e-7*|target|.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract requires abs(actual - target) <= 1e-7 + 5e-7 * abs(target) for EACH output component separately, and states 'EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema', so large-magnitude cancellation rows are in the required domain."
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires abs(actual - target) <= 1e-7 + 5e-7*abs(target) per component, and declares every combination of finite FP16 components (including the extrema 65504) legal, so a failure on large-magnitude cancellation inputs violates a required behaviour.",
+    "statement": "The kernel's Smith-style algorithm (tl.div_rn ratio of minor/major, then tl.fma numerators) exceeds the contract's per-component tolerance 1e-7 + 5e-7*|target| for legal FP16 inputs where the true real or imaginary component is near zero while the numerator terms a, b (and denominator scale) are large (up to 65504), because rounding error in `ratio` is amplified by cancellation.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T06:48:11Z"
+  }
+]

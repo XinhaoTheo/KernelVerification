@@ -1,0 +1,13 @@
+Quake rsqrt with 2 Newton iterations in fp32. Need accuracy 1e-6 absolute on x/sqrt(1+x²), |output|<1. rsqrt relative error after 2 iterations ~ few 1e-4? Quake initial error ~3.4%, one Newton ~0.17%, two ~4e-6 relative... Actually Newton for rsqrt: error squares: 0.034² /2 ≈ 5.8e-4 after one, then (5.8e-4)²/2 ≈ 1.7e-7 after two. So relative error ~1.7e-7, value ≤1, so absolute error ≤ ~1.7e-7 plus fp32 rounding ~6e-8. Fine.
+
+Edge cases: x=0 → squared=1, rsqrt(1)≈1, fine. x=±65504: x*x in fp32? x converted to fp32, x*x = ~4.29e9, exact-ish fp32 relative error ~1e-7; fine. Newton iterations overflow? inverse_length small, no overflow. Subnormals fine.
+
+Bitcast to int32, encoding >>1 arithmetic shift — squared_length ≥1 so positive, sign bit 0, arithmetic shift same as logical. Fine.
+
+But wait: 0x5F3759DF minus half encoding — standard. Half of squared_length: fp32 0.5*exact. The refinement computes exact-ish rsqrt of fp32-rounded squared_length. Target uses exact x value (fp16 exact in fp32), 1+x*x in real; fp32 rounding of x*x gives relative error ~1e-7, so value error ~1e-7. Fine.
+
+Storage offset views: pointer arithmetic fine since contiguous.
+
+tl.int32 constant 0x5F3759DF > int32 max? 0x5F3759DF = 1597463007 < 2^31. Fine.
+
+Verdict: trust.

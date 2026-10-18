@@ -31,7 +31,22 @@ FAMILIES = {"state_pair": ("case_106", "case_107"),
             "erf_pair": ("case_126", "case_127"),
             "gelu_pair": ("case_128", "case_129"),
             "silu_pair": ("case_130", "case_131"),
-            "sine_pair": ("case_132", "case_133")}
+            "sine_pair": ("case_132", "case_133"),
+            "hypot_pair": ("case_134", "case_135"),
+            "softplus_pair": ("case_136", "case_137"),
+            "compensated_pair": ("case_138", "case_139"),
+            "fastdiv_pair": ("case_140", "case_141"),
+            "butterfly_pair": ("case_142", "case_143"),
+            "packed_argmax_pair": ("case_144", "case_145"),
+            "atan_pair": ("case_146", "case_147"),
+            "rounding_pair": ("case_148", "case_149"),
+            "ntt_pair": ("case_150", "case_151"),
+            "crc_pair": ("case_152", "case_153"),
+            "complex_pair": ("case_154", "case_155"),
+            "requant_compose_pair": ("case_156", "case_157"),
+            "affine_scan_pair": ("case_158", "case_159"),
+            "winograd_pair": ("case_160", "case_161"),
+            "realfft_pair": ("case_162", "case_163")}
 app = modal.App("kv-real-kernel-qualification")
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4",

@@ -13,6 +13,7 @@ import re
 from pathlib import Path, PurePosixPath
 import tarfile
 from typing import Any
+from uuid import uuid4
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCHMARK_DIR = REPO_ROOT / "benchmark_fn_fp"
@@ -20,7 +21,8 @@ TRACES_GLOB = "traces_*"
 
 
 def new_trial_id() -> str:
-    return datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%S_%fZ")
+    timestamp = datetime.now(timezone.utc).strftime("run_%Y%m%dT%H%M%S_%fZ")
+    return f"{timestamp}_{uuid4().hex}"
 
 
 def next_trial_id(case_ids: list[str], arms: list[str], *, traces_dir: str) -> str:

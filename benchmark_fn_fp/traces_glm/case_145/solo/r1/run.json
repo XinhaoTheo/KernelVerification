@@ -1,0 +1,902 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_145",
+    "has_error": null,
+    "kernel_code": "\"\"\"Row-wise first-maximum index via a packed integer-key reduction.\n\nOriginal synthetic Triton implementation; not an upstream historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    column = tl.arange(0, BLOCK)\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\n    rank = raw ^ mask\n    # Rank dominates; reversed column indices select the first equal value.\n    tie = 0xffffffff - column.to(tl.uint32)\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\n    key = tl.where(column < N, key, 0)\n    best = tl.max(key, axis=0)\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\n    tl.store(OUT + row, winner)\n\n\ndef validate_inputs(x, require_cuda=True):\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags outside domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required\")\n    require(x.ndim == 2, \"matrix [M,N] required\")\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\n            and x.numel() <= 262144, \"matrix dimensions outside domain\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all values must be finite\")\n    return {\"valid\": True, \"shape\": list(x.shape)}\n\n\ndef run(x):\n    validate_inputs(x)\n    m, n = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.argmax(x.to(torch.float64), dim=1)\n\n\ndef make_inputs(device=\"cuda\", rows=17, columns=257, seed=0):\n    \"\"\"Convenience examples, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_145",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:34:23Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:34:43Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "394bff631a131001dd58454417a6ce06cbd7940783a69d1893cf9a90611fa360"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "271cd45ecd41b48681aad61c3d365bc8fb6a159b2120e197cf7abedd155d7f5c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "578f746a0955739ad48e21efbb5a1d52364bb554591a739a39cb9e96b52e67de"
+              }
+            ],
+            "duration_s": 4.399129,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "kernel": [
+                3,
+                1,
+                2
+              ],
+              "mismatch_rows": [
+                0,
+                1,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                1
+              ]
+            },
+            "kernel": [
+              3,
+              1,
+              2
+            ],
+            "mismatch_rows": [
+              0,
+              1,
+              2
+            ],
+            "ref": [
+              0,
+              0,
+              1
+            ],
+            "stderr": "",
+            "stdout": "{\"kernel\": [3, 1, 2], \"ref\": [0, 0, 1], \"mismatch_rows\": [0, 1, 2]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Rows containing an earlier -0 and later +0 (plus negative values so zero is the row max) were tested. Kernel returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched. Later positive zeros outrank earlier negative zeros, confirming the +0-biased rank in the packed-key scheme.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The monotonic-key trick XORs raw bits with 0x8000 for positives and 0xffff for negatives; for negative zero raw=0x8000 gives rank 0x7fff while +0 gives 0x8000, so +0 ranks strictly above -0. Rank dominates the packed key, so a later +0 beats an earlier -0, returning a later index than the required first zero.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins. Every finite FP16 value is legal, including both signed zeros. No approximate tolerance: index must equal the specified first index."
+        }
+      ],
+      "scope_rationale": "The contract explicitly includes both signed zeros in the domain and requires that when a row's maximum is zero, the first zero of either sign wins. If the kernel returns a later +0 index when an earlier -0 is present, it violates this required behaviour.",
+      "statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule.",
+      "status": "confirmed",
+      "updated_at": "2026-10-18T01:34:43Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_145",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_145"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_145"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_145"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_145",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 12.435540871,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel's packed-key rank handles \u00b10 asymmetrically: -0 (0x8000) gets rank 0x7fff while +0 gets rank 0x8000, so +0 outranks -0 regardless of column order. The contract says the first zero of either sign must win. I'll record that claim and probe it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The monotonic-key trick XORs raw bits with 0x8000 for positives and 0xffff for negatives; for negative zero raw=0x8000 gives rank 0x7fff while +0 gives 0x8000, so +0 ranks strictly above -0. Rank dominates the packed key, so a later +0 beats an earlier -0, returning a later index than the required first zero.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins. Every finite FP16 value is legal, including both signed zeros. No approximate tolerance: index must equal the specified first index."
+              }
+            ],
+            "scope_rationale": "The contract explicitly includes both signed zeros in the domain and requires that when a row's maximum is zero, the first zero of either sign wins. If the kernel returns a later +0 index when an earlier -0 is present, it violates this required behaviour.",
+            "statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 12.436,
+        "input_tokens": 8743,
+        "output_tokens": 873
+      }
+    },
+    {
+      "duration_s": 4.725253739999999,
+      "role": "solo",
+      "round": 3,
+      "text": "",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_145\")\nimport kernel\n\nneg0 = torch.tensor([0.0], dtype=torch.float16).to(torch.float64)\nneg0 = neg0.to(torch.float16) * -1  # ensures sign set below\n# Build rows with earlier -0 and later +0\ndef mk(*vals):\n    return torch.tensor(vals, dtype=torch.float16)\n\nneg_zero = torch.zeros(1, dtype=torch.float16); neg_zero[0] = -0.0\npos_zero = torch.zeros(1, dtype=torch.float16)\nassert torch.copysign(torch.ones(1), neg_zero).item() < 0\n\nx = torch.stack([torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n                 torch.cat([neg_zero, pos_zero, pos_zero]),\n                 torch.cat([mk(-5.0), neg_zero, pos_zero])]).to(\"cuda\").contiguous()\nout = kernel.run(x)\nref = kernel.reference(x.cpu())\nresult = {\"kernel\": out.cpu().tolist(), \"ref\": ref.tolist(),\n          \"signs\": torch.copysign(torch.ones(x.shape, dtype=torch.float16), x.cpu()).view(x.shape[0],-1).tolist()}\nprint(json.dumps(result))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.725,
+        "input_tokens": 10230,
+        "output_tokens": 300
+      }
+    },
+    {
+      "duration_s": 4.367989377000001,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed on a tensor-shape bug (row 0 had 4 elements). I'll fix the sizes and rerun.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_145\")\nimport kernel\n\ndef mk(*vals):\n    return torch.tensor(vals, dtype=torch.float16)\n\nneg_zero = torch.tensor([-0.0], dtype=torch.float16)\npos_zero = torch.tensor([0.0], dtype=torch.float16)\nassert torch.copysign(torch.ones(1), neg_zero).item() < 0\n\n# rows of length 4: row0 earlier -0 later +0 with negatives; row1 -0,+0,+0; row2 -5,-0,+0\nx = torch.stack([\n    torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n    torch.cat([neg_zero, pos_zero, pos_zero, mk(-3.0)]),\n    torch.cat([mk(-5.0), neg_zero, pos_zero, mk(-7.0)]),\n]).to(\"cuda\").contiguous()\nout = kernel.run(x)\nref = kernel.reference(x.cpu())\nmismatch = (out.cpu() != ref.cpu()).nonzero().flatten().tolist()\nprint(json.dumps({\"kernel\": out.cpu().tolist(), \"ref\": ref.tolist(), \"mismatch_rows\": mismatch}))"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.368,
+        "input_tokens": 12125,
+        "output_tokens": 328
+      }
+    },
+    {
+      "duration_s": 3.7858520739999975,
+      "role": "solo",
+      "round": 5,
+      "text": "The probe decisively confirmed the signed-zero defect: kernel returned [3,1,2] vs required [0,0,1] on all three rows. I'll finalize the evidence and verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "kernel": [
+                3,
+                1,
+                2
+              ],
+              "mismatch_rows": [
+                0,
+                1,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                1
+              ]
+            },
+            "event_id": "t7",
+            "status": "confirmed",
+            "summary": "Rows containing an earlier -0 and later +0 (plus negative values so zero is the row max) were tested. Kernel returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched. Later positive zeros outrank earlier negative zeros, confirming the +0-biased rank in the packed-key scheme.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.786,
+        "input_tokens": 14100,
+        "output_tokens": 211
+      }
+    },
+    {
+      "duration_s": 5.013424534999999,
+      "role": "solo",
+      "round": 6,
+      "text": "The signed-zero defect is confirmed with in-scope runtime evidence (probe t7: kernel [3,1,2] vs required [0,0,1] on all rows containing earlier -0 and later +0 maxima). The contract explicitly requires the first zero of either sign to win, so this is a decisive violation. Recording the reject verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.98,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Claim c1 (in_scope, confirmed): the contract requires that when a row's maximum is zero, the first zero of either sign wins (problem.txt explicitly includes both signed zeros in the domain and forbids any index tolerance). The kernel's packed-key scheme gives +0 rank 0x8000 but -0 rank 0x7fff, so a later +0 always beats an earlier -0. Runtime probe t7 on a 3x4 FP16 CUDA tensor with rows [(-0,-1,-2,+0), (-0,+0,+0,-3), (-5,-0,+0,-7)] returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched the kernel's own reference(). This is a confirmed violation of a required behaviour on inputs the contract explicitly admits, so the kernel must be rejected.",
+            "verdict": "reject"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.013,
+        "input_tokens": 17063,
+        "output_tokens": 313
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_145"
+      },
+      "created_at": "2026-10-18T01:34:09Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_145",
+        "has_error": null,
+        "kernel_code": "\"\"\"Row-wise first-maximum index via a packed integer-key reduction.\n\nOriginal synthetic Triton implementation; not an upstream historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    column = tl.arange(0, BLOCK)\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\n    rank = raw ^ mask\n    # Rank dominates; reversed column indices select the first equal value.\n    tie = 0xffffffff - column.to(tl.uint32)\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\n    key = tl.where(column < N, key, 0)\n    best = tl.max(key, axis=0)\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\n    tl.store(OUT + row, winner)\n\n\ndef validate_inputs(x, require_cuda=True):\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags outside domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required\")\n    require(x.ndim == 2, \"matrix [M,N] required\")\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\n            and x.numel() <= 262144, \"matrix dimensions outside domain\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all values must be finite\")\n    return {\"valid\": True, \"shape\": list(x.shape)}\n\n\ndef run(x):\n    validate_inputs(x)\n    m, n = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.argmax(x.to(torch.float64), dim=1)\n\n\ndef make_inputs(device=\"cuda\", rows=17, columns=257, seed=0):\n    \"\"\"Convenience examples, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_145",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_145"
+      },
+      "created_at": "2026-10-18T01:34:09Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_145",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_145"
+      },
+      "created_at": "2026-10-18T01:34:09Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_145",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2705
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1834
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_145",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:34:09Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_145",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The monotonic-key trick XORs raw bits with 0x8000 for positives and 0xffff for negatives; for negative zero raw=0x8000 gives rank 0x7fff while +0 gives 0x8000, so +0 ranks strictly above -0. Rank dominates the packed key, so a later +0 beats an earlier -0, returning a later index than the required first zero.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins. Every finite FP16 value is legal, including both signed zeros. No approximate tolerance: index must equal the specified first index."
+          }
+        ],
+        "scope_rationale": "The contract explicitly includes both signed zeros in the domain and requires that when a row's maximum is zero, the first zero of either sign wins. If the kernel returns a later +0 index when an earlier -0 is present, it violates this required behaviour.",
+        "statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule."
+      },
+      "created_at": "2026-10-18T01:34:23Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T01:34:23Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The monotonic-key trick XORs raw bits with 0x8000 for positives and 0xffff for negatives; for negative zero raw=0x8000 gives rank 0x7fff while +0 gives 0x8000, so +0 ranks strictly above -0. Rank dominates the packed key, so a later +0 beats an earlier -0, returning a later index than the required first zero.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins. Every finite FP16 value is legal, including both signed zeros. No approximate tolerance: index must equal the specified first index."
+          }
+        ],
+        "scope_rationale": "The contract explicitly includes both signed zeros in the domain and requires that when a row's maximum is zero, the first zero of either sign wins. If the kernel returns a later +0 index when an earlier -0 is present, it violates this required behaviour.",
+        "statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule.",
+        "status": "open",
+        "updated_at": "2026-10-18T01:34:23Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_145\")\nimport kernel\n\nneg0 = torch.tensor([0.0], dtype=torch.float16).to(torch.float64)\nneg0 = neg0.to(torch.float16) * -1  # ensures sign set below\n# Build rows with earlier -0 and later +0\ndef mk(*vals):\n    return torch.tensor(vals, dtype=torch.float16)\n\nneg_zero = torch.zeros(1, dtype=torch.float16); neg_zero[0] = -0.0\npos_zero = torch.zeros(1, dtype=torch.float16)\nassert torch.copysign(torch.ones(1), neg_zero).item() < 0\n\nx = torch.stack([torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n                 torch.cat([neg_zero, pos_zero, pos_zero]),\n                 torch.cat([mk(-5.0), neg_zero, pos_zero])]).to(\"cuda\").contiguous()\nout = kernel.run(x)\nref = kernel.reference(x.cpu())\nresult = {\"kernel\": out.cpu().tolist(), \"ref\": ref.tolist(),\n          \"signs\": torch.copysign(torch.ones(x.shape, dtype=torch.float16), x.cpu()).view(x.shape[0],-1).tolist()}\nprint(json.dumps(result))"
+      },
+      "created_at": "2026-10-18T01:34:30Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "ba435f2c82e1a8d95965042fe44fc1859b2b3bfd31f588a277467e7c2e73454a"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "d9810ef94bfdd7f6aebcfebc8e61b88d59058a65ba11bad46ec0199c05618a0f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule.",
+        "cwd": "/root/cases/case_145",
+        "duration_s": 2.496933,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "ba435f2c82e1a8d95965042fe44fc1859b2b3bfd31f588a277467e7c2e73454a"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "d9810ef94bfdd7f6aebcfebc8e61b88d59058a65ba11bad46ec0199c05618a0f"
+              }
+            ],
+            "duration_s": 2.496933,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_145/solo/probes/t6_probe.py\", line 15, in <module>\n    x = torch.stack([torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: stack expects each tensor to be equal size, but got [4] at entry 0 and [3] at entry 1\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_145/solo/probes/t6_probe.py\", line 15, in <module>\n    x = torch.stack([torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nRuntimeError: stack expects each tensor to be equal size, but got [4] at entry 0 and [3] at entry 1\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_145\")\nimport kernel\n\ndef mk(*vals):\n    return torch.tensor(vals, dtype=torch.float16)\n\nneg_zero = torch.tensor([-0.0], dtype=torch.float16)\npos_zero = torch.tensor([0.0], dtype=torch.float16)\nassert torch.copysign(torch.ones(1), neg_zero).item() < 0\n\n# rows of length 4: row0 earlier -0 later +0 with negatives; row1 -0,+0,+0; row2 -5,-0,+0\nx = torch.stack([\n    torch.cat([neg_zero, mk(-1.0, -2.0), pos_zero]),\n    torch.cat([neg_zero, pos_zero, pos_zero, mk(-3.0)]),\n    torch.cat([mk(-5.0), neg_zero, pos_zero, mk(-7.0)]),\n]).to(\"cuda\").contiguous()\nout = kernel.run(x)\nref = kernel.reference(x.cpu())\nmismatch = (out.cpu() != ref.cpu()).nonzero().flatten().tolist()\nprint(json.dumps({\"kernel\": out.cpu().tolist(), \"ref\": ref.tolist(), \"mismatch_rows\": mismatch}))"
+      },
+      "created_at": "2026-10-18T01:34:39Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "394bff631a131001dd58454417a6ce06cbd7940783a69d1893cf9a90611fa360"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "271cd45ecd41b48681aad61c3d365bc8fb6a159b2120e197cf7abedd155d7f5c"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "578f746a0955739ad48e21efbb5a1d52364bb554591a739a39cb9e96b52e67de"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule.",
+        "cwd": "/root/cases/case_145",
+        "duration_s": 4.399129,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "394bff631a131001dd58454417a6ce06cbd7940783a69d1893cf9a90611fa360"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "271cd45ecd41b48681aad61c3d365bc8fb6a159b2120e197cf7abedd155d7f5c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "578f746a0955739ad48e21efbb5a1d52364bb554591a739a39cb9e96b52e67de"
+              }
+            ],
+            "duration_s": 4.399129,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "kernel": [
+                3,
+                1,
+                2
+              ],
+              "mismatch_rows": [
+                0,
+                1,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                1
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"kernel\": [3, 1, 2], \"ref\": [0, 0, 1], \"mismatch_rows\": [0, 1, 2]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "kernel": [
+            3,
+            1,
+            2
+          ],
+          "mismatch_rows": [
+            0,
+            1,
+            2
+          ],
+          "ref": [
+            0,
+            0,
+            1
+          ]
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"kernel\": [3, 1, 2], \"ref\": [0, 0, 1], \"mismatch_rows\": [0, 1, 2]}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "kernel": [
+            3,
+            1,
+            2
+          ],
+          "mismatch_rows": [
+            0,
+            1,
+            2
+          ],
+          "ref": [
+            0,
+            0,
+            1
+          ]
+        },
+        "event_id": "t7",
+        "status": "confirmed",
+        "summary": "Rows containing an earlier -0 and later +0 (plus negative values so zero is the row max) were tested. Kernel returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched. Later positive zeros outrank earlier negative zeros, confirming the +0-biased rank in the packed-key scheme.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-10-18T01:34:43Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:34:23Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:34:43Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "394bff631a131001dd58454417a6ce06cbd7940783a69d1893cf9a90611fa360"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "271cd45ecd41b48681aad61c3d365bc8fb6a159b2120e197cf7abedd155d7f5c"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "578f746a0955739ad48e21efbb5a1d52364bb554591a739a39cb9e96b52e67de"
+                  }
+                ],
+                "duration_s": 4.399129,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "kernel": [
+                    3,
+                    1,
+                    2
+                  ],
+                  "mismatch_rows": [
+                    0,
+                    1,
+                    2
+                  ],
+                  "ref": [
+                    0,
+                    0,
+                    1
+                  ]
+                },
+                "kernel": [
+                  3,
+                  1,
+                  2
+                ],
+                "mismatch_rows": [
+                  0,
+                  1,
+                  2
+                ],
+                "ref": [
+                  0,
+                  0,
+                  1
+                ],
+                "stderr": "",
+                "stdout": "{\"kernel\": [3, 1, 2], \"ref\": [0, 0, 1], \"mismatch_rows\": [0, 1, 2]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Rows containing an earlier -0 and later +0 (plus negative values so zero is the row max) were tested. Kernel returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched. Later positive zeros outrank earlier negative zeros, confirming the +0-biased rank in the packed-key scheme.",
+              "supports": "confirmed",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The monotonic-key trick XORs raw bits with 0x8000 for positives and 0xffff for negatives; for negative zero raw=0x8000 gives rank 0x7fff while +0 gives 0x8000, so +0 ranks strictly above -0. Rank dominates the packed key, so a later +0 beats an earlier -0, returning a later index than the required first zero.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Positive and negative zero compare equal; if a row's maximum is zero, the first zero of either sign wins. Every finite FP16 value is legal, including both signed zeros. No approximate tolerance: index must equal the specified first index."
+            }
+          ],
+          "scope_rationale": "The contract explicitly includes both signed zeros in the domain and requires that when a row's maximum is zero, the first zero of either sign wins. If the kernel returns a later +0 index when an earlier -0 is present, it violates this required behaviour.",
+          "statement": "When a row contains an earlier negative zero and a later positive zero (both being the row maximum), the kernel returns the later positive-zero index instead of the first zero index, violating the contract's \"first zero of either sign wins\" rule.",
+          "status": "confirmed",
+          "updated_at": "2026-10-18T01:34:43Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:34:43Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "394bff631a131001dd58454417a6ce06cbd7940783a69d1893cf9a90611fa360"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "271cd45ecd41b48681aad61c3d365bc8fb6a159b2120e197cf7abedd155d7f5c"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "578f746a0955739ad48e21efbb5a1d52364bb554591a739a39cb9e96b52e67de"
+              }
+            ],
+            "duration_s": 4.399129,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "kernel": [
+                3,
+                1,
+                2
+              ],
+              "mismatch_rows": [
+                0,
+                1,
+                2
+              ],
+              "ref": [
+                0,
+                0,
+                1
+              ]
+            },
+            "kernel": [
+              3,
+              1,
+              2
+            ],
+            "mismatch_rows": [
+              0,
+              1,
+              2
+            ],
+            "ref": [
+              0,
+              0,
+              1
+            ],
+            "stderr": "",
+            "stdout": "{\"kernel\": [3, 1, 2], \"ref\": [0, 0, 1], \"mismatch_rows\": [0, 1, 2]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Rows containing an earlier -0 and later +0 (plus negative values so zero is the row max) were tested. Kernel returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched. Later positive zeros outrank earlier negative zeros, confirming the +0-biased rank in the packed-key scheme.",
+          "supports": "confirmed",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.98,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 (in_scope, confirmed): the contract requires that when a row's maximum is zero, the first zero of either sign wins (problem.txt explicitly includes both signed zeros in the domain and forbids any index tolerance). The kernel's packed-key scheme gives +0 rank 0x8000 but -0 rank 0x7fff, so a later +0 always beats an earlier -0. Runtime probe t7 on a 3x4 FP16 CUDA tensor with rows [(-0,-1,-2,+0), (-0,+0,+0,-3), (-5,-0,+0,-7)] returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched the kernel's own reference(). This is a confirmed violation of a required behaviour on inputs the contract explicitly admits, so the kernel must be rejected.",
+        "verdict": "reject"
+      },
+      "created_at": "2026-10-18T01:34:48Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.98,
+        "created_at": "2026-10-18T01:34:48Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Claim c1 (in_scope, confirmed): the contract requires that when a row's maximum is zero, the first zero of either sign wins (problem.txt explicitly includes both signed zeros in the domain and forbids any index tolerance). The kernel's packed-key scheme gives +0 rank 0x8000 but -0 rank 0x7fff, so a later +0 always beats an earlier -0. Runtime probe t7 on a 3x4 FP16 CUDA tensor with rows [(-0,-1,-2,+0), (-0,+0,+0,-3), (-5,-0,+0,-7)] returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched the kernel's own reference(). This is a confirmed violation of a required behaviour on inputs the contract explicitly admits, so the kernel must be rejected.",
+        "verdict": "reject"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.98,
+    "created_at": "2026-10-18T01:34:48Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Claim c1 (in_scope, confirmed): the contract requires that when a row's maximum is zero, the first zero of either sign wins (problem.txt explicitly includes both signed zeros in the domain and forbids any index tolerance). The kernel's packed-key scheme gives +0 rank 0x8000 but -0 rank 0x7fff, so a later +0 always beats an earlier -0. Runtime probe t7 on a 3x4 FP16 CUDA tensor with rows [(-0,-1,-2,+0), (-0,+0,+0,-3), (-5,-0,+0,-7)] returned indices [3,1,2] while the contract-required first-zero indices are [0,0,1]; all 3 rows mismatched the kernel's own reference(). This is a confirmed violation of a required behaviour on inputs the contract explicitly admits, so the kernel must be rejected.",
+    "verdict": "reject"
+  }
+}

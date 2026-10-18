@@ -6,20 +6,18 @@ kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷�
 
 [Success cases explained in English, with code snippets and evidence](SUCCESS_CASES.md).
 
+[Replication of cases 109, 114, 127 and 128](REPLICATION_RESULTS.md). New cases 134–163 and their three-arm results are documented at the end of this page.
+
 ## 实验后的保留分组
 
-当前优先比较**带工具验证流程与无工具单次调用**。成功案例按实际观察到的判断
-差距及合法验证证据保留；暂不把纯工具因果归因或 debate 超过 solo 作为入选门槛。
-按此口径，**case_114 继续归入成功案例**。原始结果与证据审计仍完整保留。
+当前优先比较**带工具验证流程与无工具单次调用**。成功案例按实际观察到的判断差距及合法验证证据保留；暂不把纯工具因果归因或 debate 超过 solo 作为入选门槛。按此口径，**case_114 继续归入成功案例**。原始结果与证据审计仍完整保留。
 
 | 分组 | Case | 后续用途 |
 |---|---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | **case_109、case_114、case_127、case_128** | 109 的 solo、114/127 的 solo/debate 正确拒绝，无工具错误接受；128 的 solo/debate 正确接受，无工具错误拒绝 |
-| 未体现增益，保留待归普通集合 | case_106、107、108、110、111、112、113、115、116–126、129–133 | 保留正确/错误 kernel、来源和全部 traces，后续整理进普通集合 |
+| 成功案例：已观察到工具流程增益，单独保留 | **case_109、case_114、case_127、case_128、case_135、case_141、case_147、case_149、case_151、case_154、case_159、case_163** | 历史入选：109 的 solo、114/127 的 solo/debate 正确拒绝，无工具错误接受；128 的 solo/debate 正确接受，无工具错误拒绝。135 首轮的 solo/debate 找到数值反例，无工具错误接受，但其 r2 三组均正确，区分度未复现；141 首两轮有差距，但新增 r3–r5 中无工具正确 2/3，solo/debate 均正确 3/3；区分度不稳定；147/149 的新增五轮也有波动，151 的新增五轮均复现工具差距；154 仅首轮有差距，新增五轮无工具均正确，未复现；159/163 的首轮差距与固定五轮复测分别报告，详见本页末尾 |
+| 未体现增益，保留待归普通集合 | case_106、107、108、110、111、112、113、115、116–126、129–134、136–140、142–146、148、150、152–153、155–158、160–162 | 保留正确/错误 kernel、来源和全部 traces，后续整理进普通集合 |
 
-整理状态登记在 `case_map.json` 的 `curation_status`，并显示于案例和 GLM 索引。
-当前仅分组保留，未正式迁移普通集合；编号、公开题目路径、固定标签和 traces
-均保留。下方 106–111 六例、112–115 四例、116–119 四例、120–121 两例、122–123 两例、124–125 两例、126–127 两例及三轮探索 128–133 六例分别完整统计，不能仅用筛出的成功案例重算成功率。
+整理状态登记在 `case_map.json` 的 `curation_status`，并显示于案例和 GLM 索引。当前仅分组保留，未正式迁移普通集合；编号、公开题目路径、固定标签和 traces 均保留。下方 106–111 六例、112–115 四例、116–119 四例、120–121 两例、122–123 两例、124–125 两例、126–127 两例、三轮探索 128–133 六例、134–139 六例、140–145 六例、146–151 六例、152–157 六例及 158–163 六例分别完整统计，不能仅用筛出的成功案例重算成功率。
 
 ## 固定标签与公开合同
 
@@ -1280,3 +1278,481 @@ PTX 中 132 有显式 FMA，133 为分开的乘减；PTX 结论只针对该特�
    成对接受对照和独立参考；必须继续实测，不能预设会胜过无工具。
 
 本轮没有观察到 Debate 超过 Solo 的准确率收益。
+
+## Cases 134–139: three new directions
+
+2026-10-17, America/New_York. Six new synthetic implementations were independently qualified on NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0 before model evaluation. Each direction contains one Accept implementation and one Reject implementation under the same public requirements. Labels apply to the whole legal domain; a failing input is evidence against the implementation, not a separately labelled example. Sources, tolerances, candidate searches and qualification hashes are recorded in the three existing family manifests linked below. No implementation, tolerance or label was changed after model evaluation.
+
+All 18 evaluations used Fireworks `accounts/fireworks/models/glm-5p3`, reasoning effort `low`, and the same verifier fingerprint. Each arm had a total output limit of 32,768 tokens. Tool turns were limited to 8,192 tokens; Solo allowed 10 rounds and Debate 4 rounds with the existing closeout reserve. Every arm received the same complete public problem and kernel for its case. Private answers, qualification data, other cases and previous traces were excluded. All evaluations completed on their first attempt; probe-script failures and their repairs remain in the traces.
+
+### 134–135: reciprocal square root
+
+The target is `x / sqrt(1 + x*x)`, with FP32 output and absolute error at most `1e-6` for every finite FP16 input. The implementation uses an integer-bit reciprocal-square-root seed followed by Newton refinement. Case 134 uses three refinements and passes; case 135 uses two and fails. The algorithm is inspired by the [classic reciprocal-square-root implementation](https://github.com/id-Software/Quake-III-Arena/blob/master/code/game/q_math.c); these are original synthetic Triton kernels, not claimed upstream defects. [Construction and complete results](private_data/source_hypot_pair.json).
+
+<!-- BEGIN REAL KERNEL HYPOT RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_134 | Accept | [Accept](../traces_glm/case_134/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_134/solo/r1/transcript.md) (correct) | [Accept](../traces_glm/case_134/debate/r1/transcript.md) (correct) |
+| case_135 | Reject | [Accept](../traces_glm/case_135/single_call/r1/transcript.md) (wrong) | [Reject](../traces_glm/case_135/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_135/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL HYPOT RESULTS -->
+
+Case 135 is the new observed tool-benefit case. The no-tool model first recalled a two-step error near `4e-6`, then replaced it with an incorrect recurrence, `e_next ≈ e²/2`, and accepted. For reciprocal-square-root Newton iteration in exact arithmetic, the relative-error recurrence is `e_next = -1.5e² - 0.5e³`. Its mistaken coefficient substantially reduced its estimate.
+
+Excerpt from the actual [case 135 kernel](../triton_eval_cases/case_135/kernel.py):
+
+```python
+for _ in tl.static_range(2):
+    inverse_length = inverse_length * (
+        1.5 - half_squared_length * (inverse_length * inverse_length))
+value = x * inverse_length
+```
+
+Solo also initially estimated an error around `1e-7`. It then correctly reinterpreted all FP16 bit patterns, filtered NaN and infinity, ran the actual kernel on all 63,488 finite encodings, and found 20,050 violations. Debate independently found the same failure. A legal witness is `x=1640`: output `0.9999951124191284`, FP64 reference `0.9999998140988026`, error `4.701679674e-6`, exceeding the allowed `1e-6`. The [Solo probe and output](../traces_glm/case_135/solo/r1/probes/t6_stdout.txt) support rejection without relying on the model’s error estimate. Case 134 provides the passing control: independent maximum error is bounded by `1.680985035e-7`.
+
+### 136–137: Softplus
+
+The target is the [Softplus activation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Softplus.html), `log(1 + exp(x))`, evaluated against a stable mathematical reference. These kernels approximate the logarithm after range reduction. Case 136 keeps terms through `q⁷`; case 137 stops at `q⁵`. Both use absolute tolerance `1e-6`. [Construction and complete results](private_data/experiment_softplus.json).
+
+<!-- BEGIN REAL KERNEL SOFTPLUS RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_136 | Accept | [Accept](../traces_glm/case_136/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_136/solo/r1/transcript.md) (correct) | [Accept](../traces_glm/case_136/debate/r1/transcript.md) (correct) |
+| case_137 | Reject | [Reject](../traces_glm/case_137/single_call/r1/transcript.md) (correct) | [Reject](../traces_glm/case_137/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_137/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL SOFTPLUS RESULTS -->
+
+This direction did not separate the arms. The no-tool model correctly estimated the omitted term: at `x=0`, case 137 returns `0.6931458711624146` instead of `log(2)=0.6931471805599453`, an error of about `1.3094e-6`. The tool runs confirmed the defect. Case 136 passed the complete scalar sweep with a maximum error bound of `5.778695354e-7`. These remain useful correct/incorrect controls.
+
+### 138–139: cancellation in a loss function
+
+The target is the pseudo-Huber loss `sqrt(1 + x*x) - 1`, a robust loss related by a constant scale to [Ceres SoftLOneLoss](https://ceres-solver.googlesource.com/ceres-solver/+/master/include/ceres/loss_function.h). Case 138 uses the equivalent expression `x*x / (sqrt(1 + x*x) + 1)`; case 139 subtracts directly. The fixed requirement is `abs(error) <= 1e-8 + 1e-5*abs(target)`. For small inputs, the direct subtraction can lose significant digits. [Construction and complete results](private_data/experiment_compensated.json).
+
+<!-- BEGIN REAL KERNEL COMPENSATED RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_138 | Accept | [Accept](../traces_glm/case_138/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_138/solo/r1/transcript.md) (correct) | [Accept](../traces_glm/case_138/debate/r1/transcript.md) (correct) |
+| case_139 | Reject | [Reject](../traces_glm/case_139/single_call/r1/transcript.md) (correct) | [Reject](../traces_glm/case_139/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_139/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL COMPENSATED RESULTS -->
+
+This direction also did not separate the arms. The no-tool model recognized both the stable rewrite and the cancellation defect. Independent validation found zero failing scalar encodings for case 138 and 15,728 for case 139. The worst error-to-tolerance ratios were approximately `0.01532` and `9.510`, respectively; a ratio above one fails. The ratio matters here because the allowed absolute error varies with the mathematical target.
+
+### Validation and evidence limits
+
+Independent qualification used directed high-precision MPFR bounds, a separate mpmath cross-check, and actual GPU execution. Each implementation received 36 validation plans, including all 63,488 finite FP16 encodings in multiple arrangements, boundary lengths, storage offsets, input preservation and separate output storage. All three Accept implementations passed every plan. The qualification records are [134–135](private_data/qualification/r17.json), [136–137](private_data/qualification/r18.json) and [138–139](private_data/qualification/r19.json). Scalar enumeration is exhaustive for values, not a formal proof of every tensor execution or GPU environment.
+
+Trace audit found two recurring limitations. First, several accepting agents claimed the entire legal input domain was verified after a scalar sweep, despite incomplete checks of lengths, offsets and storage behavior. Second, case 135 Debate attached an unsupported explanation about intermediate rounding to its valid counterexample: `65504²` is exactly representable in FP32, and the extrema probe did not isolate the claimed cause. The primary counterexample still establishes rejection. Script errors were retained rather than hidden: these include invalid finite-value assertions, CPU/CUDA comparison mismatches and a malformed dtype constructor.
+
+Case 138 Debate used targeted value and offset tests rather than a complete scalar sweep. Case 139 Debate found valid failures, but confused a particular counterexample’s ratio (`6.4225`) with the global maximum ratio (`9.5099`) at another input. Its three successful bit-pattern bands together cover the finite scalar domain, with overlapping samples; their failure counts must not be added as if disjoint. These details are preserved in the family manifest.
+
+### Totals
+
+| Arm | Correct | Wrong | Unfinished | API estimate |
+|---|---:|---:|---:|---:|
+| single_call | 5/6 | 1 | 0 | $0.040780 |
+| solo | 6/6 | 0 | 0 | $0.485437 |
+| debate | 6/6 | 0 | 0 | $1.665735 |
+
+Total API estimate: **$2.191952**, across 18 evaluations and 71 recorded model API calls. This is a conservative estimate from captured usage and pricing, not an invoice; Modal GPU costs are excluded. All request/response captures, source hashes, model settings, budgets and the shared runtime fingerprint passed the structural audit. Probe evidence was reviewed separately.
+
+Keep case 135 with the observed tool-benefit cases. Keep 134 and 136–139 as controls or ordinary-sample candidates. This wave adds one observed tool benefit in six cases and provides no accuracy advantage for Debate over Solo. The initial wave has one run per case and arm. The subsequent case 135 replication is reported below. The most promising follow-up is whether a realistic approximation reaches a stated tolerance after a specific number of refinements; simply adding more code or a familiar cancellation pattern did not produce a gap here.
+
+### Case 135 replication
+
+A fresh r2 repeated all three arms with the same source, public requirements, model, budgets and runtime. The kernel defect reproduced, but the tool/no-tool separation did not.
+
+| Trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r1 | [Accept (wrong)](../traces_glm/case_135/single_call/r1/transcript.md) | [Reject (correct)](../traces_glm/case_135/solo/r1/transcript.md) | [Reject (correct)](../traces_glm/case_135/debate/r1/transcript.md) |
+| r2 | [Reject (correct)](../traces_glm/case_135/single_call/r2/transcript.md) | [Reject (correct)](../traces_glm/case_135/solo/r2/transcript.md) | [Reject (correct)](../traces_glm/case_135/debate/r2/transcript.md) |
+
+No-tool r2 recognized the residual-error scale after two refinements and considered inputs near `sqrt(3)`. Its recorded output increased from 558 to 7,405 tokens under the same 32,768-token limit. Its arithmetic remains approximate; the proposed input was not executed. Both tool arms again correctly enumerated all 63,488 finite FP16 encodings and found 20,050 violations, maximum error `4.701679674e-6` at `x=±1640`.
+
+The single-call requests are identical between trials. Tool initial requests differ only in bootstrap event timestamps. Source hashes, runner/verifier fingerprints, runtime and settings match. Both tool probes have valid evidence: [Solo stdout](../traces_glm/case_135/solo/r2/probes/t6_stdout.txt) and [Debate stdout](../traces_glm/case_135/debate/r2/probes/t8_stdout.txt). Full-sweep statistics must be read from stdout: Solo prints Python dictionary text, and Debate prints two JSON objects while its parsed result retains only the final extrema object.
+
+The three reruns cost an estimated **$0.342486** in model API usage, excluding GPU charges. All 12 raw API calls were captured and checked. Across two trials, no tools is correct in 1/2 trials, Solo in 2/2 and Debate in 2/2. Keep the original observed gain, mark the separation **unstable**, and do not present case 135 as a reliable tool-only discriminator.
+
+## Integer arithmetic and ordering: cases 140–145
+
+2026-10-17, America/New_York. This wave tests three directions beyond approximation error: exact integer division, transform coefficient ordering, and stable argmax ties. Each direction has two different implementations under the same public requirements, one Accept and one Reject. They are synthetic adaptations of real algorithmic techniques, not claimed historical bugs. Every label was frozen after independent CPU analysis and NVIDIA T4 qualification. A legal failing input establishes a defect in the implementation; it does not receive a separate label.
+
+All six cases received one evaluation from each arm using Fireworks `accounts/fireworks/models/glm-5p3`, reasoning effort `low`, and the existing 32,768-token total output budget. Tool turns used 8,192 tokens, Solo 10 rounds, and Debate 4 rounds with the existing closeout reserve. The source, public requirements and verifier were unchanged between arms. Before any model call, the plan required one additional three-arm trial for each initial no-tool error with valid evidence from a correct tool arm. Only case 141 triggered that rule. The selected replication is reported separately from the full 18-evaluation wave.
+
+### 140–141: integer division for indexing
+
+The kernel converts a flat unsigned index into a row and column for a width-seven layout: `row = index // 7`, `column = index % 7`. Every `uint32` value is legal, and the answer must be exact. Reciprocal multiplication is used in GPU index calculation, including [CUTLASS FastDivmod](https://github.com/NVIDIA/cutlass/blob/v3.5.1/include/cutlass/fast_math.h). These implementations adapt that technique. Case 140 uses a correct round-down reciprocal with a widened increment. Case 141 uses a round-up reciprocal that is insufficient for the full unsigned input range. [Construction, proof and trace audit](private_data/source_fastdiv_pair.json).
+
+<!-- BEGIN REAL KERNEL FASTDIV RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_140 | Accept | [Accept](../traces_glm/case_140/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_140/solo/r1/transcript.md) (correct) | [Accept](../traces_glm/case_140/debate/r1/transcript.md) (correct) |
+| case_141 | Reject | [Accept](../traces_glm/case_141/single_call/r1/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL FASTDIV RESULTS -->
+
+The central calculation in [case 141](../triton_eval_cases/case_141/kernel.py) is:
+
+```python
+# value is uint64; the public input covers the full uint32 range.
+quotient = (value * 2454267027) >> 34
+remainder = value - quotient * 7
+# Both outputs are then stored as uint32.
+```
+
+For the legal input `3435973841`, the correct result is `[490853405, 6]`. The kernel returns `[490853406, 4294967295]`: the quotient is one too large, and the negative remainder wraps when stored as unsigned. Independent analysis divides the full domain into seven remainder classes and identifies exactly 122,713,351 failing inputs. Solo r1 also enumerated the CPU integer formula over all `2^32` inputs, then reproduced the defect with the actual GPU kernel. Debate r1 found exact GPU mismatches near the upper end of the domain. Debate r2 ran all 122,713,351 predicted failing inputs on the GPU in legal-size batches and confirmed every failure. This last sweep covers the predicted failing set, not every `uint32` value.
+
+No-tool r1 accepted after both miscalculating the multiplier and misapplying its validity condition. In r2 it calculated the multiplier correctly, but argued that a reciprocal error below `0.5` guarantees the same integer quotient. That argument is false: when the exact division has remainder six, the fractional part is `6/7`, only `1/7` below the next integer. The formula can cross that boundary. The tool runs provide executed counterexamples instead of relying on this estimate.
+
+| Case 141 trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r1 | [Accept](../traces_glm/case_141/single_call/r1/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r1/transcript.md) (correct) |
+| r2 | [Accept](../traces_glm/case_141/single_call/r2/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r2/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r2/transcript.md) (correct) |
+
+In the initial r1/r2 trials, no tools accepted twice, while Solo and Debate rejected twice with valid GPU counterexamples. The subsequent r3–r5 check below found that this separation is intermittent. Initial single-call requests are identical; tool initial requests differ only in bootstrap timestamps. Two trials are not enough to establish a stable success rate. The tool agents sometimes suspected the defect before execution, so the evidence supports a workflow benefit without isolating tool access from additional reasoning. Keep case 141 with the observed tool-benefit cases. It does not establish an accuracy advantage for Debate over Solo.
+
+### 142–143: transform coefficient order
+
+These kernels compute the integer Walsh–Hadamard transform and return its coefficients in sequency order, ordered by the number of sign changes in each basis row. The arithmetic is exact over the full `int16` value range for widths 32, 64 and 128. Case 142 applies `bitreverse(gray(k))`; case 143 reverses those operations. The additions are correct in both, but case 143 places coefficients in the wrong positions. This is an original Triton implementation of a [standard transform](https://www.mathworks.com/help/signal/ref/fwht.html). [Construction and trace audit](private_data/source_butterfly_pair.json).
+
+<!-- BEGIN REAL KERNEL BUTTERFLY RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_142 | Accept | [Accept](../traces_glm/case_142/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_142/solo/r1/transcript.md) (correct) | [Accept](../traces_glm/case_142/debate/r1/transcript.md) (correct) |
+| case_143 | Reject | [Reject](../traces_glm/case_143/single_call/r1/transcript.md) (correct) | [Reject](../traces_glm/case_143/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_143/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL BUTTERFLY RESULTS -->
+
+This direction did not produce a no-tool classification error. For case 143, the no-tool model initially thought the ordering was standard, then spent 6,884 output tokens working through it and correctly rejected. Its small examples used widths outside the public domain, so they are explanatory calculations, not legal executed counterexamples. Independent qualification provides a legal witness at width 32: input `[0, 1, 0, ...]` gives coefficient 8 equal to `-1`, where the reference requires `+1`.
+
+Case 142 Debate used a useful verification method: it evaluated every basis vector at each legal width and compared all 21,504 matrix coefficients exactly. Combined with linearity and the proven integer bound, this checks the transform itself instead of relying only on random vectors. It also checked nonzero storage offsets. The no-tool model nevertheless reached the correct label. The stronger evidence did not improve accuracy on this pair.
+
+### 144–145: the first index among equal maxima
+
+These kernels return each row's first maximum index. They pack an FP16 value rank and an inverted column index into a single integer key, then reduce with `max`. The numerical values `-0.0` and `+0.0` are equal, so `[-0.0, +0.0]` must select index zero. Case 144 gives both zeros the same rank; case 145 does not and incorrectly selects index one. The design adapts float-bit ordering and packed reductions; it is not an upstream bug claim. [Construction and trace audit](private_data/source_packed_argmax_pair.json).
+
+<!-- BEGIN REAL KERNEL PACKED ARGMAX RESULTS -->
+
+| Case | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|
+| case_144 | Accept | [Accept](../traces_glm/case_144/single_call/r1/transcript.md) (correct) | [Accept](../traces_glm/case_144/solo/r1/transcript.md) (correct) | [No verdict](../traces_glm/case_144/debate/r1/transcript.md) (error) |
+| case_145 | Reject | [Reject](../traces_glm/case_145/single_call/r1/transcript.md) (correct) | [Reject](../traces_glm/case_145/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_145/debate/r1/transcript.md) (correct) |
+
+<!-- END REAL KERNEL PACKED ARGMAX RESULTS -->
+
+The no-tool model recognized both the correct zero handling and the defective version directly from source. This pair is useful as a control, but did not separate no tools from the tool workflows. Case 144 Debate produced malformed tool-call JSON before executing a probe and ended without a verdict. Its response, error and cost are retained; it was not rerun to improve the result.
+
+### Evidence and totals
+
+Independent [T4 qualification](private_data/qualification/r20.json) used PyTorch 2.8.0 and Triton 3.4.0. It combined full-domain integer analysis for division, complete operator checks for the transform, and all 63,488 finite FP16 encodings for value ordering, with GPU shape, offset, input-preservation and separate-output tests. Cases 140, 142 and 144 passed all 33, 66 and 111 validation plans respectively. These arguments and checks support the fixed labels; they are not a formal proof of every possible GPU execution.
+
+Trace review separates correct verdicts from the quality of their explanations. Case 140 Solo repaired an oversized input and a timed-out CPU sweep before completing full scalar enumeration; case 141 Solo r2 repaired unsupported unsigned PyTorch operations before finding valid counterexamples. Some summaries overstate coverage or misreport values: 144 Solo sampled 32,768 bit patterns rather than all 63,488 finite encodings; 140 Debate reported the wrong remainder for the maximum input despite correct comparisons in its probe; 143 Solo called an output magnitude an error magnitude. Full findings and probe paths are retained in the family manifests. The 144 Debate failure was malformed JSON with finish reason `tool_calls`, not a token-limit response. All raw responses, including that failure, passed the capture audit.
+
+| First-pass arm | Correct | Wrong | Unfinished | API estimate |
+|---|---:|---:|---:|---:|
+| single_call | 5/6 | 1 | 0 | $0.058099 |
+| solo | 6/6 | 0 | 0 | $0.595463 |
+| debate | 5/6 | 0 | 1 | $1.216206 |
+
+The full first pass cost an estimated **$1.869768**. The selected case 141 replication cost **$0.434908**, giving **$2.304676** across 21 evaluations. These are conservative model API estimates from captured usage, excluding Modal GPU charges. Keep 140 and 142–145 as ordinary-sample candidates; retain the failed Debate run in the totals. The follow-up direction is exact integer optimization across width and range boundaries. Familiar signed-zero mistakes were easy to catch from source, while longer transform reasoning still produced a correct no-tool answer.
+
+### Case 141 stability check
+
+Three additional trials (r3–r5) were declared before any new API call. All nine evaluations completed under the same model, public source, problem, budget and verifier as r1/r2. No trial was dropped or rerun to improve its answer. The fixed kernel label remains **Reject**.
+
+| Trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r1 | [Accept](../traces_glm/case_141/single_call/r1/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r1/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r1/transcript.md) (correct) |
+| r2 | [Accept](../traces_glm/case_141/single_call/r2/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r2/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r2/transcript.md) (correct) |
+| r3 (new) | [Reject](../traces_glm/case_141/single_call/r3/transcript.md) (correct) | [Reject](../traces_glm/case_141/solo/r3/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r3/transcript.md) (correct) |
+| r4 (new) | [Accept](../traces_glm/case_141/single_call/r4/transcript.md) (wrong) | [Reject](../traces_glm/case_141/solo/r4/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r4/transcript.md) (correct) |
+| r5 (new) | [Reject](../traces_glm/case_141/single_call/r5/transcript.md) (correct) | [Reject](../traces_glm/case_141/solo/r5/transcript.md) (correct) | [Reject](../traces_glm/case_141/debate/r5/transcript.md) (correct) |
+
+**The separation is intermittent.** In the three new trials, no tools was correct in 2/3, Solo in 3/3 and Debate in 3/3. Thus only one new trial reproduced the gap. Across all five trials, the corresponding counts are 2/5, 5/5 and 5/5, with no missing answers. Report both views: r1/r2 were the earlier selected successes, while r3–r5 were the fixed follow-up batch. These small counts do not establish a long-run success rate.
+
+The no-tool successes have valid reasoning. In r3, the model corrected a missing factor of seven in its own calculation and derived that sufficiently large inputs with remainder six produce an oversized quotient. In r5, it also gave the legal witness `4294967291`: the kernel quotient is `613566756`, but exact division gives `613566755`. In r4, it miscalculated the multiplier as `2456838455` and the reciprocal excess as one rather than five, then incorrectly accepted. The initial API requests are identical across all five single-call trials; the result changes came from the responses, not changed prompts or additional hints.
+
+All six new tool runs supplied valid executed counterexamples. Solo r4 initially assumed the division formula was correct, then tested all `2^32` scalar inputs on the GPU in legal-size batches and rejected after seeing failures. Its final report confused the first failing block start with the first failing input, so the actual witness must be read from probe stdout. Debate r4 also reached the correct verdict but misstated the multiplier and reference remainder, and its CPU failure count includes duplicate and out-of-domain values. Solo r5 also used a CPU checker whose int64 product overflowed, inflating its failure count; the model acknowledged that problem, and its separate GPU comparisons still establish rejection.
+
+The semantic audit records each probe, input domain, reference, script repair and explanation limit in the [existing family manifest](private_data/source_fastdiv_pair.json). A correct verdict does not validate every associated claim: for example, no-tool r5 suggested increasing the shift to 35, but that proposed repair was not verified and would also require checking the wider multiplier for uint64 product overflow.
+
+Tool initial requests differ from r1 only in bootstrap event timestamps; runtime records, source hashes, model settings and budgets match. Every raw request and response was captured. The tools consistently supplied executable rejection evidence across all five trials, but tools were not necessary for this model to solve the case: the two new no-tool derivations show that directly. There is still no observed accuracy advantage for Debate over Solo.
+
+| New r3–r5 only | Correct | Wrong | Unfinished | API estimate |
+|---|---:|---:|---:|---:|
+| single_call | 2/3 | 1 | 0 | $0.018657 |
+| solo | 3/3 | 0 | 0 | $0.599673 |
+| debate | 3/3 | 0 | 0 | $0.759121 |
+
+The nine new evaluations cost an estimated **$1.377451** in model API usage, excluding Modal GPU charges. Keep case 141 with the historically observed tool-benefit cases, but mark its separation **intermittent**, not consistently reproducible. The earlier 18-case-arm wave and its conditional r2 cost totals remain unchanged above.
+
+## Atan, sigmoid and NTT
+
+Six purpose-built implementations were qualified before model evaluation. Each has one fixed label over its complete public input domain. The pairs share the same requirements; their implementation code differs. Sources, failed CPU candidates, the reference repair and all model outcomes are retained.
+
+All runs use Fireworks GLM-5p3, low reasoning effort, the unchanged verifier, a 32,768-output-token budget per arm, and the frozen T4 / PyTorch 2.8.0 / Triton 3.4.0 environment. The tool workflows receive only the current public case, not author-side oracle data.
+
+### First pass
+
+| Case | Implementation | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|---|
+| [146](../triton_eval_cases/case_146/kernel.py) | Atan, five-digit coefficients | Accept | Accept ✓ | Accept ✓ | Accept ✓ |
+| [147](../triton_eval_cases/case_147/kernel.py) | Atan, four-digit coefficients | Reject | Accept ✗ | Reject ✓ | Reject ✓ |
+| [148](../triton_eval_cases/case_148/kernel.py) | Sigmoid, FP64 internal arithmetic | Accept | Accept ✓ | Accept ✓ | Accept ✓ |
+| [149](../triton_eval_cases/case_149/kernel.py) | Sigmoid, FP32 internal arithmetic | Reject | Accept ✗ | Reject ✓ | Reject ✓ |
+| [150](../triton_eval_cases/case_150/kernel.py) | NTT, converted fused coefficients | Accept | No verdict ✗ | Accept ✓ | Accept ✓ |
+| [151](../triton_eval_cases/case_151/kernel.py) | NTT, unconverted fused coefficients | Reject | Accept ✗ | Reject ✓ | Reject ✓ |
+
+Correct verdicts over all six first-pass cases: no tools **2/6**, Solo **6/6**, Debate **6/6**. Case 150's no-tool call exhausted all 32,768 output tokens without a verdict; it remains in the denominator and was not retried.
+
+### Five fresh repetitions
+
+The repeat rule was registered before model evaluation: a wrong no-tool first-pass verdict and valid correct verdicts from both tool workflows trigger exactly five fresh three-arm trials. All five must preserve that separation to pass this wave’s strict repeat check. Cases 147, 149 and 151 triggered the rule; all planned trials were completed, including negative results. These are selected follow-ups, reported separately from the first pass.
+
+| Case | No tools correct | Solo correct | Debate correct | Five-repeat check |
+|---|---|---|---|---|
+| 147 | 2/5 | 5/5 | 5/5 | Did not pass |
+| 149 | 2/5 | 5/5 | 4/5 | Did not pass |
+| 151 | 0/5 | 5/5 | 5/5 | Passed |
+
+Case 151 reproduced the separation in all five fresh trials: every no-tool answer accepted the defective kernel, and every Solo and Debate answer rejected it with an actual legal GPU counterexample. Including the initial selection trial, the counts are no tools 0/6 correct, Solo 6/6 and Debate 6/6. This is repeatability on one selected implementation and one model, not a measured success rate for all NTT kernels or evidence that Debate outperforms Solo.
+
+### Why 151 separates the workflows
+
+An NTT is an exact transform using integers modulo 3329. This implementation fuses two butterfly stages and stores multiplication coefficients in Montgomery form: each stored coefficient already includes a scale factor R. The faulty version multiplies two stored coefficients without removing one extra factor of R. The individual butterfly formulas and individual modular-reduction operation look valid, but their combination computes the wrong transform. This is a synthetic porting defect inspired by the Montgomery representation used in real NTT implementations, not a claimed upstream historical bug.
+
+The following is an explanatory sketch of the coefficient conversion:
+
+```python
+a_R = a * R % q
+b_R = b * R % q
+cross = a_R * b_R % q             # Contains R squared.
+cross_R = cross * R_inverse % q   # Restore the one-R representation.
+```
+
+The no-tool model repeatedly accepted the composition. In r3 it even identified the R-squared versus R distinction, then incorrectly treated them as equivalent. The tool workflows executed the actual kernel and compared its output with an independent exact integer DFT. A simple recorded counterexample is N=64 with all inputs equal to 1: the zero-frequency output must be the sum, **64**, but the kernel returns **2954**. This legal counterexample supports the implementation’s fixed Reject label; the input itself does not receive a label. See [Solo r3](../traces_glm/case_151/solo/r3/transcript.md), [No tools r3](../traces_glm/case_151/single_call/r3/transcript.md) and the [full NTT audit](private_data/source_ntt_pair.json).
+
+### What the other two directions showed
+
+Atan 147 uses four-significant-digit coefficients in a Cephes-style rational approximation. Independent execution finds 5,606 failing finite FP16 encodings, with maximum absolute error about 5.033e-6 against a 1e-6 requirement. Wrong no-tool answers transferred the original approximation’s accuracy to this shortened coefficient set. Two fresh no-tool runs nevertheless rejected it; one spent 16,954 output tokens on manual arithmetic, while another reached the right label using incorrectly recalled source coefficients. All tool repetitions found actual violations. The gap is intermittent, so this case did not pass the strict repeat check.
+
+Sigmoid 149 has an explicit requirement to round the mathematical result once to FP16. This is stricter than ordinary approximate sigmoid API behavior. Its FP32 path misrounds seven finite input encodings; for x=0.0029296875, the correct output is 0.50048828125, while the kernel returns 0.5009765625. Some no-tool runs dismissed rounding-boundary crossings as too unlikely; two fresh runs correctly rejected the implementation. The gap is intermittent here as well. Debate r3 abstained after repeated input-enumeration errors and a blocked corrective probe; it had budget remaining but never completed a valid near-zero check. This is a workflow failure, not a GPU or API outage. Case 148’s FP64 implementation passes the same complete scalar-domain requirement.
+
+### Qualification and trace limitations
+
+Atan and sigmoid qualification covers all 63,488 finite FP16 encodings with independent directed MPFR bounds and a second high-precision implementation. NTT qualification compares the complete basis operator with a Python big-integer DFT and separately verifies modular linearity, integer bounds and address layouts; it therefore does not rely only on randomly passing inputs. Compiled GPU runs also check storage and shape cases. These checks are evidence for the fixed implementations and environment, not an exhaustion of every possible tensor execution.
+
+The first sigmoid qualification attempt exposed a platform-dependent FP64-to-FP16 conversion in the public reference. Before any model call on those cases, the reference was repaired to write FP16 bits directly with Python struct.pack. The mathematical requirement, GPU kernel and expected labels stayed unchanged. The failed [r22 qualification](private_data/qualification/r22.json), old hashes and repair are retained; the repaired pair passed [r24](private_data/qualification/r24.json). Atan passed [r21](private_data/qualification/r21.json); NTT passed [r23](private_data/qualification/r23.json).
+
+Trace review distinguished real executed counterexamples from failed scripts and inflated coverage claims. Examples include FP32 nextafter values collapsing to duplicate FP16 values, invalid reference dtypes, an incorrect sigmoid helper, and NTT sample tests described as complete-domain coverage. Those statements are not counted as additional evidence. Every Reject from a tool workflow counted in the repetition table has a separate valid actual GPU witness. The correct NTT control’s tool runs use valid samples but do not themselves reproduce the author-side complete-basis proof.
+
+Total: **63 model workflow trials**, including 18 first-pass trials and 45 selected repetitions. Recorded model API estimate: **$11.208477**; first pass **$2.784000**, repetitions **$8.424477**. This is a conservative estimate from captured usage and the recorded price schedule, not an invoice; Modal GPU charges are excluded. All raw requests, responses and tool artifacts remain in [traces_glm](../traces_glm/INDEX.md).
+
+Per-family records: [Atan](private_data/source_atan_pair.json), [sigmoid rounding](private_data/source_rounding_pair.json), [NTT](private_data/source_ntt_pair.json). These include predeclared plans, source hashes, every result, protocol comparisons and per-run semantic audits.
+
+## CRC, complex division and INT8 requantization
+
+This wave tests three directions with six purpose-built kernels, cases 152–157. Each pair has one correct implementation and one defective implementation under the same public requirements. Each kernel keeps one label over the full permitted input domain. The implementations adapt real arithmetic methods; these are synthetic variants, not reported upstream bugs.
+
+All six kernels passed independent qualification before model calls. All three arms use Fireworks GLM-5p3 with low reasoning effort and a 32,768-output-token budget. The tool workflows use the unchanged verifier on NVIDIA T4, PyTorch 2.8.0 and Triton 3.4.0. Private qualification data are not shown to the model.
+
+### First pass
+
+| Case | Implementation | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|---|
+| [152](../triton_eval_cases/case_152/kernel.py) | CRC with the correct reflected unit | Accept | [Accept](../traces_glm/case_152/single_call/r1/transcript.md) ✓ | [Accept](../traces_glm/case_152/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_152/debate/r1/transcript.md) ✓ |
+| [153](../triton_eval_cases/case_153/kernel.py) | CRC with the wrong reflected unit | Reject | [Reject](../traces_glm/case_153/single_call/r1/transcript.md) ✓ | [Reject](../traces_glm/case_153/solo/r1/transcript.md) ✓ | [Reject](../traces_glm/case_153/debate/r1/transcript.md) ✓ |
+| [154](../triton_eval_cases/case_154/kernel.py) | Complex division with direct FP32 products | Accept | [Reject](../traces_glm/case_154/single_call/r1/transcript.md) ✗ | [Accept](../traces_glm/case_154/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r1/transcript.md) ✓ |
+| [155](../triton_eval_cases/case_155/kernel.py) | Complex division with a rounded ratio | Reject | [Reject](../traces_glm/case_155/single_call/r1/transcript.md) ✓ | [Reject](../traces_glm/case_155/solo/r1/transcript.md) ✓ | [Reject](../traces_glm/case_155/debate/r1/transcript.md) ✓ |
+| [156](../triton_eval_cases/case_156/kernel.py) | INT8 rescale with exact int64 arithmetic | Accept | [Accept](../traces_glm/case_156/single_call/r1/transcript.md) ✓ | [Accept](../traces_glm/case_156/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_156/debate/r1/transcript.md) ✓ |
+| [157](../triton_eval_cases/case_157/kernel.py) | INT8 rescale through FP64 arithmetic | Reject | [Reject](../traces_glm/case_157/single_call/r1/transcript.md) ✓ | [Reject](../traces_glm/case_157/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_157/debate/r1/transcript.md) ✗ |
+
+First-pass correct verdicts: **no tools 5/6, Solo 6/6, Debate 5/6**. All 18 trials produced a verdict. Case 154 showed a first-pass tool benefit. Case 157 showed a Debate failure. Both results remain in the totals.
+
+### 152–153: combining CRC blocks
+
+These kernels compute CRC-32 over 64-byte and 128-byte rows. They combine four-byte blocks with polynomial arithmetic over bits. In this reflected representation, the multiplicative unit is `0x80000000`. Case 153 uses `1` in the exponentiation helper, so block composition computes the wrong checksum. Case 152 uses the correct unit.
+
+Independent qualification compares the complete affine basis with a separate bitwise recurrence and zlib. It also checks integer ranges and addresses. The actual GPU checks cover 2,284 outputs per implementation. Case 152 has no mismatch; case 153 has 2,272. Passing zero rows does not mean that every nonzero row fails: different messages can have the same CRC.
+
+All three arms identify both labels. The no-tool model uses 15,176 output tokens on case 153 and derives the representation error from source. Tool execution adds reproducible failures, but this pair adds no verdict accuracy gain. [Source and trace audit](private_data/source_crc_pair.json).
+
+### 154–155: complex division
+
+The requirement is complex division for finite FP16 components with a nonzero denominator. Each FP32 output component must satisfy `absolute error <= 1e-7 + 5e-7 * abs(target)`. Case 154 uses the direct formula (equivalent short form):
+
+```python
+scale = c*c + d*d
+real = tl.div_rn(a*c + b*d, scale)
+imag = tl.div_rn(b*c - a*d, scale)
+```
+
+The inputs are FP16, but these operations use FP32. Each FP16 product needs at most 22 significant bits, so FP32 represents it exactly. The subsequent sums and divisions round. Their relative error bound is about `1.78814e-7`, below `5e-7`; the permitted input range prevents FP32 overflow and underflow. The argument covers the scalar arithmetic. Separate GPU checks cover shapes and storage conditions.
+
+The first no-tool answer rejects case 154 because it assumes that the products already lost precision before cancellation. It also uses `65503`, which is not a representable FP16 value, in a proposed example. Solo and Debate accept after actual GPU comparisons. The independent qualification checks 937,928 output components with no failure.
+
+Case 155 divides the smaller denominator component by the larger one, then uses this rounded ratio in fused operations. Ratio error can remain when terms cancel. For the legal input `(1024 - 1536i) / (3 + 2i)`, the exact real component is zero. The actual GPU result is about `-7.04252e-6`. Its absolute error exceeds `1e-7`. Fused multiply-add does not restore the exact ratio. All three arms reject this implementation. [Source, arithmetic bound and trace audit](private_data/source_complex_pair.json).
+
+### Case 154: five fresh trials
+
+Before any model call, the repeat rule specified five fresh three-arm trials for a qualifying first-pass gap. Only case 154 qualified. All five trials ran with the same source, public requirements, model, instructions and budgets. Initial tool requests differ only in bootstrap timestamps; single-call requests are identical. The table excludes the initial selection trial.
+
+| Trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r2 | [Accept](../traces_glm/case_154/single_call/r2/transcript.md) ✓ | [Accept](../traces_glm/case_154/solo/r2/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r2/transcript.md) ✓ |
+| r3 | [Accept](../traces_glm/case_154/single_call/r3/transcript.md) ✓ | [Accept](../traces_glm/case_154/solo/r3/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r3/transcript.md) ✓ |
+| r4 | [Accept](../traces_glm/case_154/single_call/r4/transcript.md) ✓ | [Accept](../traces_glm/case_154/solo/r4/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r4/transcript.md) ✓ |
+| r5 | [Accept](../traces_glm/case_154/single_call/r5/transcript.md) ✓ | [Accept](../traces_glm/case_154/solo/r5/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r5/transcript.md) ✓ |
+| r6 | [Accept](../traces_glm/case_154/single_call/r6/transcript.md) ✓ | [Accept](../traces_glm/case_154/solo/r6/transcript.md) ✓ | [Accept](../traces_glm/case_154/debate/r6/transcript.md) ✓ |
+
+Fresh-trial correct counts: **no tools 5/5, Solo 5/5, Debate 5/5**. The first-pass gap did not pass the five-repeat requirement. In the fresh no-tool answers, the model recognizes that FP16 products are exact in FP32. In r3, it reaches this conclusion in only 581 output tokens. Keep case 154 as an observed first-pass benefit with failed replication, not a stable new separation.
+
+### 156–157: exact INT8 rescale
+
+These kernels rescale int32 accumulators with a per-channel multiplier, shift and zero point. The output must equal the exact integer rule, including its specified tie handling:
+
+```python
+P = a * multiplier
+R = (P + 2**(30 + shift)) // 2**(31 + shift)
+output = clamp(R + zero_point, -128, 127)
+```
+
+Case 156 performs the operation in int64. Range analysis proves that the product plus bias fits, and that its intermediate clamp preserves the final INT8 output. Case 157 uses FP64 for the product and rounding step. An exact integer product can need more than FP64's 53 significant bits.
+
+A legal failing example uses `a=1073741825`, `multiplier=2147483646`, `shift=31` and `zero_point=0`. The exact product is `2**61 - 2`; the correct output is **0**. FP64 rounds the product to `2**61`, and the kernel returns **1**. This error survives INT8 saturation. The independent GPU checks find 2,137 failing outputs in case 157 and none in case 156.
+
+Solo finds 16 actual GPU failures and correctly rejects case 157. Debate accepts after 40,164 matching output comparisons. Its main precision probes use large accumulators with shift zero: both outputs reach the same INT8 saturation limit, which hides the rounding error. Its remaining coarse tests miss the unsaturated half-integer boundary at large shifts. Passing those tests does not establish correctness.
+
+The no-tool verdict on case 157 is correct, but its stated example uses shift 30 and incorrectly claims that `floor(1.5)` is 2. Both implementations return 1 for that example. Count the verdict as correct and record the invalid explanation separately. [Source and full trace audit](private_data/source_requant_compose_pair.json).
+
+### Evidence limits and next direction
+
+Every trial has raw requests, responses, usage, verdicts and tool artifacts. Some failed scripts were repaired; the failures remain in the traces. Some tool summaries overstate coverage. For example, a case 154 cancellation generator falls back to samples that do not meet its intended near-cancellation condition. Other probes lose storage offsets when copying inputs, or check only finiteness while claiming accuracy coverage. The semantic audits identify these errors. Passing samples support only the tested conditions; they do not replace the independent arithmetic argument.
+
+This wave found no new stable separation between no tools and both tool workflows. More source complexity alone did not help: the no-tool model derived the CRC composition rule. A single numerical reasoning error also did not persist: case 154 was corrected in fresh trials. Tools supplied valid counterexamples, but poor test selection caused the case 157 Debate error. This wave does not show a Debate advantage over Solo.
+
+The next candidates are fused transform stages with interacting scale and index conversions, and parallel affine scans with ordered matrix composition. Complete basis checks can verify exact linear operators; floating-point variants also need an error argument. These directions are proposals, not results from this wave.
+
+Total: **33 workflow trials**: 18 first-pass trials and 15 selected repetitions. The conservative model API estimate is **$6.476464**: first pass **$3.629795**, repetitions **$2.846669**. The estimate uses captured usage and the recorded Fireworks prices; it is not an invoice and excludes Modal GPU charges. Independent qualification: [CRC](private_data/qualification/r25.json), [complex division and INT8](private_data/qualification/r26.json). All trial paths are listed in the [GLM index](../traces_glm/INDEX.md).
+
+## Affine scan, Winograd and real FFT
+
+This wave adds six kernels in three pairs, cases 158–163. Each pair uses the same public requirements and different code. The correct code has one Accept label. The defective code has one Reject label. Legal inputs provide evidence about the implementation; they do not receive separate labels. These are synthetic adaptations of real algorithms, not reproductions of historical upstream bugs.
+
+Independent T4 checks confirmed each fixed label before model evaluation. All three methods use Fireworks GLM-5p3 with low reasoning effort. Each trial has a 32,768-output-token budget. Solo and the existing four-role Debate use the unchanged verifier, PyTorch 2.8.0 and Triton 3.4.0. All raw API requests, responses, usage, verdicts and tool artifacts are retained.
+
+### First pass
+
+| Case | Implementation | Fixed label | No tools | Solo | Debate |
+|---|---|---|---|---|---|
+| [158](../triton_eval_cases/case_158/kernel.py) | Affine scan with ordered composition | Accept | [Accept](../traces_glm/case_158/single_call/r1/transcript.md) ✓ | [Accept](../traces_glm/case_158/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_158/debate/r1/transcript.md) ✓ |
+| [159](../triton_eval_cases/case_159/kernel.py) | Affine scan with reversed carry composition | Reject | [Accept](../traces_glm/case_159/single_call/r1/transcript.md) ✗ | [Reject](../traces_glm/case_159/solo/r1/transcript.md) ✓ | [Reject](../traces_glm/case_159/debate/r1/transcript.md) ✓ |
+| [160](../triton_eval_cases/case_160/kernel.py) | Winograd with consistent transform coordinates | Accept | [Accept](../traces_glm/case_160/single_call/r1/transcript.md) ✓ | [Accept](../traces_glm/case_160/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_160/debate/r1/transcript.md) ✓ |
+| [161](../triton_eval_cases/case_161/kernel.py) | Winograd with swapped filter coordinates | Reject | [Reject](../traces_glm/case_161/single_call/r1/transcript.md) ✓ | [Reject](../traces_glm/case_161/solo/r1/transcript.md) ✓ | [Reject](../traces_glm/case_161/debate/r1/transcript.md) ✓ |
+| [162](../triton_eval_cases/case_162/kernel.py) | Real FFT with the correct partner address | Accept | [Accept](../traces_glm/case_162/single_call/r1/transcript.md) ✓ | [Accept](../traces_glm/case_162/solo/r1/transcript.md) ✓ | [Accept](../traces_glm/case_162/debate/r1/transcript.md) ✓ |
+| [163](../triton_eval_cases/case_163/kernel.py) | Real FFT with the wrong partner address | Reject | [Accept](../traces_glm/case_163/single_call/r1/transcript.md) ✗ | [Reject](../traces_glm/case_163/solo/r1/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r1/transcript.md) ✓ |
+
+First-pass correct verdicts: **no tools 4/6, Solo 6/6, Debate 6/6**. All six cases remain in this table. Follow-up repetitions are reported separately.
+
+### 158–159: ordered affine scan
+
+The task updates a two-component state at each step: `state = matrix @ state + bias`. The kernel must return every state exactly. Sequence lengths range from 1 to 32. Matrix entries are −1, 0 or 1; bias and initial state use the full INT16 range. Output uses INT64. The implementation first scans groups of eight steps, then combines their summaries and applies the incoming state to each group.
+
+Case 159 reverses two arguments when it propagates a prefix through the summary tree. The helper applies its right argument after its left argument. The incorrect call applies the parent prefix after the left subtree, which reverses the required order. The error becomes visible in the fourth group, at lengths 25–32. Shorter sequences and some commuting transforms can pass. The implementation still has one Reject label for the full requirements.
+
+A small independent witness uses a 25-step sequence. All steps are identity transforms with zero bias, except `[[1,1],[0,1]]` at step 0 and `[[1,0],[1,1]]` at step 16. From initial state `[1, 2]`, the correct state at step 24 is `[3, 5]`. Case 159 returns `[4, 3]`. Case 158 uses the correct argument order. Independent qualification compares 53,780 components per case with a sequential Python-integer reference. Case 158 passes all 119 plans. Case 159 fails 28 plans, with 3,310 incorrect components. Composition, address and integer-range checks support the control over the full declared domain.
+
+The first no-tool answer for case 159 derives the helper's composition rule correctly, but accepts the wrong downsweep order. It checks the familiar addition-scan pattern without a correct invariant for a nonidentity parent prefix. The tool workflows can compare the complete recurrence against a sequential reference. Their actual evidence and coverage limits are recorded in the [source and trace audit](private_data/source_affine_scan_pair.json).
+
+### 160–161: Winograd convolution
+
+Cases 160–161 compute a valid 3×3 cross-correlation for each 6×6 INT8 tile. Each tile has its own filter. Every INT8 value is legal, and the 4×4 INT32 output must be exact. Both cases have the same public requirements. Case 160 is Accept. Case 161 is Reject. The labels apply to each complete implementation.
+
+The kernels use Winograd transforms to compute the cross-correlation. The filter transform uses coordinates that include +2 and −2. Case 161 swaps these two coordinates, but keeps the data and output transforms unchanged. The products therefore combine different coordinates. Case 160 keeps the same coordinate order in all three stages.
+
+Independent qualification checked all 324 tile/filter basis pairs and bounded every integer intermediate. These checks establish the complete arithmetic identity for case 160. On T4, all 130,752 tested outputs passed. Case 161 had 125,623 failed outputs. The GPU plans also checked tail blocks, storage offsets, overlapping inputs, input preservation and separate output storage.
+
+All three methods gave the correct verdict for both cases. The no-tool model derived a valid transform identity for case 160. For case 161, it found the coordinate mismatch but calculated its final counterexample incorrectly. Both tool methods found valid GPU failures. Some trace summaries overstated test coverage or reported incorrect failure counts. This pair shows no verdict advantage from tools.
+
+[Winograd source and trace audit](private_data/source_winograd_pair.json).
+
+### 162–163: packed real FFT
+
+The task computes the unnormalized forward Fourier transform of each real FP16 row. Legal widths are 64, 128 and 256. Every finite FP16 value is allowed. The output stores FP32 real and imaginary components for frequencies `k=0..N/2` in natural order. Each component must satisfy `absolute error <= 1e-4 + 1e-6 * abs(target)`.
+
+Let `M = N/2`. The kernel packs even and odd input positions into a half-length complex transform. Its internal result is stored in bit-reversed order. The final real-transform step needs both frequency `k` and frequency `(-k) mod M`. It must convert each frequency to its storage address. The two implementations differ here (simplified sketch; the actual reversal helper also receives the bit width):
+
+```python
+# Case 162: correct. Convert the required partner frequency to an address.
+partner = reverse((-k) & (M - 1))
+
+# Case 163: defective. Negate the address of k instead.
+address = reverse(k)
+partner = (-address) & (M - 1)
+```
+
+Bit reversal and modular negation do not generally commute. For `M=32` and `k=1`, the correct partner address is 31. Case 163 uses 16. It therefore combines the wrong complex coefficients. FP64 arithmetic cannot correct this address error.
+
+Independent qualification uses a separate direct DFT with bounded reference error, all impulse positions and additional boundary checks. Case 162 passes all 36 GPU plans. Case 163 fails 24 plans, with 355,421 failed output components. The control also has an arithmetic error bound: at most `2.383022e-5 + 5.960465e-8 * abs(target)`, below the public tolerance. Basis tests alone do not prove a floating-point error bound.
+
+The first no-tool answer for case 163 checks the butterfly and real-transform formulas but assumes that the partner coefficient is correct. It accepts the kernel. Solo first also considers the formula correct, then rejects after actual GPU failures. Debate also finds legal GPU counterexamples. Some initial extreme-value probes create infinity when converted to FP16. Those inputs are illegal and are excluded as evidence. Separate finite random inputs, tones and impulses still establish the defect. [FFT source and trace audit](private_data/source_realfft_pair.json).
+
+### Five fresh trials for each selected case
+
+Before model evaluation, the plan specified five fresh three-arm trials for each qualifying first-pass gap, with at most three selected cases. Selection requires a wrong no-tool verdict and correct verdicts from both tool workflows with legal actual GPU evidence. Every selected trial runs, even if the gap disappears. Code, public requirements, prompts, runtime and budgets stay fixed. The following results exclude the first-pass selection trials.
+
+
+#### case_159
+
+| Trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r2 | [Reject](../traces_glm/case_159/single_call/r2/transcript.md) ✓ | [Reject](../traces_glm/case_159/solo/r2/transcript.md) ✓ | [Reject](../traces_glm/case_159/debate/r2/transcript.md) ✓ |
+| r3 | [Accept](../traces_glm/case_159/single_call/r3/transcript.md) ✗ | [Reject](../traces_glm/case_159/solo/r3/transcript.md) ✓ | [Reject](../traces_glm/case_159/debate/r3/transcript.md) ✓ |
+| r4 | [Accept](../traces_glm/case_159/single_call/r4/transcript.md) ✗ | [Reject](../traces_glm/case_159/solo/r4/transcript.md) ✓ | [Abstain](../traces_glm/case_159/debate/r4/transcript.md) ✗ |
+| r5 | [Reject](../traces_glm/case_159/single_call/r5/transcript.md) ✓ | [Reject](../traces_glm/case_159/solo/r5/transcript.md) ✓ | [Reject](../traces_glm/case_159/debate/r5/transcript.md) ✓ |
+| r6 | [Accept](../traces_glm/case_159/single_call/r6/transcript.md) ✗ | [Reject](../traces_glm/case_159/solo/r6/transcript.md) ✓ | [Reject](../traces_glm/case_159/debate/r6/transcript.md) ✓ |
+
+Fresh correct counts: **no tools 2/5, Solo 5/5, Debate 4/5**. This case does not meet the predeclared five-repeat separation check.
+
+#### case_163
+
+| Trial | No tools | Solo | Debate |
+|---|---|---|---|
+| r2 | [Accept](../traces_glm/case_163/single_call/r2/transcript.md) ✗ | [Reject](../traces_glm/case_163/solo/r2/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r2/transcript.md) ✓ |
+| r3 | [Reject](../traces_glm/case_163/single_call/r3/transcript.md) ✓ | [Reject](../traces_glm/case_163/solo/r3/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r3/transcript.md) ✓ |
+| r4 | [Accept](../traces_glm/case_163/single_call/r4/transcript.md) ✗ | [Reject](../traces_glm/case_163/solo/r4/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r4/transcript.md) ✓ |
+| r5 | [Reject](../traces_glm/case_163/single_call/r5/transcript.md) ✓ | [Reject](../traces_glm/case_163/solo/r5/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r5/transcript.md) ✓ |
+| r6 | [Accept](../traces_glm/case_163/single_call/r6/transcript.md) ✗ | [Reject](../traces_glm/case_163/solo/r6/transcript.md) ✓ | [Reject](../traces_glm/case_163/debate/r6/transcript.md) ✓ |
+
+Fresh correct counts: **no tools 2/5, Solo 5/5, Debate 5/5**. This case does not meet the predeclared five-repeat separation check.
+
+Including the first pass, case_159 has correct counts of **no tools 2/6, Solo 6/6, Debate 5/6**. The difference is intermittent. It does not pass the five-repeat requirement.
+
+Including the first pass, case_163 has correct counts of **no tools 2/6, Solo 6/6, Debate 6/6**. The difference is intermittent. It does not pass the five-repeat requirement.
+
+Case 159 no-tools r2 correctly derives the reversed operands and explains why the bad carry first matters at length 25. In r3, the model instead writes one composition order and treats it as another. The same source therefore produces both correct and incorrect manual reviews. The tool runs can execute the full sequence and compare every state with the simple sequential reference.
+
+Case 159 Debate r4 abstains without running a GPU probe. Two early role calls reach the per-call output limit. A later call records a claim, but the run enters the reserved closeout before execution. It uses 25,261 output tokens in total. This is a reasoning-budget and scheduling failure, not an API or GPU outage. It remains in the denominator and is not counted as correct. Solo supplies valid executed counterexamples in the corresponding trials.
+
+Case 163 no-tools r2 explicitly claims that bit reversal commutes with modular negation. It incorrectly treats negation as bitwise complement and omits the added one. In r3, the model eventually identifies the true address error. Its final numerical example uses N=8, which is outside the legal widths. The source diagnosis is correct, so the verdict counts as correct; the example is not a legal benchmark counterexample. This distinction is retained in the audit.
+
+Case 163 no-tools r5 also reaches the correct verdict and checks a legal M=32 address mismatch. Its final N=8 numerical example remains outside the domain and contains a packing error: z=[1,i,0,0] has exact frequency-1 real part about 0.2929, not 1.707. The verdict is still counted as correct. No invalid hand example is presented as a valid executed counterexample.
+
+Case 163 Solo r2 and Debate r2 initially accept the index argument, then change their verdict after GPU comparisons fail. Debate r2 does not correctly isolate the cause: it blames Triton gather behavior without a test that establishes that explanation. The executed mismatch supports Reject; the source address error explains the defect. A correct verdict does not make every explanation correct.
+
+These results support further work on the boundaries between algorithm stages: transform-coordinate order, physical storage order and noncommutative composition. Extra code length alone is not the objective. Tools can enumerate address mappings, check symbolic composition or compare a complete transform basis, as well as run numeric samples. The current results compare complete workflows. They do not isolate tool access from extra reasoning, and they do not establish a Debate advantage over Solo.
+
+### Qualification, evidence and cost
+
+The first affine GPU qualification failed to compile because a summary store used a scalar pointer with a vector value. Both implementations received the same pointer-shape repair before any model call. The expected labels and public requirements stayed fixed. The failed [r28 record](private_data/qualification/r28.json), old hashes and repair are retained. The repaired pair passed [r29](private_data/qualification/r29.json). The FFT cases already passed their part of r28. Their completed evidence was recorded separately after hash verification. Winograd passed [r27](private_data/qualification/r27.json).
+
+Trace review separates correct verdicts from correct explanations. Some models overstate sample coverage or quote the wrong failure count. Failed scripts and illegal probes remain in the traces, but do not count as evidence. The private manifests contain the per-trial semantic review and the comparison of repeated initial requests. Repeated single-call requests are identical; tool requests differ only in bootstrap timestamps. All repeated runtime settings match.
+
+Two concurrent no-tool batches, r2 and r3, received the same timestamp batch ID. Their separate trial directories and different API response IDs confirm independent calls. The index now separates these collisions by the canonical trial number and preserves the original metadata. Future batch IDs also include a random suffix. These reporting and storage changes were made after all model trials finished.
+
+Total: **48 workflow trials**, including 18 first-pass trials and 30 selected repetitions. The conservative model API estimate is **$9.275751**: first pass **$3.548831**, repetitions **$5.726920**. This estimate uses captured token usage and the recorded price schedule. It is not an invoice and excludes Modal GPU charges. All trials are listed in the [GLM trace index](../traces_glm/INDEX.md).

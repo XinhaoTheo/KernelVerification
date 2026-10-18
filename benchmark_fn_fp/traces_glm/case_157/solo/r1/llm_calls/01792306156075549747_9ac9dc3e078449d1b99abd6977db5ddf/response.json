@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-47a9c87f",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe targeting exact halfway cases with large products where float64 cannot represent a*m exactly.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-95bd85485dde929e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_157\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\n# search legal inputs where fp64 path differs from exact int64 single-rounding\\nfound = []\\nm = ((1<<31) - 1)  # max multiplier\\nr = 0\\nrng = torch.Generator().manual_seed(0)\\n\\ndef exact(a, m, r, z=0):\\n    P = a * m\\n    R = (P + (1 << (30 + r))) >> (31 + r)\\n    return max(-128, min(127, R + z))\\n\\n# candidates: a such that a*m is odd*... halfway means P + 2^(30+r) = k*2^(31+r) + 2^(31+r) i.e.\\n# actual halfway: a*m/2^(31+r) = t + 0.5  -> a*m = (2t+1)*2^(30+r). a odd, m odd gives odd product -> not halfway.\\n# mismatch more likely when |a*m| > 2^53 so fp64 product rounds.\\n# test a bunch of large a values\\nfor _ in range(40):\\n    a = int(torch.randint(1<<30, 1<<31, (1,), generator=rng).item())\\n    for sign in (1, -1):\\n        av = sign * a\\n        # check fp64 emulation vs exact\\n        pf = float(av) * float(m)  # fp64 rounding of conversion+product\\n        scaled = pf / float(1 << 31)\\n        import math\\n        kf = math.floor(scaled + 0.5)\\n        re = exact(av, m, r)\\n        if kf != re:\\n            found.append((av, m, r, kf, re))\\nprint(\\\"emulation mismatches:\\\", len(found), found[:3])\\n\\n# Now run actual kernel on adversarial tensor\\nvals = []\\nif found:\\n    for av, m_, r_, kf, re in found[:5]:\\n        vals.append(av)\\nelse:\\n    vals = [2147483647, -2147483648, 1234567891, -1234567891]\\nacc = torch.tensor(vals, dtype=torch.int32, device=dev).view(len(vals),1)\\nmult = torch.full((1,), m, dtype=torch.int32, device=dev)\\nsh = torch.zeros(1, dtype=torch.int32, device=dev)\\nzp = torch.zeros(1, dtype=torch.int32, device=dev)\\nout = kernel.run(acc, mult, sh, zp).cpu()\\nref = kernel.reference(acc, mult, sh, zp).cpu()\\nprint(\\\"kernel:\\\", out.flatten().tolist())\\nprint(\\\"ref   :\\\", ref.flatten().tolist())\\nprint(\\\"mismatch:\\\", not torch.equal(out, ref))\\n\\n# broad randomized check including r in 0..31\\ng = torch.Generator().manual_seed(1)\\na = torch.randint(-(1<<31), 1<<31, (512, 17), generator=g, dtype=torch.int64).to(torch.int32).to(dev)\\nmm = torch.randint(1<<30, 1<<31, (17,), generator=g, dtype=torch.int64).to(torch.int32).to(dev)\\nrr = torch.randint(0, 32, (17,), generator=g, dtype=torch.int32).to(dev)\\nzz = torch.randint(-128, 128, (17,), generator=g, dtype=torch.int32).to(dev)\\no2 = kernel.run(a, mm, rr, zz)\\nr2 = kernel.reference(a, mm, rr, zz)\\nmism = (o2 != r2)\\nprint(\\\"random mismatch count:\\\", mism.sum().item(), \\\"/\\\", mism.numel())\\nidx = mism.nonzero()[:5]\\nprint(\\\"sample mismatch idx:\\\", idx.tolist())\\nif mism.any():\\n    i,c = idx[0].tolist()\\n    print(\\\"a=\\\", a[i,c].item(), \\\"m=\\\", mm[c].item(), \\\"r=\\\", rr[c].item(), \\\"z=\\\", zz[c].item(),\\n          \\\"kernel=\\\", o2[i,c].item(), \\\"ref=\\\", r2[i,c].item())\\n\", \"expected_signal\": \"any exact-integer mismatch between kernel run() and reference() on legal inputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306156,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 949,
+    "prompt_tokens": 12350,
+    "total_tokens": 13299,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7004,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

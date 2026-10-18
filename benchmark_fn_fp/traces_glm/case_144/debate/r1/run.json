@@ -1,0 +1,167 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_144",
+    "has_error": null,
+    "kernel_code": "\"\"\"Row-wise first-maximum index via a packed integer-key reduction.\n\nOriginal synthetic Triton implementation; not an upstream historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    column = tl.arange(0, BLOCK)\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\n    raw = tl.where((raw & 0x7fff) == 0, 0, raw).to(tl.uint32)\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\n    rank = raw ^ mask\n    # Rank dominates; reversed column indices select the first equal value.\n    tie = 0xffffffff - column.to(tl.uint32)\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\n    key = tl.where(column < N, key, 0)\n    best = tl.max(key, axis=0)\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\n    tl.store(OUT + row, winner)\n\n\ndef validate_inputs(x, require_cuda=True):\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags outside domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required\")\n    require(x.ndim == 2, \"matrix [M,N] required\")\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\n            and x.numel() <= 262144, \"matrix dimensions outside domain\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all values must be finite\")\n    return {\"valid\": True, \"shape\": list(x.shape)}\n\n\ndef run(x):\n    validate_inputs(x)\n    m, n = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.argmax(x.to(torch.float64), dim=1)\n\n\ndef make_inputs(device=\"cuda\", rows=17, columns=257, seed=0):\n    \"\"\"Convenience examples, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_144",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_144",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_144"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_144"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_144"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_144",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_144"
+      },
+      "created_at": "2026-10-18T01:33:15Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_144",
+        "has_error": null,
+        "kernel_code": "\"\"\"Row-wise first-maximum index via a packed integer-key reduction.\n\nOriginal synthetic Triton implementation; not an upstream historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _argmax_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    column = tl.arange(0, BLOCK)\n    value = tl.load(X + row * N + column, mask=column < N, other=0.0)\n    raw = value.to(tl.uint16, bitcast=True).to(tl.uint32)\n    raw = tl.where((raw & 0x7fff) == 0, 0, raw).to(tl.uint32)\n    mask = tl.where((raw & 0x8000) != 0, 0xffff, 0x8000).to(tl.uint32)\n    rank = raw ^ mask\n    # Rank dominates; reversed column indices select the first equal value.\n    tie = 0xffffffff - column.to(tl.uint32)\n    key = (rank.to(tl.uint64) << 32) | tie.to(tl.uint64)\n    key = tl.where(column < N, key, 0)\n    best = tl.max(key, axis=0)\n    winner = (0xffffffff - (best & 0xffffffff)).to(tl.int64)\n    tl.store(OUT + row, winner)\n\n\ndef validate_inputs(x, require_cuda=True):\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(), \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(), \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(), \"logical view flags outside domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required\")\n    require(x.ndim == 2, \"matrix [M,N] required\")\n    require(1 <= x.shape[0] <= 65536 and 1 <= x.shape[1] <= 4096\n            and x.numel() <= 262144, \"matrix dimensions outside domain\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all values must be finite\")\n    return {\"valid\": True, \"shape\": list(x.shape)}\n\n\ndef run(x):\n    validate_inputs(x)\n    m, n = x.shape\n    with torch.cuda.device(x.device):\n        output = torch.empty((m,), dtype=torch.int64, device=x.device)\n        _argmax_kernel[(m,)](x, output, N=n, BLOCK=triton.next_power_of_2(n), num_warps=4)\n    return output\n\n\ndef reference(x):\n    \"\"\"FP16-to-FP64 conversion is exact; numerical ties use the first index.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    return torch.argmax(x.to(torch.float64), dim=1)\n\n\ndef make_inputs(device=\"cuda\", rows=17, columns=257, seed=0):\n    \"\"\"Convenience examples, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = torch.randn((rows, columns), generator=generator).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_144",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_144"
+      },
+      "created_at": "2026-10-18T01:33:15Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute the first index of the largest value in each row of an FP16 matrix.\nFor every row r, return the smallest column index j for which\n\n  x[r, j] = max(x[r, 0], ..., x[r, N-1]).\n\nThe comparison is ordinary numerical comparison of the exact stored values.\nPositive and negative zero compare equal; if a row's maximum is zero, the\nfirst zero of either sign wins. Every finite FP16 value is legal, including\nboth signed zeros, all positive/negative subnormals, and +/-65504. NaN and\ninfinity are outside the domain. There is no approximate tolerance for the\ninteger index: the returned index must equal the specified first index.\n\nComplete input domain:\n- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous\n  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage\n  offsets are legal.\n- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.\n- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.\n  Calls run in ordinary non-inference mode without concurrent external\n  writes to x. This forward-only operation does not provide autograd.\n\nReturn a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.\nAny implementation strategy is allowed if it returns the required exact\nindices throughout the complete domain. Correctness is one verdict for the\nimplementation, not a verdict per input, shape, distribution, or seed.\n\nvalidate_inputs() checks this domain and is called by run(). reference()\nuses numerical FP64 comparisons of exactly representable FP16 values and\nalso accepts CPU input. make_inputs() supplies examples only.\n\nThis is an original synthetic Triton implementation of stable argmax using\npacked integer keys. It is not copied from an upstream kernel and is not a\nclaim of a historical upstream bug.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_144",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_144"
+      },
+      "created_at": "2026-10-18T01:33:15Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_144",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 2767
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1834
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_144",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:33:15Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_144",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    }
+  ],
+  "verdict": null
+}

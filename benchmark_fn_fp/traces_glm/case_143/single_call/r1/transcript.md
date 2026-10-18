@@ -1,0 +1,331 @@
+# Single-call trace
+
+## System prompt
+
+You are verifying whether a GPU (Triton) kernel implementation is correct.
+
+You will be given:
+1. A problem statement describing the operation's contract and its reference behavior.
+2. The kernel implementation under test.
+
+Decide one of:
+- "reject": the implementation has a real defect / violates the stated contract.
+- "trust": the implementation is correct, or is an equally valid alternative implementation.
+- "needs_more_evidence": you genuinely cannot tell.
+
+Answer with the JSON object required by the output schema.
+Output schema:
+{"type": "object", "required": ["verdict", "confidence", "reason"], "properties": {"verdict": {"type": "string", "enum": ["trust", "reject", "needs_more_evidence"], "description": "'reject' if the implementation has a real defect, 'trust' if it is correct or an equally valid alternative, 'needs_more_evidence' if you genuinely cannot tell."}, "confidence": {"type": "number", "description": "0.0 to 1.0."}, "reason": {"type": "string", "description": "One or two sentences."}}, "additionalProperties": false}
+
+## User prompt
+
+## Problem statement (contract + reference behavior)
+
+Compute an unnormalized Walsh-Hadamard transform for each row of an int16
+input tensor, returning int32 coefficients in increasing sequency order.
+
+The mathematical target is defined independently of any fast algorithm:
+1. Start with H_1 = [[1]] and recursively construct
+       H_(2n) = [[H_n, H_n],
+                 [H_n, -H_n]].
+2. For each row of H_N, count how many adjacent entries have different
+   signs. These counts are all distinct and range from 0 to N-1.
+3. Sort the rows by that count, in ascending order, to obtain W_N.
+4. Return out[b,k] = sum_j W_N[k,j] * x[b,j].
+
+Thus output coefficient k uses a basis row with exactly k sign changes.
+No normalization factor is applied, and output order is part of correctness.
+
+Inputs and complete public domain:
+- x is an ordinary torch.Tensor (not a subclass), with dtype int16 and
+  shape [B,N], where 1<=B<=128 and N is one of {32,64,128}.
+- EVERY stored int16 value is legal: the full range [-32768,32767].
+- x is dense, strided, contiguous and on a CUDA device. Contiguous views
+  with nonzero storage offsets are legal.
+- x has requires_grad=False, is_inference=False, is_neg=False and
+  is_conj=False. Calls run in ordinary non-inference mode, without
+  concurrent external writes to the input. No autograd is provided.
+
+Return a fresh int32 tensor of shape [B,N] on x.device, preserving x.
+Every element must equal the mathematical integer target exactly:
+absolute tolerance = 0 and relative tolerance = 0.
+The largest possible absolute result is at most N*32768<=4194304, which
+fits in int32. Approximate transforms, other coefficient orderings and
+normalized transforms do not satisfy this task. Implementations may use
+any algorithm that satisfies the same target over the whole legal domain.
+Correctness is one verdict for the implementation, not a verdict per input,
+input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+builds the Sylvester matrix, sorts its rows by sign-change count and uses
+int64 products and sums before exact int32 conversion; it also accepts
+CPU inputs. make_inputs() supplies examples only.
+
+Walsh-Hadamard transforms are used for discrete signals and their sequency
+ordering arranges coefficients by the sign-change rate of the basis.
+This is an original synthetic Triton implementation with integer
+butterflies and coefficient reordering, not a claimed upstream historical
+defect. The input/output convention is explicitly unnormalized.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.
+
+
+## Kernel implementation under test (kernel.py)
+
+```python
+"""Sequency-ordered integer Walsh-Hadamard transform.
+
+Original synthetic Triton implementation of a standard signal transform.
+This is not an upstream implementation or a claimed historical defect.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _transform_kernel(X, OUT, N: tl.constexpr, LOG_N: tl.constexpr):
+    row = tl.program_id(0)
+    lane = tl.arange(0, N)
+    value = tl.load(X + row * N + lane).to(tl.int32)
+    for stage in tl.static_range(0, LOG_N):
+        step = 1 << stage
+        peer = tl.gather(value, lane ^ step, axis=0)
+        value = tl.where((lane & step) == 0, value + peer, peer - value)
+
+    # Convert the coefficient index to the butterfly's natural row index.
+    reversed_lane = tl.full((N,), 0, tl.int32)
+    for bit in tl.static_range(0, LOG_N):
+        reversed_lane = reversed_lane | (((lane >> bit) & 1) << (LOG_N - 1 - bit))
+    source_lane = reversed_lane ^ (reversed_lane >> 1)
+
+    result = tl.gather(value, source_lane, axis=0)
+    tl.store(OUT + row * N + lane, result)
+
+
+def validate_inputs(x, require_cuda=True):
+    """Validate the complete public domain; also usable on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    require(type(x) is torch.Tensor, "ordinary torch.Tensor required")
+    require(x.layout == torch.strided and x.is_contiguous(),
+            "contiguous strided input required")
+    require(not x.requires_grad and not x.is_inference(),
+            "ordinary non-gradient input required")
+    require(not x.is_neg() and not x.is_conj(),
+            "logical view flags are outside this domain")
+    require(not require_cuda or x.is_cuda, "CUDA input required by run")
+    require(x.ndim == 2 and 1 <= x.shape[0] <= 128 and x.shape[1] in (32, 64, 128),
+            "x must have shape [B,N], B in [1,128] and N in {32,64,128}")
+    require(x.dtype == torch.int16, "int16 input required")
+    return {"valid": True, "batch": x.shape[0], "width": x.shape[1]}
+
+
+def run(x):
+    """Return the unnormalized transform with coefficients in sequency order."""
+    validate_inputs(x)
+    batch, width = x.shape
+    with torch.cuda.device(x.device):
+        output = torch.empty((batch, width), dtype=torch.int32, device=x.device)
+        _transform_kernel[(batch,)](
+            x, output, N=width, LOG_N=width.bit_length() - 1, num_warps=4)
+    return output
+
+
+def reference(x):
+    """Build the mathematical basis independently, then multiply in int64."""
+    validate_inputs(x, require_cuda=False)
+    width = x.shape[1]
+    hadamard = torch.ones((1, 1), dtype=torch.int64, device=x.device)
+    while hadamard.shape[0] < width:
+        top = torch.cat((hadamard, hadamard), dim=1)
+        bottom = torch.cat((hadamard, -hadamard), dim=1)
+        hadamard = torch.cat((top, bottom), dim=0)
+    changes = (hadamard[:, 1:] != hadamard[:, :-1]).sum(dim=1)
+    sequency_rows = hadamard[torch.argsort(changes)]
+    # int64 products and sums are exact throughout the complete int16 domain.
+    result = (x.to(torch.int64)[:, None, :] * sequency_rows[None, :, :]).sum(dim=2)
+    return result.to(torch.int32)
+
+
+def make_inputs(device="cuda", batch=7, width=64, seed=0):
+    """Examples only; all stored int16 values are legal."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x = torch.randint(-32768, 32768, (batch, width), generator=generator, dtype=torch.int32)
+    return (x.to(device=device, dtype=torch.int16),)
+
+```
+
+Is this implementation correct?
+
+## Provider reasoning (verbatim)
+
+Check ordering: butterfly computes natural (Hadamard) order coefficients indexed by bit-reversed? Actually sequency order: natural-order index k (sequency) maps to Hadamard (row) index = bit_reverse(k) XOR (bit_reverse(k)>>1) (Gray code of reversed index). Kernel: reversed_lane = bit reverse of lane; source_lane = reversed ^ (reversed>>1). That's the standard natural→sequency mapping. Correct.
+
+Butterfly: value + peer for (lane & step)==0, peer - value otherwise — standard Hadamard butterfly producing natural Hadamard order indexed by... Butterfly order: after all stages, index i holds sum with sign (-1)^{popcount(i & j)}? That's the Hadamard matrix row indexed by i. Yes. Note stage order: typically butterflies go from MSB stage down; does order of stages matter? The standard iterative FFT-like WHT processes stages from large step to small, or small to large — the resulting order differs. Butterfly with step = 1<<stage applied ascending stages: this is the standard "DIF" WHT? Let's verify with N=2: step=1, lane0: value0+value1; lane1: peer - value = value0 - value1. H_2 = [[1,1],[1,-1]]. Row index i=0: +,+, i=1: +,-. Correct.
+
+N=4: stages step=1 then step=2.
+After stage0 (step1): v0=x0+x1, v1=x0-x1, v2=x2+x3, v3=x2-x3.
+After stage1 (step2): lane&2==0: v+v_peer(peer=lane^2). lane0: v0+v2 = x0+x1+x2+x3 ✓ (row 000). lane1: v1+v3 = x0-x1+x2-x3 (row 001 of H_4: [1,-1,1,-1]) ✓. lane2: v2-v0 = -(x0+x1)+x2+x3 = row 010: [-1,-1,1,1] ✓. lane3: v3-v1 = -x0+x1+x2-x3? row 011: [-1,1,1,-1] → -x0+x1+x2-x3. Kernel: peer - value = v1-v3 = x0-x1-x2+x3. That's negative of target. Hmm.
+
+Wait, which stage order is standard? Standard iterative WHT: for hlen doubling, stage with step = size of butterfly. Typically loop bit = logN-1 down to 0 with step=1<<bit. Let me recompute with descending: step=2 first then step=1.
+Stage step2: lane0: x0+x2, lane1: x1+x3, lane2: x2-x0, lane3: x3-x1.
+Stage step1: lane0 (lane&1==0): (x0+x2)+(x1+x3)=x0+x1+x2+x3 ✓. lane1: peer-value = v0-v1 = x0+x2-x1-x3 ✓ (row 001: [1,-1? wait row 001 is [1,-1,1,-1]: x0-x1+x2-x3. v0-v1 = x0-x1+x2-x3 ✓. lane2: v2+v3 = x2-x0+x3-x1 = row 010 [-1,-1,1,1] ✓. lane3: peer-value = v2-v3 = x2-x0-x3+x1 = row 011 [-1,1,1,-1] ✓.
+
+So ascending order gives wrong signs for some rows. With ascending stage order, the resulting index is bit-reversed butterfly: actually ascending order yields the transform with indices in reversed order? Let me recheck ascending case lane3: got x0-x1-x2+x3, which equals row 100 of H_4? Row 100: [1? H_4 rows: row0 [1,1,1,1], row1 [1,-1,1,-1]? Let me build H_4 = [[H2,H2],[H2,-H2]]:
+row0: 1 1 1 1
+row1: 1 -1 1 -1
+row2: 1 1 -1 -1
+row3: 1 -1 -1 1
+row3 (011): x0-x1-x2+x3. Hmm wait I mislabeled. rows indexed 0..3: row0=[1,1,1,1], row1=[1,-1,1,-1], row2=[1,1,-1,-1], row3=[1,-1,-1,1].
+
+Recompute ascending lane1: v1+v3 = x0-x1+x2-x3 = row1 ✓. lane2: v2 - v0 = x2+x3-x0-x1 = -(x0+x1) + x2+x3 = row? row2 = x0+x1-x2-x3. Lane2 gives negative of row2. Hmm but with sign flips, overall row sign flip doesn't matter for Walsh? No — sign flip of coefficient changes result sign, matters for exact match.
+
+Hmm, so ascending gives lane i = ± row bitreverse? Let's think: ascending stage order computes DIT with bit-reversed output? The known result: iterative FFT-style with ascending (small to large) produces output in bit-reversed order; descending produces natural order. But bit-reversal of indices for N=4 is palindromic-ish: bitrev(1)=2. So lane1 holds row2's coefficient (up to sign?), lane2 holds row1's. lane1 ascending = x0-x1+x2-x3 = row1 though... hmm, not row2.
+
+Let me just compute all ascending lanes vs rows:
+lane0 = x0+x1+x2+x3 = row0.
+lane1 = x0-x1+x2-x3 = row1.
+lane2 = -x0-x1+x2+x3 = -row2.
+lane3 = v1 - v3? Wait lane3 has lane&1 = 1, so value = peer - value where peer = v2 = x2+x3: lane3 = v2 - v3 = x2+x3-x0+x1 = -x0+x1+x2+x3. Rows: row2 = x0+x1-x2-x3, row3 = x0-x1-x2+x3. lane3 = -row3? -row3 = -x0+x1+x2+x3 ✓. So lane3 = -row3, lane2 = -row2, lanes 0,1 correct.
+
+So ascending order gives lanes 2,3 negated. Then mapping: sequency coefficient k uses Hadamard row = gray(bitrev(k)). For N=4: k=0→row0, k=1→bitrev(1)=2, gray(2)=2^1 XOR... gray(2)=2^(2>>1)=2^1=2, so row2. k=1 should be row with 1 sign change: row1 [1,-1,1,-1] has changes: 1→-1, -1→1, 1→-1: 3 changes. row2 [1,1,-1,-1]: 1 change. So k=1 → row2 ✓ gray(2)=2 ✓. k=2: bitrev(2)=1, gray(1)=1^0=1 → row1. k=3: bitrev=3, gray=3^1=2 → row2? gray(3)=2? 3^1=2. Hmm k=3 → row with 3 changes = row1? row1 has 3 changes. row3 [1,-1,-1,1] has 2 changes. So ordering: k=0→row0, k=1→row2, k=2→row3, k=3→row1. Gray code: k=2: bitrev(2)=1, gray=1 → row1, but row1 has 3 changes. That's wrong... hmm.
+
+The standard sequency order: walsh index k corresponds to Hadamard index = graycode(bitreverse(k))? Actually known: sequency-ordered Walsh W[k] = Hadamard[gray_code_reverse?]... The standard: WHT in sequency order: h index = bit_reverse(gray(k)). Let's check k=1: gray(1)=1, bitrev(1)=2 → row2 ✓ (1 change). k=2: gray(2)=3, bitrev(3)=3 → row3 (2 changes) ✓. k=3: gray(3)=2, bitrev(2)=1 → row1 (3 changes) ✓. Great, so correct mapping: source = bitrev(gray(k)), but kernel computes gray(bitrev(k)). For N=4: gray(bitrev(1))=gray(2)=3 → wrong. Kernel: source_lane = reversed ^ (reversed>>1) = gray(bitrev). That's wrong order? But wait — the kernel's butterfly is ascending which produces... maybe ascending butterfly outputs rows in reversed bit order with sign flips, and gray(bitrev) compensates. Hmm.
+
+Let's just directly compute what kernel produces for N=4 and compare to target.
+
+Kernel value lanes (ascending): lane0=row0, lane1=row1, lane2=-row2, lane3=-row3? Check lane2 = -x0-x1+x2+x3 = -row2 ✓ (row2=x0+x1-x2-x3). lane3=-row3 ✓.
+
+Mapping: source_lane(k) = gray(bitrev(k)):
+k=0: bitrev=0, gray=0 → source 0 → out[0]=row0 ✓ (target row0).
+k=1: bitrev(1)=2, gray(2)=3 → source 3 → out[1] = -row3. Target for k=1: row2. Wrong!
+
+Hmm, but wait — maybe my butterfly analysis with ascending is wrong. Let me redo carefully. tl.gather(value, lane ^ step): peer of lane. For (lane & step)==0: value+peer; else peer-value. Yes computed that.
+
+Stage 0, step=1: pairs (0,1),(2,3). v0=x0+x1, v1=x0-x1 (lane1&1=1: peer - value = v0 - x1 = x0 - x1 ✓). v2=x2+x3, v3=x2-x3.
+Stage 1, step=2: lane0: v0+v2; lane1: v1+v3; lane2: lane&2=2≠0: peer - value = v0 - v2 = x0+x1-x2-x3. Wait! I made an error before. lane2's peer = lane2^2 = 0, so value = peer - value = v0 - v2 = x0+x1-x2-x3 = row2 ✓! And lane3: peer = lane3^2 = 1, value = v1 - v3 = x0-x1-x2+x3 = row3 ✓.
+
+I earlier mixed up which operand. So ascending gives exactly natural Hadamard order! Let me double check lane1: lane&2==0 → v1+v3 = x0-x1+x2-x3 = row1 ✓. All correct.
+
+So butterfly produces value[i] = H_N row i. Then sequency: out[k] = H[gray? ...]. Need source(k) = bitrev(gray(k)) as derived (verified for N=4: k=1→row2, k=2→row3, k=3→row1).
+
+Kernel: reversed = bitrev(k); source = gray(reversed) = reversed ^ (reversed>>1). That's gray(bitrev(k)), but correct is bitrev(gray(k)). Are these equal? In general no. Check N=4: gray(bitrev(1)) = gray(2) = 3 ≠ 2. So out[1] = value[3] = row3 (2 sign changes), but target k=1 needs row2. Wrong!
+
+Hmm wait, let me double-check the target mapping again. Sequency k = number of sign changes. row2 = [1,1,-1,-1]: 1 change → k=1. row3=[1,-1,-1,1]: changes at positions 0→1 and 2→3? entries 1,-1,-1,1: differences: 1≠-1 (change), -1=-1, -1≠1 → 2 changes → k=2. row1=[1,-1,1,-1]: 3 changes → k=3. So out[1]=row2 coefficient, out[2]=row3, out[3]=row1.
+
+Kernel k=1: source = gray(bitrev(1)=2) = 2^(2>>1)=2^1=3 → row3. Wrong.
+
+But wait — is gray∘bitrev = bitrev∘gray? No. Actually hmm, common formula: sequency index → Hadamard index is gray code of bit-reversed index in some references. Let me re-verify with N=8 quickly. Known result: Walsh (sequency) order W_n = Hadamard row given by: bitrev then gray, or gray then bitrev? Standard (e.g., from Numerical Recipes "fwht" ordered): for sequency-ordered, index mapping: j = gray_code(bit_reverse(k))? Numerical Recipes: Walsh in sequency order: f_k = sum F_j where j related via gray... Let me test with N=8.
+
+Compute gray(bitrev(k)) vs bitrev(gray(k)) for k=1..7, N=8 (3 bits).
+bitrev: 1→4, 2→2, 3→6? bitrev(3)=binary 011 reversed 110=6. 4→1, 5→5, 6→3, 7→7.
+gray(x)=x^(x>>1): gray(0)=0,gray(1)=1,gray(2)=3,gray(3)=2,gray(4)=6,gray(5)=7,gray(6)=5,gray(7)=4.
+
+Mapping A (kernel): k → gray(bitrev(k)):
+k=0→0, 1→gray(4)=6, 2→gray(2)=3, 3→gray(6)=5, 4→gray(1)=1, 5→gray(5)=7, 6→gray(3)=2, 7→gray(7)=4.
+
+Mapping B: bitrev(gray(k)): k=0→0, 1→bitrev(1)=4, 2→bitrev(3)=6, 3→bitrev(2)=2, 4→bitrev(6)=6? bitrev(6)=binary110 rev 011=3. Let me: gray(4)=6, bitrev(6)=3. k=4→3. k=5: gray(5)=7, bitrev(7)=7. k=6: gray(6)=5, bitrev(5)=5. k=7: gray(7)=4, bitrev(4)=1.
+B: 0→0,1→4,2→6,3→2,4→3,5→7,6→5,7→1.
+
+Now compute actual sign changes of H_8 rows. H_8 row index m in binary: entries H_8[m,j] = (-1)^{popcount(m & j)}? For Sylvester construction, H[m,j] = (-1)^{popcount(m&j)}. Sign changes of row m: number of j where H[m,j]≠H[m,j+1] = popcount(m & (j^(j+1)). Over j=0..6. j^(j+1) has bits: pattern where lowest set bit... popcount(m & (j^(j+1))): j^(j+1) = mask of lowest zero bit position and below? For j, j+1: e.g., j=0→1 (mask 1), j=1→3 (mask 11), j=2→1, j=3→7, j=4→1, j=5→3, j=6→1.
+
+Sequency(m) = popcount(m&1)+popcount(m&3)+popcount(m&1)+popcount(m&7)+popcount(m&1)+popcount(m&3)+popcount(m&1)
+= 4*popcount(m&1) + 2*popcount(m&3) + popcount(m&7).
+
+Compute for each m:
+m=0: 0 → k=0.
+m=1: 4*1 + 2*1 + 1 = 7? popcount(1&3)=1, popcount(1&7)=1 → 4+2+1=7.
+m=2 (010): m&1=0, m&3=2→1, m&7=2→1 → 0+2+1=3.
+m=3: 4+2+2=8? popcount(3&7)=2 → 4+2+2=8. Max is 7 for N=8 though. Hmm, check row m=3: H[3,j]=(-1)^{popcount(3&j)}: j=0:1, j=1:(3&1=1)→-1, j=2:(2)→-1, j=3:(3&3=3)→+1? popcount(3)=2 → +1. j=4: 0→1, j=5: 1→-1, j=6: 2→-1, j=7: popcount(3)=2→+1. Row: [1,-1,-1,1,1,-1,-1,1]: changes: 0-1 yes,1-2 no,2-3 yes,3-4 no,4-5 yes,5-6 no,6-7 yes = 4 changes. My formula wrong somewhere. j^(j+1) for j=1: 1^2=3 ✓, j=3: 3^4=7 ✓, j=5: 5^6=3 ✓. Change between j and j+1 iff H[m,j]≠H[m,j+1] iff popcount(m&j) parity differs from popcount(m&(j+1)) parity. Difference in parity = parity of popcount(m & (j^(j+1))? No — popcount(m&j) + popcount(m&(j+1)) mod 2 = popcount(m & (j ^ (j+1)))? Not exactly: popcount(m&a)+popcount(m&b) ≡ popcount(m&(a^b)) mod 2? popcount(m&a XOR m&b)... Actually popcount(m&a) + popcount(m&b) mod 2 = popcount(m & (a ^ b))? Hmm: popcount(m&a ^ m&b) = popcount(m&(a^b)) — but sum mod 2 = popcount(x XOR y) mod 2 where x=m&a, y=m&b: popcount(x)+popcount(y) ≡ popcount(x^y) mod 2 ✓. And x^y = m&(a^b)? m&a ^ m&b: each bit: (m_i a_i) XOR (m_i b_i) = m_i(a_i XOR b_i) ✓. So yes.
+
+So sequency(m) = sum over j=0..6 of popcount(m & (j^(j+1))) mod 2 — I forgot mod 2! Redo:
+m=3: j^(j+1): j=0:1, j=1:3, j=2:1, j=3:7, j=4:1, j=5:3, j=6:1.
+m&1=1 → parity 1 (change). m&3=3 → parity 0. m&1→1. m&7=7→parity 1. m&1→1. m&3→0. m&1→1. Total = 1+0+1+1+1+0+1 = 5? But manual count gave 4. Hmm recheck row m=3: [1,-1,-1,1,1,-1,-1,1]: changes between consecutive: 1→-1 (c), -1→-1, -1→1 (c), 1→1, 1→-1 (c), -1→-1, -1→1 (c) = 4 changes. My parity: j=1: H[3,1]=-1, H[3,2]=-1, no change; m&(1^2=3)=3&3=3, popcount 2, parity 0 ✓. j=0: H[3,0]=1, H[3,1]=-1 change; m&1=1 parity 1 ✓. j=2: H[3,2]=-1,H[3,3]=1 change; m&(2^3=1)=1 parity 1 ✓. j=3: H[3,3]=1,H[3,4]=1 no change; m&7=7 parity 1?? popcount(7)=3, parity 1 → predicts change but actual no change. Parity of popcount(m&j)+popcount(m&(j+1)): j=3: popcount(3&3)=2, popcount(3&4)=0; 2+0=2 parity 0 → no change. But m&(j^(j+1)) = 3&7 = 3, popcount 3, parity 1. Contradiction with my identity? popcount(m&a)+popcount(m&b) mod2 vs popcount(m&(a^b)): m&a = 3&3 = 011, m&b = 3&4 = 000. x^y = 011, popcount 2 parity 0. m&(a^b) = 3&7 = 011, popcount 2 parity 0. Oh! I miscalculated popcount(3&7)=popcount(011)=2, not 3. Right, m=3 is 011. Redo: m&7 = 3 → popcount 2 parity 0 ✓.
+
+So sequency(m) = sum over j of parity(popcount(m & t_j)) where t = [1,3,1,7,1,3,1].
+m=3 (011): j0: 3&1=1→1; j1: 3&3=3→0; j2: 1; j3: 3&7=3→0? popcount(3)=2 parity 0. Hmm but earlier I found change between j=2 and j=3. H[3,2]=-1, H[3,3]=+1: change. popcount(m&2)=popcount(2)=1, popcount(m&3)=2 → parity 1 → change ✓ (that's j=2, t=1: m&1=1 parity 1 ✓). j=3: t=7, m&7=3 popcount 2 parity 0, no change ✓ (H[3,3]=H[3,4]=1 ✓). j=4: t=1, parity 1 (H[3,4]=1,H[3,5]=-1 change ✓). j=5: t=3, m&3=3 parity 0 (H[3,5]=-1,H[3,6]=-1 ✓). j=6: t=1, parity 1 (change ✓). Total: 1+0+1+0+1+0+1 = 4 ✓.
+
+So general: sequency(m) = sum_{j=0}^{N-2} parity(popcount(m & (j^(j+1)))).
+
+Now compute sequency for all m in 0..7. t pattern: positions with t=1: j∈{0,2,4,6} (4 times), t=3: j∈{1,5} (2 times), t=7: j=3 (1 time). Note parity(popcount(m & t)) where t=2^a-1 masks low bits: m&1 parity = bit0. m&3 parity = bit0^bit1. m&7 parity = bit0^bit1^bit2.
+
+sequency(m) = 4*(m&1) + 2*parity(m&3) + parity(m&7)? Wait each t=1 occurrence uses m&1: 4 occurrences → 4*bit0. t=3: 2 occurrences → 2*(bit0^bit1). t=7: 1*(bit0^bit1^bit2).
+
+m bits (b2 b1 b0):
+m=0: 0.
+m=1 (001): 4*1 + 2*(1^0=1) + (1) = 4+2+1=7.
+m=2 (010): 4*0 + 2*(0^1=1) + (1) = 3.
+m=3 (011): 4*1 + 2*(1^1=0) + (1^1^0=0) = 4.
+m=4 (100): 0+2*0+1 = 1.
+m=5 (101): 4*1+2*1+ (1^0^1=0) = 6.
+m=6 (110): 0 + 2*(0^1=1) + (0^1^0=1) = 3? Wait m=6 bits: b2=1,b1=1,b0=0. parity(m&3)=b0^b1=1. parity(m&7)=b0^b1^b2=0^1^1=0. → 0+2+0=2.
+m=7 (111): 4*1 + 2*(1^1=0) + (1^1^1=1) = 5.
+
+So sequency per row m: [0,7,3,4,1,6,2,5]. Inverse: k→m: k=0→0, 1→4, 2→6, 3→2, 4→3, 5→7, 6→5, 7→1. That matches mapping B = bitrev(gray(k))! Confirmed: correct mapping is bitrev(gray(k)), kernel uses gray(bitrev(k)).
+
+Verify kernel mapping differs: kernel k=1 → 6, but correct is 4. So for N=8, wrong. For N=4: kernel k=1 → 3, correct 2 — also wrong. So kernel is incorrect for N≥4.
+
+Wait — but maybe my earlier claim that the ascending butterfly yields natural Hadamard order is wrong, and it yields bit-reversed order, which combined with kernel's mapping... Let me recheck: I verified N=4 ascending gives rows 0,1,2,3 exactly. For N=8, ascending butterflies: does value[m] = H_8 row m, or row bitrev(m)? General fact: iterative WHT with ascending stage (step doubling from 1) computes the transform in "Hadamard/natural" order if you do DIT... Let me verify for N=8 one lane, say lane3 (011). Target row3 = signs (-1)^{popcount(3&j)}: [1,-1,-1,1,1,-1,-1,1] → coeff x0-x1-x2+x3+x4-x5-x6+x7.
+
+Ascending: stage0 step1: v3 = x2-x3, v2=x2+x3, v1=x0-x1, v0=x0+x1; lane4: x4+x5, lane5: x4-x5, lane6: x6+x7, lane7: x6-x7.
+Stage1 step2: lane3 (lane&2=2): peer=1: v1-v3 = x0-x1-x2+x3. lane1: v1+v3 = x0-x1+x2-x3. lane7: peer=5: v5-v7 = x4-x5-x6+x7. lane5: v5+v7 = x4-x5+x6-x7.
+Stage2 step4: lane3 (lane&4=0): v3+v7 where v3=(x0-x1-x2+x3), v7=(x4-x5-x6+x7) → sum = x0-x1-x2+x3+x4-x5-x6+x7 = row3 ✓. Lane7 (lane&4=4): peer=3: v3-v7 = x0-x1-x2+x3-x4+x5+x6-x7 = row7? row7 = (-1)^{popcount(7&j)}: [1,-1,-1,1,-1,1,1,-1] → x0-x1-x2+x3-x4+x5+x6-x7 ✓. Good, ascending yields natural order. (Indeed ascending WHT butterflies with this "peer - value" for high half gives natural order; descending gives bit-reversed.)
+
+So kernel butterfly is correct natural-order WHT, but the reorder permutation is gray(bitrev(k)) instead of bitrev(gray(k)) — wrong. So the implementation is incorrect for N≥4 (for N=2 it'd be fine but N∈{32,64,128}).
+
+Hold on — maybe I have the direction confused: which one is "sequency→Hadamard"? Perhaps the well-known relation: sequency index k corresponds to Hadamard index = gray(bitrev(k))? I computed ground truth via sign-change counts for N=8 and got bitrev(gray(k)). Let me double-check one: k=1 should be row with exactly 1 sign change. Rows with sequency 1: m=4 (100): row4 = (-1)^{popcount(4&j)}: [1,1,1,1,-1,-1,-1,-1]: 1 change ✓. So k=1 → m=4. Kernel gives gray(bitrev(1)) = gray(4) = 6 → row6: sequency(row6)=2 per table. Wrong. Confirmed defect.
+
+Also check int16 load: value.to(int32), arithmetic in int32, fine. Max |result| ≤ N*32768 fits int32 ✓.
+
+So verdict: reject. Confidence high.
+
+## Final response (verbatim)
+
+{"verdict": "reject", "confidence": 0.9, "reason": "The butterfly correctly computes the natural-order Hadamard transform, but the sequency permutation is wrong: the kernel uses source = gray(bit_reverse(k)) (reversed_lane ^ (reversed_lane>>1) after bit-reversal), whereas the correct Hadamard row for sequency index k is bit_reverse(gray(k)). For example, with N=8 (and likewise N=4, 32, 64, 128), coefficient k=1 must use the Hadamard row with exactly one sign change (row 4), but the kernel gathers row 6 (two sign changes), so outputs are permuted incorrectly for all N in the domain."}
+
+## Verdict
+
+{
+  "verdict": "reject",
+  "confidence": 0.9,
+  "reason": "The butterfly correctly computes the natural-order Hadamard transform, but the sequency permutation is wrong: the kernel uses source = gray(bit_reverse(k)) (reversed_lane ^ (reversed_lane>>1) after bit-reversal), whereas the correct Hadamard row for sequency index k is bit_reverse(gray(k)). For example, with N=8 (and likewise N=4, 32, 64, 128), coefficient k=1 must use the Hadamard row with exactly one sign change (row 4), but the kernel gathers row 6 (two sign changes), so outputs are permuted incorrectly for all N in the domain."
+}
+
+## Usage and stop reason
+
+{
+  "model": "accounts/fireworks/models/glm-5p3",
+  "provider": "fireworks",
+  "response": {
+    "verdict": "reject",
+    "confidence": 0.9,
+    "reason": "The butterfly correctly computes the natural-order Hadamard transform, but the sequency permutation is wrong: the kernel uses source = gray(bit_reverse(k)) (reversed_lane ^ (reversed_lane>>1) after bit-reversal), whereas the correct Hadamard row for sequency index k is bit_reverse(gray(k)). For example, with N=8 (and likewise N=4, 32, 64, 128), coefficient k=1 must use the Hadamard row with exactly one sign change (row 4), but the kernel gathers row 6 (two sign changes), so outputs are permuted incorrectly for all N in the domain."
+  },
+  "reasoning_effort": "low",
+  "timeout_s": 1800,
+  "usage": {
+    "input_tokens": 1824,
+    "output_tokens": 6884
+  },
+  "stop_reason": "stop",
+  "max_tokens": 32768,
+  "elapsed_s": 91.98018875019625,
+  "kernel_sha256": "f7ff1fdd3af4e51c28f32d7a629815289af062c597127721b63908bf60d580f0",
+  "problem_sha256": "63c39af1a635fa1511f3adb8b24c8dd607f1e3258aeed6a5af57af5c2a235d8f",
+  "prompt_variant": "original",
+  "estimated_usd": 0.0328432,
+  "pricing_snapshot": {
+    "input_per_million": 1.4,
+    "output_per_million": 4.4,
+    "cache_write_multiplier": 1.0,
+    "cache_read_multiplier": 1.0,
+    "basis": "published list price; cached input conservatively billed as uncached; excludes GPU",
+    "checked_at": "2026-10-03",
+    "source": "https://fireworks.ai/models/fireworks/glm-5p3"
+  },
+  "pricing": "dated list-price estimate; not invoice; excludes GPU and unreported HTTP usage"
+}

@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-1fdee2c5",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll record the highest-risk, directly testable claims tied to the exact-match CRC contract.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a99ace77bbb4d968",
+            "function": {
+              "arguments": "{\"rationale\": \"The composition identity (XOR of factor-multiplied per-chunk states plus one correction term) relies on _advance_factor being the exact CRC advance operator; an off-by-one in the exponent or the 1<<31 seed of the square-and-multiply would produce systematically wrong checksums for some/all rows and widths.\", \"scope\": \"in_scope\", \"scope_evidence\": [{\"source\": \"problem.txt\", \"summary\": \"Every checksum must equal the target exactly: absolute tolerance=0 and relative tolerance=0; recurrence and polynomial fully define the target; correctness is one verdict for the whole implementation.\"}], \"scope_rationale\": \"The contract requires exact equality (abs/rel tol 0) with the stated CRC-32 recurrence for every legal byte combination and both N in {64,128}, so any deviation in the advance factors or correction term for either width is a contract violation.\", \"statement\": \"The per-chunk advance factors and final correction term computed by _make_coefficients/_advance_factor do not exactly reproduce the serial CRC-32 over a full row for at least one of N=64 or N=128, so run() output differs from zlib.crc32 for some legal byte sequences.\"}",
+              "name": "record_claim"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bc00849ba2f3f9f8",
+            "function": {
+              "arguments": "{\"rationale\": \"tl.where(cond, 0xEDB88320, 0) mixes a Python int literal with a uint32 tensor; if literals get a signed int32 type, the XOR after a logical shift could be compiled differently or produce wrong intermediate values, breaking exact match.\", \"scope\": \"in_scope\", \"scope_evidence\": [{\"source\": \"problem.txt\", \"summary\": \"All shifts are logical right shifts on nonnegative 32-bit values; the int64 type holds the unsigned 32-bit checksum without a signed reinterpretation; tolerance is 0.\"}], \"scope_rationale\": \"Contract requires the unsigned 32-bit value stored in int64 without signed reinterpretation and exact equality, so a sign-extending cast or signed-literal type promotion in the Triton code path is in scope.\", \"statement\": \"The uint32-to-int64 result path in _checksum_kernel may sign-extend or mis-type the final value (e.g., via tl.where integer literal types or .to(tl.int64) on a value above 2^31), producing negative or wrong int64 outputs for checksums >= 2^31.\"}",
+              "name": "record_claim"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-9cbfca013e7e32a8",
+            "function": {
+              "arguments": "{\"rationale\": \"The host factor and the GPU product must compose identically; a static_range semantics discrepancy in the 32-bit loop, or non-carry of uint32 semantics through the jit helper's parameter mutation, would make GPU results differ from the intended math even though host-side coefficients look correct.\", \"scope\": \"in_scope\", \"scope_evidence\": [{\"source\": \"kernel.py\", \"summary\": \"Checksum kernel: state = tl.full((CHUNKS,), 0, tl.uint32); per-byte shifts and XOR with polynomial via tl.where; contribution = _polynomial_product_gpu(factor, state); tl.store(OUT + row, (combined ^ correction).to(tl.int64)).\"}, {\"source\": \"problem.txt\", \"summary\": \"Internal chunk sizes, lookup methods and polynomial representations are unrestricted if the result meets the exact-match requirement for all legal inputs.\"}], \"scope_rationale\": \"The contract exempts internal representation only if results match exactly for every legal byte sequence at both widths; the kernel's entire result depends on _polynomial_product_gpu's uint32 reduction behavior (tl.static_range(31,-1,-1) loop and helper mutating its argument) in the frozen Triton 3.4.0 environment.\", \"statement\": \"The GPU-side _polynomial_product_gpu (tl.where/bit-loop on uint32 with tl.static_range(31,-1,-1)) may not compute the same product as the host _polynomial_product, so the kernel's XOR-composition of per-chunk contributions diverges from the intended CRC-32 even when host coefficients are correct.\"}",
+              "name": "record_claim"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Record 3 in-scope claims: composition identity/advance factor correctness, uint32→int64 cast sign extension, GPU host/GPU parity."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306022,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 896,
+    "prompt_tokens": 17476,
+    "total_tokens": 18372,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 30,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3720,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

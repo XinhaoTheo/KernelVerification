@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-074019f8",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The t7 probe shows no violations even with severe cancellation — my initial bound was wrong because the fp32 sum's rounding error is relative to the (small) result, not the operands. Let me finalize that evidence, and run one more probe on extreme/subnormal/signed-zero values to be thorough.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-91e474013d3d2158",
+            "function": {
+              "arguments": "{\"data\": {\"benign_max_ratio\": 0.2847, \"max_ratio\": 0.2979, \"min_cancellation_ratio\": 2e-07, \"n\": 100000, \"output_finite\": true, \"violations\": 0}, \"event_id\": \"t7\", \"status\": \"rebutted\", \"summary\": \"On 100k worst-cancelled rows selected from 4M random full-range FP16 inputs (cancellation ratio down to 2.0e-7), max error/tolerance ratio was 0.298 with zero violations; benign inputs gave 0.285. The hypothesized catastrophic cancellation does not occur because a*c and b*d are exact in fp32 (11+11 bit mantissas), so the fp32 round-to-nearest sum has error relative to the small result (≤ ulp(rn)/2), not the large operands; div_rn adds one more 2^-24 relative rounding. Total relative error stays well under the 5e-7 tolerance.\", \"supports\": \"rebutted\"}",
+              "name": "finalize_probe_evidence"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "t7 shows no violations even with severe cancellation (ratio ~0.30). Wait — but why did I expect violations? Actually fp32 sum of two products each exact in fp32, rounding error ~2^-24 relative to operands, after division by scale — tolerance is 5e-7 relative to target. With cancellation ratio 2e-7, error ≈ 2^-24/(2e-7) relative to target ≈ 0.3 of tolerance. Interesting — exactly matches. Max ratio 0.298, consistent. So kernel always within tolerance? Error bound: numerator error ≤ ulp(operands) ≈ (|ac|+|bd|)*2^-24; denominator scale error also relative ~2^-24. Total relative error ~2^-23 / cancellation... Hmm with cancellation 2e-7 ratio gives 0.3, so worst-case cancellation could exceed? Cancellation ratio can't be much smaller than ~2^-11*...? Products are multiples of 2^-24 (fp16*fp16 exact), so their sums are exact multiples of 2^-24; smallest nonzero numerator relative cancellation: numerator ≥ 2^-24 (in magnitude, minimum step), so error/cancellation... Error from fp32 sum: sum of two exact values, error ≤ ulp(result of magnitude ~|ac|) ≤ |ac|*2^-24 (actually products are exactly representable? fp16*fp16 product has up to 22 bits mantissa... fp16 has 11-bit significand, product has 22 bits → exact in fp32 (24 bits). So products exact. Sum rounds: error ≤ ulp(sum)/2 ≤ 2^-24 * |ac|. Then division by scale (scale = c²+d², relative error 2^-24 at most). Final relative error ≤ ~2^-23 / cancellation_ratio. Cancellation ratio = |rn|/(|ac|+|bd|). But target = rn/scale. Worst case: cancellation as small as possible with nonzero rn. rn is multiple of 2^-24; |ac| up to 2^32. Min ratio = 2^-24/2^32 = 2^-56?? But wait, is such cancellation achievable with fp16 values? Need a*c ≈ -b*d. Products are quantized; exact cancellation when a/c = -d/b exactly; then rn = 0 exactly (target zero, tolerance 1e-7 absolute; error after division: 0 numerator gives exact 0? No — rn=0 computed exactly since products exact and sum exact... sum of opposite values is exact zero). Near cancellation: difference of two products, both multiples of some 2^-k; the difference is a multiple of 2^-k where k ≤ 22+2... minimum nonzero difference = 2^-24*min_step. Products a*c: a,b,c,d fp16, min |a*c| ~ 6e-8*6e-8 = 3.6e-15 = 2^-48. Max ~2^32. Difference of two products that nearly cancel: can it be as small as 2^-48 while operands are ~2^32? Requires products to match in all but last bit; products have only 22-bit mantissas times powers of two — to nearly cancel with huge magnitudes, they must agree to within one ulp of magnitude 2^32 i.e. 2^8; the difference is a multiple of 2^8... actually the difference of two 22-bit-mantissa numbers is a multiple of 2^(min_exponent_diff). Two products can have different exponents. E.g. ac = 2^32 (exactly), bd = -(2^32 - 2^k)? bd as fp16*fp16 product with magnitude near 2^32: b,d ≤ 65504, product ≤ 2^32ish. product near 2^32 has mantissa steps of 2^(32-21) = 2^11. So difference ≥ 2^11 unless exactly equal. With cancellation ~2^11/2^32 = 2^-21, error relative ~2^-23/2^-21 = 4 → violation possible? But t7 searched 4M random and min cancellation 2e-7, max ratio 0.3. Hmm but bound: max ratio ≈ 2^-23/cancellation → cancellation at 2e-7 gives 0.3. To violate need cancellation < 2^-22.7 roughly ~ 5e-8. Random unlikely. Can we construct? Need two fp16 products nearly cancelling with relative difference ~1e-9 of their magnitude. Product mantissas 11+11 bits; steps at magnitude 2^m are 2^(m-21). Relative min nonzero diff = 2^-21 ≈ 4.8e-7 between products of similar magnitude. Unless the products have different exponents! E.g., ac = 2^10, bd near 2^10 with finer step? No — step at 2^10 is 2^(10-21)=2^-11, relative 2^-21 again. Actually relative spacing of products is 2^-21 uniformly (22-bit mantissa). So min nonzero cancellation ratio ≈ 2^-21 ≈ 4.8e-7... but if products have exponents differing, e.g. ac=2^0, bd = -(2^0 - 2^-22)? bd magnitude 2^0 also 22-bit mantissa: values 1 - 2^-21 = 0.9999995, representable as 22-bit mantissa. Is it a product of two fp16? b*d = 1-2^-21 needs 22 significant bits — possible if b,d have odd mantissas. b = 1+2^-10 (fp16 representable), d = 1 - 2^-11? (1-2^-11) representable. Product = 1 + 2^-10 - 2^-11 - 2^-21 = 1 + 2^-11 - 2^-21. Hmm. Let b=1+2^-10, d=1-2^-11: product = 1 -2^-11 +2^-10 -2^-21 = 1 + 2^-11 - 2^-21. Not near 1. Try b = 1+2^-10, d = 1-2^-10: product = 1 - 2^-20. So ac=1, bd=-(1-2^-20): cancellation ratio 2^-20. Relative error bound 2^-23/2^-20 = 8?? Wait error: sum rounding relative to magnitude 1: error ≤ 2^-24. Divided by result 2^-20 → relative error 2^-4 = 0.0625?? That's < tolerance 5e-7. Wait I confused: relative error of target = (absolute error in numerator)/|target|. Absolute error in numerator ≈ ulp of sum computation ≈ 2^-24 * |operand| = 2^-24. |rn| = 2^-20. ratio = 2^-4 = 0.0625 >> 5e-7! That's a violation? But t7 found max ratio 0.3 and said cancellation 2e-7... hmm wait, ratio in t7 is err/tol where tol includes 5e-7*|target|. With cancellation 2e-7 and err/|target| ≈ 2^-24/2e-7 ≈ 0.3... so err/tol ≈ 0.3. And with cancellation 2^-20 ≈ 1e-6: err/|target| ≈ 2^-24/2^-20 = 2^-4 = 0.0625, tol = 5e-7*|target|, ratio = 0.0625/5e-7 = 125000! But t7's min cancellation 2e-7 gave ratio only 0.3?? Contradiction. Let me recompute: cancellation ratio 2e-7 means |rn| = 2e-7 * (|ac|+|bd|). Suppose |ac| ~ 2^32 (max fp16 products ~2^32). Then |rn| ≈ 2e-7*2^32 ≈ 859. Error in numerator ≈ ulp(2^32) ≈ 2^9? No—rounding error of sum of two exact values each ≤ 2^32: error ≤ ulp(2^32)/2 = 2^7... err/|rn| = 2^7/859 ≈ 0.15. Hmm ≈ 2^-24/2e-7 = 0.3. Yes matches. But that's relative error 0.15 of target — tolerance 5e-7 relative! That should be a massive violation! But t7 reported max_ratio 0.298, i.e., err/tol = 0.3. So err/|target| ≈ 0.15 means err/tol should be 300000. Something off: apparently the kernel is much more accurate than worst-case bound — because in random sampling, cancellation happens at low bits but errors also... Actually the real computed error: fp32 sum a*c + b*d. Both products exact in fp32 (22-bit mantissa fits in 24). The sum rounds to nearest with error ≤ ulp(result)/2. If the products nearly cancel, their sum magnitude is small relative to products, but the rounding error is ≤ ulp of the *result's exponent*? No! Rounding error of fl(x+y) where x,y exact: error ≤ ulp(x+y)/2, which is relative to the result, not operands! Since x+y is computed then rounded — result |rn| small, ulp(|rn|) small. Error ≤ ulp(rn)/2 ≈ 2^-24|rn|. So the sum is accurate to 2^-24 relative always. The division: div_rn rounds to nearest, 2^-24 relative. Total relative error ~2^-23 ≈ 1.2e-7 < 5e-7. Plus fp16 products exact. So the kernel is actually accurate within tolerance everywhere. My rationale was wrong: fp32 round-to-nearest of the sum has error relative to the true sum.\n\nAlso scale = c*c+d*d exact products, sum relative error 2^-24. Division adds 2^-24. Total ~2.5e-7 relative worst-case, within 5e-7. Confirmed by probe: max ratio 0.3.\n\nSo c1 rebutted. Record evidence via finalize_probe_evidence on t7 with supports \"rebutted\", then update status, then verdict trust. Maybe also test edge: max/min fp16, subnormals — quick extra probe for thoroughness? One more probe with extreme values (extrema, subnormals, signed zeros) would strengthen. Budget allows. Do that then verdict."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306331,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2674,
+    "prompt_tokens": 17930,
+    "total_tokens": 20604,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 2370,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6536,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

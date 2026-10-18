@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-2fcc7011",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Launching three independent runtime probes: c1 (per-bin comparison across N=64,128,256 on randn inputs), c2 (Nyquist bin check per N), c3 (extreme/cancellation FP16 rows).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-914f8d659ebf7c29",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, importlib.util\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel, torch\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfor N in (64, 128, 256):\\n    torch.manual_seed(1234 + N)\\n    vals = torch.randn(4, N, device=dev).to(torch.float16)\\n    vals = vals.contiguous()\\n    out = kernel.run(vals)\\n    ref = torch.fft.rfft(vals.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n    ref = torch.stack((ref.real, ref.imag), dim=-1)\\n    actual = out.to(torch.float64)\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    viol = (actual - ref).abs() / tol\\n    # per-bin max over batch and components\\n    per_bin = viol.max(dim=0).values.max(dim=-1).values\\n    results[f\\\"N{N}\\\"] = {\\n        \\\"max_viol_ratio\\\": float(viol.max()),\\n        \\\"max_viol_loc\\\": [int(torch.argmax(viol) // (N//2+1) // 2), int(torch.argmax(viol) // 2 % (N//2+1)), int(torch.argmax(viol) % 2)],\\n        \\\"per_bin_max_ratio\\\": [float(x) for x in per_bin],\\n        \\\"max_abs_err\\\": float((actual - ref).abs().max()),\\n        \\\"finite\\\": bool(torch.isfinite(out).all()),\\n    }\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"max violation ratio |actual-exact|/(1e-4+1e-6|exact|) per N and bin; >1 at some N/bin means deviation\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-bee5485aeb24c7e8",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel, torch\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfor N in (64, 128, 256):\\n    torch.manual_seed(7 + N)\\n    vals = torch.randn(6, N, device=dev).to(torch.float16).contiguous()\\n    out = kernel.run(vals)\\n    ref = torch.fft.rfft(vals.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n    ref = torch.stack((ref.real, ref.imag), dim=-1)\\n    act_last = out[:, -1, :].to(torch.float64)\\n    ref_last = ref[:, -1, :]\\n    tol = 1e-4 + 1e-6 * ref_last.abs()\\n    # also direct expected values: sum even - sum odd, imag 0\\n    exp_re = (vals.to(torch.float64)[:, 0::2].sum(1) - vals.to(torch.float64)[:, 1::2].sum(1))\\n    results[f\\\"N{N}\\\"] = {\\n        \\\"nyq_re_viol_ratio\\\": float(((act_last[:,0]-ref_last[:,0]).abs()/tol[:,0]).max()),\\n        \\\"nyq_im_viol_ratio\\\": float(((act_last[:,1]-ref_last[:,1]).abs()/tol[:,1]).max()),\\n        \\\"nyq_im_max_abs\\\": float(act_last[:,1].abs().max()),\\n        \\\"nyq_re_vs_evenodd_viol\\\": float((act_last[:,0]-exp_re).abs().max()),\\n        \\\"ref_last\\\": [[float(a), float(b)] for a, b in ref_last.tolist()],\\n        \\\"act_last\\\": [[float(a), float(b)] for a, b in act_last.tolist()],\\n    }\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"Nyquist bin real = sum_even - sum_odd, imag = 0, within tolerance per N\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b49db5dac6bb9d4b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel, torch\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfor N in (64, 128, 256):\\n    M = 65504\\n    rows = [\\n        torch.full((N,), M, device=dev),          # all +65504\\n        torch.full((N,), M, device=dev) * (torch.arange(N, device=dev) % 2 * -2 + 1),  # alternating\\n        torch.zeros(N, device=dev),               # all zero\\n    ]\\n    # row with exact X[k]=0 for chosen k: e.g. sin wave with integer period pairs summing to zero\\n    # use x[j] = cos(2*pi*f*j/N) type rows: X[0]=0 for balanced +1/-1 pattern\\n    rows.append((torch.arange(N, device=dev) % 2 * 2 - 1).to(torch.float16))  # alternating +-1: X[0]=0\\n    # signed-zero subnormal mix\\n    r = torch.arange(N, device=dev).to(torch.float16) * 6e-8\\n    r[::2] = -0.0\\n    rows.append(r)\\n    vals = torch.stack(rows).to(torch.float16).contiguous()\\n    assert torch.isfinite(vals).all()\\n    out = kernel.run(vals)\\n    ref = torch.fft.rfft(vals.to(torch.float64), dim=1, norm=\\\"backward\\\")\\n    ref = torch.stack((ref.real, ref.imag), dim=-1)\\n    act = out.to(torch.float64)\\n    tol = 1e-4 + 1e-6 * ref.abs()\\n    viol = (act - ref).abs() / tol\\n    per_row = viol.max(dim=1).values.max(dim=-1).values\\n    results[f\\\"N{N}\\\"] = {\\n        \\\"max_viol_ratio\\\": float(viol.max()),\\n        \\\"per_row_max_ratio\\\": [float(x) for x in per_row],\\n        \\\"max_abs_err\\\": float((act - ref).abs().max()),\\n        \\\"nonfinite\\\": bool((~torch.isfinite(out)).any()),\\n    }\\nprint(json.dumps(results))\\n\", \"expected_signal\": \"violation ratio on extreme/cancellation rows; >1 anywhere means tolerance violated\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (per-bin randn for all N), c2 (Nyquist bin for all N), c3 (extreme/cancellation inputs). Independent. Batch all three."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309989,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1411,
+    "prompt_tokens": 25321,
+    "total_tokens": 26732,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 40,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7122,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

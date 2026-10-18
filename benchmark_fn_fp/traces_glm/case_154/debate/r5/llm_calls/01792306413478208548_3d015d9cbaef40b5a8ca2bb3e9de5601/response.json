@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-a77f4aee",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": null,
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b2cc40bcfb282e2b",
+            "function": {
+              "arguments": "{\"contract_model\": [\"Elementwise complex division: for rows [a,b] / [c,d], return real=(ac+bd)/(c^2+d^2), imag=(bc-ad)/(c^2+d^2) as FP32 [N,2] tensor.\", \"Per-component tolerance: abs(actual - target) <= 1e-7 + 5e-7*abs(target), evaluated separately per real and imaginary component against exact FP64-real arithmetic.\", \"Domain: FP16 inputs [N,2], 1<=N<=131072, all finite FP16 values legal (signed zeros, subnormals, +/-65504 extrema); denominator row must not be both-zero.\", \"Inputs: contiguous strided tensors, same CUDA device, non-inference mode, no neg/conj views, may share storage, nonzero storage offsets legal; inputs must be preserved.\", \"Outputs must be finite; signed zeros compare equal; any internal precision/algorithm is permitted as long as the componentwise tolerance is met.\", \"Verdict is accept/reject over the full domain; passing benign random inputs is not sufficient evidence.\"], \"kernel_model\": [\"Triton kernel _divide (kernel.py lines 10-24): one program per 256-element block; loads FP16 components cast to FP32, computes scale=c*c+d*d, real_num=a*c+b*d, imag_num=b*c-a*d, then two round-to-nearest divisions (tl.div_rn) and stores FP32 results interleaved.\", \"Naive (non-Smith) algorithm: no scaling/renormalization step; relies entirely on FP32 intermediates for accuracy.\", \"Grid and masking: index = pid*256 + arange(256), masked by index<N; loads use other=0 (c uses other=1 only for inactive lanes, irrelevant since stores are masked); BLOCK=256, num_warps=4, enable_fp_fusion=False (prevents FMA reassociation of the multiply-add).\", \"run() validates via validate_inputs (dtype/shape/finiteness/nonzero-denominator/device checks), allocates a fresh FP32 output on the input device, launches kernel; reference() computes the same direct formulas in FP64 and works on CPU; make_inputs() only generates benign randn examples.\", \"Enable_fp_fusion=False means a*c+b*d is computed as separate mul + add with intermediate rounding, not FMA.\"], \"risk_map\": [\"Componentwise accuracy: the naive algorithm computes scale and numerators in FP32 with two roundings each; the contract demands ~5e-7 relative (plus 1e-7 absolute) per component. Typical FP32 rounding on four-term expressions yields ~2-3 ulp errors (~2.4e-7 relative per op, possibly >5e-7 combined) — especially when real_num or scale suffers cancellation (e.g., a*c ≈ -b*d, or c ≈ -d making scale tiny relative to c^2). Skeptic should test cancellation-heavy and mixed-extremes inputs where relative error of the small component exceeds 5e-7.\", \"Ill-conditioned small components: the contract explicitly notes a small real component must meet its own tolerance even when the imaginary component is large; the naive formula's real part can suffer catastrophic cancellation in FP32 that Smith's algorithm avoids.\", \"Subnormal/scale-extremes: c=d=smallest subnormal (~6e-8) gives scale≈4e-15, tiny relative to numerators — intermediate FP32 underflow/precision is fine in FP32, but FP32 division error on huge quotients (up to ~1e12) may exceed 1e-7+5e-7*target. Similarly scale≈4.3e9 at extrema is fine in FP32 (no overflow), but error in div_rn quotient rounding is 0.5 ulp — near the tolerance boundary.\", \"Signed-zero semantics: FP32 computation may yield -0 vs +0; contract says signed zeros compare equal, so low risk, but output finiteness must hold for all cases (no overflow paths in FP32 since |scale|<=2*65504^2≈8.6e9 and numerator bounded by 2*65504^2).\", \"Indexing/layout: kernel assumes row-major contiguous [N,2] with real at 2*index and imag at 2*index+1; contiguous views with nonzero storage offsets are handled by Triton pointer arithmetic since offsets are in the base pointer. Low risk.\", \"make_inputs() only produces benign randn samples; passing those says nothing about the ill-conditioned regions where the naive algorithm is weakest.\"], \"scope_notes\": [\"In scope: every finite FP16 component combination, including subnormals, signed zeros, both FP16 extrema (±65504), and cancellation-heavy pairs; per-component tolerance is the deciding metric.\", \"Out of scope: non-FP16 dtypes, non-contiguous tensors, both-zero denominator rows, CPU run() execution (reference supports CPU), autograd/inference-mode behavior beyond validation.\", \"The benchmark contract explicitly permits any internal precision, so correctness is judged solely by the componentwise tolerance against exact FP64-real arithmetic — a correct kernel need not match reference() bitwise.\", \"Tolerance interpretation: relative part is 5e-7 * abs(target) per component, independent of the other component's magnitude.\"], \"summary\": \"case_154: Triton complex division kernel (FP16 inputs, FP32 output) using the naive direct formulas with FP32 intermediates and tl.div_rn; contract demands per-component accuracy within 1e-7 + 5e-7*|target| over the entire finite FP16 domain, including signed zeros, subnormals and both extrema.\"}",
+              "name": "record_description_update"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Record description update. Key risk: FP32 arithmetic vs tolerance 1e-7+5e-7|target| — FP32 single-op precision can fail componentwise tolerance for ill-conditioned inputs; no Smith's algorithm; overflow in c*c+d*d at FP16 max (65504² ≈ 4.3e9, fine in FP32); FP32 intermediate error ~1e-7 relative may exceed 5e-7 tolerance marginally."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306414,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1313,
+    "prompt_tokens": 7009,
+    "total_tokens": 8322,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 97,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 4157,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

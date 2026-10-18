@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-3bc3a894",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe failed twice on sampler bugs (too-large N, then overflow to inf when drawing uniform values up to 65504 that exceed FP16 range after rounding). I'll fix the sampler to generate finite FP16 values directly.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a74f7125315bbdc1",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, itertools\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n\\ndef fp64_ref(num, den):\\n    a, b = num.to(torch.float64).unbind(1); c, d = den.to(torch.float64).unbind(1)\\n    s = c*c + d*d\\n    return torch.stack(((a*c+b*d)/s, (b*c-a*d)/s), 1)\\n\\ndef check(num, den, label, results):\\n    assert torch.isfinite(num).all() and torch.isfinite(den).all()\\n    out = k.run(num, den)\\n    tgt = fp64_ref(num, den)\\n    tol = 1e-7 + 5e-7*torch.abs(tgt)\\n    err = (out.to(torch.float64) - tgt).abs()\\n    viol = (err > tol)\\n    r = {\\\"n\\\": num.shape[0], \\\"violations\\\": int(viol.sum()),\\n         \\\"max_err\\\": float(err.max()), \\\"max_ratio_err_over_tol\\\": float((err/tol).max()),\\n         \\\"finite\\\": bool(torch.isfinite(out).all())}\\n    if viol.any():\\n        i = int((err/tol).argmax())\\n        r[\\\"worst_row\\\"] = [float(num[i,0]), float(num[i,1]), float(den[i,0]), float(den[i,1]), float(out[i,0]), float(out[i,1]), float(tgt[i,0]), float(tgt[i,1])]\\n    results[label] = r\\n    return results\\n\\ndef rand_fp16(n, g, exp_lo=-24, exp_hi=14):\\n    e = torch.empty(n,2,dtype=torch.float64).uniform_(exp_lo, exp_hi, generator=g)\\n    m = torch.empty(n,2,dtype=torch.float64).uniform_(-1,1, generator=g)\\n    t = (m * 10.0**e).to(torch.float16)\\n    t[~torch.isfinite(t)] = 0.0\\n    return t.to(dev)\\n\\nresults = {}\\nnum, den = k.make_inputs(dev)\\nresults = check(num, den, \\\"random_4093\\\", results)\\ng = torch.Generator().manual_seed(1)\\nn = 131072\\nfor trial in range(3):\\n    results = check(rand_fp16(n,g), rand_fp16(n,g), f\\\"scaled_full_range_{trial}\\\", results)\\n# cancellation: numerator = i*conj(denominator) -> real numerator ~ 0\\nc_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nd_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nden2 = torch.stack([c_, d_],1).to(torch.float16).to(dev)\\nnum2 = torch.stack([d_, -c_],1).to(torch.float16).to(dev)\\nresults = check(num2, den2, \\\"cancelled_numerator\\\", results)\\n# also extremes: numerator components at 65504 with opposite-sign products summing to near cancellation\\ne_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nnum3 = torch.stack([65504.0*torch.ones(n), (65504.0*e_).to(torch.float64)],1).to(torch.float16).to(dev)\\nden3 = torch.stack([(65504.0*e_).to(torch.float64), -65504.0*torch.ones(n)],1).to(torch.float16).to(dev)\\nresults = check(num3, den3, \\\"extreme_cancellation\\\", results)\\n# grids with subnormal / zero / extremal values\\nvals = [0.0, -0.0, 6e-8, 5.96e-8, 2.98e-8, 6.1e-5, 1.0, -1.0, 65504.0, -65504.0]\\ncombos = list(itertools.product(vals, vals))\\nfor ca in [0.0, 5.96e-8, 6.1e-5, 65504.0, 1.0]:\\n    pairs = [[v, ca] for v in vals] + [[ca, v] for v in vals]\\n    deng = torch.tensor(pairs, dtype=torch.float16, device=dev)\\n    numg = torch.tensor([[1.5, 2.5]]*len(pairs), dtype=torch.float16, device=dev)\\n    keep = (deng != 0).any(1)\\n    results = check(numg[keep], deng[keep], f\\\"grid_c_{ca}\\\", results)\\n# full all-pairs grid of extreme values for numerator too\\nallpairs = torch.tensor(combos, dtype=torch.float16, device=dev)\\nallpairs_f64 = allpairs.to(torch.float64)\\ndenok = (allpairs != 0).any(1)\\nfor base in [0.0, 5.96e-8, 6.1e-5, 65504.0, 1.0, 2048.0]:\\n    numg = torch.tensor([[base, base]]*len(combos), dtype=torch.float16, device=dev)\\n    results = check(numg[denok], allpairs[denok], f\\\"allpairs_num_{base}\\\", results)\\n# subnormal/big mixes\\nsub = torch.empty(n,2, dtype=torch.float64).uniform_(-6e-8, 6e-8, generator=g).to(torch.float16).to(dev)\\nbig = rand_fp16(n, g, exp_lo=11, exp_hi=14)\\nresults = check(big, sub, \\\"big_over_subnormal\\\", results)\\nresults = check(sub, big, \\\"subnormal_over_big\\\", results)\\nresults = check(sub.clone(), sub.clone(), \\\"subnormal_over_subnormal\\\", results)\\n# denominator with one zero component\\nz = torch.zeros(100000, dtype=torch.float16, device=dev)\\no = torch.ones(100000, dtype=torch.float16, device=dev)\\nrn = torch.randn(100000,2, dtype=torch.float16, device=dev)\\nresults = check(rn, torch.stack([o, z],1), \\\"den_real_axis\\\", results)\\nresults = check(rn, torch.stack([z, o],1), \\\"den_imag_axis\\\", results)\\n# input preservation + freshness\\nnum4, den4 = k.make_inputs(dev, size=777, seed=3)\\nn0, d0 = num4.clone(), den4.clone()\\nout4a = k.run(num4, den4); out4b = k.run(num4, den4)\\nresults[\\\"inputs_preserved\\\"] = bool(torch.equal(num4, n0) and torch.equal(den4, d0))\\nresults[\\\"fresh_tensor\\\"] = bool(out4a.data_ptr() != out4b.data_ptr() and out4a.dtype == torch.float32 and tuple(out4a.shape) == (777,2))\\nprint(json.dumps(results, indent=1))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Second probe failed because 65504 overflow in fp16 when sampling ±65504 uniform — some values exceed fp16 max → inf. Fix sampler to clamp to finite range. Also 6e-8 etc fine. Rerun with safe sampling."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306483,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1676,
+    "prompt_tokens": 18282,
+    "total_tokens": 19958,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 53,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6534,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-f193c6c7",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll batch three independent runtime probes: c1 (noncommuting matrices vs reference), c2 (all N=1..32 chunk boundary sweep), and c3 (validate_inputs/run acceptance on legal integer tensors).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-a8aa58f3b4f28fa0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_159/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n# Noncommuting off-diagonal matrices alternating, nonzero bias, nonzero initial\\nB, N = 8, 32\\nM1 = torch.tensor([[0,1],[1,0]], dtype=torch.int8)\\nM2 = torch.tensor([[1,1],[0,1]], dtype=torch.int8)\\nM3 = torch.tensor([[0,1],[-1,0]], dtype=torch.int8)\\nmats = [M1, M2, M3]\\nmatrix = torch.zeros(B, N, 2, 2, dtype=torch.int8, device=dev)\\nfor b in range(B):\\n    for t in range(N):\\n        matrix[b, t] = mats[(b + t) % 3].to(dev)\\ng = torch.Generator(\\\"cpu\\\").manual_seed(1)\\nbias = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16).to(dev)\\ninitial = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16).to(dev)\\ntry:\\n    out = k.run(matrix, bias, initial)\\n    ref = k.reference(matrix, bias, initial)\\n    exact = bool(torch.equal(out, ref))\\n    mism = (out != ref)\\n    print(json.dumps({\\\"claim\\\": \\\"c1\\\", \\\"exact_match\\\": exact,\\n                      \\\"num_mismatch\\\": int(mism.sum()),\\n                      \\\"max_abs_diff\\\": int((out - ref).abs().max()) if mism.any() else 0}))\\nexcept Exception as ex:\\n    print(json.dumps({\\\"claim\\\": \\\"c1\\\", \\\"error\\\": f\\\"{type(ex).__name__}: {ex}\\\"}))\\n\", \"expected_signal\": \"exact_match True/False vs reference on noncommuting matrices\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-9b378765a79c9724",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_159/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ng = torch.Generator(\\\"cpu\\\").manual_seed(7)\\nresults = {}\\nfor N in range(1, 33):\\n    B = 5\\n    matrix = torch.randint(-1, 2, (B, N, 2, 2), generator=g, dtype=torch.int8).to(dev)\\n    bias = torch.randint(-32768, 32768, (B, N, 2), generator=g, dtype=torch.int16).to(dev)\\n    initial = torch.randint(-32768, 32768, (B, 2), generator=g, dtype=torch.int16).to(dev)\\n    try:\\n        out = k.run(matrix, bias, initial)\\n        ref = k.reference(matrix, bias, initial)\\n        results[N] = {\\\"exact\\\": bool(torch.equal(out, ref)),\\n                      \\\"mismatch\\\": int((out != ref).sum())}\\n    except Exception as ex:\\n        results[N] = {\\\"error\\\": f\\\"{type(ex).__name__}: {ex}\\\"}\\nbad = {n: r for n, r in results.items() if r.get(\\\"exact\\\") is not True}\\nprint(json.dumps({\\\"claim\\\": \\\"c2\\\", \\\"ns_tested\\\": 32, \\\"num_bad_N\\\": len(bad), \\\"bad_N\\\": bad,\\n                  \\\"n1_8_exact\\\": all(results[n].get(\\\"exact\\\") for n in range(1,9)),\\n                  \\\"n9_16_exact\\\": all(results[n].get(\\\"exact\\\") for n in range(9,17)),\\n                  \\\"n17_32_exact\\\": all(results[n].get(\\\"exact\\\") for n in range(17,33))}))\\n\", \"expected_signal\": \"per-N exact match vs reference, focusing on N<=8 (C=1) and 9<=N<=16 (C=2)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-a0b29e77e6e2a8aa",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_159/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ninfo = {\\\"torch\\\": torch.__version__}\\ng = torch.Generator(\\\"cpu\\\").manual_seed(3)\\nm = torch.randint(-1, 2, (4, 16, 2, 2), generator=g, dtype=torch.int8).to(dev)\\nb = torch.randint(-32768, 32768, (4, 16, 2), generator=g, dtype=torch.int16).to(dev)\\ni = torch.randint(-32768, 32768, (4, 2), generator=g, dtype=torch.int16).to(dev)\\n# directly probe is_neg/is_conj on int dtypes\\ntry:\\n    info[\\\"is_neg_ok\\\"] = not m.is_neg(); info[\\\"is_conj_ok\\\"] = not m.is_conj()\\nexcept Exception as ex:\\n    info[\\\"flag_error\\\"] = f\\\"{type(ex).__name__}: {ex}\\\"\\ntry:\\n    out = k.run(m, b, i)\\n    ref = k.reference(m, b, i)\\n    info[\\\"run_ok\\\"] = True\\n    info[\\\"exact\\\"] = bool(torch.equal(out, ref))\\nexcept Exception as ex:\\n    info[\\\"run_error\\\"] = f\\\"{type(ex).__name__}: {ex}\\\"\\n    info[\\\"run_ok\\\"] = False\\nprint(json.dumps({\\\"claim\\\": \\\"c3\\\", **info}))\\n\", \"expected_signal\": \"validate_inputs accepts legal int8/int16 tensors; is_neg/is_conj callable; run returns exact output\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes: c1 (noncommuting matrices), c2 (N=1..32 sweep with random legal inputs), c3 (validate_inputs on legal ints + run). All independent — batch together.\n\nProbe code needs to import kernel from session dir. Path /root/cases/case_159/kernel.py."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309827,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1383,
+    "prompt_tokens": 25736,
+    "total_tokens": 27119,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 65,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 8360,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

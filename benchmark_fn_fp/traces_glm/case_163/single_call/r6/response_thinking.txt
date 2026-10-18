@@ -1,0 +1,72 @@
+Let me analyze this. It's a radix-2 complex FFT of the packed half-length complex sequence, then post-processing to get the real FFT. Accuracy: uses float64 internally, FP16 inputs exactly representable. The tolerance is 1e-4 + 1e-6*|exact|. FP64 compute should be far more accurate than that. N up to 256, M up to 128; error accumulation in FP64 is tiny (~1e-13). So accuracy fine.
+
+Check the algorithm. Packed complex: z[j] = x[2j] + i x[2j+1], j=0..M-1 where M=N/2. Z[k] = FFT_M(z)[k]. Then real FFT of x of length N:
+X[k] = E[k] + W_N^k * O[k] where E[k]=FFT of even samples (length M), O[k]=FFT of odd samples.
+Z[k] = E[k] + i O[k]. Then E[k] = (Z[k] + conj(Z[M-k]))/2, O[k] = (Z[k] - conj(Z[M-k]))/(2i).
+X[k] = E[k] + W_N^k O[k] = 0.5*(Z[k]+conj(Z[M-k])) - i W_N^k /2 * (Z[k]-conj(Z[M-k])).
+
+Let ar,ai = Z[address] (address = bit-reverse of k gives Z in natural order after DIF which leaves bit-reversed output... wait, decimation-in-frequency: input natural order, output bit-reversed. So after DIF, real/imag arrays indexed by k contain Z[bit_reverse? Actually DIF gives output in bit-reversed order: array[k] = Z[rev? No: array[rev(j)] = Z[j], i.e. to get Z[j] you index rev(j). So ar = real[rev(k)] = Z[k]. Good, address = rev(k) gives Z[k]. partner = (-k) mod M gives Z[M-k]. Good.
+
+So ar+i ai = Z[k], br + i bi = Z[M-k].
+
+Standard: X[k] = 0.5*[ (Z[k] + conj(Z[M-k])) - i W_N^k (Z[k] - conj(Z[M-k])) ].
+W_N^k = wr + i wi (with wi negative for twiddle: _twiddle returns wr, wi where presumably wr = cos(2πk/N), wi = -sin(2πk/N) since exp(-2πik/N) = cos - i sin).
+
+Let sr = ar+br, si = ai-bi → sr + i si = Z[k] + conj(Z[M-k]). dr = ar-br, di = ai+bi → dr + i di = Z[k] - conj(Z[M-k]).
+
+Then -i W (dr + i di) where W = wr + i wi: compute (wr + i wi)(dr + i di) = wr*dr - wi*di + i(wr*di + wi*dr). Multiply by -i: swap: -i*(A+iB) = B - iA. So term real part = (wr*di + wi*dr), imag part = -(wr*dr - wi*di).
+
+xr = 0.5*(sr + wr*di + wi*dr). Matches code: xr = 0.5*(sr + wr*di + wi*dr). ✓
+xi = 0.5*(si - (wr*dr - wi*di)). Matches. ✓
+
+Nyquist bin k=M: X[M] = sum x[j] (-1)^j. Code stores (ar - ai) at k=M position where ar,ai = Z[M] (k index at that lane... wait the mask store uses lane k==0 writing at position M. But at lane k=0, ar = Z[0], so ar - ai = Re Z[0] - Im Z[0] = sum even - sum odd = sum x[j](-1)^j. ✓ Nyquist imag stored 0. ✓
+
+But wait: at k=0 lane, the general store also stores X[0] at position 0: X[0] = 0.5*(sr + wr*di + wi*dr) with twiddle phase 0 → wr=1, wi=0 → xr = 0.5*(sr + di) = 0.5*((ar+br)+(ar... wait di = ai+bi at k=0, br = Z[M-0]=Z[0] so br=ar, bi=ai. Then sr=2ar, si=0, dr=0, di=2ai. xr = 0.5*(2ar + 1*2ai)? That's ar+ai. But X[0] should be sum of all x[j] = sum even + sum odd = Re Z[0] + Im Z[0] = ar + ai. ✓ Good (wr=1, wi=0, wr*di = 2ai). Good.
+
+Twiddle check: phase = k * (256//N). For N=256, phase = k, k up to M-1=127. For N=64, 256//N=4, phase up to 124. OK. _twiddle: table has 65 entries cos(2π t/256) for t=0..64. folded = min(phase, 128-phase): for phase ≤ 128, folded = phase if phase ≤ 64 else 128-phase. cosine = TABLE[folded], negated if phase > 64: for phase in (64,128), cos(2π phase/256) = -cos(2π(128-phase)/256). ✓. sine: TABLE[abs(64-phase)] = cos(2π|64-phase|/256) = sin(2π phase/256) for phase ∈ [0,128] since sin(θ) = cos(π/2 - θ) for θ∈[0,π]... sin(2π phase/256) with θ=2πphase/256 ∈[0,π]: sin θ = cos(π/2-θ) = cos(2π(64-phase)/256). abs handles phase>64? For phase>64, 64-phase negative, abs gives phase-64, cos(2π(phase-64)/256) = cos(θ - π/2) = sin θ. ✓. So sine = sin(2π phase/256), returns -sine = -sin. So wi = -sin(2π phase/256). exp(-2πi phase/256) = wr + i wi with wr=cos, wi=-sin. ✓ W_N^k = exp(-2πik/N), phase = 256k/N, so 2π phase/256 = 2πk/N. ✓
+
+DIF butterfly check. Stage stage=0..LOG_M-1. Standard DIF: at each stage, butterfly (a,b) → (a+b, (a-b)*W) with W indexed by k mod half. The code: for each element k, left = k & ~half (clear half bit) gives a's index, right = k|half gives b's index. If k's half bit is 0, element k is a: becomes ar+br. If half bit set, element is b: becomes (a-b)*W. W exponent: (k & (half-1)) * (256//width). In DIF stage with width M>>stage, half = width/2. The twiddle exponent for element in second half should be (k mod half) * (M/width)? The full twiddle for stage: W_{width}^{k mod half}. exp(-2πi (k mod half)/width) = exp(-2πi (k mod half) * (256/width)/256). Phase = (k & (half-1)) * (256//width). ✓ since 256/width integer for width ≤ 256... width = M>>stage, M ≤ 128, width ≤ 128, 256/width ≥ 2 integer. ✓
+
+Wait but half at stage 0 = M/2, and "half = width >> 1" — at stage 0 width=M, half=M/2. left = k & ~(M/2). Hmm, that's clearing bit LOG_M-1, correct for the first split: pairs (k, k+M/2). ✓. Subsequent stages split halves. Yes standard Stockham-free DIF: after stage s, groups of size width are split... Actually DIF: stage 0 splits N into two halves, twiddles W_N^{k mod N/2}. Correct.
+
+Then last stage: width=2, half=1, twiddle phase = k*(256//2)=128k mod... k&0=0 so phase 0, W=1, butterfly (a,b)→(a+b,a-b). Correct 2-point DFT. Output bit-reversed. ✓
+
+Bit reverse: _reverse reverses LOG_M bits. LOG_M = m.bit_length()-1. m = N/2 ∈ {32,64,128}. m.bit_length()-1: 32→6-1=5? bit_length of 32 is 6, minus 1 = 5. But log2(32)=5. ✓ 64→7-1=6 ✓ 128→8-1=7 ✓.
+
+tl.gather with axis=0 on 1-D tensor: gather(real, left) — real is indexed by position, left is a permutation. Real Triton 3.x has tl.gather. OK.
+
+partner = (-address) & (M-1): for k=0, address=0, partner=0. Fine.
+
+Output indexing: OUT + (row*(M+1)+k)*2 — output shape [B, M+1, 2], contiguous. ✓ Nyquist store with mask k==0 at index (row*(M+1)+M)*2. ✓
+
+One concern: the input tensor may have nonzero storage offset — Triton passes the data pointer including offset? Triton kernels receive the tensor and use its data_ptr, which includes storage offset. Yes, data_ptr includes offset. Fine.
+
+Wait, twiddle at final reconstruction: phase = k*(256//N), k up to M-1. For N=256: phase up to 127 < 128 ✓. For N=64: 256//64=4, k up to 31, phase up to 124 ✓. folded = min(phase,128-phase) works for phase ≤ 128. ✓
+
+But hold on — DIF twiddle for element with lower bit: for stage where width=256? Never, since width starts at M ≤ 128. Fine.
+
+One subtlety: for lower=(k&half)==0 elements, twiddle isn't applied — correct, they get a+b.
+
+Also `tl.where(phase <= 64, cosine, -cosine)`: at phase in (64,128), 128-phase in (0,64), TABLE gives positive cos, negated. At phase exactly 64: folded=64, cosine=0, fine. At phase=128? phase max 127. Also DIF phase: (k & (half-1))*(256//width). Max k&(half-1) = half-1, phase = (half-1)*256/width = 256/width*half - 256/width = 128 - 256/width < 128. ✓
+
+Imag of X[0] stored as 0.5*(si - ...) with wr=1, wi=0, dr=0 → 0.5*si; si = ai-bi = 0 at k=0. ✓ X[M] imag: exact 0 for real input? Nyquist imaginary part is sum x sin(π j) = 0. ✓ but computed from exact FP64 sums — ar - ai where ar,ai from FFT... The Nyquist value: X[M] = sum_j x[j](-1)^j exactly. Is Z[0].real - Z[0].imag exactly equal to that in FP64 arithmetic? FFT roundoff means approximately, error ~1e-13 relative. Tolerance 1e-4 absolute — fine.
+
+All FP16 inputs exactly representable in FP64, computed in FP64. Errors tiny relative to tolerance 1e-4. Even with inputs up to 65504, sums up to 256*65504 ≈ 1.7e7, FP64 error ~1e-9 absolute. Fine.
+
+table loaded as float64 tensor; tl.load(TABLE + folded) loads fp64. Arithmetic in fp64. xr.to(fp32) conversion: FP32 result; tolerance 1e-4 — FP32 rounding is ~1e-7 relative, values up to 1.7e7 → 1 ulp ~1. But tolerance is 1e-4 + 1e-6*|exact|; for |exact| ~1.7e7, 1e-6*1.7e7 = 17. FP32 ulp at 1.7e7 is 2. So fine. For values ~1e4 with |exact| exact tolerance 1e-4+1e-2; FP32 ulp at 1e4 is ~1e-3 < that. Fine generally: fp32 rel error 6e-8 << 1e-6. ✓ Nonfinite: finite inputs, finite FP64 arithmetic, can't overflow. ✓
+
+`enable_fp_fusion=False` — fine. `tl.abs` on int works. `tl.full(index.shape, 0, tl.int32)` — index is arange int32. OK.
+
+Wait, one issue: `_twiddle` uses `128 - phase` — phase is int32 expression. folded = tl.minimum(phase, 128-phase) as int. TABLE + folded indexing. Fine.
+
+Also for stage twiddles, wr, wi loaded as fp64, multiplied by fp64 dr — good.
+
+Potential issue: at DIF stage, twiddle applied even to elements where lower is False, but result overwritten by tl.where — fine.
+
+Also does the mask store at lane 0 conflict? k==0 stores at index M which is distinct from 0. Fine.
+
+Edge: k=M lane (last lane, k=M-1) stores reconstruction for k=M-1. Fine.
+
+Also check the DIF correctly computes FFT (not IFFT): twiddles are exp(-2πi.../width). Forward. ✓
+
+I'm fairly confident this is correct. Verdict: trust.

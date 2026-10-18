@@ -1,0 +1,66 @@
+{
+  "id": "chatcmpl-4ab5ad60",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch two corrected probes: for c1, finite FP16 near-cancellation rows (d = FP16-nearest -a*c/b, with 1-ulp perturbations, checked for finiteness), and for c2, skewed-denominator/mild-cancellation rows with all tensors properly re-cast to float16 and validated before run().",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8bb93a1a0825b61a",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\n\\ndef rand_fp16(n, emin=-3, emax=15):\\n    e = torch.empty(n).uniform_(emin, emax, generator=g)\\n    mant = 1.0 + torch.empty(n).uniform_(0, 1, generator=g)\\n    s = torch.where(torch.empty(n).uniform_(-1, 1, generator=g) < 0, -1.0, 1.0)\\n    return (s * mant * (2.0 ** e)).to(torch.float16)\\n\\nfails_total = 0\\nworst_ratio = 0.0\\nexamples = []\\nrows_tested = 0\\nfor trial in range(40):\\n    n = 65536\\n    a = rand_fp16(n); b = rand_fp16(n); c = rand_fp16(n)\\n    half = n // 2\\n    # real-part near cancellation: d ~ -a*c/b (clipped to finite fp16)\\n    d_real = (-(a[:half].float() * c[:half].float()) / b[:half].float().clamp(min=1e-30)).to(torch.float16)\\n    # imag-part near cancellation: d ~ b*c/a\\n    d_imag = ((b[half:].float() * c[half:].float()) / a[half:].float().clamp(min=1e-30)).to(torch.float16)\\n    d = torch.cat([d_real, d_imag]).to(torch.float16)\\n    # perturb half the rows by 1 fp16 ulp\\n    bits = d.view(torch.int16)\\n    pert = torch.where(torch.empty(n).uniform_(-1, 1, generator=g) < 0, bits + 1, bits)\\n    d = pert.to(torch.int16).view(torch.float16)\\n    keep = torch.isfinite(d) & (torch.abs(d) <= 65504) & (a != 0) & (b != 0) & (c != 0)\\n    d = d * keep  # zero out invalid (den row nonzero requires c!=0 kept, c kept nonzero)\\n    num = torch.stack([a, b], dim=1)[keep].to(dev).to(torch.float16)\\n    den = torch.stack([c, d], dim=1)[keep].to(dev).to(torch.float16)\\n    if den.shape[0] == 0:\\n        continue\\n    assert num.dtype == torch.float16 and den.dtype == torch.float16\\n    assert bool(torch.isfinite(num).all()) and bool(torch.isfinite(den).all())\\n    rows_tested += den.shape[0]\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    ratio = err / tol\\n    f = ratio > 1.0\\n    nf = int(f.sum())\\n    fails_total += nf\\n    mr = float(ratio.max())\\n    if mr > worst_ratio:\\n        worst_ratio = mr\\n    if nf > 0 and len(examples) < 5:\\n        idx = torch.nonzero(f)\\n        for ij in idx[:5 - len(examples)]:\\n            i = int(ij[0]); j = int(ij[1])\\n            examples.append({\\\"num_row\\\": num.cpu()[i].tolist(), \\\"den_row\\\": den.cpu()[i].tolist(),\\n                             \\\"out\\\": out.cpu()[i].tolist(), \\\"ref\\\": ref.cpu()[i].tolist(),\\n                             \\\"err\\\": float(err.cpu()[i, j]), \\\"tol\\\": float(tol.cpu()[i, j]),\\n                             \\\"ratio\\\": float(ratio.cpu()[i, j]), \\\"comp\\\": j})\\nprint(json.dumps({\\\"trials\\\": 40, \\\"rows_tested\\\": rows_tested, \\\"fails_total\\\": fails_total,\\n                  \\\"worst_ratio\\\": worst_ratio, \\\"examples\\\": examples[:5]}))\\n\", \"expected_signal\": \"near-cancellation rows (d=FP16-nearest -a*c/b, 1-ulp perturbed, finite) produce error/tolerance ratio > 1\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-a6ab8a5bb213e20e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, sys\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel as K\\n\\ndev = \\\"cuda\\\"\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(99)\\nn = 131072\\nfails_total = 0\\nworst_ratio = 0.0\\nworst_info = None\\nfor trial in range(60):\\n    e = torch.empty(n, 4).uniform_(-5, 15, generator=g)\\n    mant = 1.0 + torch.empty(n, 4).uniform_(0, 1, generator=g)\\n    sgn = torch.where(torch.empty(n, 4).uniform_(-1, 1, generator=g) < 0, -1.0, 1.0)\\n    x = (sgn * mant * (2.0 ** e)).to(torch.float16)\\n    a, b, c, d = x[:, 0], x[:, 1], x[:, 2], x[:, 3]\\n    if trial % 2 == 0:\\n        # no-cancellation for real part: make b*d same sign as a*c\\n        b = b.abs() * torch.where(a < 0, -1.0, 1.0)\\n        d = d.abs() * torch.where(c < 0, -1.0, 1.0)\\n    if trial % 3 == 0:\\n        # skewed denominator: |d| ~ |c| * 2^-14 so scale dominated by c^2\\n        d = (c.float() * (2.0 ** -14)).to(torch.float16)\\n    num = torch.stack([a, b], dim=1).to(torch.float16).to(dev)\\n    den = torch.stack([c, d], dim=1).to(torch.float16).to(dev)\\n    z = (den == 0).all(dim=1)\\n    den[z, 0] = torch.tensor(1.0, dtype=torch.float16, device=den.device)\\n    den = den.to(torch.float16)\\n    assert num.dtype == torch.float16 and den.dtype == torch.float16\\n    assert bool(torch.isfinite(num).all()) and bool(torch.isfinite(den).all())\\n    out = K.run(num, den)\\n    ref = K.reference(num, den)\\n    err = (out.double() - ref.double()).abs()\\n    tol = 1e-7 + 5e-7 * ref.abs()\\n    ratio = err / tol\\n    f = ratio > 1.0\\n    fails_total += int(f.sum())\\n    mr = float(ratio.max())\\n    if mr > worst_ratio:\\n        worst_ratio = mr\\n        i0, j0 = torch.unravel_index(ratio.argmax(), ratio.shape)\\n        worst_info = {\\\"num_row\\\": num.cpu()[int(i0)].tolist(),\\n                      \\\"den_row\\\": den.cpu()[int(i0)].tolist(),\\n                      \\\"out\\\": out.cpu()[int(i0)].tolist(),\\n                      \\\"ref\\\": ref.cpu()[int(i0)].tolist(),\\n                      \\\"err\\\": float(err.cpu()[int(i0), int(j0)]),\\n                      \\\"tol\\\": float(tol.cpu()[int(i0), int(j0)]),\\n                      \\\"ratio\\\": mr, \\\"comp\\\": int(j0)}\\nprint(json.dumps({\\\"trials\\\": 60, \\\"rows_per_trial\\\": n, \\\"fails_total\\\": fails_total,\\n                  \\\"worst_ratio\\\": worst_ratio, \\\"worst_case\\\": worst_info}))\\n\", \"expected_signal\": \"some no-cancellation / skewed-denominator FP16 row exceeds error/tolerance ratio 1\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          }
+        ],
+        "reasoning_content": "Launch two corrected probes: c1 asymmetric near-cancellation with d clipped to FP16 grid and finite; c2 skewed denominator with proper fp16 casting. Careful to keep all tensors float16 and finite."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306132,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1842,
+    "prompt_tokens": 46360,
+    "total_tokens": 48202,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 42,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 5853,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

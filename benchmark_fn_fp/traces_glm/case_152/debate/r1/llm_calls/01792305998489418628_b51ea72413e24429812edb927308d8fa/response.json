@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-d67203ac",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: c1 (host composition math vs a directly iterated advance), c2 (end-to-end GPU run vs zlib.crc32 on structured and edge inputs, both widths), and c3 (validate_inputs/`is_neg`/`is_conj` crash test). These are independent, so I batch them.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9718ec02452d2784",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import zlib, sys\\nsys.path.insert(0, \\\"/root/cases/case_152\\\")\\nimport kernel as K\\n\\nPOLY=0xEDB88320\\ndef advance_bits(state, nbits):\\n    for _ in range(nbits):\\n        state = (state >> 1) ^ (POLY if state & 1 else 0)\\n    return state\\n\\ndef expected_coeffs(width):\\n    # factor for chunk c: remainder of width-4(c+1) bytes of zeros advanced through init? \\n    # The composition convention: contribution_c = polyprod(factor_c, state_c).\\n    # Ground truth via linearity: CRC(data) with init I = XOR over chunks of A^(8*rem)(fold(chunk)) ^ A^(width*8)(I)... \\n    # Simplest ground-truth check: emulate the chunk scheme with a direct iterated advance.\\n    # factor_c should act on state_c like advancing state_c by 8*(width-4(c+1)) bits, in the polyprod sense.\\n    # polyprod(L,R) with identity 0x80000000: define D(state) = state advanced one bit, then polyprod(0x80000000,s)=s means identity.\\n    # Check: advance_factor(k) == polyprod representation of D^(8k). Verify by brute force:\\n    # for a set of test states s, polyprod(advance_factor(k), s) must equal advance_bits(s, 8*k).\\n    return None\\n\\nok = True\\nmismatches = []\\nfor width in (64,128):\\n    factors = K._make_coefficients(width)\\n    for c in range(width//4):\\n        k = width - 4*(c+1)\\n        f = factors[c]\\n        # identity check: polyprod(0x80000000, s) == s\\n        # verify factor acts as advancing by 8k bits\\n        for s in (0, 1, 0xFF, 0xDEADBEEF, 0x80000000, 0xFFFFFFFF, 0x12345678):\\n            lhs = K._polynomial_product(f, s)\\n            rhs = advance_bits(s, 8*k)\\n            if (lhs & 0xFFFFFFFF) != rhs:\\n                ok = False\\n                mismatches.append((width, c, k, s, hex(lhs), hex(rhs)))\\n    # identity\\n    for s in (1, 0xDEADBEEF, 0xFFFFFFFF):\\n        if K._polynomial_product(0x80000000, s) & 0xFFFFFFFF != s:\\n            ok = False\\n            mismatches.append((\\\"identity\\\", s))\\n    # correction term check: A^(width*8)(init) ^ MASK\\n    init = 0xFFFFFFFF\\n    expected_corr = advance_bits(init, width*8) ^ 0xFFFFFFFF\\n    if factors[width//4] != expected_corr:\\n        ok = False\\n        mismatches.append((\\\"correction\\\", width, hex(factors[width//4]), hex(expected_corr)))\\n\\n# End-to-end host emulation vs zlib (CPU only, no GPU dependency)\\ndef host_emulate(row):\\n    width = len(row)\\n    coeffs = K._make_coefficients(width)\\n    total = 0\\n    for c in range(width//4):\\n        state = 0\\n        for b in row[4*c:4*c+4]:\\n            state ^= b\\n            state = advance_bits(state, 8)\\n        total ^= K._polynomial_product(coeffs[c], state)\\n    return total ^ coeffs[width//4]\\n\\nimport random\\nrandom.seed(0)\\nrows = [bytes([0]*64), bytes([0xFF]*64), bytes(random.randrange(256) for _ in range(64)), bytes(128), bytes([0xFF]*128), bytes(random.randrange(256) for _ in range(128))]\\nhost_ok = all((host_emulate(r) == (zlib.crc32(r) & 0xFFFFFFFF)) for r in rows)\\n\\nimport json\\nprint(json.dumps({\\\"factor_checks_pass\\\": ok, \\\"num_mismatches\\\": len(mismatches), \\\"mismatch_examples\\\": mismatches[:3], \\\"host_emulation_matches_zlib\\\": host_ok,\\n \\\"metric\\\": \\\"exact 32-bit equality of composition factors vs directly iterated advance; correction term vs iterated init propagation\\\"}))\", \"expected_signal\": \"factors match directly-iterated advance for all chunks/widths; host emulation equals zlib.crc32 exactly\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b7588a39881f5398",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import zlib, json, torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_152\\\")\\nimport kernel as K\\n\\ndef cases():\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(0)\\n    out = {}\\n    for width in (64, 128):\\n        for batch in (1, 7, 128):\\n            rows = []\\n            rows.append(torch.zeros((batch,width), dtype=torch.uint8))\\n            rows.append(torch.full((batch,width), 255, dtype=torch.uint8))\\n            rows.append(torch.randint(0,256,(batch,width), generator=g, dtype=torch.uint8))\\n            rows.append(torch.randint(0,256,(batch,width), generator=g, dtype=torch.uint8))\\n            # single-bit / single-byte patterns\\n            sb = torch.zeros((batch,width), dtype=torch.uint8); sb[:, width//2] = 0x80; rows.append(sb)\\n            ff = torch.zeros((batch,width), dtype=torch.uint8); ff[:,0]=0xFF; rows.append(ff)\\n            # contiguous view with nonzero storage offset\\n            base = torch.randint(0,256,(batch, width*2), generator=g, dtype=torch.uint8)\\n            rows.append(base[:, width:].contiguous() if False else base[:, :width])\\n            out[(width,batch)] = rows\\n    return out\\n\\ndef ref(x):\\n    return [zlib.crc32(bytes(r)) & 0xFFFFFFFF for r in x.cpu().tolist()]\\n\\ntotal_rows = 0; bad = []\\nfor (width,batch), rows in cases().items():\\n    for i, x in enumerate(rows):\\n        if x.shape[1] == width:\\n            got = K.run(x.cuda())\\n            exp = ref(x)\\n            for j in range(batch):\\n                total_rows += 1\\n                if int(got[j].item()) != exp[j]:\\n                    bad.append((width,batch,i,j,got[j].item(),exp[j]))\\nprint(json.dumps({\\\"total_rows_checked\\\": total_rows, \\\"num_mismatches\\\": len(bad), \\\"mismatch_examples\\\": bad[:5],\\n \\\"metric\\\": \\\"exact int64 equality of run() output vs zlib.crc32 per row; inputs include zeros, 0xFF, random, single-byte, edge batches B=1/128, widths 64/128\\\",\\n \\\"output_dtype\\\": str(K.run(torch.zeros((1,64),dtype=torch.uint8).cuda()).dtype)}))\", \"expected_signal\": \"run() output exactly equals zlib.crc32 for all structured/edge in-domain inputs on both widths\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b237386482086657",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import json, torch, sys\\nsys.path.insert(0, \\\"/root/cases/case_152\\\")\\nimport kernel as K\\nres = {}\\ntry:\\n    t = torch.zeros((7,64), dtype=torch.uint8, device=\\\"cuda\\\")\\n    res[\\\"has_is_neg\\\"] = hasattr(t, \\\"is_neg\\\")\\n    res[\\\"has_is_conj\\\"] = hasattr(t, \\\"is_conj\\\")\\n    res[\\\"is_neg_value\\\"] = t.is_neg()\\n    res[\\\"is_conj_value\\\"] = t.is_conj()\\n    out = K.run(t)\\n    res[\\\"run_ok\\\"] = True\\n    res[\\\"out_shape\\\"] = list(out.shape)\\n    res[\\\"out_dtype\\\"] = str(out.dtype)\\n    res[\\\"out_device\\\"] = str(out.device)\\nexcept Exception as e:\\n    res[\\\"run_ok\\\"] = False\\n    res[\\\"exception\\\"] = repr(e)\\nprint(json.dumps(res))\", \"expected_signal\": \"is_neg/is_conj exist and run() returns int64 tensor without exception\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Launch three probes. c1: host math end-to-end vs zlib (CPU check of composition + reference). c2: GPU run vs zlib on structured inputs, both widths, edge batches. c3: run() crash test — but that's covered by c2. Still give c3 its own simple probe. Can batch all three.\n\nc1 probe: verify _make_coefficients against brute-force bit advance. c2: GPU vs zlib. c3: attribute existence + run call."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306000,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1902,
+    "prompt_tokens": 22753,
+    "total_tokens": 24655,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 100,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

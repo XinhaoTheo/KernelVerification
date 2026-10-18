@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-d4ceb696",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The t7 failure was my probe's fault: `randn*20000` overflows FP16 to inf, which the contract excludes. I'll rerun with guaranteed-finite extreme inputs.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-9e79b14a40d6062c",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"kern\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\\n\\ndef exact_dft(x):\\n    xd = x.to(\\\"cpu\\\").to(torch.float64)\\n    N = x.shape[1]\\n    j = torch.arange(N, dtype=torch.float64)\\n    k = torch.arange(N//2+1, dtype=torch.float64)\\n    phase = torch.outer(k, j) * (-2*torch.pi/N)\\n    return torch.stack([xd @ torch.cos(phase).T, xd @ torch.sin(phase).T], dim=-1)\\n\\nresults = []\\nworst_ratio = 0.0\\nfails = 0\\ndef check(name, x):\\n    global worst_ratio, fails\\n    assert torch.isfinite(x).all(), name\\n    out = kern.run(x)\\n    ref = exact_dft(x)\\n    assert out.shape == (x.shape[0], x.shape[1]//2+1, 2), out.shape\\n    assert out.dtype == torch.float32 and out.is_contiguous()\\n    d = (out.to(\\\"cpu\\\").to(torch.float64) - ref).abs()\\n    tol = 1e-4 + 1e-6*ref.abs()\\n    nonfinite = int((~torch.isfinite(out.to(\\\"cpu\\\"))).sum().item())\\n    ratio = (d/tol).max().item()\\n    worst_ratio = max(worst_ratio, ratio)\\n    n_bad = int((d > tol).sum().item()) + nonfinite\\n    if n_bad: fails += 1\\n    results.append({\\\"name\\\": name, \\\"shape\\\": list(x.shape), \\\"violations\\\": n_bad,\\n                    \\\"nonfinite\\\": nonfinite, \\\"max_ratio\\\": ratio,\\n                    \\\"max_abs_err\\\": float(d.max().item()),\\n                    \\\"max_abs_exact\\\": float(ref.abs().max().item())})\\n\\ntorch.manual_seed(0)\\nfor N in (64,128,256):\\n    for B in (1,3,256):\\n        check(f\\\"rand_B{B}_N{N}\\\", torch.randn(B,N,dtype=torch.float16,device=\\\"cuda\\\"))\\nN=256\\ncheck(\\\"all_max\\\", torch.full((2,N), 65504.0, dtype=torch.float16, device=\\\"cuda\\\"))\\ncheck(\\\"all_min\\\", torch.full((2,N), -65504.0, dtype=torch.float16, device=\\\"cuda\\\"))\\ncheck(\\\"subnormal\\\", (torch.rand(4,N,device=\\\"cuda\\\")*6e-8 - 3e-8).to(torch.float16))\\ncheck(\\\"zeros\\\", torch.zeros(2,N,dtype=torch.float16,device=\\\"cuda\\\"))\\nz = torch.zeros(2,N,dtype=torch.float16,device=\\\"cuda\\\"); z[0,:] = -0.0; check(\\\"neg_zero_row\\\", z)\\ng = torch.randn(8,N,device=\\\"cuda\\\"); g = (g/ (g.abs().max()+1e-9) * 65504).to(torch.float16)\\nassert torch.isfinite(g).all(); check(\\\"extreme_norm\\\", g)\\nimp = torch.zeros(2,N,dtype=torch.float16,device=\\\"cuda\\\")\\nimp[:, [0,1,17,63]] = 65504.0; check(\\\"impulse\\\", imp)\\ncheck(\\\"alternating\\\", ((-1.0)**torch.arange(N,device=\\\"cuda\\\")).to(torch.float16).repeat(3,1))\\ncheck(\\\"ramp\\\", torch.arange(N,device=\\\"cuda\\\").to(torch.float16).repeat(3,1))\\n# large magnitude + small tail (dynamic range within tolerance ~1e-4 abs)\\nmix = torch.zeros(4,N,dtype=torch.float16,device=\\\"cuda\\\")\\nmix[:, 3] = 65504.0\\nmix[:, 40:80] = (torch.rand(4,40,device=\\\"cuda\\\")*2-1).to(torch.float16)\\ncheck(\\\"tone_plus_small\\\", mix)\\n# nonzero storage offset, contiguous view\\nvo = torch.randn(2*N+7, dtype=torch.float16, device=\\\"cuda\\\")\\noff = vo[3:3+2*N].view(2,N)\\ncheck(\\\"storage_offset_view\\\", off)\\nx0 = torch.randn(4,N,dtype=torch.float16,device=\\\"cuda\\\"); x0c = x0.clone()\\no = kern.run(x0)\\nresults.append({\\\"input_preserved\\\": bool(torch.equal(x0,x0c)),\\n                \\\"output_separate\\\": o.data_ptr()!=x0.data_ptr()})\\nref_lib = kern.reference(x0).to(\\\"cpu\\\").to(torch.float64)\\nresults.append({\\\"lib_ref_max_diff_vs_exact\\\": float((ref_lib - exact_dft(x0)).abs().max().item())})\\nprint(json.dumps({\\\"fails\\\": fails, \\\"worst_ratio\\\": worst_ratio, \\\"results\\\": results}))\\n\", \"timeout_s\": 120}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "The t7 probe failed only because my \"mixed_extremes\" input had inf values (fp16 overflow from randn*20000) — that input is illegal (nonfinite). Rerun with fixed extreme tests, making each check tolerant of ValueError (skip nonfinite inputs)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792309980,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1160,
+    "prompt_tokens": 19168,
+    "total_tokens": 20328,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 58,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7808,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

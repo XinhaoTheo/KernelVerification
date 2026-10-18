@@ -1,0 +1,56 @@
+{
+  "id": "chatcmpl-53a9b6ae",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll probe c1 directly: sweep all finite FP16 values through the actual kernel on GPU and compare against the FP64 erfc reference, recording the max absolute error and the worst offending inputs.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-99261ccb704d55d6",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import json, math, torch\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_128/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\nbits = torch.arange(0, 65536, dtype=torch.int32)\\nxi = torch.tensor(bits.numpy(), dtype=torch.float16).cuda()  # every FP16 bit pattern\\nxi = xi[torch.isfinite(xi)]\\nvals = xi.cpu().numpy()\\nn = xi.numel()\\n# run in chunks under 131072\\nouts = []\\nfor i in range(0, n, 100000):\\n    chunk = xi[i:i+100000].clone()\\n    outs.append(k.run(chunk).cpu())\\nout = torch.cat(outs).double()\\nref = k.reference(xi.cpu()).double()\\nerr = (out - ref).abs()\\ntol = 1e-6\\nworst = int(torch.argmax(err))\\niab = err.argsort(descending=True)[:10]\\nres = {\\n    \\\"n_values\\\": int(n),\\n    \\\"max_abs_err\\\": float(err.max()),\\n    \\\"tolerance\\\": tol,\\n    \\\"n_violations\\\": int((err > tol).sum()),\\n    \\\"worst_x\\\": float(xi[worst]),\\n    \\\"worst_actual\\\": float(out[worst]),\\n    \\\"worst_ref\\\": float(ref[worst]),\\n    \\\"top10\\\": [{\\\"x\\\": float(xi[int(j)]), \\\"err\\\": float(err[int(j)]), \\\"actual\\\": float(out[int(j)]), \\\"ref\\\": float(ref[int(j)])} for j in iab],\\n    \\\"finite_output\\\": bool(torch.isfinite(out).all()),\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"max_abs_err relative to 1e-6 tolerance across exhaustive FP16 sweep\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ]
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284887,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 438,
+    "prompt_tokens": 20868,
+    "total_tokens": 21306,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 0,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

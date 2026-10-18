@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-bfc53c30",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run a probe covering signed zeros, subnormals, ties, ±65504, storage-offset views, and non-power-of-2 shapes, comparing `run(x)` to `reference(x)`.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-813284653d588ce0",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, torch\\nsys.path.insert(0, \\\"/root/cases/case_144\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nfails = []\\n\\ndef check(name, x):\\n    out = kernel.run(x)\\n    ref = kernel.reference(x)\\n    if not torch.equal(out, ref):\\n        fails.append((name, (out != ref).nonzero().flatten()[:5].tolist(),\\n                      out[~torch.eq(out,ref)][:5].tolist(), ref[~torch.eq(out,ref)][:5].tolist()))\\n\\n# random exhaustive-ish sweep over all fp16 bit patterns per row\\ng = torch.Generator().manual_seed(0)\\n# random rows with N=4096 (max), various M\\nx = torch.randn(64, 4096, generator=g).to(torch.float16).to(dev)\\ncheck(\\\"randn 64x4096\\\", x)\\n\\n# all bit patterns except NaN/Inf, many rows, N=512\\nbits = torch.arange(65536, dtype=torch.int64)\\nbits = bits[~(((bits & 0x7c00) == 0x7c00))]  # exclude nan/inf exponent all ones\\ntorch.manual_seed(1)\\nperm = bits[torch.randperm(bits.numel(), generator=torch.Generator().manual_seed(1))]\\nx = perm[:512*64].reshape(64,512)\\nv = torch.zeros(64,512, dtype=torch.float16); v.view(torch.int16).copy_(x.to(torch.int16))\\nv = v.to(dev)\\ncheck(\\\"all-bit-patterns 64x512\\\", v)\\n\\n# signed zeros: first zero of either sign wins; row max zero\\nx = torch.zeros(8, 16, dtype=torch.float16)\\nfor r in range(8):\\n    x[r, 3] = -0.0; x[r, 5] = 0.0; x[r, 9] = -0.0\\n    # max is 0; first zero at col 3 (neg zero) -> expect 3\\ncheck(\\\"signed zeros all-zero rows\\\", x.to(dev))\\nx2 = x.clone(); x2[:, 2] = -5.0  # max still zero\\ncheck(\\\"signed zeros with negatives\\\", x2.to(dev))\\n\\n# max is +0 vs -0 first, plus subnormals\\nx = torch.full((4, 32), -65504.0, dtype=torch.float16)\\nx[0, 7] = -0.0; x[0, 7] = 0.0  # +0 at 7\\nx[1, 2] = -0.0; x[1, 5] = 0.0\\nx[2, 0] = 6.1035e-5  # smallest subnormal max? row all -65504 so max is subnormal at 0\\nx[3, 31] = -5.96e-8  # negative subnormal, row is -65504 -> max is the negative subnormal at 31\\ncheck(\\\"zeros/subnormals extreme\\\", x.to(dev))\\n\\n# +/-65504 ties\\nx = torch.zeros(16, 1024, dtype=torch.float16)\\nfor r in range(16):\\n    x[r, :900] = -65504.0\\n    cols = [5, 100, 250, 999]\\n    for c in cols: x[r, c] = 65504.0\\ncheck(\\\"65504 ties\\\", x.to(dev))\\n\\n# ties among repeated max at various positions incl padding lanes\\nx = torch.randn(33, 257, generator=torch.Generator().manual_seed(2)).to(torch.float16)\\nx[0, 0] = x[0, 256] = x[0, 128] = 10.0\\nx[1] = 1.0  # all equal -> expect 0\\ncheck(\\\"ties N=257\\\", x.to(dev))\\n\\n# N=1\\nx = torch.randn(5, 1).to(torch.float16).to(dev); check(\\\"N=1\\\", x)\\n\\n# storage-offset view\\nbig = torch.randn(1, 3000, generator=torch.Generator().manual_seed(3)).to(torch.float16).to(dev)\\nview = big[0, 100:100+1024].reshape(8, 128)\\nassert view.is_contiguous()\\ncheck(\\\"storage-offset view\\\", view)\\n\\n# dense negative values, mixed subnormals\\ntorch.manual_seed(4)\\nx = (torch.randn(128, 2048, generator=torch.Generator().manual_seed(4)) * 1e-4).to(torch.float16).to(dev)\\ncheck(\\\"tiny subnormal-ish 128x2048\\\", x)\\n\\n# verify run output dtype/device/preserve\\nx = torch.randn(4, 8).to(torch.float16).to(dev); xc = x.clone()\\no = kernel.run(x)\\ninfo = dict(dtype=str(o.dtype), device=str(o.device), shape=tuple(o.shape), preserved=bool(torch.equal(x, xc)), fresh=o.data_ptr()!=x.data_ptr())\\nprint(\\\"RESULT\\\", \\\"FAIL\\\" if fails else \\\"PASS\\\", fails if fails else \\\"\\\", info)\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe with adversarial inputs comparing run() vs reference()."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792287208,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1188,
+    "prompt_tokens": 10018,
+    "total_tokens": 11206,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 13,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6156,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

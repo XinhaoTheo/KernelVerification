@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-bdadcacd",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The exhaustive sweep passed (max err 5.36e-7, 0 violations), but it compared FP32-cast reference. I'll rerun comparing against the FP64 reference directly (strictest form), then finalize.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bbbecaee0cb69761",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, math, json, sys\\nimport numpy as np\\nsys.path.insert(0, \\\"/root/cases/case_128\\\")\\nimport kernel\\n\\nbits = np.arange(65536, dtype=np.uint16)\\nraw = bits.view(np.float16)\\nx = torch.from_numpy(raw.copy())\\nx = x[torch.isfinite(x)]\\n\\nxg = x.to(\\\"cuda\\\")\\nout = kernel.run(xg).to(torch.float64)\\nref = kernel.reference(xg)  # FP64\\nerr = (out - ref).abs()\\nmaxerr = err.max().item()\\nimax = int(err.argmax().item())\\nviol = (err > 1e-6).sum().item()\\n# also worst-case analysis in float64 with tolerance applied exactly\\nprint(\\\"num inputs:\\\", x.numel())\\nprint(\\\"max abs err (FP64 ref, direct):\\\", maxerr)\\nprint(\\\"violations:\\\", viol, \\\"x_at_max:\\\", x[imax].item())\\nprint(\\\"out finite:\\\", bool(torch.isfinite(out).all().item()))\\nprint(json.dumps({\\\"metric\\\":\\\"max abs error vs FP64 reference over all finite FP16\\\",\\\"num_inputs\\\":x.numel(),\\\"max_abs_err\\\":maxerr,\\\"tolerance\\\":1e-6,\\\"violations\\\":int(viol),\\\"x_at_max\\\":x[imax].item()}))\", \"expected_signal\": \"max abs error vs FP64 reference, violation count\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Probe t7: exhaustive over all 63488 finite FP16 values, max err 5.36e-7 < 1e-6, 0 violations, output finite. But note: N limit is 131072 — 63488 fits, fine. Also check: reference stored FP32 cast of FP64 ref — target defined in real arithmetic; comparing FP32 output to FP64 ref (rounded to FP32) could hide up to ~1e-7 rounding... but tolerance check vs true ref is close enough; actually the actual output is FP32, which itself can represent values only to ~6e-8 relative. Anyway ref comparison against FP64 directly would be stricter. Slight concern: casting ref to FP32 rounds both — comparing two FP32 values could hide cases where actual rounds toward ref. Let me do a quick stricter check comparing against FP64 ref directly in float64. That's worth one probe. Also sizes > 63488 legal? Domain of x values already fully covered. Do the stricter comparison, then finalize."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792284793,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 576,
+    "prompt_tokens": 15642,
+    "total_tokens": 16218,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 219,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

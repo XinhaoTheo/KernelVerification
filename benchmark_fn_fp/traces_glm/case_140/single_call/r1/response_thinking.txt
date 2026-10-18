@@ -1,0 +1,21 @@
+SHIFT = 31 + bit_length(6) = 34. MULTIPLIER = 2^34 // 7 = 2454267026? 2^34=17179869184/7=2454267026.28 → 2454267026. Then quotient = ((v+1)*M) >> 34. Check standard: for division by d of value v, using (v*M)>>S with M = floor(2^S/d), error analysis: v/d ≈ v*2^S/d; truncation of M gives error v*frac/2^S < v/2^S ≤ (2^32-1)/2^34 < 1/4. Plus the +1 trick: (v+1)*M >> S gives ceil? Actually (v+1)*M/2^S ≈ (v+1)/d ≥ v/d, and error < (v+1)/2^34 + ... hmm.
+
+Standard result: if M = floor(2^S/d) and S ≥ ... then floor((v*M)>>S) = floor(v/d) if S large enough. With +1, floor(((v+1)*M)>>S) gives floor(v/d)? Let's verify error: (v+1)*M/2^S = (v+1)(2^S/d - e)/2^S where e = 2^S/d - M ∈ [0,1). So = (v+1)/d - (v+1)e/2^S. We want floor of this equals floor(v/d). Since (v+1)/d > v/d, subtracting (v+1)e/2^S which is < (2^32)/2^34 = 1/4. The value lies in (v/d - 1/4, (v+1)/d). floor(v/d) ≤ v/d < value? value could be less than v/d by up to... value = (v+1)/d - δ, δ<1/4. If v ≡ 0 mod d, v/d exact integer k; value in (k+1/d-1/4, k+1/d) — since 1/7≈0.143 < 1/4, value could be < k? lower bound k+1/7-1/4 = k-0.107. So value could be k-0.1, floor = k-1. Wrong!
+
+Hmm wait, e = 2^34/7 - 2454267026. 2^34/7 = 2454267026.2857..., so e = 0.2857... δ = (v+1)e/2^S = (v+1)*0.2857/2^34. Max (v+1) = 2^32 → δ_max = 2^32*0.2857/2^34 = 0.0714. So value ∈ ((v+1)/7 - 0.0714, (v+1)/7). If v ≡ 0 mod 7, v = 7k: value ∈ (k + 1/7 - 0.0714, k+1/7) = (k+0.0714, k+0.143) → floor = k. Good. If v ≡ 6 mod 7, v = 7k+6: value ∈ (k+1-0.0714, k+1) → floor = k. Good. General: value in (v/7 + 1/7 - 0.0714, v/7 + 1/7). floor(v/7) = k for v in [7k, 7k+6]. v/7 ∈ [k, k+6/7]. value > k + 1/7 - 0.0714 > k. value < k + 6/7 + 1/7 = k+1. So floor(value) = k. 
+
+Also need the >> to be exact integer arithmetic: value uint64, (v+1)*M ≤ 2^32 * 2^34/7 ≈ 2^63.something? (v+1)*M: v+1 ≤ 2^32, M ≈ 2^31.2 → product ≈ 2^63.2 — overflow in uint64? 2^32 * 2454267026 ≈ 4.29e9 * 2.45e9 = 1.054e19. uint64 max 1.845e19. Fine.
+
+Wait, v+1: value.to(uint64), then +1 — in Triton value+1 stays uint64? value is uint64, 1 promotes. Fine.
+
+But careful: when v = 2^32-1, v+1 in uint64 = 2^32, fine.
+
+Edge: does Triton uint64 multiplication work? Yes generally.
+
+Store: OUT + 2*index — index int32, 2*index up to 262143, fine. Output uint32 tensor, store quotient.to(tl.uint32) — quotient fits in uint32 (max (2^32-1)/7 < 2^32). remainder in [0,6].
+
+Pointer arithmetic: OUT + 2*index — pointer to uint32, correct strided layout.
+
+One subtlety: tl.load of uint32 pointer; .to(tl.uint64) zero-extends? Triton casts between unsigned types should zero-extend. Yes.
+
+Grid: cdiv(n,256), N constexpr. Looks correct. Verdict trust.

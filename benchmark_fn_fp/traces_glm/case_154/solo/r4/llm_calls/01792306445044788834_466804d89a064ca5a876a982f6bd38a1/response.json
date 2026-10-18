@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-1870d94d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll run an adversarial probe for claim c1 covering cancellation, subnormals, extrema, and signed zeros.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-accfb8db0a72d471",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"\\nimport torch, json, itertools, random\\nimport importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_154/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\n\\ndef fp64_ref(num, den):\\n    a, b = num.to(torch.float64).unbind(1); c, d = den.to(torch.float64).unbind(1)\\n    s = c*c + d*d\\n    return torch.stack(((a*c+b*d)/s, (b*c-a*d)/s), 1)\\n\\ndef check(num, den, label, results):\\n    out = k.run(num, den)\\n    tgt = fp64_ref(num, den)\\n    tol = 1e-7 + 5e-7*torch.abs(tgt)\\n    err = (out.to(torch.float64) - tgt).abs()\\n    viol = (err > tol)\\n    results[label] = {\\\"n\\\": num.shape[0], \\\"violations\\\": int(viol.sum()),\\n                      \\\"max_err\\\": float(err.max()), \\\"max_tol\\\": float(tol.max()),\\n                      \\\"finite\\\": bool(torch.isfinite(out).all())}\\n    if viol.any():\\n        i = int(err.div(tol).argmax())\\n        results[label][\\\"worst_row\\\"] = [float(num[i,0]), float(num[i,1]), float(den[i,0]), float(den[i,1]), float(out[i,0]), float(out[i,1]), float(tgt[i,0]), float(tgt[i,1])]\\n    return results\\n\\nresults = {}\\n# 1. random\\nnum, den = k.make_inputs(dev)\\nresults = check(num, den, \\\"random_4093\\\", results)\\n# 2. random extrema-scaled magnitudes: random exponents over full fp16 range\\ng = torch.Generator().manual_seed(1)\\nn = 200000\\nfor trial in range(3):\\n    def sampler():\\n        e = torch.empty(n,2,dtype=torch.float64).uniform_(-24, 15, generator=g)\\n        m = torch.empty(n,2,dtype=torch.float64).uniform_(-1,1, generator=g)\\n        return (m * 10.0**e).to(torch.float16).to(dev)\\n    results = check(sampler(), sampler(), f\\\"scaled_full_range_{trial}\\\", results)\\n# 3. crafted cancellation: numerator ~ proportional to denominator conjugate => tiny real part\\n# choose a,b such that a*c + b*d is tiny relative to magnitudes\\nc_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\nd_ = torch.empty(n, dtype=torch.float64).uniform_(-1,1, generator=g)\\na_ = d_; b_ = -c_  # numerator = i*conj? a*c+b*d = d*c - c*d = 0 exactly at fp64; quantize to fp16\\nden2 = torch.stack([c_, d_],1).to(torch.float16).to(dev)\\nnum2 = torch.stack([a_, b_],1).to(torch.float16).to(dev)\\nresults = check(num2, den2, \\\"cancelled_numerator\\\", results)\\n# 4. subnormals / zeros / extrema grid\\nvals = [0.0, -0.0, 5e-324, 6e-8, 6.1e-5, 1.0, -1.0, 65504.0, -65504.0, 5.96e-8, 2.98e-8]\\ncombos = list(itertools.product(vals, vals))\\nfor ca in [0.0, 6.1e-5, 65504.0, 5.96e-8, 1.0]:\\n    pairs = [[v, ca] for v in vals] + [[ca, v] for v in vals]\\n    numg = torch.tensor([[1.5, 2.5]]*len(pairs), dtype=torch.float16, device=dev)\\n    deng = torch.tensor(pairs, dtype=torch.float16, device=dev)\\n    results = check(numg, deng, f\\\"grid_c_{ca}\\\", results)\\n# 5. brute random subnormal-heavy\\nsub = torch.empty(200000,2, dtype=torch.float64).uniform_(-6e-8, 6e-8, generator=g).to(torch.float16).to(dev)\\nbig = (torch.empty(200000,2, dtype=torch.float64).uniform_(-65504, 65504, generator=g)).to(torch.float16).to(dev)\\nresults = check(big, sub, \\\"big_over_subnormal\\\", results)\\nresults = check(sub, big, \\\"subnormal_over_big\\\", results)\\nresults = check(sub.clone(), sub.clone(), \\\"subnormal_over_subnormal\\\", results)\\n# 6. small denominator rows with one zero component\\nz = torch.zeros(100000, dtype=torch.float16, device=dev)\\no = torch.ones(100000, dtype=torch.float16, device=dev)\\nrn = torch.randn(100000,2, dtype=torch.float16, device=dev)\\nresults = check(rn, torch.stack([o, z],1), \\\"den_real_axis\\\", results)\\nresults = check(rn, torch.stack([z, o],1), \\\"den_imag_axis\\\", results)\\n# also check inputs preserved\\nnum3, den3 = k.make_inputs(dev, size=777, seed=3)\\nn0, d0 = num3.clone(), den3.clone()\\nk.run(num3, den3)\\nresults[\\\"inputs_preserved\\\"] = bool(torch.equal(num3, n0) and torch.equal(den3, d0))\\nprint(json.dumps(results, indent=1))\\n\", \"timeout_s\": 300}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run adversarial probe: cancellation, subnormals, extrema, compare to FP64 reference computed in Python (use kernel's reference on CPU)."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306445,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1323,
+    "prompt_tokens": 11114,
+    "total_tokens": 12437,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 30,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 6534,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

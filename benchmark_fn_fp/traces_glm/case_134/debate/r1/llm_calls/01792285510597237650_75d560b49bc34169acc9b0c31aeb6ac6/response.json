@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-d30a2c20",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes: a full FP16 sweep for c1, tail-size tests for c2, and a subnormal/signed-zero focused check for c3.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-ae3d27635eb6a1cc",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_134/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n\\n# all finite FP16 bit patterns (exclude NaN/Inf: exponent 0x1F and mantissa !=0)\\nbits = torch.arange(65536, dtype=torch.int32)\\nu16 = (bits & 0xFFFF).to(torch.uint16).view(torch.float16)\\nfinite = torch.isfinite(u16)\\nx = u16[finite].cuda()  # 30720? actually finite count = 65536 - 2(inf sign) - 1024*2(nan) -> compute\\nn = x.numel()\\nout = k.run(x)\\nref = k.reference(x)\\nerr = (out.double() - ref).abs()\\ni = int(err.argmax())\\nres = {\\n  \\\"n_finite\\\": n, \\\"max_abs_err\\\": float(err[i]), \\\"tolerance\\\": 1e-6,\\n  \\\"worst_x\\\": float(x[i]), \\\"worst_out\\\": float(out[i]), \\\"worst_ref\\\": float(ref[i]),\\n  \\\"num_exceed\\\": int((err > 1e-6).sum()),\\n  \\\"num_exceed_1e_7\\\": int((err > 1e-7).sum()),\\n  \\\"max_err_at_65504\\\": float(err[torch.searchsorted(x.cpu().sort().values, torch.tensor(65504., dtype=torch.float16)).item()])\\n}\\nprint(json.dumps(res))\", \"expected_signal\": \"max_abs_err over all finite FP16 inputs vs 1e-6 tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-ba0327d70e039198",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_134/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nresults = {}\\nbad = 0\\nfor n in [1, 2, 255, 256, 257, 4093, 65536, 131072]:\\n    torch.manual_seed(n)\\n    x = ((8.0*torch.randn(n)).to(torch.float16)).to(dev)\\n    out = k.run(x)\\n    ref = k.reference(x)\\n    err = (out.double()-ref).abs().max().item()\\n    finite = bool(torch.isfinite(out).all().item())\\n    results[n] = {\\\"max_abs_err\\\": err, \\\"out_finite\\\": finite,\\n                  \\\"shape_ok\\\": tuple(out.shape)==(n,), \\\"dtype_ok\\\": out.dtype==torch.float32,\\n                  \\\"passed\\\": err <= 1e-6 and finite}\\n    bad += (err > 1e-6)\\n# also all-equal-extreme single-element and adjacent-canary OOB test\\nn = 4093\\ntorch.manual_seed(0)\\nbase = (8.0*torch.randn(n+256)).to(torch.float16).cuda()\\nx = base[:n]\\nout = k.run(x)\\nref = k.reference(x)\\ntail_ok = bool((out.double()-ref).abs().max().item() <= 1e-6)\\n# canary: run on slice, check neighbors of the slice in base unchanged (slice of contiguous is contiguous)\\nprint(json.dumps({\\\"per_size\\\": {str(kk): vv for kk, vv in results.items()},\\n                  \\\"num_sizes_failed\\\": bad, \\\"tail_4093_ok\\\": tail_ok}))\", \"expected_signal\": \"all tested N sizes pass 1e-6 bound with finite outputs\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-b0d12479c8f2e6a7",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_134/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\n# signed zeros and all subnormal FP16 patterns (exponent 0, mantissa != 0)\\nm = torch.arange(1024, dtype=torch.int32)\\nsub_bits = (m & 0x03FF).to(torch.uint16).view(torch.float16)\\nneg_sub = sub_bits.clone(); neg_sub_bits_view = neg_sub.view(torch.int16); # sign bit set\\nneg = (sub_bits.view(torch.int16) | torch.int16(-0x8000)).view(torch.float16)\\nxs = [torch.tensor([0.0], dtype=torch.float16), torch.tensor([-0.0], dtype=torch.float16),\\n      torch.tensor([6.104e-5], dtype=torch.float16), torch.tensor([-6.104e-5], dtype=torch.float16),\\n      sub_bits, neg]\\nx = torch.cat(xs).cuda()\\nout = k.run(x)\\nref = k.reference(x)\\nerr = (out.double()-ref).abs()\\ni = int(err.argmax())\\nres = {\\\"n\\\": x.numel(), \\\"max_abs_err\\\": float(err[i]), \\\"tolerance\\\": 1e-6,\\n       \\\"num_exceed\\\": int((err>1e-6).sum()),\\n       \\\"neg_zero_out\\\": float(out[1].item()), \\\"neg_zero_ref\\\": float(ref[1].item()),\\n       \\\"neg_zero_signbit_out\\\": bin(torch.tensor(out[1].item()).view(torch.int32).item() & 0x80000000 != 0),\\n       \\\"min_subnormal_err\\\": float(err[len(xs)-1])}\\nprint(json.dumps(res))\", \"expected_signal\": \"subnormal and signed-zero band max abs error vs 1e-6\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Three claims; design one comprehensive probe: full sweep of all 15360 finite FP16 values (excluding ±inf/NaN) against FP64 reference — this covers c1 and c3. And c2 tail masking with N=1, 4093, 256, 131072. Launch three probes together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792285512,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1323,
+    "prompt_tokens": 19868,
+    "total_tokens": 21191,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 67,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

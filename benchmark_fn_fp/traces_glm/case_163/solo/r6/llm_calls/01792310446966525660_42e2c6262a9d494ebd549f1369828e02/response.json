@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-c86a0792",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Running the decisive probe against the claim: all widths, extreme FP16 values, subnormals, signed zeros, random inputs, comparing kernel output to the FP64 reference under the contract tolerance.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8d26ba8df7c5de92",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_163\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\nresults = {}\\nfail = False\\ndetails = []\\n\\ndef check(name, values, ref):\\n    global fail\\n    out = kernel.run(values)\\n    ref = ref.to(dev).to(torch.float32).unsqueeze(-1)\\n    ref = torch.stack([kernel.reference(values)[...,0], kernel.reference(values)[...,1]], dim=-1)\\n    exact = ref\\n    err = (out.double() - exact.double()).abs()\\n    tol = 1e-4 + 1e-6 * exact.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    mx = err.max().item()\\n    nbad = int(bad.sum())\\n    results[name] = {\\\"max_err\\\": mx, \\\"violations\\\": nbad, \\\"shape\\\": list(out.shape), \\\"nonfinite\\\": int((~torch.isfinite(out)).sum())}\\n    if nbad:\\n        fail = True\\n        idx = bad.nonzero()[:5]\\n        details.append({\\\"name\\\": name, \\\"idx\\\": idx.tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"exact\\\": exact[bad][:5].tolist()})\\n    # input preservation\\n    return values\\n\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(1234)\\nfor n in (64, 128, 256):\\n    for b in (1, 7, 256):\\n        v = torch.randn((b, n), generator=g).to(torch.float16).to(dev)\\n        ref = kernel.reference(v)\\n        out = kernel.run(v)\\n        err = (out.double() - ref.double()).abs()\\n        tol = 1e-4 + 1e-6 * ref.double().abs()\\n        bad = (err > tol) | ~torch.isfinite(out)\\n        results[f\\\"rand_n{n}_b{b}\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n        if bad.sum():\\n            fail = True\\n            details.append({\\\"case\\\": f\\\"rand_n{n}_b{b}\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# extreme magnitudes\\nfor n in (64, 128, 256):\\n    v = torch.full((3, n), 65504.0, dtype=torch.float16, device=dev)\\n    v[1] = -65504.0\\n    v[2] = torch.linspace(-65504, 65504, n, dtype=torch.float32).to(torch.float16)\\n    ref = kernel.reference(v); out = kernel.run(v)\\n    err = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    results[f\\\"extreme_n{n}\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n    if bad.sum():\\n        fail = True\\n        details.append({\\\"case\\\": f\\\"extreme_n{n}\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# subnormals and signed zeros\\nv = torch.zeros((4, 128), dtype=torch.float16, device=dev)\\nv[0] = 6e-8\\nv[1] = -6e-8\\nv[2, 0] = -0.0\\nv[3] = torch.tensor([x * 6e-8 for x in range(128)], dtype=torch.float32).to(torch.float16)\\nref = kernel.reference(v); out = kernel.run(v)\\nerr = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\nbad = (err > tol) | ~torch.isfinite(out)\\nresults[\\\"subnormal_signedzero\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\nif bad.sum():\\n    fail = True\\n    details.append({\\\"case\\\": \\\"subnormal\\\", \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# adversarial bit patterns (finite FP16 values)\\nvals = []\\nfor i in range(0, 65536, 97):\\n    vals.append(i)\\nh = torch.tensor(vals, dtype=torch.int16).view(torch.float16).to(dev)\\nif not torch.isfinite(h).all():\\n    pass\\nelse:\\n    v = h[: 128 * 4].reshape(4, 128)\\n    ref = kernel.reference(v); out = kernel.run(v)\\n    err = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\n    bad = (err > tol) | ~torch.isfinite(out)\\n    results[\\\"bitpattern\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\n    if bad.sum():\\n        fail = True\\n        details.append({\\\"case\\\": \\\"bitpattern\\\", \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# random uniform magnitudes across full FP16 range\\nv = (torch.rand((256, 256), generator=g) * 2 - 1).mul(65504).to(torch.float16).to(dev)\\nref = kernel.reference(v); out = kernel.run(v)\\nerr = (out.double() - ref.double()).abs(); tol = 1e-4 + 1e-6 * ref.double().abs()\\nbad = (err > tol) | ~torch.isfinite(out)\\nresults[\\\"fullrange_n256_b256\\\"] = {\\\"max_err\\\": err.max().item(), \\\"violations\\\": int(bad.sum())}\\nif bad.sum():\\n    fail = True\\n    details.append({\\\"case\\\": \\\"fullrange\\\", \\\"idx\\\": bad.nonzero()[:5].tolist(), \\\"out\\\": out[bad][:5].tolist(), \\\"ref\\\": ref[bad][:5].tolist()})\\n\\n# input preservation + output properties\\nv = torch.randn((8, 128)).to(torch.float16).to(dev)\\nvc = v.clone()\\nout = kernel.run(v)\\npreserved = torch.equal(v, vc)\\nfresh = out.data_ptr() != v.data_ptr()\\nprop_ok = out.dtype == torch.float32 and out.is_contiguous() and list(out.shape) == [8, 65, 2] and out.device == v.device\\nresults[\\\"input_preserved\\\"] = preserved\\nresults[\\\"output_props\\\"] = prop_ok\\n\\nprint(json.dumps({\\\"metric\\\": \\\"per-component abs error vs FP64 reference vs tol 1e-4+1e-6|exact|\\\",\\n                  \\\"results\\\": results, \\\"details\\\": details, \\\"fail\\\": fail or not (preserved and prop_ok)}))\\n\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Run a probe covering all widths, extreme magnitudes, subnormals, signed zeros, and random batches, comparing against FP64 reference."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310447,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1599,
+    "prompt_tokens": 12976,
+    "total_tokens": 14575,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 28,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7768,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

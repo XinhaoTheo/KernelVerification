@@ -1,0 +1,343 @@
+[
+  {
+    "created_at": "2026-10-18T01:30:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:31:21Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "7c2d41d7282a4ba708e9e6e8cda10d8573504eb49f0595a856a2d27a144433ae"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "86b72e7b53deed0cfdb0927aef9eae125e2c7c5bcda7ae6b1e699508667ccf8e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "d3014fa1271e58aaa6eaf49403c6da72e861efc3402ccfbc986850bc88fb8749"
+            }
+          ],
+          "bad_row_count": 14286,
+          "duration_s": 5.825335,
+          "example_bad_rows": [
+            613552471,
+            613552472,
+            613552473
+          ],
+          "example_bad_vals": [
+            4294867296,
+            4294867303,
+            4294867310
+          ],
+          "exit_code": 0,
+          "expected_rows": [
+            613552470,
+            613552471,
+            613552472
+          ],
+          "expected_signal": "row quotient overshoots floor(n/7) by 1 for large uint32 values with certain residues mod 7",
+          "json_parse_error": null,
+          "json_result": {
+            "bad_row_count": 14286,
+            "example_bad_rows": [
+              613552471,
+              613552472,
+              613552473,
+              613552474,
+              613552475,
+              613552476,
+              613552477,
+              613552478,
+              613552479,
+              613552480
+            ],
+            "example_bad_vals": [
+              4294867296,
+              4294867303,
+              4294867310,
+              4294867317,
+              4294867324,
+              4294867331,
+              4294867338,
+              4294867345,
+              4294867352,
+              4294867359
+            ],
+            "expected_rows": [
+              613552470,
+              613552471,
+              613552472,
+              613552473,
+              613552474,
+              613552475,
+              613552476,
+              613552477,
+              613552478,
+              613552479
+            ],
+            "max_val": 4294967295,
+            "min_val": 4294867296,
+            "n_tested": 100000,
+            "residues_of_bad": [
+              6
+            ],
+            "row_diff_values": [
+              0,
+              1
+            ]
+          },
+          "max_val_tested": 4294967295,
+          "n_tested": 100000,
+          "residues_of_bad": [
+            6
+          ],
+          "row_overshoot": 1,
+          "stderr": "",
+          "stdout": "2.8.0+cu128\n{\"n_tested\": 100000, \"min_val\": 4294867296, \"max_val\": 4294967295, \"bad_row_count\": 14286, \"row_diff_values\": [0, 1], \"example_bad_vals\": [4294867296, 4294867303, 4294867310, 4294867317, 4294867324, 4294867331, 4294867338, 4294867345, 4294867352, 4294867359], \"example_bad_rows\": [613552471, 613552472, 613552473, 613552474, 613552475, 613552476, 613552477, 613552478, 613552479, 613552480], \"expected_rows\": [613552470, 613552471, 613552472, 613552473, 613552474, 613552475, 613552476, 613552477, 613552478, 613552479], \"residues_of_bad\": [6]}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Sweep of the last 100000 uint32 values: 14286 of 100000 rows are wrong, all by +1, and all failing inputs have residue n mod 7 = 6. E.g. input 4294867296 gives row 613552471 instead of 613552470. Confirms SHIFT=34 quotient overshoot for residue-6 values near the top of the range, exactly matching the ceil-magic error analysis (5n/(7*2^34) > 6/7 margin).",
+        "supports": "confirmed",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "With M = ceil(2^34/7) = 2454267027, 7M - 2^34 = 5, so (n*M)>>34 overestimates n/7 by up to 5n/(7*2^34) \u2248 0.1786 at n near 2^32, which exceeds the safety margin; for n with n mod 7 near 6 (frac close to 6/7) the floored quotient overshoots by 1. The ceil-magic method for a uint32 dividend and divisor 7 requires SHIFT \u2265 35.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive' and 'Every coordinate must equal the integer mathematical target EXACTLY ... In particular, every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers.'"
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Lines 10-12: _SHIFT = 31 + (7-1).bit_length() = 34; _MULTIPLIER = ceil(2^34/7) = 2454267027; line 21 computes quotient = (value * MULTIPLIER) >> SHIFT."
+      }
+    ],
+    "scope_rationale": "The contract explicitly requires exact row=floor(i/7) for every uint32 value including those near 2^32 (e.g., inputs with n mod 7 = 6 and n near 4294967295, which the contract admits since all uint32 values are legal), so an overshooting quotient at these values violates the exactness requirement.",
+    "statement": "The kernel's reciprocal-multiply quotient (value * 2454267027) >> 34 overshoots floor(n/7) by 1 for some uint32 inputs, e.g. inputs with n mod 7 = 6 near the top of the uint32 range, yielding a row that is one too large.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:31:21Z"
+  },
+  {
+    "created_at": "2026-10-18T01:30:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:31:21Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "f912f4c6c85c07515d754d3c49e0b1f9f24aeb510384d603b24e25b9fb41ac62"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "3373cf80a48310ae6f873b736db11bdaa20b91061150cd6d059b8ae37724fc4c"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "cf3a4d4eceddd41d47d6396754a1202aef5d96c70b316efe8726718800a3d24d"
+            }
+          ],
+          "bad_col_count": 14286,
+          "duration_s": 3.681366,
+          "example_cols": [
+            4294967295
+          ],
+          "example_rows": [
+            613552471
+          ],
+          "example_vals": [
+            4294867296
+          ],
+          "exit_code": 0,
+          "expected_signal": "remainder wraps to huge uint32 (e.g. 4294967295) for large indices where quotient overshoots",
+          "json_parse_error": null,
+          "json_result": {
+            "bad_col_count": 14286,
+            "example_cols": [
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295,
+              4294967295
+            ],
+            "example_rows": [
+              613552471,
+              613552472,
+              613552473,
+              613552474,
+              613552475,
+              613552476,
+              613552477,
+              613552478,
+              613552479,
+              613552480
+            ],
+            "example_vals": [
+              4294867296,
+              4294867303,
+              4294867310,
+              4294867317,
+              4294867324,
+              4294867331,
+              4294867338,
+              4294867345,
+              4294867352,
+              4294867359
+            ],
+            "invariant_violations": 0,
+            "max_col_observed": 4294967295,
+            "n_tested": 100000
+          },
+          "max_col_observed": 4294967295,
+          "n_tested": 100000,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 100000, \"bad_col_count\": 14286, \"example_vals\": [4294867296, 4294867303, 4294867310, 4294867317, 4294867324, 4294867331, 4294867338, 4294867345, 4294867352, 4294867359], \"example_cols\": [4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295, 4294967295], \"example_rows\": [613552471, 613552472, 613552473, 613552474, 613552475, 613552476, 613552477, 613552478, 613552479, 613552480], \"invariant_violations\": 0, \"max_col_observed\": 4294967295}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c2.e1",
+        "kind": "runtime_probe",
+        "summary": "Same sweep: 14286 elements have col outside [0,6]; all show col=4294967295 (uint32 wrap of value - 7*overshooting_quotient = -1) with row one too large. The mod-2^32 invariant check passes only because the wrapped col cancels the +1 row error; the mathematical invariant 7*row+col==index with col in [0,6] is violated for all 14286 elements.",
+        "supports": "confirmed",
+        "tool_event_id": "t10"
+      }
+    ],
+    "id": "c2",
+    "raised_by": "skeptic",
+    "rationale": "Same overestimate mechanism: when quotient is one too large, 7*quotient exceeds value, so the uint32 cast of value - 7*quotient wraps to a value like 4294967295, breaking the stated invariant that every col lies in [0,6].",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'every col is in [0,6] and 7*row + col equals the original unsigned index in mathematical integers' \u2014 an invariant stated for every legal uint32 index."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Line 22: remainder = value - quotient * 7 (uint64), then .to(tl.uint32) store at line 24 \u2014 wraparound if quotient overshoots."
+      }
+    ],
+    "scope_rationale": "The contract states the invariant col in [0,6] and 7*row+col == index for every legal uint32 input; a wrapped remainder for any such input directly violates it. This follows from the same in-scope input family (large uint32 values) as the quotient-overshoot claim.",
+    "statement": "For the same failing inputs, the remainder computed as value - 7*quotient in uint64 then cast to uint32 wraps to a huge value (e.g. 4294967295) instead of a col in [0,6], breaking the invariant 7*row + col == index.",
+    "status": "confirmed",
+    "updated_at": "2026-10-18T01:31:21Z"
+  },
+  {
+    "created_at": "2026-10-18T01:30:40Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-10-18T01:31:21Z",
+        "data": {
+          "all_exact": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "452b18950b3ab1afbc20d16e6a771cc08236c000cf9aeb332e408fe12b991db1"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "57b46a9a7a6ffe962c2e318f8bcb07c803edf1b7fa5796801f9768076c6965d1"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "f8afb68c18cf06a2d286676a02daf8a054d707e7f5e6dbba9242237e16db1ffa"
+            }
+          ],
+          "col_exact": true,
+          "duration_s": 3.868739,
+          "exit_code": 0,
+          "expected_signal": "if constexpr typing were corrupting the product, even mid-range inputs would show wrong quotients",
+          "json_parse_error": null,
+          "json_result": {
+            "all_exact": true,
+            "col_exact": true,
+            "max_val_tested": 999945670,
+            "n_tested": 51000,
+            "row_exact": true
+          },
+          "max_val_tested": 999945670,
+          "n_tested": 51000,
+          "row_exact": true,
+          "stderr": "",
+          "stdout": "{\"n_tested\": 51000, \"max_val_tested\": 999945670, \"row_exact\": true, \"col_exact\": true, \"all_exact\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "On 51000 inputs spanning 0..~1e9 (where SHIFT=34 magic math is provably exact), kernel row and col match the exact int64 reference for every element. No evidence of constexpr MULTIPLIER int32 truncation or 64-bit product corruption; the only failures are the SHIFT=34 range failures already covered by c1/c2.",
+        "supports": "rebutted",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "Triton constexpr integers can be typed by value; 2454267027 does not fit in int32, so the multiplication or its typing may behave unexpectedly in Triton 3.4, independent of the shift-size analysis.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'Every coordinate must equal the integer mathematical target EXACTLY' for every legal uint32 input; any division method is allowed only 'if it satisfies this exact requirement for every legal unsigned index'."
+      },
+      {
+        "source": "kernel.py",
+        "summary": "Line 55: _unflatten launched with MULTIPLIER=_MULTIPLIER=2454267027 as a tl.constexpr; line 21 multiplies uint64 value by MULTIPLIER."
+      }
+    ],
+    "scope_rationale": "The kernel's exact-quotient computation for any contract-legal input depends on MULTIPLIER being represented at full 64-bit width in the product; a silent int32 truncation would corrupt outputs even for inputs where SHIFT=34 math is otherwise adequate. The contract requires exactness for all uint32 inputs.",
+    "statement": "The constexpr MULTIPLIER (2454267027 > int32 max) may be typed as a 32-bit signed value in Triton 3.4, causing the 64-bit product value * MULTIPLIER to overflow or sign-extend incorrectly and produce wrong quotients.",
+    "status": "rebutted",
+    "updated_at": "2026-10-18T01:31:21Z"
+  }
+]

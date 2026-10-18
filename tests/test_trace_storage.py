@@ -38,6 +38,19 @@ def snapshot(root):
     return {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
+def test_batch_ids_remain_distinct_when_clock_values_collide(monkeypatch):
+    instant = traces.datetime(2026, 10, 18, tzinfo=traces.timezone.utc)
+
+    class FixedClock:
+        @staticmethod
+        def now(tz):
+            return instant
+
+    monkeypatch.setattr(traces, "datetime", FixedClock)
+    assert traces.experiment_trial_id("r2") != traces.experiment_trial_id("r3")
+    assert traces.experiment_trial_id("named_batch") == "named_batch"
+
+
 def test_next_numeric_trial_uses_all_selected_slots_without_overwriting(benchmark):
     traces.reserve_trace("case_01", "solo", traces_dir="traces_glm", trial="r2")
     traces.reserve_trace("case_02", "debate", traces_dir="traces_glm", trial="r10")

@@ -1,0 +1,47 @@
+{
+  "id": "chatcmpl-b115f1dc",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "{\"verdict\": \"reject\", \"confidence\": 0.7, \"reason\": \"The kernel computes the Smith-algorithm numerators with single fma operations in fp32, so when b*ratio (~65504 max) cancels against a to a tiny numerator, the fma's half-ulp rounding (~4e-3) survives division by scale, giving component errors up to ~1e-6 \u2014 exceeding the 1e-7 + 5e-7*|target| tolerance for the near-zero component (e.g. a=-65472, b=65504, c=1000, d=999.5). Meeting the stated componentwise tolerance on this domain requires higher internal precision than plain fp32 Smith.\"}",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "Smith-like algorithm with FMA ratio. Check signs: standard Smith: if |c|>=|d|, ratio=d/c, denom=c+d*ratio, real=(a+b*ratio)/denom, imag=(b-a*ratio)/denom. Correct. Else ratio=c/d, denom=d+c*ratio, real=(a*ratio+b)/denom, imag=(b*ratio-a)/denom. Matches.\n\nPrecision: inputs fp16, converted to fp32, computation in fp32. Target computed in fp64 from exact fp16 values. Error tolerance 1e-7 + 5e-7|target|. fp32 relative error ~6e-8 per op; Smith algorithm may have a few ulps. Concern: catastrophic cancellation when real or imag component is near zero (target small). Tolerance abs 1e-7. Cancellation: real_numerator = a + b*ratio computed with fma \u2014 when a \u2248 -b*ratio, result relative error of fp32 with values up to ~65504 magnitude. b*ratio magnitude ~65504; absolute error ~65504*2^-24 \u2248 4e-3. If the true value is tiny (cancellation), actual value error could be ~4e-3 >> 1e-7 absolute tolerance. But target tolerance is 1e-7 + 5e-7|target|. E.g. a=1, b=-1, c=1, d=1: real numerator = a + b*(d/c) = 0, imag numerator = b - a*ratio = -2, denom = 2 \u2192 result -i. real=0 exactly? fma(b,ratio,a) = fma(-1,1,1)=0 exact. But pick a=1.0001-ish where cancellation to tiny value: a=1, b=-1, c=65504, d=1 \u2192 ratio=1/65504 tiny, fma(b,ratio,a) computes 1 - 1/65504 with error ~ ulp(1)=6e-8. True numerator \u2248 1 - 1.0000153 \u2248 -1.5e-5, divided by scale \u2248 65504 \u2192 real \u2248 -2.3e-10. Error in numerator from rounding ~6e-8 / 65504 \u2248 1e-12, fine since a is exactly representable fp16. Hmm, inputs are fp16 so a,b exactly representable in fp32. The numerator error sources: ratio rounded (error ~ulp of ratio), b*ratio product... fma computes b*ratio+a with single rounding. Errors: ratio error \u03b5_r \u2192 error b*\u03b5_r \u2248 |b*ratio|*2^-24. If |b*ratio| \u2248 |a| \u2248 65504 (max cancellation), error \u2248 4e-3 in numerator, divided by scale \u2265 ... scale \u2265 major \u2265 ... major can be small (e.g. 1e-4). Consider c=1e-4? Wait |c|\u2265|d| so major=|c|. b*ratio with |ratio|\u22641, so |b*ratio| \u2264 |b| \u2264 65504. Cancellation: real_num \u2248 0 while |b*ratio| \u2248 65504 requires b=65504, ratio=1 (d=\u00b1c), a=\u221365504. Then real_num = 0 exactly? ratio = d/c: if d=c exactly (fp16), ratio=1 exact, fma(b,1,a)=b+a=0 exact. But if d\u2260c, ratio rounded: e.g. c=1000, d=999.5 (ratio 0.9995, not exactly representable in fp32? 0.9995 rounding error ~3e-8). b*ratio = 65504*0.9995 \u2248 65471. b*\u03b5 \u2248 65504*3e-8 \u2248 2e-3 error in numerator. True numerator = a + b*ratio_true; we choose a = -round(b*ratio_true) to make numerator tiny. scale \u2248 1000*1.4 \u2248 1414. Real result error \u2248 2e-3/1414 \u2248 1.4e-6. Target: numerator small \u2014 can be near zero. Tolerance 1e-7 + 5e-7|target| \u2248 1e-7. 1.4e-6 > 1e-7 \u2192 violation.\n\nHmm, but also fp32 division div_rn correctly rounded. Let's construct concrete numbers. b=65504, c=1000, d=999.5? d must be fp16: 999.5 representable? fp16 near 1000 has spacing 1 (since 1024 range: 512-1024 spacing 0.5 actually: 512\u2264x<1024 spacing 2^-10*2^9? fp16: 10 mantissa bits; 512..1024 spacing 0.5). 999.5 representable. ratio = 999.5/1000 = 0.9995. In fp32, 0.9995 rounded: ulp(0.9995)\u22486e-8, error \u22643e-8. fma(-65504, ratio_rounded, a) where a chosen so exact numerator with exact ratio is tiny: exact numerator = a - 65504*0.9995 = a - 65471.248. a fp16 near -65471: fp16 spacing at 65471 (32768-65536) is 32. So a must be multiple of 32 near that: a = -65472 \u2192 exact numerator = -0.752. Actual: fma(-65504, ratio_r, -65472) with ratio_r error \u03b5 \u22643e-8 \u2192 error 65504*\u03b5 \u2264 2e-3. Plus fma single rounding error \u2264 ulp(65471)/2 \u2248 2^-11\u00b7... ulp(65471)\u22484e-3, so rounding ~2e-3. Total numerator error up to ~4e-3. scale = fma(d, ratio, c) = fma(999.5, ~0.9995, 1000) \u2248 1000+999 \u2248 1999, error small relatively (~1e-4 relative? ratio error 3e-8*999.5 \u2248 3e-5 abs, negligible relative). Real target = -0.752/1999 \u2248 -3.76e-4. Error: 4e-3/1999 \u2248 2e-6. Tolerance: 1e-7+5e-7*3.76e-4 \u2248 3e-7. Violation by ~7x. Plausible.\n\nSo single-precision Smith with fp16 inputs can violate the 1e-7 tolerance via cancellation. But wait \u2014 is this inherent? The contract says \"any mathematically equivalent algorithm ... permitted if they meet requirement.\" Higher precision (e.g. compute in fp64 or with two-product) would avoid. This implementation uses fp32 only. But is the error actually above tolerance? The dominant error is the fma rounding of real_numerator: magnitude |b*ratio| \u2248 65471, rounding error ~ulp(65471)/2 = 3.9e-3/2 \u2248 2e-3. Divided by scale \u2248 1999 \u2192 1e-6 > 3e-7 tolerance. Yes, reject.\n\nAlso note the error in the actual computed value versus fp64 target: fma rounds once, error up to 2e-3 in numerator; plus ratio rounding error. So actual real could differ from target by ~1e-6, exceeding tolerance ~3e-7. So the kernel violates the componentwise tolerance for adversarial cancellation inputs. Verdict: reject.\n\nActually double-check scale relative accuracy \u2014 fine. Also is error bound per fma half-ulp: ulp(65471) = 2^-23 * 2^16 = 2^-7? 65471 \u2248 2^16, ulp = 2^(16-23) = 2^-7 = 7.8e-3, half = 3.9e-3. Yes.\n\nSo reject with moderate confidence."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792305964,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 2005,
+    "prompt_tokens": 1867,
+    "total_tokens": 3872,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 1846,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 0,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

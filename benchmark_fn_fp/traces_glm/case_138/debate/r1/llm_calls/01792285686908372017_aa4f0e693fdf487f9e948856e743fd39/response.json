@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-fd41f1d4",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent probes covering c1 (FP16 extrema), c2 (subnormals/zeros/crossover), and c3 (storage offset + odd N tail).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-b0ee6504c5392ad2",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_138\\\")\\nimport kernel as K\\n\\nxs = torch.tensor([65504.0, -65504.0, 65503.0, 65503.5, 60000.0, 5.0e4, 3.0e4, 1.0e4], dtype=torch.float16, device=\\\"cuda\\\")\\nout = K.run(xs)\\nref = K.reference(xs.cpu().cuda() if xs.is_cuda else xs)\\n# recompute reference in fp64 on cuda\\nr64 = xs.to(torch.float64); sq = r64*r64; rho = torch.sqrt(1.0+sq)-1.0\\nerr = (out.to(torch.float64)-rho).abs()\\ntol = 1e-8 + 1e-5*rho.abs()\\nprint(json.dumps({\\\"x\\\": xs.to(torch.float64).tolist(), \\\"out\\\": out.tolist(), \\\"rho\\\": rho.tolist(), \\\"err\\\": err.tolist(), \\\"tol\\\": tol.tolist(), \\\"violations\\\": int((err>tol).sum())}))\\n\", \"expected_signal\": \"tolerance violations count at extrema (0 = rebutted, >0 = confirmed)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-b59508c3c99234d5",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_138\\\")\\nimport kernel as K\\n\\n# all FP16 subnormal bit patterns + signed zeros + crossover region values\\nvals = []\\nfor b in range(1, 1024):  # subnormal magnitudes\\n    v = torch.tensor(b, dtype=torch.uint16).view(torch.float16).item()\\n    vals += [v, -v]\\nvals += [0.0, -0.0]\\nfor b in [1024, 1536, 1792, 2048, 2560, 3072, 4096, 5120, 6144, 7168]:  # values ~6e-5..1.4e-4 region\\n    v = torch.tensor(b, dtype=torch.uint16).view(torch.float16).item()\\n    vals += [v, -v]\\nxs = torch.tensor(vals, dtype=torch.float16, device=\\\"cuda\\\")\\nout = K.run(xs)\\nr64 = xs.to(torch.float64); sq = r64*r64; rho = torch.sqrt(1.0+sq)-1.0\\nerr = (out.to(torch.float64)-rho).abs()\\ntol = 1e-8 + 1e-5*rho.abs()\\nviol = err > tol\\nidx = viol.nonzero().flatten().tolist()\\nprint(json.dumps({\\\"n\\\": xs.numel(), \\\"num_violations\\\": int(viol.sum()), \\\"violation_indices_first10\\\": idx[:10],\\n  \\\"max_err\\\": err.max().item(), \\\"max_ratio_err_over_tol\\\": (err/tol).max().item(),\\n  \\\"zero_out_plus\\\": out[vals.index(0.0)].item(), \\\"zero_out_minus\\\": out[vals.index(-0.0)].item()}))\\n\", \"expected_signal\": \"count of mixed-tolerance violations over all subnormal/near-zero FP16 values (0 = rebutted, >0 = confirmed)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-8a5ba109baddbe78",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import sys, json, torch\\nsys.path.insert(0, \\\"/root/cases/case_138\\\")\\nimport kernel as K\\n\\n# contiguous view with nonzero storage offset, N=4093 (not multiple of 256)\\nN, KOFF = 4093, 7\\nbase = (2.0*torch.randn(5000, generator=torch.Generator().manual_seed(1))).to(torch.float16).cuda()\\nx = base[KOFF:KOFF+N]\\nassert x.is_contiguous() and x.storage_offset() == KOFF\\nbefore = x.clone()\\nout = K.run(x)\\nr64 = x.to(torch.float64); sq = r64*r64; rho = torch.sqrt(1.0+sq)-1.0\\nerr = (out.to(torch.float64)-rho).abs(); tol = 1e-8 + 1e-5*rho.abs()\\ninput_preserved = bool(torch.equal(before, x))\\n# also test N=1 and N=131072 with offset\\nbase2 = (2.0*torch.randn(140000, generator=torch.Generator().manual_seed(2))).to(torch.float16).cuda()\\nx2 = base2[3:3+131072]\\nout2 = K.run(x2)\\nrho2 = torch.sqrt(1.0 + x2.to(torch.float64)**2) - 1.0\\nerr2 = (out2.to(torch.float64)-rho2).abs(); tol2 = 1e-8 + 1e-5*rho2.abs()\\nx1 = base2[5:6]\\nout1 = K.run(x1)\\nrho1 = torch.sqrt(1.0 + x1.to(torch.float64)**2) - 1.0\\nerr1 = (out1.to(torch.float64)-rho1).abs(); tol1 = 1e-8 + 1e-5*rho1.abs()\\nprint(json.dumps({\\\"offset\\\": KOFF, \\\"n\\\": N, \\\"violations_n4093\\\": int((err>tol).sum()), \\\"input_preserved\\\": input_preserved,\\n  \\\"n_max\\\": 131072, \\\"violations_n131072\\\": int((err2>tol2).sum()), \\\"n1\\\": 1, \\\"violations_n1\\\": int((err1>tol1).sum()),\\n  \\\"tail_last5_err\\\": err[-5:].tolist(), \\\"head_first5_err\\\": err[:5].tolist()}))\\n\", \"expected_signal\": \"tolerance violations for offset view at odd N plus N=1 and N=131072 (0 = rebutted, >0 = confirmed)\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "Three independent probes. Launch all three together."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792285688,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1342,
+    "prompt_tokens": 19128,
+    "total_tokens": 20470,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 9,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 3948,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

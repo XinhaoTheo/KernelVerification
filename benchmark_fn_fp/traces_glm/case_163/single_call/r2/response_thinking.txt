@@ -1,0 +1,85 @@
+Let me analyze the algorithm. Packed real FFT via half-size complex FFT of M complex points (even/odd packed). Standard post-processing:
+
+Given Z[k] = FFT of z[j] = x[2j] + i x[2j+1], N=2M.
+
+X[k] = Zr_e[k] + ... standard formulas:
+Let Z[k] = FFT_M(z). Then X[k] = E[k] + W_N^k O[k], where E[k]=(Z[k]+conj(Z[M-k]))/2, O[k]=(Z[k]-conj(Z[M-k]))/(2i).
+
+Here they compute with bit-reversed address: ar,ai = Z[address], br,bi = Z[partner] where partner = (-address) mod M. So k ranges 0..M-1, and the output index is k (natural order), gathering Z[rev(k)]? Wait — after DIF, real[] contains Z in bit-reversed order: real[i] = Z[bitrev(i)]. They gather at address=bitrev(k), giving Z[k]. partner gives Z[(-k) mod M] = conj(Z[M-k]) for real input... wait, the input to complex FFT is z[j] = x[2j]+i x[2j+1], which is not real, so conjugate symmetry doesn't hold. They use the general formula.
+
+So ar,ai = Z[k], br,bi = Z[M-k mod M] (since -k mod M). Actually partner = (-address)&(M-1) = bitrev index of (-k mod M)? Hmm — is bitrev((-k) mod M) = (-bitrev(k)) mod M? For M power of 2, bit reversal commutes with negation mod M: yes, -k mod M flips all bits, and reversal of flipped bits = flipped reversal... Let k have bits b0..b_{L-1} (b0 LSB). -k mod M = ~k mod M (complement all bits). bitrev(~k) reverses complemented bits = complement of bitrev(k) = ~bitrev(k) = -bitrev(k) mod M. Yes, partner = bitrev(-k mod M). Good, so br,bi = Z[M-k].
+
+Then standard: E[k] = (Z[k] + conj(Z[M-k]))/2 → er = (ar+br)/2, ei = (ai-bi)/2. O[k] = (Z[k] - conj(Z[M-k]))/(2i) → or_ = (ai-bi)/2? Let's compute: (Z - conj(Z'))/(2i) = ((ar-br) + i(ai+bi))/(2i) = (ai+bi)/2 - i(ar-br)/2. So Or = (ai+bi)/2, Oi = -(ar-br)/2.
+
+X[k] = E[k] + W_N^k O[k], W = exp(-2πik/N) = cos - i sin.
+X[k] real = er + wr*Or - wi*Oi = (ar+br)/2 + wr*(ai+bi)/2 + wi*(ar-br)/2.
+Their code: sr=ar+br, si=ai-bi, dr=ar-br, di=ai+bi. xr = 0.5*(sr + wr*di + wi*dr) = (ar+br)/2 + wr*(ai+bi)/2 + wi*(ar-br)/2. ✓ matches.
+
+Imag: ei + wr*Oi - wi*Or = (ai-bi)/2 - wr*(ar-br)/2 - wi*(ai+bi)/2. Their xi = 0.5*(si - wr*dr + wi*di)... wait they wrote xi = 0.5*(si - (wr*dr - wi*di)) = (si - wr*dr + wi*di)/2 = (ai-bi)/2 - wr*(ar-br)/2 + wi*(ai+bi)/2. But expected is minus wi*(ai+bi)/2. Hmm sign discrepancy — depends on _twiddle sine sign convention.
+
+_twiddle returns (cosine, -sine). So wi = -sin(phase). Then W = wr + i*wi = cos - i sin. ✓ correct W. So the term: ei + (wr*Oi - wi*Or) where O = Or + i Oi with Or=(ai+bi)/2, Oi=-(ar-br)/2.
+
+Wait I need to recompute O. O[k] = (Z[k] - conj(Z[M-k]))/(2i). Z - conj(Z') = (ar-br) + i(ai+bi). Dividing by 2i: (a)/(2i) = -i a/2. So = (ai+bi)/2 - i (ar-br)/2. So Or = (ai+bi)/2 = di/2, Oi = -(ar-br)/2 = -dr/2.
+
+X[k] = E + W*O. Imag: ei + wr*Oi - wi*Or = (ai-bi)/2 + wr*(-dr/2) - wi*di/2.
+Their xi = si/2 - wr*dr/2 + wi*di/2. That's si/2 - wr*dr/2 + wi*di/2. Expected: si/2 - wr*dr/2 - wi*di/2. Sign mismatch on wi*di!
+
+Hmm, let me recheck. With wi = -sin: - wi*Or = -(-sin)(di/2) = + sin*di/2. Their term: + wi*di/2 = -sin*di/2. Discrepancy.
+
+Let me recheck Oi sign. Oi = coefficient of i: (Z - conj(Z'))/(2i). Let P = (ar-br) + i(ai+bi) = p + iq. P/(2i) = (p+iq)(-i)/2 = (-ip + q)/2 = q/2 - i p/2. So Or = q/2 = (ai+bi)/2, Oi = -p/2 = -(ar-br)/2. Yes.
+
+X[k] = (E + W O). WO imag part: wr*Oi + wi*Or. Total imag = ei + wr*Oi + wi*Or = (ai-bi)/2 + wr*(-(ar-br)/2) + wi*(ai+bi)/2.
+
+Oh wait, W = cos - i sin so wr + i wi with wi = -sin. W*O = (wr+iwi)(Or+iOi) → imag = wr*Oi + wi*Or. So imag = ei + wr*Oi + wi*Or = si/2 - wr*dr/2 + wi*di/2. That matches their xi! I made sign error earlier (I wrote ei + wr*Oi - wi*Or). Good.
+
+Real: er + wr*Or - wi*Oi = sr/2 + wr*di/2 - wi*(-dr/2) = sr/2 + wr*di/2 + wi*dr/2 = their xr. ✓.
+
+Nyquist bin: X[M] = E[M'] where sum of evens minus sum of odds: X[M] = sum x[j](-1)^j = Re(Z at... ) Actually X[N/2] = Z_r[0] - Z_i[0]... X[N/2] = sum x[j] e^{-iπj} = sum (-1)^j x[j] = sum evens - sum odds = Re(Z[0]) - Im(Z[0]) = ar - ai (at k=0, Z[0], ar,ai = Z[0], partner=Z[0] so br=ar, bi=ai). They store (ar - ai) at bin M for k==0. ✓. Imag of Nyquist = 0. ✓.
+
+Now the butterfly: DIF with twiddle (k & (half-1)) * (256//width). Let's check. Stage stage: width = M >> stage, half = width>>1. For DIF, first stage should have width = M (stage 0), twiddle for lower half indices k < half... Actually DIF: at each stage, butterfly between k and k+half (with grouping). Twiddle factor index for position k: (k mod half) * (N_total/width)? The total twiddle denominator: W_M^{...}? The complex FFT is of size M, so twiddles W_M. W_M^j = exp(-2πi j/M). Their phase in 256-scale: phase = (k & (half-1)) * (256/width). The angle = 2π * phase/256 = 2π (k mod half)/width. Since width is the size of the sub-DFT at that stage... In DIF, stage with sub-length width: twiddle W_width^{k mod half}? Hmm, standard DIF (Sande-Tukey): at stage with butterfly span half, top gets a+b, bottom gets (a-b) W^{k mod half} where W is root of unity of order = current DFT size. At stage 0, size M, span M/2, twiddle W_M^{k mod (M/2)} for k in lower half. Angle = 2π(k mod M/2)/M = 2π(k mod half)/width with width=M. ✓. Later stages subdivide. So phase*(2π/256) = 2π(k mod half)/width ✓, twiddle for W = e^{-2πi phase/256}.
+
+But wait — which half gets twiddle? In DIF, all "lower" butterflies (k with bit half clear) compute a+b, upper compute (a-b)*W. Their code: lower = (k & half)==0 → real = a+b; else (a-b)*W. ✓ standard DIF. And after DIF stages output is bit-reversed. ✓ They address via _reverse.
+
+Butterfly indices: left = k & ~half, right = k | half. So pairs (k, k^half) effectively. For upper k, left = k - half (lower partner), right = k. So br = a[lower], ar... wait for upper k, left = k & ~half = k-half, right = k. ar = value at left (lower), br = value at right (itself, upper). Then dr = ar - br = lower - upper. In DIF, upper output = (lower - upper)*W? Standard: A' = a+b for lower, B' = (a - b) W for upper. Here dr = a_lower - b_upper — correct order (a-b). ✓.
+
+Twiddle phase for upper k: k & (half-1) — since upper k has half bit set, k mod half = (k-half) & (half-1)... (k & (half-1)) for upper k equals its position within the block. ✓.
+
+Also twiddle magnitude for the twiddle table: table only has 65 entries (0..64) for first quadrant. _twiddle: folded = min(phase, 128-phase), cosine = table[folded], negate if phase > 64. sine = table[|64 - phase|]. Check: phase in 0..128. sin(2π phase/256) = sin(π phase/128). For phase=0..128: sine table index |64-phase| gives cos value = cos(π|64-phase|/128) = sin(π phase/128) for phase in 0..128. ✓. cosine = cos(π phase/128): folded = min(phase,128-phase) ∈ 0..64 ✓, sign: cos(πp/128) for p in 64..128 is negative, so negate if phase>64 ✓. Then returns (cos, -sin), so wi = -sin ✓ W = cos - i sin. Good.
+
+But phase can also be from twiddles at stage where width=M: (k&(half-1)) * (256//width) with width=M → 256/M multiplier; k mod half up to half-1, phase up to 256/M*(half-1) = 128 - 256/M ≤ 128. ✓ always within 0..128.
+
+Post-processing twiddle: phase = k*(256//N) with k up to M-1 = N/2-1: phase up to (N/2-1)*(256/N) = 128 - 256/N ≤ 128. ✓.
+
+Gather with tl.gather — supported in Triton 3.4. real is a vector of M fp64 values; fine.
+
+LOG_M = m.bit_length() - 1: M = N/2 = 32, 64, or 128 → log2 = 5,6,7. M.bit_length() for 32 = 6, minus 1 = 5 ✓.
+
+Memory access: X + row*N + 2*k loads even/odd. Input is fp16 contiguous [B,N], row stride N. ✓. Nonzero storage offset: base pointer passed handles that fine.
+
+Output store: OUT + (row*(M+1)+k)*2 — output is contiguous [B,M+1,2], row stride (M+1)*2 elements fp32. ✓.
+
+Wait — special Nyquist store writes at index M for k==0 only, masked. But other bins k in 0..M-1 stored from the vector loop... k ranges over tl.arange(0,M), so bins 0..M-1 stored; bin M stored separately. ✓.
+
+But wait: bin k=0: address=bitrev(0)=0, partner = 0. ar=ai? no: ar,ai = Z[0] components; br,bi = Z[0] components too. So X[0] = sr/2 + ... = (2 Re? ) X[0] should = Zr[0]+Zi[0]... Actually X[0] = sum evens + sum odds = Re Z[0] + Im Z[0]. Compute: sr = 2ar, di = 2ai, dr=0. wr for k=0: phase 0, wr=1, wi=0. xr = 0.5*(2ar + 2ai) = ar+ai ✓. xi = 0.5*(si) with si = ai - bi = 0 ✓.
+
+Also `_reverse` for k index: reverses LOG_M bits ✓.
+
+tl.gather requires same shapes; index int32 vs real fp64 — gather(real, left, axis=0), left int32 vector — fine.
+
+Potential issue: enable_fp_fusion=False — fine. fp64 on T4 is slow but perf not required.
+
+Also does tl.gather exist? Triton 3.4 does have tl.gather (added ~3.2/3.3). Yes.
+
+Also validate_inputs checks finiteness of input — contract says all finite FP16 legal, so no rejection of legal inputs. But it rejects non-finite inputs, which aren't legal anyway. Fine.
+
+One more: table stores 65 entries (0..64). |64-phase| for phase∈[0,128] gives 0..64 ✓.
+
+Also the sign flip: phase <= 64 keep, else negate. cos at phase=64 is 0 exactly, fine.
+
+Edge: N=64, M=32, LOG_M=5. Butterfly stages: widths 32,16,8,4,2. Stage with width=2: half=1, twiddle phase = (k & 0) * 128 = 0 → W=1. ✓ correct for last stage.
+
+Everything looks correct. One subtlety: fp16 subnormals loaded to fp64 — exact. Accumulation in fp64 → accuracy well within tolerance.
+
+Store Nyquist: mask=k==0 writes (ar-ai). At k=0, ar,ai = Z[0] real/imag = sum evens, sum odds. ar - ai ✓.
+
+Verdict: trust. Confidence high, ~0.9.

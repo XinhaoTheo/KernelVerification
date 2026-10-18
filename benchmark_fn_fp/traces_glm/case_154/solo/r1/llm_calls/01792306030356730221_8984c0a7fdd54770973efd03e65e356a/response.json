@@ -1,0 +1,57 @@
+{
+  "id": "chatcmpl-c6e05c9d",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "The probe again failed on my own slice-length bug (numerator view 8500 rows vs denominator view 8400 rows) before printing any results. I'll fix the view lengths to match and rerun the full adversarial sweep.",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-bcd71b8d6881800b",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, sys, json\\nsys.path.insert(0, \\\"/root/cases/case_154\\\")\\nimport kernel\\n\\ndev = \\\"cuda\\\"\\ntol_a, tol_r = 1e-7, 5e-7\\nfails = []\\n\\ndef check(name, num, den):\\n    num = num.to(dev); den = den.to(dev)\\n    out = kernel.run(num, den)\\n    ref = kernel.reference(num, den).cpu().double()\\n    outc = out.cpu().double()\\n    diff = (outc - ref).abs()\\n    allowed = tol_a + tol_r * ref.abs()\\n    bad = diff > allowed\\n    nonfinite = ~torch.isfinite(outc)\\n    nbad = int(bad.sum()); nnf = int(nonfinite.sum())\\n    if nbad or nnf:\\n        m = (bad | nonfinite).flatten()\\n        fails.append((name, nbad, nnf, outc.flatten()[m.nonzero().flatten()[:5]].tolist(), ref.flatten()[m.nonzero().flatten()[:5]].tolist()))\\n    return nbad, nnf, outc.numel()\\n\\ntot = 0; badtot = 0\\nfor seed, size in [(0, 4093), (1, 131072), (2, 131072)]:\\n    g = torch.Generator().manual_seed(seed)\\n    num = torch.randn((size,2), generator=g).to(torch.float16)\\n    den = torch.randn((size,2), generator=g).to(torch.float16)\\n    den[(den==0).all(dim=1), 0] = 1\\n    nb, nf, n = check(f\\\"rand seed{seed} size{size}\\\", num, den); badtot += nb+nf; tot += n\\n\\nspecial = torch.tensor([0.0,-0.0, 65504.0,-65504.0, 6.103515625e-05,-6.103515625e-05,\\n                        5.960464477539063e-08,-5.960464477539063e-08, 1.0,-1.0, 2048.0, 0.001, 300.0], dtype=torch.float16)\\ns1, s2 = torch.meshgrid(special, special, indexing=\\\"ij\\\")\\nnum = torch.stack([s1.reshape(-1), s2.reshape(-1)], dim=1)\\ns3, s4 = torch.meshgrid(special, special, indexing=\\\"ij\\\")\\nden = torch.stack([s3.reshape(-1), s4.reshape(-1)], dim=1)\\nkeep = ~(den == 0).all(dim=1)\\nnb, nf, n = check(\\\"special grid\\\", num[keep], den[keep]); badtot += nb+nf; tot += n\\n\\nfor seed in range(5):\\n    g = torch.Generator().manual_seed(100+seed)\\n    size = 65536\\n    den = torch.randn((size,2), generator=g).to(torch.float16)\\n    k = torch.randn((size,1), generator=g).to(torch.float16)\\n    num = (den.double() * k.double()).to(torch.float16)\\n    keep = ~(den==0).all(dim=1)\\n    nb, nf, n = check(f\\\"cancellation seed{seed}\\\", num[keep], den[keep]); badtot += nb+nf; tot += n\\n\\ng = torch.Generator().manual_seed(7)\\nsize = 4096\\nnum = torch.empty((size,2)); num.uniform_(-65504, 65504, generator=g)\\nden = (torch.rand((size,2), generator=g) * 1e-7).to(torch.float16)\\nzz = (den==0).all(dim=1); den[zz,0] = torch.tensor(6e-8, dtype=torch.float16)\\nnum = num.to(torch.float16)\\nnb, nf, n = check(\\\"extreme ratio\\\", num, den); badtot += nb+nf; tot += n\\n\\n# storage-offset contiguous views, same length\\nbase = torch.randn((10000,2), dtype=torch.float16)\\nnumv = base[500:8500].cuda()          # 8000 rows\\ndenb = torch.randn((20000,2), dtype=torch.float16)\\ndenv = denb[100:8100].cuda()         # 8000 rows\\ndenv = denv.clone(); denv[(denv==0).all(dim=1), 0] = 1\\nnumv = numv.clone()\\nnb, nf, n = check(\\\"storage offset views\\\", numv, denv); badtot += nb+nf; tot += n\\n\\n# shared backing storage\\nbuf = torch.randn((2, 8192), dtype=torch.float16).cuda()\\nnumv = buf[0]; denv = buf[1].clone()\\ndenv[(denv==0).all(dim=1), 0] = 1\\nbefore = numv.clone()\\nnb, nf, n = check(\\\"shared storage\\\", numv, denv); badtot += nb+nf; tot += n\\npreserved = bool(torch.equal(numv, before))\\n\\nprint(json.dumps({\\\"total_components\\\": tot, \\\"bad\\\": badtot, \\\"inputs_preserved\\\": preserved, \\\"fail_cases\\\": fails if fails else None}))\", \"expected_signal\": \"componentwise tolerance violations on adversarial FP16 domain\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          }
+        ],
+        "reasoning_content": "Fix the storage offset shape mismatch (numv 8500 rows, denv 8400). numv = base[500:9000] → 8500; denv = denb[100:8500] → 8400. Fix: denv = denb[100:8500+100]... just make slices same length: base[500:500+8400] and denb[100:8500]. Rerun."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792306031,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1335,
+    "prompt_tokens": 18260,
+    "total_tokens": 19595,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 98,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 7508,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

@@ -217,7 +217,7 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
                             if is_active_case(details.get(case, {}))}
                   for dataset, truths in labels.items()}
         labels = {dataset: truths for dataset, truths in labels.items() if truths}
-    groups = {}
+    pending_groups = {}
     for record in records:
         if not include_archived and (not is_active_case(details.get(record["case"], {}))
                                      or Path(record["path"]).is_relative_to(root / "archive")):
@@ -255,17 +255,37 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
         key = "/".join(str(record.get(part) or "unknown") for part in
                        ("dataset", "provider", "model", "arm")) + "/" + row["original_trial"]
         key += "/" + json.dumps(protocol, sort_keys=True, separators=(",", ":"))
-        group = groups.setdefault(key, {
+        group = pending_groups.setdefault(key, {
             **{part: record.get(part) for part in ("dataset", "provider", "model", "arm")},
             # Group-level trial is the historical batch for backwards-compatible
             # protocol consumers; per_case[*].trial is the local display name.
             "trial": row["original_trial"], "original_trial": row["original_trial"],
             "protocol": protocol,
-            "per_case": {},
+            "rows": [],
         })
-        if record["case"] in group["per_case"]:
-            raise ValueError(f"Duplicate case/arm/model/provider/dataset/trial: {key}/{record['case']}")
-        group["per_case"][record["case"]] = row
+        group["rows"].append(row)
+
+    groups = {}
+    for key, pending in pending_groups.items():
+        rows = pending.pop("rows")
+        trials_by_case = {}
+        for row in rows:
+            trials_by_case.setdefault(row["case"], set()).add(row["trial"])
+        # Concurrent batches can share a timestamp ID. Disambiguate only those
+        # collisions; historical batches can legitimately span local r1/r2
+        # directories on different cases and must otherwise stay together.
+        collision = any(len(trials) > 1 for trials in trials_by_case.values())
+        for row in rows:
+            group_key = key
+            extra = {}
+            if collision:
+                group_key += "/local_trial=" + json.dumps(row["trial"])
+                extra = {"collision_disambiguator": row["trial"],
+                         "grouping_note": "Repeated case in the same recorded batch; separated by canonical trial without changing trace metadata."}
+            group = groups.setdefault(group_key, {**pending, **extra, "per_case": {}})
+            if row["case"] in group["per_case"]:
+                raise ValueError(f"Duplicate case/arm/model/provider/dataset/trial: {group_key}/{row['case']}")
+            group["per_case"][row["case"]] = row
 
     for group in groups.values():
         rows = group["per_case"]

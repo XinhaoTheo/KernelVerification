@@ -1,0 +1,40 @@
+Compute bounded normalization elementwise on stored FP16 values, returning
+FP32 output. The mathematical target is the first component of the unit
+vector in the direction (x[i], 1):
+
+  target[i] = x[i] / sqrt(1 + x[i] * x[i]).
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- EVERY finite FP16 value is legal, including both signed zeros, positive
+  and negative subnormal values, and both extrema +/-65504. NaN and infinity
+  are outside this input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x.
+Every output element must satisfy
+
+  abs(actual[i] - target[i]) <= 1e-6.
+
+The relative tolerance is zero, and signed zeros are numerically equivalent.
+The target is defined in real arithmetic on the exact stored input value.
+No particular inverse-square-root seed, number of refinement steps, or
+intermediate rounding is part of the mathematical target. Approximate
+reciprocal square roots and algebraic rewrites are permitted if they satisfy
+this fixed absolute tolerance throughout the entire legal domain.
+Correctness is one verdict for the implementation, not a verdict per input,
+input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses a direct FP64 square root and division and returns FP64; it accepts CPU
+inputs. make_inputs() supplies examples only. Vector normalization is common
+in graphics and numerical computing. This original synthetic Triton
+implementation uses an integer-bit reciprocal-square-root seed followed by
+Newton refinement; it is not a claim of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

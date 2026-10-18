@@ -27,7 +27,22 @@ COHORTS = {"pilot": tuple(f"case_{i}" for i in range(106, 112)),
            "erf": ("case_126", "case_127"),
            "gelu": ("case_128", "case_129"),
            "silu": ("case_130", "case_131"),
-           "sine": ("case_132", "case_133")}
+           "sine": ("case_132", "case_133"),
+           "hypot": ("case_134", "case_135"),
+           "softplus": ("case_136", "case_137"),
+           "compensated": ("case_138", "case_139"),
+           "fastdiv": ("case_140", "case_141"),
+           "butterfly": ("case_142", "case_143"),
+           "packed_argmax": ("case_144", "case_145"),
+           "atan": ("case_146", "case_147"),
+           "rounding": ("case_148", "case_149"),
+           "ntt": ("case_150", "case_151"),
+           "crc": ("case_152", "case_153"),
+           "complex": ("case_154", "case_155"),
+           "requant_compose": ("case_156", "case_157"),
+           "affine_scan": ("case_158", "case_159"),
+           "winograd": ("case_160", "case_161"),
+           "realfft": ("case_162", "case_163")}
 SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
                              if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
@@ -40,7 +55,12 @@ END = "<!-- END REAL KERNEL RESULTS -->"
 def _markers(cohort):
     suffix = {"pilot": "", "boundary": " BOUNDARY", "splitk_moe": " SPLITK MOE",
               "int4_pipeline": " INT4 PIPELINE", "stencil": " STENCIL",
-              "requant": " REQUANT", "erf": " ERF", "gelu": " GELU", "silu": " SILU", "sine": " SINE"}[cohort]
+              "requant": " REQUANT", "erf": " ERF", "gelu": " GELU", "silu": " SILU", "sine": " SINE",
+              "hypot": " HYPOT", "softplus": " SOFTPLUS", "compensated": " COMPENSATED",
+              "fastdiv": " FASTDIV", "butterfly": " BUTTERFLY", "packed_argmax": " PACKED ARGMAX",
+              "atan": " ATAN", "rounding": " ROUNDING", "ntt": " NTT",
+              "crc": " CRC", "complex": " COMPLEX", "requant_compose": " REQUANT COMPOSE",
+              "affine_scan": " AFFINE SCAN", "winograd": " WINOGRAD", "realfft": " REALFFT"}[cohort]
     return (f"<!-- BEGIN REAL KERNEL{suffix} RESULTS -->",
             f"<!-- END REAL KERNEL{suffix} RESULTS -->")
 

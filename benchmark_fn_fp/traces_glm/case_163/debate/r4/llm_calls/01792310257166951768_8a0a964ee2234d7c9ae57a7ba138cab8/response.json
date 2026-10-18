@@ -1,0 +1,75 @@
+{
+  "id": "chatcmpl-853f232e",
+  "choices": [
+    {
+      "finish_reason": "tool_calls",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "I'll launch three independent runtime probes in one batch: c1 (per-bin, per-width comparison against FP64 rfft on random FP16 inputs), c2 (Nyquist-bin isolation across widths with even/odd-asymmetric inputs), and c3 (extreme-magnitude coherent inputs engineered for near-zero cancellation bins).",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": [
+          {
+            "id": "chatcmpl-tool-8ceb9173ec984aa9",
+            "function": {
+              "arguments": "{\"claim_id\": \"c1\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\ntol_a, tol_r = 1e-4, 1e-6\\nout = {}\\nfor N in (64,128,256):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(1234+N)\\n    x = torch.randn((8,N), generator=g).to(torch.float16).to(dev)\\n    act = k.run(x)\\n    ref = torch.fft.rfft(x.to(torch.float64), dim=1)\\n    refc = torch.stack((ref.real, ref.imag), dim=-1)\\n    err = (act.to(torch.float64)-refc).abs()\\n    allowed = tol_a + tol_r*refc.abs()\\n    viol = (err > allowed)\\n    # worst violating bin\\n    if viol.any():\\n        idx = (err/allowed).argmax()\\n        out[N] = \\\"FAIL worst ratio %.3g\\\" % float((err/allowed).max())\\n    else:\\n        out[N] = \\\"PASS worst ratio %.3g\\\" % float((err/allowed).max())\\nprint(json.dumps({\\\"metric\\\":\\\"per-component abs err vs FP64 rfft, ratio err/(1e-4+1e-6|ref|)\\\",\\\"widths\\\":out,\\\"nonfinite\\\": any(not torch.isfinite(a).all() for a in [k.run(torch.randn((2,N)).to(torch.float16).to(dev)) for N in (64,)])}))\", \"expected_signal\": \"per-bin per-width error ratio vs tolerance\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 0
+          },
+          {
+            "id": "chatcmpl-tool-931ebf7491022496",
+            "function": {
+              "arguments": "{\"claim_id\": \"c2\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nres = {}\\nfor N in (64,128,256):\\n    g = torch.Generator(device=\\\"cpu\\\").manual_seed(99+N)\\n    # even/odd-asymmetric random input: distinct even and odd content\\n    x = torch.randn((4,N), generator=g).to(torch.float16)\\n    # make Nyquist large: add alternating component\\n    alt = ((torch.arange(N) % 2) * 2 - 1).float() * 5000.0\\n    x = (x.float() + alt).to(torch.float16).to(dev)\\n    act = k.run(x)\\n    ref = torch.fft.rfft(x.to(torch.float64), dim=1)\\n    nyq_act = act[:, N//2, :]\\n    nyq_ref = torch.stack((ref.real[:, N//2], ref.imag[:, N//2]), dim=-1)\\n    err = (nyq_act.to(torch.float64)-nyq_ref).abs()\\n    allowed = 1e-4 + 1e-6*nyq_ref.abs()\\n    res[N] = {\\\"max_nyquist_err\\\": float(err.max()), \\\"tol\\\": float(allowed.max()),\\n              \\\"imag_exactly_zero\\\": bool((act[:, N//2, 1] == 0.0).all()),\\n              \\\"pass\\\": bool((err <= allowed).all())}\\nprint(json.dumps({\\\"metric\\\":\\\"Nyquist bin k=N/2 abs error vs tolerance; imag part zero check\\\",\\\"result\\\":res}))\", \"expected_signal\": \"Nyquist bin error within tolerance and imag exactly zero\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 1
+          },
+          {
+            "id": "chatcmpl-tool-a51a6f64b2dcae0e",
+            "function": {
+              "arguments": "{\"claim_id\": \"c3\", \"code\": \"import torch, json, importlib.util\\nspec = importlib.util.spec_from_file_location(\\\"k\\\", \\\"/root/cases/case_163/kernel.py\\\")\\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\\ndev = \\\"cuda\\\"\\nN = 256\\ng = torch.Generator(device=\\\"cpu\\\").manual_seed(7)\\n# coherent extreme-magnitude rows: +/-65504 sinusoid at frequency f1 combined with another\\n# so most bins cancel exactly, plus near-zero-cancellation via two adjacent frequencies\\nj = torch.arange(N)\\nrows = []\\nfor (f1, f2, a, b) in [(1,2,65504.,65504.),(3,3,65504.,-65504.),(5,254,60000.,60000.),(64,32,65504.,65000.)]:\\n    r = a*torch.cos(2*3.141592653589793*f1*j/N) + b*torch.cos(2*3.141592653589793*f2*j/N)\\n    rows.append(r)\\nx = torch.stack(rows).to(torch.float16).to(dev)\\nact = k.run(x)\\nref = torch.fft.rfft(x.to(torch.float64), dim=1)\\nrefc = torch.stack((ref.real, ref.imag), dim=-1)\\nerr = (act.to(torch.float64)-refc).abs()\\nallowed = 1e-4 + 1e-6*refc.abs()\\nratio = err/allowed\\nworst = ratio.max()\\n# smallest |ref| magnitude present (near-zero cancellation bins)\\nminabs = refc.abs().min()\\npass_all = bool((err <= allowed).all()) and bool(torch.isfinite(act).all())\\nprint(json.dumps({\\\"metric\\\":\\\"abs err vs 1e-4+1e-6|ref| on coherent extreme FP16 inputs N=256\\\",\\n \\\"pass\\\":pass_all, \\\"worst_ratio\\\":float(worst), \\\"max_abs_err\\\":float(err.max()),\\n \\\"min_abs_ref\\\":float(minabs), \\\"nonfinite\\\": bool((~torch.isfinite(act)).any())}))\", \"expected_signal\": \"error ratio on extreme-magnitude cancellation bins\"}",
+              "name": "run_claim_probe"
+            },
+            "type": "function",
+            "index": 2
+          }
+        ],
+        "reasoning_content": "I need to inspect kernel source? Not necessary. Launch three probes — c1 (per-width per-bin random), c2 (Nyquist bin across widths, distinct even/odd content), c3 (extreme magnitude cancellation inputs). But c2/c3 depend on kernel working at all... they're independent probes. I can batch all three.\n\nProbe code: import kernel from artifact? The probes run locally — need to load kernel.py. Likely the session dir /root/cases/case_163. I'll import via importlib from that path."
+      },
+      "raw_output": null
+    }
+  ],
+  "created": 1792310259,
+  "model": "accounts/fireworks/models/glm-5p3",
+  "object": "chat.completion",
+  "metadata": null,
+  "moderation": null,
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 1440,
+    "prompt_tokens": 36245,
+    "total_tokens": 37685,
+    "completion_tokens_details": {
+      "accepted_prediction_tokens": null,
+      "audio_tokens": null,
+      "reasoning_tokens": 112,
+      "rejected_prediction_tokens": null,
+      "text_tokens": null
+    },
+    "prompt_tokens_details": {
+      "audio_tokens": null,
+      "cache_write_tokens": null,
+      "cached_tokens": 498,
+      "image_tokens": null,
+      "text_tokens": null
+    }
+  }
+}

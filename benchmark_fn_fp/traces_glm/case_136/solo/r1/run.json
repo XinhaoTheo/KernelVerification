@@ -1,0 +1,820 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_136",
+    "has_error": null,
+    "kernel_code": "\"\"\"Elementwise softplus using stable tails and a range-reduced logarithm.\n\nOriginal synthetic Triton implementation of a standard activation function.\nThis is not a reproduction of an upstream implementation or historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _softplus_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = tl.exp(-tl.abs(x))\n    s = 1.0 + exponential\n    # Range-reduce log(s) around sqrt(2), then use its odd-power expansion.\n    q = tl.div_rn(s - 1.4142135623730951, s + 1.4142135623730951)\n    square = q * q\n    polynomial = 0.14285714285714285\n    polynomial = 0.2 + square * polynomial\n    polynomial = 0.3333333333333333 + square * polynomial\n    polynomial = 1.0 + square * polynomial\n    correction = 0.34657359027997265 + (2.0 * q) * polynomial\n    value = tl.maximum(x, 0.0) + correction\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating softplus of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _softplus_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical softplus with a stable FP64 expression.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.clamp(value, min=0.0) + torch.log1p(torch.exp(-torch.abs(value)))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+    "passed": null,
+    "problem_text": "Compute softplus elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is\n\n  target[i] = softplus(x[i]) = log(1 + exp(x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - softplus(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular range reduction, polynomial approximation or intermediate\nrounding is part of the mathematical target. Algebraic rewrites and\napproximations are permitted if they satisfy this fixed absolute tolerance\nthroughout the entire legal domain. Correctness is one verdict for the\nimplementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 softplus expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Softplus is a standard neural\nnetwork activation. This is an original synthetic Triton implementation\nusing logarithm range reduction and an odd-power series, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_136",
+    "status": "unknown",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-10-18T01:05:37Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:57Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "a7f8c99589271ed99f5eeb2d2679f5b47d95ff48348ea7344c1ed044b927389b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d6b0dd2b3b95a5f06002eca9fe4e6e726a7084da9bd91895e3b0eb17950c13d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "d8520eebfd5bb3bb6ab52abf1a83a4ad4bd36d0a3ad4c19ec9bcc933670ce544"
+              }
+            ],
+            "duration_s": 4.539932,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 5.7786953533423e-07,
+              "n_tested": 63488,
+              "tolerance": 1e-06,
+              "violations": 0,
+              "worst_out": 8.06281566619873,
+              "worst_ref": 8.062815088329195,
+              "worst_x": 8.0625
+            },
+            "max_abs_err": 5.7786953533423e-07,
+            "n_tested": 63488,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 63488, \"max_abs_err\": 5.7786953533423e-07, \"tolerance\": 1e-06, \"violations\": 0, \"worst_x\": 8.0625, \"worst_out\": 8.06281566619873, \"worst_ref\": 8.062815088329195}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "violations": 0,
+            "worst_out": 8.06281566619873,
+            "worst_ref": 8.062815088329195,
+            "worst_x": 8.0625
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values on CUDA: max abs error vs FP64 softplus reference is 5.779e-7 (< 1e-6 tolerance), 0 violations; worst point at x=8.0625.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The kernel approximates ln(1+exp(-|x|)) with a truncated odd-power series in q=(s-sqrt2)/(s+sqrt2) evaluated in FP32; truncation error (~5e-8) plus FP32 rounding in exp, division, and polynomial could exceed the 1e-6 absolute tolerance for some FP16 input, especially around s near 2 (x near 0) where the series tail is largest.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Every output element must satisfy abs(actual[i] - softplus(x[i])) <= 1e-6 throughout the entire legal domain, and every finite FP16 value (subnormals, signed zeros, +/-65504) is legal."
+        }
+      ],
+      "scope_rationale": "The contract requires abs(actual - softplus(x)) <= 1e-6 for every finite FP16 input value, so any input value violating it is a direct contract violation.",
+      "statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6.",
+      "status": "rebutted",
+      "updated_at": "2026-10-18T01:05:57Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_136",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_136"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_136"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_136"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_136",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 29.763208961,
+      "role": "solo",
+      "round": 2,
+      "text": "The contract allows every finite FP16 value with a fixed 1e-6 absolute tolerance, and FP16 is small enough to test exhaustively. I'll record that claim and run a probe over all 65536 finite FP16 values.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The kernel approximates ln(1+exp(-|x|)) with a truncated odd-power series in q=(s-sqrt2)/(s+sqrt2) evaluated in FP32; truncation error (~5e-8) plus FP32 rounding in exp, division, and polynomial could exceed the 1e-6 absolute tolerance for some FP16 input, especially around s near 2 (x near 0) where the series tail is largest.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Every output element must satisfy abs(actual[i] - softplus(x[i])) <= 1e-6 throughout the entire legal domain, and every finite FP16 value (subnormals, signed zeros, +/-65504) is legal."
+              }
+            ],
+            "scope_rationale": "The contract requires abs(actual - softplus(x)) <= 1e-6 for every finite FP16 input value, so any input value violating it is a direct contract violation.",
+            "statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 29.763,
+        "input_tokens": 9018,
+        "output_tokens": 2247
+      }
+    },
+    {
+      "duration_s": 5.118843847999997,
+      "role": "solo",
+      "round": 3,
+      "text": "I'll run the exhaustive FP16 sweep for claim c1 \u2014 every finite FP16 value compared against an FP64 softplus reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_136\")\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx = torch.tensor(bits, dtype=torch.float16).view(torch.int16).view(torch.int16).to(torch.int16)\nx16 = bits.to(torch.int16).view(torch.float16)\nx16 = x16.to(\"cuda\")\nfinite = torch.isfinite(x16)\nassert finite.all(), \"all bit patterns should be finite after masking\"\n# skip NaN/Inf encodings\nmask = torch.isfinite(x16)\nidx = torch.nonzero(mask).flatten()\nxv = x16[idx].contiguous()\nout = kernel.run(xv)\nref = kernel.reference(xv.cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nworst_i = int(err.argmax())\ndata = {\n    \"n_tested\": int(xv.numel()),\n    \"max_abs_err\": max_err,\n    \"tolerance\": 1e-6,\n    \"violations\": int((err > 1e-6).sum()),\n    \"worst_x\": float(xv.cpu()[worst_i]),\n    \"worst_out\": float(out.cpu()[worst_i]),\n    \"worst_ref\": float(ref[worst_i]),\n}\nprint(json.dumps(data))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 5.119,
+        "input_tokens": 10377,
+        "output_tokens": 350
+      }
+    },
+    {
+      "duration_s": 3.8382286420000042,
+      "role": "solo",
+      "round": 4,
+      "text": "The probe failed only due to a stray assertion (the full bit range legitimately contains NaN/Inf encodings). I'll re-run the exhaustive FP16 sweep with the mask applied properly.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_136\")\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int16)\nx16 = bits.view(torch.float16).to(\"cuda\")\nmask = torch.isfinite(x16)\nxv = x16[mask].contiguous()\nout = kernel.run(xv)\nref = kernel.reference(xv.cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nworst_i = int(err.argmax())\ndata = {\n    \"n_tested\": int(xv.numel()),\n    \"max_abs_err\": max_err,\n    \"tolerance\": 1e-6,\n    \"violations\": int((err > 1e-6).sum()),\n    \"worst_x\": float(xv.cpu()[worst_i]),\n    \"worst_out\": float(out.cpu()[worst_i]),\n    \"worst_ref\": float(ref[worst_i]),\n}\nprint(json.dumps(data))\n"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.838,
+        "input_tokens": 12430,
+        "output_tokens": 304
+      }
+    },
+    {
+      "duration_s": 4.1026209970000025,
+      "role": "solo",
+      "round": 5,
+      "text": "The exhaustive FP16 sweep (t7) tested all 63,488 finite FP16 values against the FP64 reference: zero violations, max absolute error 5.78e-7 \u2014 under the 1e-6 tolerance. The claim is rebutted and the kernel satisfies the contract over its entire declared domain.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "max_abs_err": 5.7786953533423e-07,
+              "n_tested": 63488,
+              "tolerance": 1e-06,
+              "violations": 0,
+              "worst_out": 8.06281566619873,
+              "worst_ref": 8.062815088329195,
+              "worst_x": 8.0625
+            },
+            "event_id": "t7",
+            "summary": "Exhaustive sweep of all 63488 finite FP16 values on CUDA: max abs error vs FP64 softplus reference is 5.779e-7 (< 1e-6 tolerance), 0 violations; worst point at x=8.0625.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 4.103,
+        "input_tokens": 14563,
+        "output_tokens": 294
+      }
+    },
+    {
+      "duration_s": 3.9428350880000025,
+      "role": "solo",
+      "round": 6,
+      "text": "The exhaustive sweep over the entire legal domain (all 63,488 finite FP16 values) showed zero tolerance violations, with max error 5.78e-7 against the 1e-6 contract. The only open claim is resolved as rebutted, and output dtype/device requirements are met by inspection (FP32 output on x.device). Recording the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.97,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "Ran an exhaustive runtime probe (tool event t7) over every finite FP16 value (63,488 values, including subnormals, signed zeros, and \u00b165504) on CUDA, comparing kernel.run output against the FP64 softplus reference. Max absolute error was 5.779e-7 (worst at x=8.0625), with 0 violations of the contract's fixed 1e-6 absolute tolerance. Since FP16 is exhaustively enumerable, this covers the entire declared legal domain; the contract permits approximations as long as the tolerance holds. Claim c1 (that some input violates the tolerance) is rebutted; the kernel also returns a fresh FP32 tensor on the input device per source inspection. Verdict: trust.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.943,
+        "input_tokens": 17872,
+        "output_tokens": 299
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_136"
+      },
+      "created_at": "2026-10-18T01:05:06Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_136",
+        "has_error": null,
+        "kernel_code": "\"\"\"Elementwise softplus using stable tails and a range-reduced logarithm.\n\nOriginal synthetic Triton implementation of a standard activation function.\nThis is not a reproduction of an upstream implementation or historical bug.\n\"\"\"\nimport torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _softplus_kernel(X, OUT, N: tl.constexpr, BLOCK: tl.constexpr):\n    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)\n    active = index < N\n    x = tl.load(X + index, mask=active, other=0.0).to(tl.float32)\n    exponential = tl.exp(-tl.abs(x))\n    s = 1.0 + exponential\n    # Range-reduce log(s) around sqrt(2), then use its odd-power expansion.\n    q = tl.div_rn(s - 1.4142135623730951, s + 1.4142135623730951)\n    square = q * q\n    polynomial = 0.14285714285714285\n    polynomial = 0.2 + square * polynomial\n    polynomial = 0.3333333333333333 + square * polynomial\n    polynomial = 1.0 + square * polynomial\n    correction = 0.34657359027997265 + (2.0 * q) * polynomial\n    value = tl.maximum(x, 0.0) + correction\n    tl.store(OUT + index, value, mask=active)\n\n\ndef validate_inputs(x, require_cuda=True):\n    \"\"\"Validate the complete public input domain; also usable on CPU.\"\"\"\n    def require(condition, message):\n        if not condition:\n            raise ValueError(message)\n\n    require(not torch.is_inference_mode_enabled(), \"ordinary execution mode required\")\n    require(type(x) is torch.Tensor, \"ordinary torch.Tensor required\")\n    require(x.layout == torch.strided and x.is_contiguous(),\n            \"contiguous strided input required\")\n    require(not x.requires_grad and not x.is_inference(),\n            \"ordinary non-gradient input required\")\n    require(not x.is_neg() and not x.is_conj(),\n            \"logical view flags are outside this domain\")\n    require(not require_cuda or x.is_cuda, \"CUDA input required by run\")\n    require(x.ndim == 1 and 1 <= x.numel() <= 131072,\n            \"x must have shape [N] with N in [1,131072]\")\n    require(x.dtype == torch.float16, \"FP16 input required\")\n    require(bool(torch.isfinite(x).all().item()), \"all input values must be finite\")\n    return {\"valid\": True, \"size\": x.numel()}\n\n\ndef run(x):\n    \"\"\"Return a fresh FP32 tensor approximating softplus of each stored input value.\"\"\"\n    validate_inputs(x)\n    n = x.numel()\n    with torch.cuda.device(x.device):\n        output = torch.empty((n,), dtype=torch.float32, device=x.device)\n        _softplus_kernel[(triton.cdiv(n, 256),)](\n            x, output, N=n, BLOCK=256, num_warps=4, enable_fp_fusion=False)\n    return output\n\n\ndef reference(x):\n    \"\"\"Evaluate mathematical softplus with a stable FP64 expression.\"\"\"\n    validate_inputs(x, require_cuda=False)\n    value = x.to(torch.float64)\n    return torch.clamp(value, min=0.0) + torch.log1p(torch.exp(-torch.abs(value)))\n\n\ndef make_inputs(device=\"cuda\", size=4093, seed=0):\n    \"\"\"Convenience example generator, not a restriction on the input domain.\"\"\"\n    generator = torch.Generator(device=\"cpu\").manual_seed(seed)\n    x = (2.0 * torch.randn((size,), generator=generator)).to(torch.float16)\n    return (x.to(device),)\n",
+        "passed": null,
+        "problem_text": "Compute softplus elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is\n\n  target[i] = softplus(x[i]) = log(1 + exp(x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - softplus(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular range reduction, polynomial approximation or intermediate\nrounding is part of the mathematical target. Algebraic rewrites and\napproximations are permitted if they satisfy this fixed absolute tolerance\nthroughout the entire legal domain. Correctness is one verdict for the\nimplementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 softplus expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Softplus is a standard neural\nnetwork activation. This is an original synthetic Triton implementation\nusing logarithm range reduction and an odd-power series, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_136",
+        "status": "unknown",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_136"
+      },
+      "created_at": "2026-10-18T01:05:06Z",
+      "id": "t2",
+      "output": {
+        "content": "Compute softplus elementwise on stored FP16 values, returning FP32 output.\nThe mathematical target is\n\n  target[i] = softplus(x[i]) = log(1 + exp(x[i])).\n\nInputs and complete public domain:\n- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.\n- EVERY finite FP16 value is legal, including both signed zeros, positive\n  and negative subnormal values, and both extrema +/-65504. NaN and infinity\n  are outside this input domain.\n- x is an ordinary torch.Tensor (not a subclass), dense, strided,\n  contiguous, and on a CUDA device. Contiguous views with nonzero storage\n  offsets are legal. The input has requires_grad=False, is_inference=False,\n  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,\n  without concurrent external writes to the input. This forward operation\n  does not provide autograd.\n\nReturn a fresh finite FP32 tensor [N] on x.device, preserving x.\nEvery output element must satisfy\n\n  abs(actual[i] - softplus(x[i])) <= 1e-6.\n\nThe relative tolerance is zero, and signed zeros are numerically equivalent.\nThe target is defined in real arithmetic on the exact stored input value.\nNo particular range reduction, polynomial approximation or intermediate\nrounding is part of the mathematical target. Algebraic rewrites and\napproximations are permitted if they satisfy this fixed absolute tolerance\nthroughout the entire legal domain. Correctness is one verdict for the\nimplementation, not a verdict per input, input distribution, seed or size.\n\nvalidate_inputs() enforces this domain and is called by run(). reference()\nuses a stable FP64 softplus expression and returns FP64; it accepts CPU\ninputs. make_inputs() supplies examples only. Softplus is a standard neural\nnetwork activation. This is an original synthetic Triton implementation\nusing logarithm range reduction and an odd-power series, not a claim of an\nupstream historical defect.\n\nFrozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.\n",
+        "entry": "case_136",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_136"
+      },
+      "created_at": "2026-10-18T01:05:06Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_136",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 3103
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 3
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 1945
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_136",
+        "path": "meta.json"
+      },
+      "created_at": "2026-10-18T01:05:06Z",
+      "id": "t4",
+      "output": {
+        "content": "{}\n",
+        "entry": "case_136",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 3,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The kernel approximates ln(1+exp(-|x|)) with a truncated odd-power series in q=(s-sqrt2)/(s+sqrt2) evaluated in FP32; truncation error (~5e-8) plus FP32 rounding in exp, division, and polynomial could exceed the 1e-6 absolute tolerance for some FP16 input, especially around s near 2 (x near 0) where the series tail is largest.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - softplus(x[i])) <= 1e-6 throughout the entire legal domain, and every finite FP16 value (subnormals, signed zeros, +/-65504) is legal."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual - softplus(x)) <= 1e-6 for every finite FP16 input value, so any input value violating it is a direct contract violation.",
+        "statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6."
+      },
+      "created_at": "2026-10-18T01:05:37Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-10-18T01:05:37Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The kernel approximates ln(1+exp(-|x|)) with a truncated odd-power series in q=(s-sqrt2)/(s+sqrt2) evaluated in FP32; truncation error (~5e-8) plus FP32 rounding in exp, division, and polynomial could exceed the 1e-6 absolute tolerance for some FP16 input, especially around s near 2 (x near 0) where the series tail is largest.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Every output element must satisfy abs(actual[i] - softplus(x[i])) <= 1e-6 throughout the entire legal domain, and every finite FP16 value (subnormals, signed zeros, +/-65504) is legal."
+          }
+        ],
+        "scope_rationale": "The contract requires abs(actual - softplus(x)) <= 1e-6 for every finite FP16 input value, so any input value violating it is a direct contract violation.",
+        "statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6.",
+        "status": "open",
+        "updated_at": "2026-10-18T01:05:37Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_136\")\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int32)\nx = torch.tensor(bits, dtype=torch.float16).view(torch.int16).view(torch.int16).to(torch.int16)\nx16 = bits.to(torch.int16).view(torch.float16)\nx16 = x16.to(\"cuda\")\nfinite = torch.isfinite(x16)\nassert finite.all(), \"all bit patterns should be finite after masking\"\n# skip NaN/Inf encodings\nmask = torch.isfinite(x16)\nidx = torch.nonzero(mask).flatten()\nxv = x16[idx].contiguous()\nout = kernel.run(xv)\nref = kernel.reference(xv.cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nworst_i = int(err.argmax())\ndata = {\n    \"n_tested\": int(xv.numel()),\n    \"max_abs_err\": max_err,\n    \"tolerance\": 1e-6,\n    \"violations\": int((err > 1e-6).sum()),\n    \"worst_x\": float(xv.cpu()[worst_i]),\n    \"worst_out\": float(out.cpu()[worst_i]),\n    \"worst_ref\": float(ref[worst_i]),\n}\nprint(json.dumps(data))\n"
+      },
+      "created_at": "2026-10-18T01:05:45Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "143b2eec5fe06780e91a8d305f2ce60868aed92131a2b68468abf9c60ec1f9c4"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "54d42d13bf20dee7d341895f73964f0e0ce7b15dd8b50b324e083720f071505f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6.",
+        "cwd": "/root/cases/case_136",
+        "duration_s": 3.059721,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "143b2eec5fe06780e91a8d305f2ce60868aed92131a2b68468abf9c60ec1f9c4"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "54d42d13bf20dee7d341895f73964f0e0ce7b15dd8b50b324e083720f071505f"
+              }
+            ],
+            "duration_s": 3.059721,
+            "exit_code": 1,
+            "expected_signal": null,
+            "json_parse_error": "stdout has no non-empty lines",
+            "json_result": null,
+            "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_136/solo/probes/t6_probe.py:6: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).\n  x = torch.tensor(bits, dtype=torch.float16).view(torch.int16).view(torch.int16).to(torch.int16)\nTraceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_136/solo/probes/t6_probe.py\", line 10, in <module>\n    assert finite.all(), \"all bit patterns should be finite after masking\"\n           ^^^^^^^^^^^^\nAssertionError: all bit patterns should be finite after masking\n",
+            "stdout": "",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 1,
+        "expected_signal": null,
+        "json_parse_error": "stdout has no non-empty lines",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "/root/trace_runs/r1/real_kernel_challenges/case_136/solo/probes/t6_probe.py:6: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.detach().clone() or sourceTensor.detach().clone().requires_grad_(True), rather than torch.tensor(sourceTensor).\n  x = torch.tensor(bits, dtype=torch.float16).view(torch.int16).view(torch.int16).to(torch.int16)\nTraceback (most recent call last):\n  File \"/root/trace_runs/r1/real_kernel_challenges/case_136/solo/probes/t6_probe.py\", line 10, in <module>\n    assert finite.all(), \"all bit patterns should be finite after masking\"\n           ^^^^^^^^^^^^\nAssertionError: all bit patterns should be finite after masking\n",
+        "stdout": "",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_136\")\nimport kernel\n\nbits = torch.arange(65536, dtype=torch.int16)\nx16 = bits.view(torch.float16).to(\"cuda\")\nmask = torch.isfinite(x16)\nxv = x16[mask].contiguous()\nout = kernel.run(xv)\nref = kernel.reference(xv.cpu())\nerr = (out.cpu().to(torch.float64) - ref).abs()\nmax_err = err.max().item()\nworst_i = int(err.argmax())\ndata = {\n    \"n_tested\": int(xv.numel()),\n    \"max_abs_err\": max_err,\n    \"tolerance\": 1e-6,\n    \"violations\": int((err > 1e-6).sum()),\n    \"worst_x\": float(xv.cpu()[worst_i]),\n    \"worst_out\": float(out.cpu()[worst_i]),\n    \"worst_ref\": float(ref[worst_i]),\n}\nprint(json.dumps(data))\n"
+      },
+      "created_at": "2026-10-18T01:05:53Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "a7f8c99589271ed99f5eeb2d2679f5b47d95ff48348ea7344c1ed044b927389b"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t7_stdout.txt",
+            "sha256": "d6b0dd2b3b95a5f06002eca9fe4e6e726a7084da9bd91895e3b0eb17950c13d5"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t7_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t7_json_result.json",
+            "sha256": "d8520eebfd5bb3bb6ab52abf1a83a4ad4bd36d0a3ad4c19ec9bcc933670ce544"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6.",
+        "cwd": "/root/cases/case_136",
+        "duration_s": 4.539932,
+        "event_id": "t7",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "a7f8c99589271ed99f5eeb2d2679f5b47d95ff48348ea7344c1ed044b927389b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d6b0dd2b3b95a5f06002eca9fe4e6e726a7084da9bd91895e3b0eb17950c13d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "d8520eebfd5bb3bb6ab52abf1a83a4ad4bd36d0a3ad4c19ec9bcc933670ce544"
+              }
+            ],
+            "duration_s": 4.539932,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 5.7786953533423e-07,
+              "n_tested": 63488,
+              "tolerance": 1e-06,
+              "violations": 0,
+              "worst_out": 8.06281566619873,
+              "worst_ref": 8.062815088329195,
+              "worst_x": 8.0625
+            },
+            "stderr": "",
+            "stdout": "{\"n_tested\": 63488, \"max_abs_err\": 5.7786953533423e-07, \"tolerance\": 1e-06, \"violations\": 0, \"worst_x\": 8.0625, \"worst_out\": 8.06281566619873, \"worst_ref\": 8.062815088329195}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t7"
+        },
+        "exit_code": 0,
+        "expected_signal": null,
+        "json_parse_error": null,
+        "json_result": {
+          "max_abs_err": 5.7786953533423e-07,
+          "n_tested": 63488,
+          "tolerance": 1e-06,
+          "violations": 0,
+          "worst_out": 8.06281566619873,
+          "worst_ref": 8.062815088329195,
+          "worst_x": 8.0625
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"n_tested\": 63488, \"max_abs_err\": 5.7786953533423e-07, \"tolerance\": 1e-06, \"violations\": 0, \"worst_x\": 8.0625, \"worst_out\": 8.06281566619873, \"worst_ref\": 8.062815088329195}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "max_abs_err": 5.7786953533423e-07,
+          "n_tested": 63488,
+          "tolerance": 1e-06,
+          "violations": 0,
+          "worst_out": 8.06281566619873,
+          "worst_ref": 8.062815088329195,
+          "worst_x": 8.0625
+        },
+        "event_id": "t7",
+        "summary": "Exhaustive sweep of all 63488 finite FP16 values on CUDA: max abs error vs FP64 softplus reference is 5.779e-7 (< 1e-6 tolerance), 0 violations; worst point at x=8.0625.",
+        "supports": "rebutted"
+      },
+      "created_at": "2026-10-18T01:05:57Z",
+      "id": "t8",
+      "output": {
+        "claim": {
+          "created_at": "2026-10-18T01:05:37Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-10-18T01:05:57Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t7_probe.py",
+                    "sha256": "a7f8c99589271ed99f5eeb2d2679f5b47d95ff48348ea7344c1ed044b927389b"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "d6b0dd2b3b95a5f06002eca9fe4e6e726a7084da9bd91895e3b0eb17950c13d5"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t7_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t7_json_result.json",
+                    "sha256": "d8520eebfd5bb3bb6ab52abf1a83a4ad4bd36d0a3ad4c19ec9bcc933670ce544"
+                  }
+                ],
+                "duration_s": 4.539932,
+                "exit_code": 0,
+                "expected_signal": null,
+                "json_parse_error": null,
+                "json_result": {
+                  "max_abs_err": 5.7786953533423e-07,
+                  "n_tested": 63488,
+                  "tolerance": 1e-06,
+                  "violations": 0,
+                  "worst_out": 8.06281566619873,
+                  "worst_ref": 8.062815088329195,
+                  "worst_x": 8.0625
+                },
+                "max_abs_err": 5.7786953533423e-07,
+                "n_tested": 63488,
+                "stderr": "",
+                "stdout": "{\"n_tested\": 63488, \"max_abs_err\": 5.7786953533423e-07, \"tolerance\": 1e-06, \"violations\": 0, \"worst_x\": 8.0625, \"worst_out\": 8.06281566619873, \"worst_ref\": 8.062815088329195}\n",
+                "timed_out": false,
+                "timeout_s": 60,
+                "tolerance": 1e-06,
+                "violations": 0,
+                "worst_out": 8.06281566619873,
+                "worst_ref": 8.062815088329195,
+                "worst_x": 8.0625
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Exhaustive sweep of all 63488 finite FP16 values on CUDA: max abs error vs FP64 softplus reference is 5.779e-7 (< 1e-6 tolerance), 0 violations; worst point at x=8.0625.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "solo",
+          "rationale": "The kernel approximates ln(1+exp(-|x|)) with a truncated odd-power series in q=(s-sqrt2)/(s+sqrt2) evaluated in FP32; truncation error (~5e-8) plus FP32 rounding in exp, division, and polynomial could exceed the 1e-6 absolute tolerance for some FP16 input, especially around s near 2 (x near 0) where the series tail is largest.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Every output element must satisfy abs(actual[i] - softplus(x[i])) <= 1e-6 throughout the entire legal domain, and every finite FP16 value (subnormals, signed zeros, +/-65504) is legal."
+            }
+          ],
+          "scope_rationale": "The contract requires abs(actual - softplus(x)) <= 1e-6 for every finite FP16 input value, so any input value violating it is a direct contract violation.",
+          "statement": "There exists at least one finite FP16 input value x such that abs(run(x) - softplus_fp64(x)) > 1e-6.",
+          "status": "rebutted",
+          "updated_at": "2026-10-18T01:05:57Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-10-18T01:05:57Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t7_probe.py",
+                "sha256": "a7f8c99589271ed99f5eeb2d2679f5b47d95ff48348ea7344c1ed044b927389b"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t7_stdout.txt",
+                "sha256": "d6b0dd2b3b95a5f06002eca9fe4e6e726a7084da9bd91895e3b0eb17950c13d5"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t7_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t7_json_result.json",
+                "sha256": "d8520eebfd5bb3bb6ab52abf1a83a4ad4bd36d0a3ad4c19ec9bcc933670ce544"
+              }
+            ],
+            "duration_s": 4.539932,
+            "exit_code": 0,
+            "expected_signal": null,
+            "json_parse_error": null,
+            "json_result": {
+              "max_abs_err": 5.7786953533423e-07,
+              "n_tested": 63488,
+              "tolerance": 1e-06,
+              "violations": 0,
+              "worst_out": 8.06281566619873,
+              "worst_ref": 8.062815088329195,
+              "worst_x": 8.0625
+            },
+            "max_abs_err": 5.7786953533423e-07,
+            "n_tested": 63488,
+            "stderr": "",
+            "stdout": "{\"n_tested\": 63488, \"max_abs_err\": 5.7786953533423e-07, \"tolerance\": 1e-06, \"violations\": 0, \"worst_x\": 8.0625, \"worst_out\": 8.06281566619873, \"worst_ref\": 8.062815088329195}\n",
+            "timed_out": false,
+            "timeout_s": 60,
+            "tolerance": 1e-06,
+            "violations": 0,
+            "worst_out": 8.06281566619873,
+            "worst_ref": 8.062815088329195,
+            "worst_x": 8.0625
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Exhaustive sweep of all 63488 finite FP16 values on CUDA: max abs error vs FP64 softplus reference is 5.779e-7 (< 1e-6 tolerance), 0 violations; worst point at x=8.0625.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.97,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Ran an exhaustive runtime probe (tool event t7) over every finite FP16 value (63,488 values, including subnormals, signed zeros, and \u00b165504) on CUDA, comparing kernel.run output against the FP64 softplus reference. Max absolute error was 5.779e-7 (worst at x=8.0625), with 0 violations of the contract's fixed 1e-6 absolute tolerance. Since FP16 is exhaustively enumerable, this covers the entire declared legal domain; the contract permits approximations as long as the tolerance holds. Claim c1 (that some input violates the tolerance) is rebutted; the kernel also returns a fresh FP32 tensor on the input device per source inspection. Verdict: trust.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-10-18T01:06:01Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.97,
+        "created_at": "2026-10-18T01:06:01Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "Ran an exhaustive runtime probe (tool event t7) over every finite FP16 value (63,488 values, including subnormals, signed zeros, and \u00b165504) on CUDA, comparing kernel.run output against the FP64 softplus reference. Max absolute error was 5.779e-7 (worst at x=8.0625), with 0 violations of the contract's fixed 1e-6 absolute tolerance. Since FP16 is exhaustively enumerable, this covers the entire declared legal domain; the contract permits approximations as long as the tolerance holds. Claim c1 (that some input violates the tolerance) is rebutted; the kernel also returns a fresh FP32 tensor on the input device per source inspection. Verdict: trust.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.97,
+    "created_at": "2026-10-18T01:06:01Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Ran an exhaustive runtime probe (tool event t7) over every finite FP16 value (63,488 values, including subnormals, signed zeros, and \u00b165504) on CUDA, comparing kernel.run output against the FP64 softplus reference. Max absolute error was 5.779e-7 (worst at x=8.0625), with 0 violations of the contract's fixed 1e-6 absolute tolerance. Since FP16 is exhaustively enumerable, this covers the entire declared legal domain; the contract permits approximations as long as the tolerance holds. Claim c1 (that some input violates the tolerance) is rebutted; the kernel also returns a fresh FP32 tensor on the input device per source inspection. Verdict: trust.",
+    "verdict": "trust"
+  }
+}
