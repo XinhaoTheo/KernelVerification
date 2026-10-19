@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_29`
+- Entry: `case_30`
 - Turns: 10
-- Tool events: 14
+- Tool events: 13
 - Claims: 2
 - Description updates: 0
-- LLM time: 76.523s across 9 calls | tokens: in=180625 out=5382 total=186007
+- LLM time: 110.824s across 9 calls | tokens: in=98530 out=2206 total=100736
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.95
@@ -25,54 +25,49 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_29",
+    "entry": "case_30",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 
-### Turn 2 - `solo` (23.827896595000002s, in=6591 out=1537)
+### Turn 2 - `solo` (13.701652715000009s, in=6586 out=336)
 
 Message:
 
 ```text
-The kernel's quantization: it computes binade exponent e = floor(log2(ax)), step = 2^(e-3). For a value like 7.9 (binade [4,8)), step = 0.5, but e4m3 normal grid: values 4, 4.5,...,7.5, and then 8. Rounding 7.9 with step 0.5 gives 8.0 — fine. But issue: at binade boundary, e.g. x=8.2, e=3, step=1, floor(8.2/1+0.5)=8 → 8.0 ok. Value 7.6: e=2 (since floor(log2(7.6))=2), step=0.5, floor(15.2+0.5)=15 → 7.5, correct (nearest of 7.5 and 8 is 7.5? 7.6 nearest is 7.5? gap 0.5 vs 0.4 — 8 is nearer! 7.6-7.5=0.1, 8-7.6=0.4. So correct is 7.5? no, 7.6 is closer to 7.5. ok.)
+The kernel uses `v >= best` with strict take — tie: later equal value takes (take = v >= best, so a later e with v == best takes, replacing earlier). That means the HIGHEST index wins ties, violating lowest-index rule. Confirm with probe.
 
-Real bug: rounding via x/step + 0.5 near boundary where x negative? tl.floor(x/step+0.5) for negative x: e.g. x=-7.6, step=0.5, x/step=-15.2, +0.5 = -14.7, floor=-15, q=-7.5. ok round-half-away.
-
-Bug: for x just below a power of two like 8.0-eps: ax slightly <8, e=2, step=0.5, values go to 7.5 max. x=7.99 → q=8.0? floor(15.98+0.5)=16, q=16*0.5=8.0. representable, fine.
-
-Real bug: x=2^-9 tiny subnormal region? e4m3 min normal is 2^-6, subnormals step 2^-9. Kernel gives step 2^(e-3); for x=0.001 (2^-10, e=-10, step=2^-13) → quantizes to a grid finer than representable — not nearest representable e4m3 (should round to 0 or 2^
-...[truncated 1958 chars]
+Record claim with scope (in_scope: tie rule in problem.txt), then run probe.The kernel uses `take = v >= best`, so a later expert with a logit equal to the current best replaces it — that picks the *highest* tied index, contradicting the contract's lowest-index tie rule. Recording that claim and probingit.
 ```
 
 Tool calls:
@@ -80,39 +75,33 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel uses a per-binade step 2^(floor(log2|x|)-3) with no clamping to e4m3's exponent range, so tiny values get a finer grid than e4m3 provides and large values exceed the 448 maximum; outputs would not be representable e4m3 values, violating \"every value is rounded to the nearest representable e4m3 value\".",
+    "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: every value rounded to nearest representable e4m3 value; relative error bounded by half mantissa step (~6.25%), implying subnormal/small-value range is covered, not excluded."
+        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
       }
     ],
-    "scope_rationale": "problem.txt states the contract is that EVERY value is rounded to the nearest representable e4m3 value; subnormal-range and saturating-range inputs are ordinary float32
-  ...[truncated 345 chars]
+    "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index 
+  ...[truncated 113 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel uses a per-binade step 2^(floor(log2|x|)-3) with no clamping to e4m3's exponent range, so tiny values get a finer grid than e4m3 provides and large values exceed the 448 maximum; outputs would not be representable e4m3 values, violating \"every value is rounded to the nearest representable e4m3 value\".",
+    "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
     "scope": "unknown",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: every value rounded to nearest representable e4m3 value; relative error bounded by half mantissa step (~6.25%), implying subnormal/small-value range is covered, not excluded."
+        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
       }
     ],
-    "scope_rationale": "problem.txt states the contract is that EVERY value is rounded to the nearest representable e4m3 value; subnormal-range and saturating-range inputs are ordinary float32 values the contract admits (no input domain restriction is stated anywhere in the artifact).",
-    "statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
+    "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
     "status": "open"
-  
-  ...[truncated 1 chars]
+  }
 
-### Turn 3 - `solo` (5.6066313789999995s, in=8670 out=576)
-
-Message:
-
-```text
-Run probe for c1: compare kernel output against true e4m3 grid for subnormal and large values, and also general correctness. Use run_claim_probe.Testing c1 against the real kernel with subnormal-range and >448 inputs, comparing to the true e4m3 grid.
-```
+### Turn 3 - `solo` (7.379372528000005s, in=7811 out=170)
 
 Tool calls:
 
@@ -120,8 +109,9 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json\nfrom kernel import fp8_roundtrip\n\ndef e4m3_grid():\n    vals = [0.0]\n    for e in range(-9, 9):  # subnormals e=-9 step 2^-9; normals from 2^-6 to 2^8\n        step = 2.0**e\n        for m in range(8):\n            v = (1 + m/8) * step if e >= -6 else (m/8) * 2.0**(-6)\n            vals.append(v)\n    vals.append(448.0)\n    s = sorted(set(vals))\n    return torch.tensor(s + [-v for v in s if v > 0], dtype=torch.float32)\n\ngrid = e4m3_grid()\n\ndef ref(x):\n    # nearest representable e4m3 value\n    idx = torch.searchsorted(grid, x.contiguous().view(-1))\n    idx = idx.clamp(1, grid.numel()-1)\n    lo, hi = grid[idx-1], grid[idx]\n    pick_hi = (hi - x.view(-1)) < (x.view(-1) - lo)\n    return torch.where(pick_hi, hi, lo).view_as(x)
-  ...[truncated 598 chars]
+    "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_30\")\nfrom kernel import route_top1\n\nlogits = torch.tensor([[3.0, 3.0, 3.0, 1.0],\n                       [1.0, 3.0, 3.0, 0.0],\n                       [2.0, 1.0, 0.5, 2.0]], device=\"cuda\")\nout = route_top1(logits)\nprint(\"kernel :\", out.tolist())\nprint(\"expected (lowest tied index): [0, 1, 0]\")\n",
+    "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)"
+  }
   Output summary:
   {
     "artifacts": [
@@ -129,24 +119,24 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "d9832a64256e324fe0e031e1de152d6d75b6668fa950a247c046c06f6a2dfed4"
+        "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
-        "sha256": "8d632c2b6a5cf4f16bf78697b485a8c4b944a7146ded242e2f2cf108eeeaae5f"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
-    "duration_s": 6.948987,
+    "claim_statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+    "duration_s": 5.043531,
     "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
@@ -154,136 +144,97 @@ Tool calls:
         "artifacts": [
           {
             "description": "Python probe code executed by local runtime.",
-            "kind": "pr
-  ...[truncated 2350 chars]
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+         
+  ...[truncated 1508 chars]
 
-### Turn 4 - `solo` (4.241889983s, in=11199 out=551)
-
-Message:
-
-```text
-Fix device bug: grid on cuda. Rerun probe.The previous probe failed only because the reference grid was on CPU while inputs were on CUDA. Rerunning with the grid moved to thesame device.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t7 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import torch, json\nfrom kernel import fp8_roundtrip\n\ndef e4m3_grid():\n    vals = [0.0]\n    for e in range(-9, 9):\n        step = 2.0**e\n        for m in range(8):\n            v = (1 + m/8) * step if e >= -6 else (m/8) * 2.0**(-6)\n            vals.append(v)\n    vals.append(448.0)\n    s = sorted(set(vals))\n    return torch.tensor(s + [-v for v in s if v > 0], dtype=torch.float32)\n\ngrid = e4m3_grid().cuda()\n\ndef ref(x):\n    xs = x.contiguous().view(-1)\n    idx = torch.searchsorted(grid, xs).clamp(1, grid.numel()-1)\n    lo, hi = grid[idx-1], grid[idx]\n    pick_hi = (hi - xs) < (xs - lo)\n    return torch.where(pick_hi, hi, lo).view_as(x)\n\nx = torch.tensor([0.001, 0.0009, 2.0**-9, 2.0**-7, 0.01, 500.0, 448.0, 449.5, 2.0**10, 3.7, -3.7, 7.6]
-  ...[truncated 601 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "a21b895f36edb523b733dfe35028cd517f6ebf9312509b3909d41dcb1a115c89"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "ff999811c173db38320b00395e8fa5de7553ededd79cb441ede1b0b7f20a0309"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "5b916d729dc160ef4384ac1789a67884cd0e6596b8547602014b6ff60d03eb04"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual
-  ...[truncated 5256 chars]
-
-### Turn 5 - `solo` (10.843884841000005s, in=15401 out=1063)
+### Turn 4 - `solo` (17.868629992999985s, in=9271 out=303)
 
 Message:
 
 ```text
-The t7 reference grid was buggy: my grid construction was wrong (subnormal/negative handling, ref_out -480 garbage). But kernel outputs like 0.0009765625 = 2^-10 for input 0.001 — e4m3 subnormal max is 0.875*2^-6=0.01367, min subnormal step 2^-9≈0.00195. Kernel output 0.000915527 (≈2^-10*7.5?) not representable in e4m3. 500→512 also >448. These confirm c1: outputs not representable. The reference itself was broken (negative 480?), but the key evidence is kernel_out not on e4m3 grid. Let me finalize: check representability directly of kernel outputs. Evidence already shows kernel outputs 0.0009765625 (=2^-10, not e4m3 representable; smallest positive e4m3 is 2^-9) and 512 (>448 max), and -3.75 → -3.75? kernel gives -3.75 representable, ref broken. rand mismatch count is meaningless due to broken ref.
-
-Simplest: run one clean probe verifying representability of kernel outputs across wide range. Or just finalize from t7: kernel outputs 0.0009765625 and 512 are demonstrably not e4m3 values (grid check in probe). Do one clean probe: sample wide range inputs, check each output is in e4m3 set, plus nearest-representable comparison for correct reference (build grid properly with torch pow,
-...[truncated 441 chars]
+Probe returned [2, 2, 3] — wait, row 2: [2.0,1.0,0.5,2.0] has tie between index 0 and 3 at 2.0; kernel returned 3 (highest). Row 0 tie 0,1,2 → 2 (highest). Row 1 tie 1,2 → 2 (highest). Confirmed. Finalize evidence, update claim, record verdict.The probe result (t6) is decisive: on rows with tied maxima the kernel returned the *highest* tied index (row 0: tie {0,1,2} → 2; row 1: tie {1,2} → 2; row 2: tie {0,3} → 3), while the contract requires the lowest. Finalizing the evidence and recording the verdict.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `finalize_probe_evidence -> t7 error`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import torch, json\nfrom kernel import fp8_roundtrip\n\ntorch.manual_seed(0)\n\n# Reference: PyTorch native e4m3 cast (round-to-nearest, saturating)\ndef ref(x):\n    return x.to(torch.float8_e4m3fn).to(torch.float32)\n\n# Targeted range probes\nx = torch.tensor([0.001, 0.0009, 2.0**-9, 2.0**-7, 0.01, 500.0, 449.5, 1024.0, 3.7, -3.7, 7.6, 0.0], device='cuda')\nout = fp8_roundtrip(x)\nr = ref(x)\n\n# e4m3fn representable values (subnormals step 2^-9, max 448)\ndef is_e4m3(v):\n    v = torch.tensor(v, device='cuda')\n    return bool((v.to(torch.float8_e4m3fn).to(torch.float32) == v).all()) if v.numel() else True\n\nres = {\n    \"inputs\": x.tolist(),\n    \"kernel_out\": out.tolist(),\n    \"native_ref\": r.tolist(),\n    \"kernel_outputs_representable\": [i
-  ...[truncated 1033 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "4469df381f978443fe0720b3357c1e460425c6b28ad874a708f4d9c878d8feb1"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "bb3a2182c6420772cefa48670dbe632afa23080d519768900668c8d486d185cd"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "daa7e9e6d611f8ac2e3a097f711462c9c0df77bbd7896313187309d39a1c22be"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual
-  ...[truncated 6083 chars]
-
-### Turn 6 - `solo` (4.797090091000001s, in=20131 out=365)
-
-Message:
-
-```text
-Probe t8 confirms c1: kernel outputs 0.0009765625, 0.000915527, 512, 1024 — not representable; native ref mismatches 234/410. Finalize evidence and verdict reject.Probe t8 is decisive: kernel outputs are not representable e4m3 values in the subnormal range and above 448, while the native cast gives the correct grid. I'll finalize the evidence for c1 and record the verdict.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t9 ok`
-  Args:
-  {
-    "event_id": "t8",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "Confirmed: kernel output 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125); kernel outputs 512.0 and 1024.0 for inputs 500.0/1024.0 exceed the e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (up to 9792 abs error), violating the contract \"every value rounded to nearest representable e4m3 value with relative error bounded by ~6.25%\".",
+    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). This confirms c1.",
     "supports": "confirmed"
   }
   Output summary:
   {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Confirmed: kernel output 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125); kernel outputs 512.0 and 1024.0 for inputs 500.0/1024.0 exceed the e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (up to 9792 abs error), violating the contract \"every value rounded to nearest representable e4m3 value with relative error bounded by ~6.25%\".",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
+    "error_type": "LedgerError",
+    "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge"
   }
-- `update_claim_status -> t10 ok`
+
+### Turn 5 - `solo` (13.196290040000008s, in=9967 out=289)
+
+Message:
+
+```text
+Need to re-finalize with data key/values. Use append_evidence then update_claim_status, then record_verdict.The finalize failed only because it needs decisive measurements in `data`. I'll attach the evidence with explicit key/value measurements, then close the claim and record the verdict.
+```
+
+Tool calls:
+
+- `append_evidence -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "data": {
+      "expected_lowest_index_rule": true,
+      "kernel_argmax": [
+        2,
+        2,
+        3
+      ],
+      "probe_event": "t6",
+      "row0_kernel_pick": 2,
+      "row0_tied_max_indices": [
+        0,
+        1,
+        2
+      ],
+      "row1_kernel_pick": 2,
+      "row1_tied_max_indices": [
+        1,
+        2
+      ],
+      "row2_kernel_pick": 3,
+      "row2_tied_max_indices": [
+        0,
+        3
+      ]
+    },
+    "kind": "runtime_probe",
+    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+    "supports": "confirmed",
+    "tool_event_id": "t6"
+  }
+  Output summary:
+  {
+    "id": "c1.e1",
+    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+    "supports": "confirmed"
+  }
+
+### Turn 6 - `solo` (8.608783232999997s, in=11263 out=138)
+
+Message:
+
+```text
+Claim c1 still open, scope unknown. Update claim status to confirmed, set scope... record_claim already had scope evidence but stored as unknown. Update status; scope field may need setting — update_claim_status only takes status. The scope info is in scope_rationale/scope_evidence already. Proceed: update_claim_status confirmed, then record_verdict reject.The evidence is in place: probe t6 showed the kernel picks the highest tied index on all three tie rows, confirming claim c1 against the contract's lowest-index rule. I'll close the claim and record the verdict.
+```
+
+Tool calls:
+
+- `update_claim_status -> t9 ok`
   Args:
   {
     "claim_id": "c1",
@@ -295,81 +246,108 @@ Tool calls:
     "status": "confirmed"
   }
 
-### Turn 7 - `solo` (6.240305524999997s, in=28278 out=525)
+### Turn 7 - `solo` (17.627244606999994s, in=12046 out=328)
 
 Message:
 
 ```text
-Claim c1 is confirmed but scope is "unknown" — needs in_scope for reject. Update claim scope? There's no tool to update scope except record_claim (new claim). I'll record a scoped version of the claim... Actually record_claim creates a new claim; simplest: record an in_scope claim confirming the violation, attach evidence, then verdict.The decisive probe (t8) is done, but claim c1 is still scoped "unknown", which cannot support a reject. I'll record a properly scoped in-scope claim, attach the existing evidence, and then record the verdict.
+Claim c1 confirmed but scope "unknown". record_verdict reject requires decisive claims scoped. Need to set scope to in_scope — record_claim had scope_evidence but scope stayed unknown. I could re-record a claim with scope="in_scope", or try update... only status. Maybe re-record a narrower claim with scope in_scope and attach evidence via append_evidence, then update status confirmed, then verdict.The claim is confirmed but its scope is still `unknown`, which blocks it from supporting a reject. I'll record the same claim properly scoped as `in_scope`, attach the existing probe evidence, close it, and record the verdict.
 ```
 
 Tool calls:
 
-- `record_claim -> t11 ok`
+- `record_claim -> t10 ok`
   Args:
   {
-    "rationale": "Probe t8 already showed kernel outputs (e.g. 0.0009765625 for input 0.001, 512.0 for input 500.0, 1024.0 for input 1024.0) that are not values representable in e4m3, while the native cast rounds to the correct grid; re-recording with in_scope scope so it can support the verdict.",
+    "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract is that every value is rounded to the nearest representable e4m3 value, with relative error bounded by half a mantissa step (~6.25%). No input-domain restriction is stated; small and large float32 values are ordinary inputs the contract admits."
+        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
       }
     ],
-    "scope_rationale": "problem.txt states the contract applies to EVERY value (\"every value is rounded to the nearest representabl
-  ...[truncated 659 chars]
+    "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's 
+  ...[truncated 87 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Probe t8 already showed kernel outputs (e.g. 0.0009765625 for input 0.001, 512.0 for input 500.0, 1024.0 for input 1024.0) that are not values representable in e4m3, while the native cast rounds to the correct grid; re-recording with in_scope scope so it can support the verdict.",
+    "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract is that every value is rounded to the nearest representable e4m3 value, with relative error bounded by half a mantissa step (~6.25%). No input-domain restriction is stated; small and large float32 values are ordinary inputs the contract admits."
+        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
       }
     ],
-    "scope_rationale": "problem.txt states the contract applies to EVERY value (\"every value is rounded to the nearest representable e4m3 value\") with relative error bounded by ~6.25%; subnormal-range and >448 inputs are ordinary float32 values covered by this contract, and no artifact restricts the input domain.",
-    "statement": "fp8_roundtrip violates the e4m3 contract: for subnormal-range inputs (|x| < 2^-6) it outputs values not representable in e4m3 (e.g. 0.0009765625 for input 0.001, where the smallest po
-  ...[truncated 293 chars]
+    "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+    "status": "open"
+  }
 
-### Turn 8 - `solo` (3.7093256879999927s, in=30129 out=275)
+### Turn 8 - `solo` (12.77791706100001s, in=13080 out=320)
 
 Message:
 
 ```text
-I'll attach the existing t8 evidence to the scoped claim c2 and mark it confirmed, then record the verdict.
+Attach c1's evidence to c2 (or just run a probe for c2? The evidence exists; attach via append_evidence to c2 referencing t6), update c2 confirmed, then verdict.The claim c2 is identical to c1 but properly scoped as in_scope. I'll attach the existing probe t6 evidence (with decisive key/value data) to c2, close it, then record the verdict.
 ```
 
 Tool calls:
 
-- `append_evidence -> t12 ok`
+- `append_evidence -> t11 ok`
   Args:
   {
     "claim_id": "c2",
+    "data": {
+      "expected_lowest_index_rule": true,
+      "kernel_argmax": [
+        2,
+        2,
+        3
+      ],
+      "probe_event": "t6",
+      "row0_kernel_pick": 2,
+      "row0_tied_max_indices": [
+        0,
+        1,
+        2
+      ],
+      "row1_kernel_pick": 2,
+      "row1_tied_max_indices": [
+        1,
+        2
+      ],
+      "row2_kernel_pick": 3,
+      "row2_tied_max_indices": [
+        0,
+        3
+      ]
+    },
     "kind": "runtime_probe",
-    "summary": "Probe t8 (tool event t8, artifacts probes/t8_*): kernel outputs 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125, verified by round-trip through torch.float8_e4m3fn); inputs 500.0/1024.0 produce 512.0/1024.0 exceeding e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating the contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%.",
+    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t6"
   }
   Output summary:
   {
     "id": "c2.e1",
-    "summary": "Probe t8 (tool event t8, artifacts probes/t8_*): kernel outputs 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125, verified by round-trip through torch.float8_e4m3fn); inputs 500.0/1024.0 produce 512.0/1024.0 exceeding e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating the contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%.",
+    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
     "supports": "confirmed"
   }
 
-### Turn 9 - `solo` (12.210029295000012s, in=30355 out=35)
+### Turn 9 - `solo` (5.461138731999995s, in=14025 out=47)
 
 Message:
 
 ```text
-I'll close out the scoped claim c2 and record the verdict.
+Claim c2 is now scoped in_scope with probe t6 evidence attached; I'll close it as confirmed and record the verdict.
 ```
 
 Tool calls:
 
-- `update_claim_status -> t13 ok`
+- `update_claim_status -> t12 ok`
   Args:
   {
     "claim_id": "c2",
@@ -381,32 +359,33 @@ Tool calls:
     "status": "confirmed"
   }
 
-### Turn 10 - `solo` (5.046253428s, in=29871 out=455)
+### Turn 10 - `solo` (14.203401971000005s, in=14481 out=275)
 
 Message:
 
 ```text
-Evidence complete; record verdict.All claims are resolved: the kernel quantizes with step 2^(floor(log2|x|)-3) unbounded, producing non-e4m3 values for small inputs (e.g. 0.0009765625 for 0.001) and values above the 448 max for large inputs, confirmed by probe t8. Recording the verdict.
+All claims resolved; record verdict.All claims are resolved: claim c2 (in_scope, confirmed) is backed by probe t6 showing the kernel picks the highest tied index on all three tie rows while the contract requires the lowest. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t14 ok`
+- `record_verdict -> t13 ok`
   Args:
   {
     "confidence": 0.95,
     "decisive_claims": [
       "c2"
     ],
-    "reason": "Probe t8 (run_claim_probe, artifacts probes/t8_*) ran the kernel against the PyTorch native e4m3 cast across targeted inputs and a 410-point sweep (magnitudes 1e-5..1e4). The kernel's step 2^(floor(log2|x|)-3) has no clamping to the e4m3 exponent range: input 0.001 -> 0.0009765625 and 0.0009 -> 0.00091552734375, neither representable in e4m3 (smallest positive e4m3 subnormal is 2^-9 = 0.001953125), and inputs 500.0/1024.0 -> 512.0/1024.0 exceed the e4m3 max 448 instead of saturating. In the sweep, 230 of 410 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating problem.txt's contract that every va
-  ...[truncated 371 chars]
+    "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+    "verdict": "reject"
+  }
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
       "c2"
     ],
-    "reason": "Probe t8 (run_claim_probe, artifacts probes/t8_*) ran the kernel against the PyTorch native e4m3 cast across targeted inputs and a 410-point sweep (magnitudes 1e-5..1e4). The kernel's step 2^(floor(log2|x|)-3) has no clamping to the e4m3 exponent range: input 0.001 -> 0.0009765625 and 0.0009 -> 0.00091552734375, neither representable in e4m3 (smallest positive e4m3 subnormal is 2^-9 = 0.001953125), and inputs 500.0/1024.0 -> 512.0/1024.0 exceed the e4m3 max 448 instead of saturating. In the sweep, 230 of 410 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating problem.txt's contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%. This refines the correct-binade behavior the kernel does implement (e.g. 3.7->3.75, 7.6->7.5 match the native cast); the failure is specifically outside the single reference binade. Claims c1/c2 confirmed with in_scope scope evidence from problem.txt.",
+    "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
     "verdict": "reject"
   }
 
@@ -418,76 +397,76 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.
+Statement: route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).
 
 Scope: `unknown`
 
-Scope rationale: problem.txt states the contract is that EVERY value is rounded to the nearest representable e4m3 value; subnormal-range and saturating-range inputs are ordinary float32 values the contract admits (no input domain restriction is stated anywhere in the artifact).
+Scope rationale: problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.
 
 Scope evidence:
-- `problem.txt`: Contract: every value rounded to nearest representable e4m3 value; relative error bounded by half mantissa step (~6.25%), implying subnormal/small-value range is covered, not excluded.
+- `problem.txt`: Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win.
 
-Rationale: The kernel uses a per-binade step 2^(floor(log2|x|)-3) with no clamping to e4m3's exponent range, so tiny values get a finer grid than e4m3 provides and large values exceed the 448 maximum; outputs would not be representable e4m3 values, violating "every value is rounded to the nearest representable e4m3 value".
+Rationale: The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Confirmed: kernel output 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125); kernel outputs 512.0 and 1024.0 for inputs 500.0/1024.0 exceed the e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (up to 9792 abs error), violating the contract "every value rounded to nearest representable e4m3 value with relative error bounded by ~6.25%".
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] — the highest tied index in every tie — while the contract requires the lowest (expected [0,1,0]). Confirms c1.
 
 ### c2 - `confirmed`
 
-Statement: fp8_roundtrip violates the e4m3 contract: for subnormal-range inputs (|x| < 2^-6) it outputs values not representable in e4m3 (e.g. 0.0009765625 for input 0.001, where the smallest positive e4m3 is 2^-9=0.001953125), and for inputs above the e4m3 max 448 it outputs non-representable values (512.0, 1024.0) instead of saturating to 448; in a 410-point sweep, 230 outputs were not e4m3-representable and 229 relative errors exceeded half a mantissa step.
+Statement: route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the contract applies to EVERY value ("every value is rounded to the nearest representable e4m3 value") with relative error bounded by ~6.25%; subnormal-range and >448 inputs are ordinary float32 values covered by this contract, and no artifact restricts the input domain.
+Scope rationale: problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.
 
 Scope evidence:
-- `problem.txt`: The contract is that every value is rounded to the nearest representable e4m3 value, with relative error bounded by half a mantissa step (~6.25%). No input-domain restriction is stated; small and large float32 values are ordinary inputs the contract admits.
+- `problem.txt`: Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence.
 
-Rationale: Probe t8 already showed kernel outputs (e.g. 0.0009765625 for input 0.001, 512.0 for input 500.0, 1024.0 for input 1024.0) that are not values representable in e4m3, while the native cast rounds to the correct grid; re-recording with in_scope scope so it can support the verdict.
+Rationale: Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Probe t8 (tool event t8, artifacts probes/t8_*): kernel outputs 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125, verified by round-trip through torch.float8_e4m3fn); inputs 500.0/1024.0 produce 512.0/1024.0 exceeding e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating the contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] — the HIGHEST tied index in every tie — while the contract requires the lowest (expected [0,1,0]). Confirms c2.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel uses a per-binade step 2^(floor(log2|x|)-3) with no clamping to e4m3's exponent range, so tiny values get a finer grid than e4m3 provides and large values exceed the 448 maximum; outputs would not be representable e4m3 values, violating \"every value is rounded to the nearest representable e4m3 value\".",
+  "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
   "scope": "unknown",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract: every value rounded to nearest representable e4m3 value; relative error bounded by half mantissa step (~6.25%), implying subnormal/small-value range is covered, not excluded."
+      "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
     }
   ],
-  "scope_rationale": "problem.txt states the contract is that EVERY value is rounded to the nearest representable e4m3 value; subnormal-range and saturating-range inputs are ordinary float32 values the contract admits (no input domain restriction is stated anywhere in the artifact).",
-  "statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
+  "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
+  "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
   "status": "open"
 }
 
@@ -499,24 +478,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "d9832a64256e324fe0e031e1de152d6d75b6668fa950a247c046c06f6a2dfed4"
+      "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
-      "sha256": "8d632c2b6a5cf4f16bf78697b485a8c4b944a7146ded242e2f2cf108eeeaae5f"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
-  "duration_s": 6.948987,
+  "claim_statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+  "duration_s": 5.043531,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -526,198 +505,89 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "d9832a64256e324fe0e031e1de152d6d75b6668fa950a247c046c06f6a2dfed4"
+          "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t6_stderr.txt",
-          "sha256": "8d632c2b6a5cf4f16bf78697b485a8c4b944a7146ded242e2f2cf108eeeaae5f"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 6.948987,
-      "exit_code": 1,
-      "expected_signal": null,
-      "json_parse_error": "stdout has no non-empty lines",
-      "js
-...[truncated 1550 chars]
+      "duration_s": 5.043531,
+      "exit_code": 0,
+      "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)",
+      "json_parse_error": "last stdout line is not JSON:
+...[truncated 708 chars]
 
-### t7 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "a21b895f36edb523b733dfe35028cd517f6ebf9312509b3909d41dcb1a115c89"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "ff999811c173db38320b00395e8fa5de7553ededd79cb441ede1b0b7f20a0309"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "5b916d729dc160ef4384ac1789a67884cd0e6596b8547602014b6ff60d03eb04"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
-  "duration_s": 5.4297,
-  "event_id": "t7",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "a21b895f36edb523b733dfe35028cd517f6ebf9312509b3909d41dcb1a115c89"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "ff999811c173db38320b00395e8fa5de7553ededd79cb441ede1b0b7f20a0309"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          
-...[truncated 4456 chars]
-
-### t8 - run_claim_probe - ok
+### t7 - finalize_probe_evidence - error
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "4469df381f978443fe0720b3357c1e460425c6b28ad874a708f4d9c878d8feb1"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "bb3a2182c6420772cefa48670dbe632afa23080d519768900668c8d486d185cd"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "daa7e9e6d611f8ac2e3a097f711462c9c0df77bbd7896313187309d39a1c22be"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "fp8_roundtrip produces values not representable in e4m3 for inputs in the subnormal range (|x| < 2^-6) and for inputs above the e4m3 max normal 448, because the kernel's step 2^(floor(log2|x|)-3) is not the actual e4m3 grid there.",
-  "duration_s": 6.274829,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "4469df381f978443fe0720b3357c1e460425c6b28ad874a708f4d9c878d8feb1"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "bb3a2182c6420772cefa48670dbe632afa23080d519768900668c8d486d185cd"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-        
-...[truncated 5283 chars]
-
-### t9 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Confirmed: kernel output 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125); kernel outputs 512.0 and 1024.0 for inputs 500.0/1024.0 exceed the e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (up to 9792 abs error), violating the contract \"every value rounded to nearest representable e4m3 value with relative error bounded by ~6.25%\".",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
+  "error_type": "LedgerError",
+  "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge"
 }
 
-### t10 - update_claim_status - ok
+### t8 - append_evidence - ok
+
+{
+  "id": "c1.e1",
+  "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+  "supports": "confirmed"
+}
+
+### t9 - update_claim_status - ok
 
 {
   "id": "c1",
   "status": "confirmed"
 }
 
-### t11 - record_claim - ok
+### t10 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Probe t8 already showed kernel outputs (e.g. 0.0009765625 for input 0.001, 512.0 for input 500.0, 1024.0 for input 1024.0) that are not values representable in e4m3, while the native cast rounds to the correct grid; re-recording with in_scope scope so it can support the verdict.",
+  "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The contract is that every value is rounded to the nearest representable e4m3 value, with relative error bounded by half a mantissa step (~6.25%). No input-domain restriction is stated; small and large float32 values are ordinary inputs the contract admits."
+      "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
     }
   ],
-  "scope_rationale": "problem.txt states the contract applies to EVERY value (\"every value is rounded to the nearest representable e4m3 value\") with relative error bounded by ~6.25%; subnormal-range and >448 inputs are ordinary float32 values covered by this contract, and no artifact restricts the input domain.",
-  "statement": "fp8_roundtrip violates the e4m3 contract: for subnormal-range inputs (|x| < 2^-6) it outputs values not representable in e4m3 (e.g. 0.0009765625 for input 0.001, where the smallest positive e4m3 is 2^-9=0.001953125), and for inputs above the e4m3 max 448 it outputs non-representable values (512.0, 1024.0) instead of saturating to 448; in a 410-point sweep, 230 outputs were not e4m3-representable and 229 relative errors exceeded half a mantissa step.",
+  "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
+  "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
   "status": "open"
 }
 
-### t12 - append_evidence - ok
+### t11 - append_evidence - ok
 
 {
   "id": "c2.e1",
-  "summary": "Probe t8 (tool event t8, artifacts probes/t8_*): kernel outputs 0.0009765625 and 0.00091552734375 for inputs 0.001/0.0009 are not e4m3-representable (smallest positive e4m3 is 2^-9=0.001953125, verified by round-trip through torch.float8_e4m3fn); inputs 500.0/1024.0 produce 512.0/1024.0 exceeding e4m3 max 448 where native cast saturates to 448. In a 410-point sweep across magnitudes 1e-5..1e4, 230 outputs were not representable and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating the contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%.",
+  "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
   "supports": "confirmed"
 }
 
-### t13 - update_claim_status - ok
+### t12 - update_claim_status - ok
 
 {
   "id": "c2",
   "status": "confirmed"
 }
 
-### t14 - record_verdict - ok
+### t13 - record_verdict - ok
 
 {
   "confidence": 0.95,
   "decisive_claims": [
     "c2"
   ],
-  "reason": "Probe t8 (run_claim_probe, artifacts probes/t8_*) ran the kernel against the PyTorch native e4m3 cast across targeted inputs and a 410-point sweep (magnitudes 1e-5..1e4). The kernel's step 2^(floor(log2|x|)-3) has no clamping to the e4m3 exponent range: input 0.001 -> 0.0009765625 and 0.0009 -> 0.00091552734375, neither representable in e4m3 (smallest positive e4m3 subnormal is 2^-9 = 0.001953125), and inputs 500.0/1024.0 -> 512.0/1024.0 exceed the e4m3 max 448 instead of saturating. In the sweep, 230 of 410 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating problem.txt's contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%. This refines the correct-binade behavior the kernel does implement (e.g. 3.7->3.75, 7.6->7.5 match the native cast); the failure is specifically outside the single reference binade. Claims c1/c2 confirmed with in_scope scope evidence from problem.txt.",
+  "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
   "verdict": "reject"
 }
 
@@ -725,10 +595,10 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-10T05:21:17Z",
+  "created_at": "2026-09-10T05:23:13Z",
   "decisive_claims": [
     "c2"
   ],
-  "reason": "Probe t8 (run_claim_probe, artifacts probes/t8_*) ran the kernel against the PyTorch native e4m3 cast across targeted inputs and a 410-point sweep (magnitudes 1e-5..1e4). The kernel's step 2^(floor(log2|x|)-3) has no clamping to the e4m3 exponent range: input 0.001 -> 0.0009765625 and 0.0009 -> 0.00091552734375, neither representable in e4m3 (smallest positive e4m3 subnormal is 2^-9 = 0.001953125), and inputs 500.0/1024.0 -> 512.0/1024.0 exceed the e4m3 max 448 instead of saturating. In the sweep, 230 of 410 outputs were not representable in e4m3 (verified by round-trip through torch.float8_e4m3fn) and 229 relative errors exceeded half a mantissa step (max abs err 9792), violating problem.txt's contract that every value is rounded to the nearest representable e4m3 value with relative error bounded by ~6.25%. This refines the correct-binade behavior the kernel does implement (e.g. 3.7->3.75, 7.6->7.5 match the native cast); the failure is specifically outside the single reference binade. Claims c1/c2 confirmed with in_scope scope evidence from problem.txt.",
+  "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
   "verdict": "reject"
 }

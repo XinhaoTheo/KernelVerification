@@ -21,17 +21,20 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: the query-head to KV-head mapping of Grouped Query Attention, in
-the style of the index arithmetic in vllm-project/vllm,
-vllm/v1/attention/ops/triton_unified_attention.py.
+Operation: per-token INT8 activation quantization
+(sgl-project/sglang, python/sglang/kernels/ops/quantization/int8_kernel.py::_per_token_quant_int8).
 
-With num_q_heads query heads and num_kv_heads key/value heads
-(n_rep = num_q_heads // num_kv_heads), GQA groups CONSECUTIVE query heads onto
-the same KV head: query heads 0..n_rep-1 read KV head 0, query heads
-n_rep..2*n_rep-1 read KV head 1, and so on.
+For each row of the input, the kernel must quantize to int8 and return the
+dequantized reconstruction.
 
-`gqa_gather(kv, num_q_heads)` must return, for each query head, the KV row
-that query head is supposed to read.
+Contract: the scale is per-row and derived from THAT row's own magnitude:
+
+    absmax = max(max(|x_row|), 1e-10)
+    scale  = absmax / 127
+    q      = clamp(round(x_row / scale), -127, 127)
+    out    = q * scale
+
+so no value in the row is clipped by its own scale.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -41,21 +44,35 @@ import torch
 import triton
 import triton.language as tl
 
+_STALE_ABSMAX = 4.0  # simulates an EMA scale that hasn't caught up to the current batch
+
 
 @triton.jit
-def gqa_gather_kernel(kv_ptr, out_ptr, num_kv_heads, dim: tl.constexpr):
-    q_head = tl.program_id(0)
-    kv_head = q_head % num_kv_heads
-    offs_d = tl.arange(0, dim)
-    kv = tl.load(kv_ptr + kv_head * dim + offs_d)
-    tl.store(out_ptr + q_head * dim + offs_d, kv)
+def _per_token_quant_int8(
+    x_ptr, xq_ptr, scale_ptr,
+    stride_x, stride_xq, N,
+    STALE_ABSMAX: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    row_id = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    mask = cols < N
+    x = tl.load(x_ptr + row_id * stride_x + cols, mask=mask, other=0.0).to(tl.float32)
+    absmax = STALE_ABSMAX
+    scale_x = absmax / 127
+    x_q = x * (127 / absmax)
+    x_q = tl.clamp(tl.extra.cuda.libdevice.round(x_q), -127, 127).to(tl.int8)
+    tl.store(xq_ptr + row_id * stride_xq + cols, x_q, mask=mask)
+    tl.store(scale_ptr + row_id, scale_x.to(scale_ptr.dtype.element_ty))
 
 
-def gqa_gather(kv: torch.Tensor, num_q_heads: int) -> torch.Tensor:
-    num_kv_heads, dim = kv.shape
-    out = torch.empty(num_q_heads, dim, device=kv.device, dtype=kv.dtype)
-    gqa_gather_kernel[(num_q_heads,)](kv, out, num_kv_heads, dim=dim)
-    return out
+def quant_dequant_int8(x: torch.Tensor) -> torch.Tensor:
+    M, N = x.shape
+    x_q = torch.empty_like(x, dtype=torch.int8)
+    scales = torch.empty(M, device=x.device, dtype=torch.float32)
+    BLOCK = triton.next_power_of_2(N)
+    _per_token_quant_int8[(M,)](x, x_q, scales, x.stride(0), x_q.stride(0), N, STALE_ABSMAX=_STALE_ABSMAX, BLOCK=BLOCK)
+    return x_q.float() * scales.unsqueeze(-1)
 
 ```
 
@@ -63,18 +80,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-kv_head = q_head % num_kv_heads is interleaved mapping, wrong; should be q_head // n_rep.
+Uses a stale fixed absmax of 4.0, violating per-row scale contract → clipping. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.98, "reason": "The mapping uses `kv_head = q_head % num_kv_heads`, which is an interleaved (MQA-style) mapping, not the GQA contract where consecutive query heads (q_head // n_rep) map to the same KV head."}
+{"verdict": "reject", "confidence": 0.98, "reason": "The kernel uses a hardcoded STALE_ABSMAX of 4.0 instead of computing each row's own absmax, violating the per-row scale contract and clipping any row with |x| > 4.0."}
 
 ## Verdict
 
 {
   "verdict": "reject",
   "confidence": 0.98,
-  "reason": "The mapping uses `kv_head = q_head % num_kv_heads`, which is an interleaved (MQA-style) mapping, not the GQA contract where consecutive query heads (q_head // n_rep) map to the same KV head."
+  "reason": "The kernel uses a hardcoded STALE_ABSMAX of 4.0 instead of computing each row's own absmax, violating the per-row scale contract and clipping any row with |x| > 4.0."
 }
 
 ## Usage and stop reason
@@ -85,21 +102,21 @@ kv_head = q_head % num_kv_heads is interleaved mapping, wrong; should be q_head 
   "response": {
     "verdict": "reject",
     "confidence": 0.98,
-    "reason": "The mapping uses `kv_head = q_head % num_kv_heads`, which is an interleaved (MQA-style) mapping, not the GQA contract where consecutive query heads (q_head // n_rep) map to the same KV head."
+    "reason": "The kernel uses a hardcoded STALE_ABSMAX of 4.0 instead of computing each row's own absmax, violating the per-row scale contract and clipping any row with |x| > 4.0."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 626,
-    "output_tokens": 95
+    "input_tokens": 805,
+    "output_tokens": 88
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 1.9266706660855561,
-  "kernel_sha256": "ad66b28e9907c8db0a66bdd7f021e04f2d4adf9090bdb9fb2132179e9fe0f22a",
-  "problem_sha256": "b828fac23a1180457dc6f46e60fae5af4450323acb59c910b8966902e3c95ba8",
+  "elapsed_s": 2.1801210411358625,
+  "kernel_sha256": "a5b05f6906e5d58e8d3a34d961a2b256bfcebf1efe9128dc921ffea99eedc0f3",
+  "problem_sha256": "cdd991195b23792a4803dfeebac21115c7c78a8842d69f5cde8a79140bbe8769",
   "prompt_variant": "original",
-  "estimated_usd": 0.0012944,
+  "estimated_usd": 0.0015142,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

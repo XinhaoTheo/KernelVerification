@@ -1,35 +1,29 @@
-"""Triton kernel under test: fn17_int8_percentile_calibration_outliers."""
+"""Triton kernel under test: fp11_fp8_e4m3_rounding_within_format."""
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    cols = tl.arange(0, BLOCK)
-    valid = cols < N
-    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)
+def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    x = tl.load(X + offs, mask=mask, other=0.0)
 
+    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
     ax = tl.abs(x)
-    absmax = tl.max(ax, axis=0)
-    # Calibrate on the bulk of the row rather than on its single largest value.
-    thresh = absmax
-    for _ in range(PCTL_LEVELS):
-        below = tl.where(ax < thresh, ax, 0.0)
-        thresh = tl.max(below, axis=0)
-
-    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)
-    q = tl.floor(x / scale + 0.5)
-    q = tl.minimum(tl.maximum(q, -127.0), 127.0)
-    tl.store(OUT + row * stride + cols, q * scale, mask=valid)
+    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
+    step = tl.exp2(e - 3.0)
+    q = tl.floor(x / step + 0.5) * step
+    q = tl.where(ax == 0.0, 0.0, q)
+    tl.store(OUT + offs, q, mask=mask)
 
 
-def quant_dequant(x, pctl_levels: int = 2):
-    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.
-    n_rows, n_cols = x.shape
+def fp8_roundtrip(x):
+    # Round a float32 tensor to the nearest value representable in e4m3.
+    n = x.numel()
     out = torch.empty_like(x)
-    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,
-                             PCTL_LEVELS=pctl_levels,
-                             BLOCK=triton.next_power_of_2(n_cols))
+    BLOCK = 1024
+    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
     return out

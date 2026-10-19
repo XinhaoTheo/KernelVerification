@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_62", "case_63")
+CASES = ("case_119", "case_120")
 N, M = 32, 4
 RIDGE = 1.0 / 1024.0
 TOLERANCE = 0.05

@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_116": "reject", "case_117": "trust"}
+EXPECTED = {"case_43": "reject", "case_44": "trust"}
 ATOL, RTOL = .01, .001
 
 
@@ -112,7 +112,7 @@ def _public_cpu(case_root, name):
 
 
 def cpu_audit(case_root: Path):
-    public = _public_cpu(case_root, "case_117")
+    public = _public_cpu(case_root, "case_44")
     rows = []
     for plan in plans():
         values = arrays(plan)

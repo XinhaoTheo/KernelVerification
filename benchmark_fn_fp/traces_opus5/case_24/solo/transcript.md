@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_24`
+- Entry: `case_25`
 - Turns: 5
-- Tool events: 11
-- Claims: 2
+- Tool events: 8
+- Claims: 1
 - Description updates: 0
-- LLM time: 120.815s across 4 calls | tokens: in=51720 out=9144 total=60864
+- LLM time: 40.16s across 4 calls | tokens: in=35742 out=3294 total=39036
 - Cache tokens: created=0 read=27640
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.86
+- Verdict: `reject`
+- Confidence: 0.97
 
 ## Timeline
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
   Output summary:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
   Output summary:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
   Output summary:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_24",
+    "entry": "case_25",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_24"
+    "entry": "case_25"
   }
 
-### Turn 2 - `solo` (39.638171123999996s, in=3313 out=2999)
+### Turn 2 - `solo` (10.240436380000006s, in=3131 out=717)
 
 Message:
 
 ```text
-Let me record the primary hypotheses and probe the kernel against a high-precision reference.
+The kernel uses `tl.floor(x/scale)` where the contract explicitly requires round-to-nearest and unbiasedness. Recording that claim and probing it.
 ```
 
 Tool calls:
@@ -74,258 +74,164 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "Core formula check. The kernel accumulates dot/na/nb in a dynamic loop with masked loads; any masking, accumulator, or stride error would show up as an absolute deviation from the contract formula.",
+    "rationale": "Line 14 of kernel.py is `q = tl.floor(x / scale).to(tl.int8)`. The contract states `q = round(x / scale) to the nearest representable level` and explicitly requires the round trip be unbiased under repeated application. floor is biased by -0.5 LSB.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: row-wise cosine similarity of two 2-D float32 tensors, cos = dot/(||a||*||b||), denominator floored at eps; absolute agreement matters."
+        "summary": "Requires q = round(x/scale) 'to the nearest representable level' and states 'The rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.'"
+      },
+      {
+        "source": "kernel.py:14",
+        "summary": "Implements q = tl.floor(x / scale), a directed rounding mode, not round-to-nearest."
       }
     ],
-    "scope_rationale": "problem.txt states the exact formula cos(a,b)=dot(a,b)/(||a||*||b||) for 2-D float32 tensors and says absolute agreement of the score is what matters.",
-    "statement": "cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolu
-  ...[truncated 115 chars]
+    "scope_rationale": "The contract text
+  ...[truncated 529 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Core formula check. The kernel accumulates dot/na/nb in a dynamic loop with masked loads; any masking, accumulator, or stride error would show up as an absolute deviation from the contract formula.",
+    "rationale": "Line 14 of kernel.py is `q = tl.floor(x / scale).to(tl.int8)`. The contract states `q = round(x / scale) to the nearest representable level` and explicitly requires the round trip be unbiased under repeated application. floor is biased by -0.5 LSB.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: row-wise cosine similarity of two 2-D float32 tensors, cos = dot/(||a||*||b||), denominator floored at eps; absolute agreement matters."
-      }
-    ],
-    "scope_rationale": "problem.txt states the exact formula cos(a,b)=dot(a,b)/(||a||*||b||) for 2-D float32 tensors and says absolute agreement of the score is what matters.",
-    "statement": "cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolute for contiguous 2-D float32 inputs of typical shapes (including N not a multiple of BLOCK=256 and N >> BLOCK).",
-    "status": "open"
-  }
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "Contract explicitly requires the denominator floored at eps so a zero-norm row does not divide by zero; tl.maximum(denom, eps) must actually be applied with the right eps value/type.",
-    "scope": "in_scope",
-    "scope_evidence": [
+        "summary": "Requires q = round(x/scale) 'to the nearest representable level' and states 'The rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.'"
+      },
       {
-        "source": "problem.txt",
-        "summary": "'with the denominator floored at eps so a zero-norm row does not divide by zero'"
+        "source": "kernel.py:14",
+        "summary": "Implements q = tl.floor(x / scale), a directed rounding mode, not round-to-nearest."
       }
     ],
-    "scope_rationale": "problem.txt explicitly names the zero-norm row / eps-floor behaviour as part of the contract.",
-    "statement": "For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires."
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "Contract explicitly requires the denominator floored at eps so a zero-norm row does not divide by zero; tl.maximum(denom, eps) must actually be applied with the right eps value/type.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "'with the denominator floored at eps so a zero-norm row does not divide by zero'"
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly names the zero-norm row / eps-floor behaviour as part of the contract.",
-    "statement": "For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires.",
-    "status": "open"
-  }
+    "scope_rationale": "The contract text itself states the required formula (round to nearest) and the required invariant (unbiased under repeated application). No test.py exists; representative inputs are an ordinary 1-D float32 tensor, which is exactly what requantize() documents as its domain.",
+    "statement": "requantize() rounds toward -infinity (tl.floor) instead of round-to-nearest, so q = floor(x/scale) rather than
+  ...[truncated 163 chars]
 
-### Turn 3 - `solo` (25.740457569s, in=6510 out=2085)
+### Turn 3 - `solo` (11.022930803999998s, in=5441 out=1056)
 
 Message:
 
 ```text
-Running a combined probe against a float64 reference across shapes, plus zero-norm and near-eps rows.
+I'll run a probe measuring the mean signed error against a round-to-nearest reference, plus repeated-application drift.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_24/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(a,b,eps=1e-8):\n    A=a.double(); B=b.double()\n    dot=(A*B).sum(1); na=A.pow(2).sum(1).sqrt(); nb=B.pow(2).sum(1).sqrt()\n    den=(na*nb).clamp_min(eps)\n    return dot/den\n\nres={}\ntorch.manual_seed(0)\nfor (R,N) in [(4,16),(8,256),(8,257),(16,1000),(32,4096),(4,100000),(3,1)]:\n    a=torch.randn(R,N,device='cuda',dtype=torch.float32)\n    b=torch.randn(R,N,device='cuda',dtype=torch.float32)\n    o=k.cosine_similarity(a,b)\n    r=ref(a,b)\n    res[f\"{R}x{N}\"]={\"maxabs\":float((o.double()-r).abs().max()),\n                     \"out_range\"
-  ...[truncated 987 chars]
+    "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_25\")\nfrom kernel import requantize\n\ntorch.manual_seed(0)\nN = 4096\nx = torch.randn(N, device=\"cuda\", dtype=torch.float32)\n\ndef ref(x, BLOCK=1024):\n    out = torch.empty_like(x)\n    n = x.numel()\n    for i in range(0, n, BLOCK):\n        blk = x[i:i+BLOCK]\n        absmax = blk.abs().max()\n        scale = torch.where(absmax == 0, torch.tensor(1.0, device=x.device), absmax/127.0)\n        q = torch.round(blk/scale).clamp(-127,127)\n        out[i:i+BLOCK] = q*scale\n    return out\n\ny = requantize(x)\nr = ref(x)\nscale0 = x[:1024].abs().max().item()/127.0\n\nres = {}\nres[\"mean_signed_err_kernel_vs_input\"] = (y-x).mean().item()\nres[\"mean_signed_err_ref_vs_input\"] = (r-x).mean()
+  ...[truncated 1166 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "d1bc0f0ec37ace650445e821ee60c16a93c1a95be25e8607f8c386d862348243"
+        "path": "probes/t6_probe.py",
+        "sha256": "97d1866f2c0c96fb1c0384bb5779256c61eef68ba53177eff6c6d3a808dff6c6"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "e175e537ca27749a89d980a536d4e1178cf07c3b2f0cabad39a2bf62a5821593"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "ab451d663e14f1cfdd190ab2e2aab479dbb2b48d87c374553074ac6a55170b9e"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolute for contiguous 2-D float32 inputs of typical shapes (including N not a multiple of BLOCK=256 and N >> BLOCK).",
-    "duration_s": 9.203853,
-    "event_id": "t7",
+    "claim_statement": "requantize() rounds toward -infinity (tl.floor) instead of round-to-nearest, so q = floor(x/scale) rather than round(x/scale), producing a systematic negative bias of about -0.5*scale per element and a mean error that grows with repeated application.",
+    "duration_s": 5.436782,
+    "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
             "description": "Python probe code executed by local runtime.",
-        
-  ...[truncated 4059 chars]
-- `run_claim_probe -> t8 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_24/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(1)\nR,N=6,300\na=torch.randn(R,N,device='cuda'); b=torch.randn(R,N,device='cuda')\na[0]=0.0            # zero norm a\nb[1]=0.0            # zero norm b\na[2]=0.0; b[2]=0.0  # both zero\na[3]=1e-25          # tiny norm\nb[3]=1e-25\no=k.cosine_similarity(a,b)\nA=a.double();B=b.double()\nden=(A.pow(2).sum(1).sqrt()*B.pow(2).sum(1).sqrt()).clamp_min(1e-8)\nr=(A*B).sum(1)/den\nprint(json.dumps({\"out\":[float(x) for x in o],\"ref\":[float(x) for x in r],\n \"finite\":bool(torch.isfinite(o).all()),\n \"maxabs\":float((o.double()-r).abs().max())},inden
-  ...[truncated 82 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "61f8fac419294eca431c3e4bf5e2a96a0de563d32a8be0a54f674f22158dc3cf"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "ec50c581cd3343988bd82f95701ad2558777bdc7e0ed43885622baaf38252a3d"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires.",
-    "duration_s": 6.289236,
-    "event_id": "t8",
-    "evidence_draft": {
-      "claim_id": "c2",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t8_probe.py",
-            "sha256": "61f8fac4192
-  ...[truncated 1863 chars]
+   
+  ...[truncated 3030 chars]
 
-### Turn 4 - `solo` (32.479454450999924s, in=14974 out=2481)
+### Turn 4 - `solo` (9.750025713000014s, in=10068 out=863)
 
 Message:
 
 ```text
-Both probes returned. Formula accuracy is excellent (max abs err ≤2.4e-7 across shapes, including N=257, N=100000, N=1) and zero-norm rows are finite. The one anomaly is fp32 overflow at input magnitude 1e20. Let me finalize those two and open a claim on the overflow.
+Probe t6 confirms the hypothesis quantitatively: mean signed error of -0.483 LSB (floor predicts -0.5), 49% of elements differ from the round-to-nearest reference, and repeated application drifts the mean monotonically negative while the reference is fixed after step 1. Finalizing the evidence and recording the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t9 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "maxabs_32x4096": 4.55e-09,
-      "maxabs_3x1": 0.0,
-      "maxabs_4x100000": 1.78e-09,
-      "maxabs_4x16": 3.89e-08,
-      "maxabs_8x257": 9.44e-09,
-      "maxabs_near_identical": 2.38e-07,
-      "scale1e20_finite": false
+      "exit_code": 0,
+      "frac_mismatch_kernel_vs_ref": 0.49072265625,
+      "input_mean": -0.015690434724092484,
+      "kernel_mean_after_1_5_20": [
+        -0.02789815329015255,
+        -0.0444544181227684,
+        -0.05371110513806343
+      ],
+      "max_abs_kernel_vs_ref": 0.0261075496673584,
+      "mean_err_in_lsb_kernel": -0.4827374815940857,
+      "mean_err_in_lsb_ref": -0.0061749741435050964,
+      "metric": "mean signed error in LSB units + repeated-application mean drift",
+      "ref_mean_after_1_5_20": [
+        -0.015743842348456383,
+        -0.015743842348456383,
+        -0.015743842348456383
+      ],
+      "scale_block0": 0.026107459556399367
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "Against a float64 eps-floored reference, kernel matches to <=3.9e-8 abs for shapes 4x16, 8x256, 8x257 (non-multiple of BLOCK), 16x1000, 32x4096, 4x100000 (many loop iterations), 3x1; scaled inputs 1e-4/1e4/1e-20 match to <=7e-9 abs; near-identical rows give 1.0 +/- 1.2e-7. Only deviation: inputs scaled by 1e20 produce NaN (fp32 overflow of sum of squares), tracked separately as c3.",
-    "supports": "confirmed"
-  }
+    "summary": "On a 4096-element float32 input (BLOCK=1024, 4 blocks), the kernel's mean signed error vs 
+  ...[truncated 616 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Against a float64 eps-floored reference, kernel matches to <=3.9e-8 abs for shapes 4x16, 8x256, 8x257 (non-multiple of BLOCK), 16x1000, 32x4096, 4x100000 (many loop iterations), 3x1; scaled inputs 1e-4/1e4/1e-20 match to <=7e-9 abs; near-identical rows give 1.0 +/- 1.2e-7. Only deviation: inputs scaled by 1e20 produce NaN (fp32 overflow of sum of squares), tracked separately as c3.",
+    "summary": "On a 4096-element float32 input (BLOCK=1024, 4 blocks), the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.026107), exactly the -0.5 LSB signature of floor; a round-to-nearest reference with identical per-block absmax scaling gives -0.0062 LSB. 49.07% of elements differ from the reference, with max deviation 0.02611 = exactly one full LSB. Under repeated application the kernel's mean drifts monotonically: -0.01569 (input) -> -0.02790 (1 step) -> -0.04445 (5) -> -0.05371 (20), while the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is precisely the compounding per-step bias the contract forbids.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
-  }
-- `finalize_probe_evidence -> t10 ok`
-  Args:
-  {
-    "data": {
-      "all_finite": true,
-      "maxabs": 3.05e-09,
-      "out": [
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        -0.13949147,
-        0.07815536
-      ],
-      "ref": [
-        0.0,
-        0.0,
-        0.0,
-        3e-40,
-        -0.13949147,
-        0.07815536
-      ]
-    },
-    "event_id": "t8",
-    "status": "confirmed",
-    "summary": "Rows with ||a||=0, ||b||=0, both zero, and tiny norm (1e-25 entries) all produce finite output 0.0, matching the eps-floored float64 reference to 3.0e-9 abs (reference for the tiny-norm row is 3e-40, i.e. absolute agreement is exact at the scale that matters). Non-degenerate rows in the same batch match to 3e-9. No NaN/Inf.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "Rows with ||a||=0, ||b||=0, both zero, and tiny norm (1e-25 entries) all produce finite output 0.0, matching the eps-floored float64 reference to 3.0e-9 abs (reference for the tiny-norm row is 3e-40, i.e. absolute agreement is exact at the scale that matters). Non-degenerate rows in the same batch match to 3e-9. No NaN/Inf.",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t6"
   }
 
-### Turn 5 - `solo` (22.956543635999992s, in=26923 out=1579)
+### Turn 5 - `solo` (9.146929403000058s, in=17102 out=658)
 
 Message:
 
 ```text
-Both in-scope claims are confirmed positively; the only deviation (inputs scaled to 1e20, causing fp32 overflow of the sum of squares) is an extreme-magnitude case the float32 contract does not require handling, and is inherent to any direct-formula fp32 implementation. Recording the verdict.
+The claim is confirmed with decisive runtime numbers and is in scope against the contract's explicit round-to-nearest/unbiasedness requirement. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t11 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.86,
+    "confidence": 0.97,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The contract (problem.txt) requires row-wise cos(a,b)=dot/(||a||*||b||) on 2-D float32 tensors, with the denominator floored at eps, judged by absolute agreement of the score.\\n\\nEvent t7 (claim c1) compared the kernel against a float64 eps-floored reference across shapes 4x16, 8x256, 8x257 (N not a multiple of BLOCK=256, exercising the mask), 16x1000, 32x4096, 4x100000 (391 loop iterations), and 3x1: max absolute errors were 3.9e-8, 1.3e-8, 9.4e-9, 1.2e-8, 4.6e-9, 1.8e-9 and 0.0 respectively. Uniformly scaled inputs (1e-4, 1e4, 1e-20) matched to <=7e-9 abs, and near-identical rows returned 1.0 within 1.2e-7, i.e. the output stays in [-1,1] to fp32 rounding. This is far inside any sensible absolute tolera
-  ...[truncated 975 chars]
+    "reason": "The contract explicitly requires q = round(x/scale) \"to the nearest representable level\" and states that \"the rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.\" kernel.py:14 instead computes q = tl.floor(x / scale), a directed rounding mode. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on a 4096-element float32 CUDA tensor against a round-to-nearest reference using identical per-block (BLOCK=1024) absmax scaling: the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.0261075), the exact -0.5 LSB signature of floor, while the reference gives -0.0062 LSB; 49.07% of elements differ 
+  ...[truncated 574 chars]
   Output summary:
   {
-    "confidence": 0.86,
+    "confidence": 0.97,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The contract (problem.txt) requires row-wise cos(a,b)=dot/(||a||*||b||) on 2-D float32 tensors, with the denominator floored at eps, judged by absolute agreement of the score.\\n\\nEvent t7 (claim c1) compared the kernel against a float64 eps-floored reference across shapes 4x16, 8x256, 8x257 (N not a multiple of BLOCK=256, exercising the mask), 16x1000, 32x4096, 4x100000 (391 loop iterations), and 3x1: max absolute errors were 3.9e-8, 1.3e-8, 9.4e-9, 1.2e-8, 4.6e-9, 1.8e-9 and 0.0 respectively. Uniformly scaled inputs (1e-4, 1e4, 1e-20) matched to <=7e-9 abs, and near-identical rows returned 1.0 within 1.2e-7, i.e. the output stays in [-1,1] to fp32 rounding. This is far inside any sensible absolute tolerance, so the formula, masking, stride indexing and fp32 accumulation are all correct.\\n\\nEvent t8 (claim c2) exercised the eps floor directly: rows with ||a||=0, ||b||=0, both zero, and 1e-25-magnitude entries all returned finite 0.0 with no NaN/Inf, matching the eps-floored float64 reference to 3.0e-9 abs, while non-degenerate rows in the same batch matched to 3e-9. The tl.maximum(denom, eps) fl
-  ...[truncated 575 chars]
+    "reason": "The contract explicitly requires q = round(x/scale) \"to the nearest representable level\" and states that \"the rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.\" kernel.py:14 instead computes q = tl.floor(x / scale), a directed rounding mode. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on a 4096-element float32 CUDA tensor against a round-to-nearest reference using identical per-block (BLOCK=1024) absmax scaling: the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.0261075), the exact -0.5 LSB signature of floor, while the reference gives -0.0062 LSB; 49.07% of elements differ from the reference with max deviation 0.02611 = exactly one full quantization step. Repeated application shows the forbidden compounding bias: mean -0.015690 (input) -> -0.027898 (1 step) -> -0.044454 (5) -> -0.053711 (20), whereas the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is a violation of a behaviour the contract explicitly mandat
+  ...[truncated 174 chars]
 
 ## Description Model
 
@@ -335,123 +241,95 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolute for contiguous 2-D float32 inputs of typical shapes (including N not a multiple of BLOCK=256 and N >> BLOCK).
+Statement: requantize() rounds toward -infinity (tl.floor) instead of round-to-nearest, so q = floor(x/scale) rather than round(x/scale), producing a systematic negative bias of about -0.5*scale per element and a mean error that grows with repeated application.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the exact formula cos(a,b)=dot(a,b)/(||a||*||b||) for 2-D float32 tensors and says absolute agreement of the score is what matters.
+Scope rationale: The contract text itself states the required formula (round to nearest) and the required invariant (unbiased under repeated application). No test.py exists; representative inputs are an ordinary 1-D float32 tensor, which is exactly what requantize() documents as its domain.
 
 Scope evidence:
-- `problem.txt`: Contract: row-wise cosine similarity of two 2-D float32 tensors, cos = dot/(||a||*||b||), denominator floored at eps; absolute agreement matters.
+- `problem.txt`: Requires q = round(x/scale) 'to the nearest representable level' and states 'The rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.'
+- `kernel.py:14`: Implements q = tl.floor(x / scale), a directed rounding mode, not round-to-nearest.
 
-Rationale: Core formula check. The kernel accumulates dot/na/nb in a dynamic loop with masked loads; any masking, accumulator, or stride error would show up as an absolute deviation from the contract formula.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Against a float64 eps-floored reference, kernel matches to <=3.9e-8 abs for shapes 4x16, 8x256, 8x257 (non-multiple of BLOCK), 16x1000, 32x4096, 4x100000 (many loop iterations), 3x1; scaled inputs 1e-4/1e4/1e-20 match to <=7e-9 abs; near-identical rows give 1.0 +/- 1.2e-7. Only deviation: inputs scaled by 1e20 produce NaN (fp32 overflow of sum of squares), tracked separately as c3.
-
-### c2 - `confirmed`
-
-Statement: For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires.
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt explicitly names the zero-norm row / eps-floor behaviour as part of the contract.
-
-Scope evidence:
-- `problem.txt`: 'with the denominator floored at eps so a zero-norm row does not divide by zero'
-
-Rationale: Contract explicitly requires the denominator floored at eps so a zero-norm row does not divide by zero; tl.maximum(denom, eps) must actually be applied with the right eps value/type.
+Rationale: Line 14 of kernel.py is `q = tl.floor(x / scale).to(tl.int8)`. The contract states `q = round(x / scale) to the nearest representable level` and explicitly requires the round trip be unbiased under repeated application. floor is biased by -0.5 LSB.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Rows with ||a||=0, ||b||=0, both zero, and tiny norm (1e-25 entries) all produce finite output 0.0, matching the eps-floored float64 reference to 3.0e-9 abs (reference for the tiny-norm row is 3e-40, i.e. absolute agreement is exact at the scale that matters). Non-degenerate rows in the same batch match to 3e-9. No NaN/Inf.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On a 4096-element float32 input (BLOCK=1024, 4 blocks), the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.026107), exactly the -0.5 LSB signature of floor; a round-to-nearest reference with identical per-block absmax scaling gives -0.0062 LSB. 49.07% of elements differ from the reference, with max deviation 0.02611 = exactly one full LSB. Under repeated application the kernel's mean drifts monotonically: -0.01569 (input) -> -0.02790 (1 step) -> -0.04445 (5) -> -0.05371 (20), while the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is precisely the compounding per-step bias the contract forbids.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_24"
+  "entry": "case_25"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_24"
+  "entry": "case_25"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_24"
+  "entry": "case_25"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_24"
+  "entry": "case_25"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Core formula check. The kernel accumulates dot/na/nb in a dynamic loop with masked loads; any masking, accumulator, or stride error would show up as an absolute deviation from the contract formula.",
+  "rationale": "Line 14 of kernel.py is `q = tl.floor(x / scale).to(tl.int8)`. The contract states `q = round(x / scale) to the nearest representable level` and explicitly requires the round trip be unbiased under repeated application. floor is biased by -0.5 LSB.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract: row-wise cosine similarity of two 2-D float32 tensors, cos = dot/(||a||*||b||), denominator floored at eps; absolute agreement matters."
-    }
-  ],
-  "scope_rationale": "problem.txt states the exact formula cos(a,b)=dot(a,b)/(||a||*||b||) for 2-D float32 tensors and says absolute agreement of the score is what matters.",
-  "statement": "cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolute for contiguous 2-D float32 inputs of typical shapes (including N not a multiple of BLOCK=256 and N >> BLOCK).",
-  "status": "open"
-}
-
-### t6 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "Contract explicitly requires the denominator floored at eps so a zero-norm row does not divide by zero; tl.maximum(denom, eps) must actually be applied with the right eps value/type.",
-  "scope": "in_scope",
-  "scope_evidence": [
+      "summary": "Requires q = round(x/scale) 'to the nearest representable level' and states 'The rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.'"
+    },
     {
-      "source": "problem.txt",
-      "summary": "'with the denominator floored at eps so a zero-norm row does not divide by zero'"
+      "source": "kernel.py:14",
+      "summary": "Implements q = tl.floor(x / scale), a directed rounding mode, not round-to-nearest."
     }
   ],
-  "scope_rationale": "problem.txt explicitly names the zero-norm row / eps-floor behaviour as part of the contract.",
-  "statement": "For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires.",
+  "scope_rationale": "The contract text itself states the required formula (round to nearest) and the required invariant (unbiased under repeated application). No test.py exists; representative inputs are an ordinary 1-D float32 tensor, which is exactly what requantize() documents as its domain.",
+  "statement": "requantize() rounds toward -infinity (tl.floor) instead of round-to-nearest, so q = floor(x/scale) rather than round(x/scale), producing a systematic negative bias of about -0.5*scale per element and a mean error that grows with repeated application.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "d1bc0f0ec37ace650445e821ee60c16a93c1a95be25e8607f8c386d862348243"
+      "path": "probes/t6_probe.py",
+      "sha256": "97d1866f2c0c96fb1c0384bb5779256c61eef68ba53177eff6c6d3a808dff6c6"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "e175e537ca27749a89d980a536d4e1178cf07c3b2f0cabad39a2bf62a5821593"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "ab451d663e14f1cfdd190ab2e2aab479dbb2b48d87c374553074ac6a55170b9e"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "cosine_similarity() produces row-wise cosine similarity matching a float64 reference dot/max(||a||*||b||, eps) to within ~1e-5 absolute for contiguous 2-D float32 inputs of typical shapes (including N not a multiple of BLOCK=256 and N >> BLOCK).",
-  "duration_s": 9.203853,
-  "event_id": "t7",
+  "claim_statement": "requantize() rounds toward -infinity (tl.floor) instead of round-to-nearest, so q = floor(x/scale) rather than round(x/scale), producing a systematic negative bias of about -0.5*scale per element and a mean error that grows with repeated application.",
+  "duration_s": 5.436782,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -459,129 +337,57 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "d1bc0f0ec37ace650445e821ee60c16a93c1a95be25e8607f8c386d862348243"
+          "path": "probes/t6_probe.py",
+          "sha256": "97d1866f2c0c96fb1c0384bb5779256c61eef68ba53177eff6c6d3a808dff6c6"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "e175e537ca27749a89d980a536d4e1178cf07c3b2f0cabad39a2bf62a5821593"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "ab451d663e14f1cfdd190ab2e2aab479dbb2b48d87c374553074ac6a55170b9e"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
+          "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 9.203853,
+      "duration_s": 5.436782,
       "exit_code": 0,
-      "expected_signal": "max abs error << 1e-5 for all shapes if formula correct",
+      "expected_signal": "If floor is used, mean_err_in_lsb_kernel ~ -0.5 while
+...[truncated 2230 chars]
 
-...[truncated 3259 chars]
-
-### t8 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "61f8fac419294eca431c3e4bf5e2a96a0de563d32a8be0a54f674f22158dc3cf"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "ec50c581cd3343988bd82f95701ad2558777bdc7e0ed43885622baaf38252a3d"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "For rows where ||a|| or ||b|| is zero (or extremely small), the kernel's eps flooring yields a finite result (no NaN/Inf) as the contract requires.",
-  "duration_s": 6.289236,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "61f8fac419294eca431c3e4bf5e2a96a0de563d32a8be0a54f674f22158dc3cf"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "ec50c581cd3343988bd82f95701ad2558777bdc7e0ed43885622baaf38252a3d"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-      ],
-      "duration_s": 6.289236,
-      "exit_code": 0,
-      "expected_signal": "rows 0-3 finite, matching eps-floored reference",
-      "json_parse_error": "last stdout line is not JSON: Expecting value",
-      "json_result": null,
-    
-...[truncated 1063 chars]
-
-### t9 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Against a float64 eps-floored reference, kernel matches to <=3.9e-8 abs for shapes 4x16, 8x256, 8x257 (non-multiple of BLOCK), 16x1000, 32x4096, 4x100000 (many loop iterations), 3x1; scaled inputs 1e-4/1e4/1e-20 match to <=7e-9 abs; near-identical rows give 1.0 +/- 1.2e-7. Only deviation: inputs scaled by 1e20 produce NaN (fp32 overflow of sum of squares), tracked separately as c3.",
+  "summary": "On a 4096-element float32 input (BLOCK=1024, 4 blocks), the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.026107), exactly the -0.5 LSB signature of floor; a round-to-nearest reference with identical per-block absmax scaling gives -0.0062 LSB. 49.07% of elements differ from the reference, with max deviation 0.02611 = exactly one full LSB. Under repeated application the kernel's mean drifts monotonically: -0.01569 (input) -> -0.02790 (1 step) -> -0.04445 (5) -> -0.05371 (20), while the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is precisely the compounding per-step bias the contract forbids.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t10 - finalize_probe_evidence - ok
+### t8 - record_verdict - ok
 
 {
-  "claim_id": "c2",
-  "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "Rows with ||a||=0, ||b||=0, both zero, and tiny norm (1e-25 entries) all produce finite output 0.0, matching the eps-floored float64 reference to 3.0e-9 abs (reference for the tiny-norm row is 3e-40, i.e. absolute agreement is exact at the scale that matters). Non-degenerate rows in the same batch match to 3e-9. No NaN/Inf.",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - record_verdict - ok
-
-{
-  "confidence": 0.86,
+  "confidence": 0.97,
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The contract (problem.txt) requires row-wise cos(a,b)=dot/(||a||*||b||) on 2-D float32 tensors, with the denominator floored at eps, judged by absolute agreement of the score.\\n\\nEvent t7 (claim c1) compared the kernel against a float64 eps-floored reference across shapes 4x16, 8x256, 8x257 (N not a multiple of BLOCK=256, exercising the mask), 16x1000, 32x4096, 4x100000 (391 loop iterations), and 3x1: max absolute errors were 3.9e-8, 1.3e-8, 9.4e-9, 1.2e-8, 4.6e-9, 1.8e-9 and 0.0 respectively. Uniformly scaled inputs (1e-4, 1e4, 1e-20) matched to <=7e-9 abs, and near-identical rows returned 1.0 within 1.2e-7, i.e. the output stays in [-1,1] to fp32 rounding. This is far inside any sensible absolute tolerance, so the formula, masking, stride indexing and fp32 accumulation are all correct.\\n\\nEvent t8 (claim c2) exercised the eps floor directly: rows with ||a||=0, ||b||=0, both zero, and 1e-25-magnitude entries all returned finite 0.0 with no NaN/Inf, matching the eps-floored float64 reference to 3.0e-9 abs, while non-degenerate rows in the same batch matched to 3e-9. The tl.maximum(denom, eps) floor works as the contract states.\\n\\nThe single deviation observed was inputs scaled by 1e20, where the fp32 sum of squares overflows and the output is NaN (t7, scale1e+20). That is an extreme-magnitude input the contract does not require support for -- the contract declares float32 tensors and the plain formula, and any direct fp32 implementation of ||a||^2 overflows there -- so it is a generalization note, not a contract violation, and cannot support a reject under the scope policy. Both in-scope claims are confirmed in the kernel's favour.",
-  "verdict": "trust"
+  "reason": "The contract explicitly requires q = round(x/scale) \"to the nearest representable level\" and states that \"the rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.\" kernel.py:14 instead computes q = tl.floor(x / scale), a directed rounding mode. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on a 4096-element float32 CUDA tensor against a round-to-nearest reference using identical per-block (BLOCK=1024) absmax scaling: the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.0261075), the exact -0.5 LSB signature of floor, while the reference gives -0.0062 LSB; 49.07% of elements differ from the reference with max deviation 0.02611 = exactly one full quantization step. Repeated application shows the forbidden compounding bias: mean -0.015690 (input) -> -0.027898 (1 step) -> -0.044454 (5) -> -0.053711 (20), whereas the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is a violation of a behaviour the contract explicitly mandates (both the stated formula and the unbiasedness invariant), on ordinary 1-D float32 input which is precisely the documented domain of requantize().",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.86,
-  "created_at": "2026-09-08T14:52:49Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:51:30Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The contract (problem.txt) requires row-wise cos(a,b)=dot/(||a||*||b||) on 2-D float32 tensors, with the denominator floored at eps, judged by absolute agreement of the score.\\n\\nEvent t7 (claim c1) compared the kernel against a float64 eps-floored reference across shapes 4x16, 8x256, 8x257 (N not a multiple of BLOCK=256, exercising the mask), 16x1000, 32x4096, 4x100000 (391 loop iterations), and 3x1: max absolute errors were 3.9e-8, 1.3e-8, 9.4e-9, 1.2e-8, 4.6e-9, 1.8e-9 and 0.0 respectively. Uniformly scaled inputs (1e-4, 1e4, 1e-20) matched to <=7e-9 abs, and near-identical rows returned 1.0 within 1.2e-7, i.e. the output stays in [-1,1] to fp32 rounding. This is far inside any sensible absolute tolerance, so the formula, masking, stride indexing and fp32 accumulation are all correct.\\n\\nEvent t8 (claim c2) exercised the eps floor directly: rows with ||a||=0, ||b||=0, both zero, and 1e-25-magnitude entries all returned finite 0.0 with no NaN/Inf, matching the eps-floored float64 reference to 3.0e-9 abs, while non-degenerate rows in the same batch matched to 3e-9. The tl.maximum(denom, eps) floor works as the contract states.\\n\\nThe single deviation observed was inputs scaled by 1e20, where the fp32 sum of squares overflows and the output is NaN (t7, scale1e+20). That is an extreme-magnitude input the contract does not require support for -- the contract declares float32 tensors and the plain formula, and any direct fp32 implementation of ||a||^2 overflows there -- so it is a generalization note, not a contract violation, and cannot support a reject under the scope policy. Both in-scope claims are confirmed in the kernel's favour.",
-  "verdict": "trust"
+  "reason": "The contract explicitly requires q = round(x/scale) \"to the nearest representable level\" and states that \"the rounding must be to nearest, so the round trip is unbiased: repeated application must not push the tensor systematically toward zero or away from it.\" kernel.py:14 instead computes q = tl.floor(x / scale), a directed rounding mode. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on a 4096-element float32 CUDA tensor against a round-to-nearest reference using identical per-block (BLOCK=1024) absmax scaling: the kernel's mean signed error vs the input is -0.4827 LSB (scale=0.0261075), the exact -0.5 LSB signature of floor, while the reference gives -0.0062 LSB; 49.07% of elements differ from the reference with max deviation 0.02611 = exactly one full quantization step. Repeated application shows the forbidden compounding bias: mean -0.015690 (input) -> -0.027898 (1 step) -> -0.044454 (5) -> -0.053711 (20), whereas the round-to-nearest reference is a fixed point after the first step (-0.015744 at steps 1, 5 and 20). This is a violation of a behaviour the contract explicitly mandates (both the stated formula and the unbiasedness invariant), on ordinary 1-D float32 input which is precisely the documented domain of requantize().",
+  "verdict": "reject"
 }

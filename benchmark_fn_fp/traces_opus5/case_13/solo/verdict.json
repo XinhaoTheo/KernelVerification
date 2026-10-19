@@ -1,9 +1,9 @@
 {
   "confidence": 0.97,
-  "created_at": "2026-09-08T14:48:02Z",
+  "created_at": "2026-09-08T14:48:43Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) explicitly requires CONSECUTIVE grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q_head // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads, an interleaved mapping. Probe t6 (finalized as evidence c1.e1 via t7) ran the actual kernel on GPU with kv = arange rows and compared per-query-head KV row indices against the contract mapping: for num_kv_heads=2, num_q_heads=8 the kernel produced [0,1,0,1,0,1,0,1] vs required [0,0,0,0,1,1,1,1] (max_abs_err 4.0); for nkv=4,nq=8 it produced [0,1,2,3,0,1,2,3] vs required [0,0,1,1,2,2,3,3] (max_abs_err 8.0); nkv=3,nq=6 also mismatched. Only the degenerate cases n_rep==1 and num_kv_heads==1 agree. This is an exact discrete-index contract violation, not a tolerance or convention issue.",
+  "reason": "The contract in problem.txt requires a per-row scale derived from that row's own magnitude (absmax = max(max(|x_row|),1e-10); scale = absmax/127; q = clamp(round(x/scale),-127,127); out = q*scale) and states explicitly that no value in a row may be clipped by its own scale. Kernel source line 19 hard-codes absmax = _STALE_ABSMAX = 4.0 with no row reduction of |x| anywhere, and the same constant scale 4/127 is stored for every row (line 24). Probe t6 ran the kernel against the contract reference on GPU: for torch.randn(128,256), 2 elements were clipped, kernel max output 4.0 vs reference 4.2301, max_abs_err 0.2301; for a 10x-scaled input, 180 elements were clipped, kernel max 4.0 vs reference 30.269, max_abs_err 26.27, and the emitted scale was 0.031496 instead of the contract's 0.238338; for a small-magnitude input the emitted scale was 0.000248 instead of 0.000200 with max_rel_err ~1.0. These are not rounding artifacts of INT8 quantization \u2014 they are a different (wrong) scale formula, producing hard clipping the contract forbids.",
   "verdict": "reject"
 }

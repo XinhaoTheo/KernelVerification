@@ -1,17 +1,12 @@
-Operation: symmetric INT8 quantize-dequantize with one scale per group of
-columns, the per-group scaling used by INT8 inference kernels.
+Operation: dense matrix multiplication C = A @ B for float32 operands, blocked
+over M, N and K (the standard tiled-GEMM structure used by Triton matmul
+kernels).
 
-For each group of `group_size` consecutive columns of a row:
+    C[m, n] = sum over k of A[m, k] * B[k, n]
 
-    scale = max(|x|) / 127          over that group
-    q     = round(x / scale)        clamped into int8
-    y     = q * scale
+Input domain: M, N and K may each be any positive integer. In particular K is
+NOT required to be a multiple of the kernel's K block size; when it is not, the
+final K tile is partial and only the first (K mod BLOCK_K) of its entries take
+part in the sum.
 
-Every column of the input must be quantized under the scale of the group it
-belongs to.
-
-Input domain: `n_cols` may be any positive integer. It is NOT required to be a
-multiple of `group_size`; when it is not, the trailing columns form a shorter
-final group, which is still a group with its own scale.
-
-Does group_quant_dequant() satisfy this contract?
+Does matmul() satisfy this contract?

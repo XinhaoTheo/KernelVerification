@@ -1,17 +1,21 @@
-Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,
-select the expert with the largest router logit.
+Operation: variable-length block-sparse attention
+(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).
 
-    expert[t] = argmax over e of logits[t, e]
+A batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`
+are the cumulative offsets, so sequence b occupies rows
+cu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of
+`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query
+block i attends to key block j.
 
-Tie rule: router logits are computed in reduced precision and distinct logits
-routinely round to the same representable value, so ties are a normal
-occurrence rather than a curiosity. When several experts share the largest
-logit, the contract requires the LOWEST expert index to win, so that routing is
-reproducible across runs and across replicas holding the experts in the same
-order.
+    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v
 
-The selected expert's output is what the layer returns, and different experts
-are independently trained, so which one wins a tie changes the continuous
-output substantially.
+restricted to keys that belong to the same sequence as t and that lie in a
+selected block.
 
-Does route_top1() satisfy this contract?
+Input domain: sequence lengths are arbitrary and generally differ within a
+batch -- that is the point of the packed variable-length format. A sequence
+length is NOT required to be a multiple of the block size; when it is not, the
+final block of that sequence is partial and the positions past its end belong
+to the next sequence, so they must not contribute to the softmax.
+
+Does block_sparse_attention() satisfy this contract?

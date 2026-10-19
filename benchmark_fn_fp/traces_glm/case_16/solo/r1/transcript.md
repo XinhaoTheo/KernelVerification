@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_16`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_17`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 30.258s across 5 calls | tokens: in=52274 out=1396 total=53670
+- LLM time: 23.297s across 4 calls | tokens: in=37502 out=1103 total=38605
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.99
@@ -25,124 +25,97 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_16",
+    "entry": "case_17",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 
-### Turn 2 - `solo` (5.642748369999936s, in=7275 out=295)
+### Turn 2 - `solo` (5.413285836s, in=6665 out=276)
 
 Message:
 
 ```text
-The kernel's K-loop runs only `K // BLOCK_K` iterations, dropping the final partial K-tile whenever K is not a multiple of 32 — which the contract explicitly says is in scope. I'll record the claim and probe it.
+The kernel loops only `seqlen // CHUNK` chunks, so a trailing partial chunk is never written — outputs stay zero, violating the contract's explicit non-multiple-of-chunk requirement.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 error`
+- `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.",
+    "rationale": "n_chunks = seqlen // CHUNK drops the remainder chunk, so trailing positions are never computed/stored and remain 0 from torch.zeros_like. The contract explicitly requires seqlen not be a multiple of chunk and that trailing outputs still be produced.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The contract explicitly requires correct handling of K % BLOCK_K != 0."
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never proce
-  ...[truncated 36 chars]
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 3 - `solo` (4.7579831439999225s, in=8008 out=287)
-
-Message:
-
-```text
-The previous record_claim failed because scope_rationale was missing; I'll re-send it properly.
-```
-
-Tool calls:
-
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
-      }
-    ],
-    "scope_rationale": "The contract requires C[m,n] = sum over ALL k, and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. A kernel that drops the remainder violate
-  ...[truncated 225 chars]
+    "scope_rationale": "The contract explicitly requires correct outputs for seqlen not a multiple of chunk, but the kernel drops the trailing chunk entirely.",
+    "statement": "For seqlen not divisible by chunk, chun
+  ...[truncated 105 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.",
+    "rationale": "n_chunks = seqlen // CHUNK drops the remainder chunk, so trailing positions are never computed/stored and remain 0 from torch.zeros_like. The contract explicitly requires seqlen not be a multiple of chunk and that trailing outputs still be produced.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "scope_rationale": "The contract requires C[m,n] = sum over ALL k, and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. A kernel that drops the remainder violates this required behavior.",
-    "statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.",
+    "scope_rationale": "The contract explicitly requires correct outputs for seqlen not a multiple of chunk, but the kernel drops the trailing chunk entirely.",
+    "statement": "For seqlen not divisible by chunk, chunked_cumsum leaves the trailing positions of the output at zero instead of the correct cumulative sums.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.8221475889999965s, in=9308 out=207)
+### Turn 3 - `solo` (5.099278776999995s, in=7784 out=273)
 
 Message:
 
 ```text
-I'll run the decisive probe: K not a multiple of 32 vs a multiple of 32.
+I'll run a probe with seqlen=100 (not a multiple of 64) to confirm the trailing chunk is left at zero.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_16')\nfrom kernel import matmul\n\ntorch.manual_seed(0)\nres = {}\nfor K in [32, 33, 70, 100]:\n    a = torch.randn(64, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, 64, device='cuda', dtype=torch.float32)\n    c = matmul(a, b)\n    ref = a @ b\n    err = (c - ref).abs().max().item()\n    rel = err / ref.abs().max().item()\n    res[K] = {'max_abs_err': err, 'rel_err': rel, 'K_mod_32': K % 32}\nprint(json.dumps(res))"
+    "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(0)\nres = {}\nfor seqlen in [100, 64, 130]:\n    x = torch.randn(3, seqlen, device=\"cuda\", dtype=torch.float32)\n    out = chunked_cumsum(x, chunk=64)\n    ref = torch.cumsum(x, dim=1)\n    diff = (out - ref).abs()\n    tail = seqlen - (seqlen // 64) * 64\n    res[seqlen] = {\n        \"max_abs_err_full\": diff.max().item(),\n        \"max_abs_err_tail\": diff[:, -tail:].max().item() if tail else None,\n        \"max_abs_err_body\": diff[:, :seqlen - tail].max().item() if tail else diff.max().item(),\n        \"tail_len\": tail,\n    }\nprint(res)\n",
+    "expected_signal": "tail positions stay zero, large error in trailing chunk"
   }
   Output summary:
   {
@@ -150,68 +123,63 @@ Tool calls:
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "919cc9023c6a462c7fb85026553b45d4ecd4a6682a8669dc31994681f68129f3"
+        "path": "probes/t6_probe.py",
+        "sha256": "37c20693f2d8d6cd76c9c70f1bcfc3e864a8f755bc4895099d4dbe67ae4ed48f"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "74c6305ad8eaf07a7438b50b448cd4f0c89952bbd61de5e1483ba53cc08c5611"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "ab394156cf2da7d12d5f0c4c4846a86621a9fdc6053fd488c7c77f5eb74cf6df"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "26618613bb20caa8103ef2e78c99b1166825ece4835dcf81b431d6477ccf0c0a"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.",
-    "duration_s": 5.868607,
-    "eve
-  ...[truncated 3341 chars]
+    "claim_statement": "For seqlen not divisible by chunk, chunked_cumsum leaves the trailing positions of the output at zero instead of the correct cumulative sums.",
+    "duration_s": 5.345607,
+    "event_id": "t6",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "37c20693f2d8d6cd7
+  ...[truncated 2223 chars]
 
-### Turn 5 - `solo` (7.468569756999955s, in=11669 out=326)
+### Turn 4 - `solo` (6.443099671000027s, in=9763 out=346)
 
 Message:
 
 ```text
-The probe decisively confirmed the claim: K=32 is exact, but K=33, 70, 100 (K%32≠0) show huge errors (~30% relative). I'll finalize the evidence, close the claim, and record the verdict.
+The probe confirms the claim: for seqlen=100 and 130 (not multiples of chunk 64), the trailing positions show large errors (~10 and ~18) while the body matches to ~1e-6, and exact multiples (seqlen=64) are correct. The trailing chunk is left at zero, violating the contract's explicit requirement.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "K=100 (mod 4)": {
-        "max_abs_err": 10.81,
-        "rel_err": 0.288
-      },
-      "K=32 (mod 0)": {
-        "max_abs_err": 0.0,
-        "rel_err": 0.0
-      },
-      "K=33 (mod 1)": {
-        "max_abs_err": 9.31,
-        "rel_err": 0.331
-      },
-      "K=70 (mod 6)": {
-        "max_abs_err": 10.85,
-        "rel_err": 0.367
-      }
+      "body_err_100": 1.9073486328125e-06,
+      "body_err_130": 3.814697265625e-06,
+      "exact_multiple_64_err": 9.5367431640625e-07,
+      "metric": "max abs error vs torch.cumsum, split into covered body vs trailing partial chunk",
+      "tail_err_100": 10.053009033203125,
+      "tail_err_130": 18.264089584350586,
+      "tail_len_100": 36,
+      "tail_len_130": 2
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "For float32 GEMM vs torch reference: K=32 (multiple of BLOCK_K=32) gives max_abs_err 0.0; K=33, 70, 100 (K%32 != 0) give max_abs_err 9.31-10.85 and relative error 0.29-0.37, confirming the kernel drops the final partial K tile and produces incorrect C whenever K is not a multiple of 32.",
+    "summary": "For seqlen=100 (tail 36) and 130 (tail 2), trailing positions show max abs error 10.05 and 18.26 vs torch.cumsum (outputs left at zero), while covered body matches to ~1e-6 and an exact multiple (seqlen=64) is fully correct. Confirms the partial trailing chunk is never computed.",
     "supports": "confirmed"
   }
   Output summary:
@@ -219,37 +187,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "For float32 GEMM vs torch reference: K=32 (multiple of BLOCK_K=32) gives max_abs_err 0.0; K=33, 70, 100 (K%32 != 0) give max_abs_err 9.31-10.85 and relative error 0.29-0.37, confirming the kernel drops the final partial K tile and produces incorrect C whenever K is not a multiple of 32.",
+    "summary": "For seqlen=100 (tail 36) and 130 (tail 2), trailing positions show max abs error 10.05 and 18.26 vs torch.cumsum (outputs left at zero), while covered body matches to ~1e-6 and an exact multiple (seqlen=64) is fully correct. Confirms the partial trailing chunk is never computed.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (6.566997583999978s, in=16014 out=281)
+### Turn 5 - `solo` (6.34086043100001s, in=13290 out=208)
 
 Message:
 
 ```text
-The claim is fully confirmed with decisive runtime evidence and proper in-scope scoping. Recording the final verdict.
+The single claim is confirmed and in-scope; the evidence is decisive. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
     "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) requires C[m,n] = sum over all k and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. The kernel's K-loop (kernel.py line 19, `for _ in range(0, K // BLOCK_K)` with BLOCK_K=32) runs only floor(K/32) iterations with no masked remainder handling. Runtime probe t7 confirmed: K=32 (multiple of 32) matched the torch reference exactly (max_abs_err 0.0), while K=33, 70, 100 \u2014 all in the contract's declared input domain \u2014 produced max absolute errors of 9.31, 10.85, and 10.81 (relative errors 0.33, 0.37, 0.29), corresponding to the dropped final partial K-tile terms. Claim c1 is in_scope with contract scope evidence reco
-  ...[truncated 142 chars]
+    "reason": "The contract explicitly requires correct cumulative sums for seqlen not a multiple of chunk, but the kernel computes only seqlen // CHUNK chunks, leaving the trailing partial chunk at zero. Probe t6 on a real GPU (float32, batch 3) showed max abs error vs torch.cumsum of 10.05 at seqlen=100 (tail 36) and 18.26 at seqlen=130 (tail 2) confined to the trailing positions, while covered body positions matched to ~1e-6 and an exact multiple (seqlen=64) was fully correct. This is an in-scope, confirmed violation.",
+    "verdict": "reject"
+  }
   Output summary:
   {
     "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) requires C[m,n] = sum over all k and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. The kernel's K-loop (kernel.py line 19, `for _ in range(0, K // BLOCK_K)` with BLOCK_K=32) runs only floor(K/32) iterations with no masked remainder handling. Runtime probe t7 confirmed: K=32 (multiple of 32) matched the torch reference exactly (max_abs_err 0.0), while K=33, 70, 100 \u2014 all in the contract's declared input domain \u2014 produced max absolute errors of 9.31, 10.85, and 10.81 (relative errors 0.33, 0.37, 0.29), corresponding to the dropped final partial K-tile terms. Claim c1 is in_scope with contract scope evidence recorded and its evidence (tool event t7) is confirmed, so the kernel violates a required behavior and must be rejected.",
+    "reason": "The contract explicitly requires correct cumulative sums for seqlen not a multiple of chunk, but the kernel computes only seqlen // CHUNK chunks, leaving the trailing partial chunk at zero. Probe t6 on a real GPU (float32, batch 3) showed max abs error vs torch.cumsum of 10.05 at seqlen=100 (tail 36) and 18.26 at seqlen=130 (tail 2) confined to the trailing positions, while covered body positions matched to ~1e-6 and an exact multiple (seqlen=64) was fully correct. This is an in-scope, confirmed violation.",
     "verdict": "reject"
   }
 
@@ -261,103 +230,90 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.
+Statement: For seqlen not divisible by chunk, chunked_cumsum leaves the trailing positions of the output at zero instead of the correct cumulative sums.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires C[m,n] = sum over ALL k, and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. A kernel that drops the remainder violates this required behavior.
+Scope rationale: The contract explicitly requires correct outputs for seqlen not a multiple of chunk, but the kernel drops the trailing chunk entirely.
 
 Scope evidence:
-- `problem.txt`: "K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum."
+- `problem.txt`: Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.
 
-Rationale: The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.
+Rationale: n_chunks = seqlen // CHUNK drops the remainder chunk, so trailing positions are never computed/stored and remain 0 from torch.zeros_like. The contract explicitly requires seqlen not be a multiple of chunk and that trailing outputs still be produced.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: For float32 GEMM vs torch reference: K=32 (multiple of BLOCK_K=32) gives max_abs_err 0.0; K=33, 70, 100 (K%32 != 0) give max_abs_err 9.31-10.85 and relative error 0.29-0.37, confirming the kernel drops the final partial K tile and produces incorrect C whenever K is not a multiple of 32.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: For seqlen=100 (tail 36) and 130 (tail 2), trailing positions show max abs error 10.05 and 18.26 vs torch.cumsum (outputs left at zero), while covered body matches to ~1e-6 and an exact multiple (seqlen=64) is fully correct. Confirms the partial trailing chunk is never computed.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
-### t5 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The loop `for _ in range(0, K // BLOCK_K)` performs only floor(K/BLOCK_K) iterations with no partial-tile masking, so the last (K mod BLOCK_K) entries of the reduction are omitted whenever K is not a multiple of 32, violating C[m,n] = sum over all k.",
+  "rationale": "n_chunks = seqlen // CHUNK drops the remainder chunk, so trailing positions are never computed/stored and remain 0 from torch.zeros_like. The contract explicitly requires seqlen not be a multiple of chunk and that trailing outputs still be produced.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
     }
   ],
-  "scope_rationale": "The contract requires C[m,n] = sum over ALL k, and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. A kernel that drops the remainder violates this required behavior.",
-  "statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.",
+  "scope_rationale": "The contract explicitly requires correct outputs for seqlen not a multiple of chunk, but the kernel drops the trailing chunk entirely.",
+  "statement": "For seqlen not divisible by chunk, chunked_cumsum leaves the trailing positions of the output at zero instead of the correct cumulative sums.",
   "status": "open"
 }
 
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "919cc9023c6a462c7fb85026553b45d4ecd4a6682a8669dc31994681f68129f3"
+      "path": "probes/t6_probe.py",
+      "sha256": "37c20693f2d8d6cd76c9c70f1bcfc3e864a8f755bc4895099d4dbe67ae4ed48f"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "74c6305ad8eaf07a7438b50b448cd4f0c89952bbd61de5e1483ba53cc08c5611"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "ab394156cf2da7d12d5f0c4c4846a86621a9fdc6053fd488c7c77f5eb74cf6df"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "26618613bb20caa8103ef2e78c99b1166825ece4835dcf81b431d6477ccf0c0a"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "matmul() produces incorrect results when K is not a multiple of BLOCK_K=32 because the kernel loop iterates only K//BLOCK_K times and never processes the K mod BLOCK_K remainder.",
-  "duration_s": 5.868607,
-  "event_id": "t7",
+  "claim_statement": "For seqlen not divisible by chunk, chunked_cumsum leaves the trailing positions of the output at zero instead of the correct cumulative sums.",
+  "duration_s": 5.345607,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -365,41 +321,47 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "919cc9023c6a462c7fb85026553b45d4ecd4a6682a8669dc31994681f68129f3"
+          "path": "probes/t6_probe.py",
+          "sha256": "37c20693f2d8d6cd76c9c70f1bcfc3e864a8f755bc4895099d4dbe67ae4ed48f"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "74c6305ad8eaf07a7438b50b448cd4f0c89952bbd61de5e1483ba53cc08c5611"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "ab394156cf2da7d12d5f0c4c4846a86621a9fdc6053fd488c7c77f5eb74cf6df"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e
-...[truncated 2541 chars]
+          "path": "probes/t6_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "duration_s": 5.345607,
+      "exit_code": 0,
+      "expected_signal": "tail positions stay zero, large error in trailing chunk",
+      "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quot
+...[truncated 1423 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "For float32 GEMM vs torch reference: K=32 (multiple of BLOCK_K=32) gives max_abs_err 0.0; K=33, 70, 100 (K%32 != 0) give max_abs_err 9.31-10.85 and relative error 0.29-0.37, confirming the kernel drops the final partial K tile and produces incorrect C whenever K is not a multiple of 32.",
+  "summary": "For seqlen=100 (tail 36) and 130 (tail 2), trailing positions show max abs error 10.05 and 18.26 vs torch.cumsum (outputs left at zero), while covered body matches to ~1e-6 and an exact multiple (seqlen=64) is fully correct. Confirms the partial trailing chunk is never computed.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
   "confidence": 0.99,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) requires C[m,n] = sum over all k and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. The kernel's K-loop (kernel.py line 19, `for _ in range(0, K // BLOCK_K)` with BLOCK_K=32) runs only floor(K/32) iterations with no masked remainder handling. Runtime probe t7 confirmed: K=32 (multiple of 32) matched the torch reference exactly (max_abs_err 0.0), while K=33, 70, 100 \u2014 all in the contract's declared input domain \u2014 produced max absolute errors of 9.31, 10.85, and 10.81 (relative errors 0.33, 0.37, 0.29), corresponding to the dropped final partial K-tile terms. Claim c1 is in_scope with contract scope evidence recorded and its evidence (tool event t7) is confirmed, so the kernel violates a required behavior and must be rejected.",
+  "reason": "The contract explicitly requires correct cumulative sums for seqlen not a multiple of chunk, but the kernel computes only seqlen // CHUNK chunks, leaving the trailing partial chunk at zero. Probe t6 on a real GPU (float32, batch 3) showed max abs error vs torch.cumsum of 10.05 at seqlen=100 (tail 36) and 18.26 at seqlen=130 (tail 2) confined to the trailing positions, while covered body positions matched to ~1e-6 and an exact multiple (seqlen=64) was fully correct. This is an in-scope, confirmed violation.",
   "verdict": "reject"
 }
 
@@ -407,10 +369,10 @@ Evidence:
 
 {
   "confidence": 0.99,
-  "created_at": "2026-09-30T08:25:53Z",
+  "created_at": "2026-09-30T08:26:22Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) requires C[m,n] = sum over all k and explicitly states K need not be a multiple of the K block size, with the partial final tile participating in the sum. The kernel's K-loop (kernel.py line 19, `for _ in range(0, K // BLOCK_K)` with BLOCK_K=32) runs only floor(K/32) iterations with no masked remainder handling. Runtime probe t7 confirmed: K=32 (multiple of 32) matched the torch reference exactly (max_abs_err 0.0), while K=33, 70, 100 \u2014 all in the contract's declared input domain \u2014 produced max absolute errors of 9.31, 10.85, and 10.81 (relative errors 0.33, 0.37, 0.29), corresponding to the dropped final partial K-tile terms. Claim c1 is in_scope with contract scope evidence recorded and its evidence (tool event t7) is confirmed, so the kernel violates a required behavior and must be rejected.",
+  "reason": "The contract explicitly requires correct cumulative sums for seqlen not a multiple of chunk, but the kernel computes only seqlen // CHUNK chunks, leaving the trailing partial chunk at zero. Probe t6 on a real GPU (float32, batch 3) showed max abs error vs torch.cumsum of 10.05 at seqlen=100 (tail 36) and 18.26 at seqlen=130 (tail 2) confined to the trailing positions, while covered body positions matched to ~1e-6 and an exact multiple (seqlen=64) was fully correct. This is an in-scope, confirmed violation.",
   "verdict": "reject"
 }

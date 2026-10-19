@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "sin
 PRIVATE = Path("private_data") / "correlation_pair"
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from audit_traces import audit
-from case_registry import case_sort_key
+from case_registry import case_sort_key, load_registry, remap_validation_cases
 from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
 from summarize_traces import build_report
 from traces import experiment_trial, iter_trace_records, trial_sort_key
@@ -113,6 +113,8 @@ def derive(root=ROOT):
     root = Path(root)
     benchmark = benchmark_root(root)
     labels = read(root / PRIVATE / "validation_gpu.json")
+    labels = {**labels, "cases": remap_validation_cases(
+        labels.get("cases", {}), DATASET, load_registry(benchmark))}
     if not labels.get("cases"):
         raise ValueError("Missing frozen correlation-pair labels")
     public = {}

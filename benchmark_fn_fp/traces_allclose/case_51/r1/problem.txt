@@ -1,0 +1,54 @@
+Compute the fixed-point requantization epilogue of an integer GEMM, returning
+dequantized FP32 values. This interface requires gemmlowp-compatible DOUBLE
+rounding. Single-rounding requantization is a different operation.
+
+Inputs and complete public domain:
+- acc is int32 [M,C], with 1<=M<=4096 and 1<=C<=257. EVERY int32 accumulator
+  value is legal, including -2^31 and 2^31-1.
+- multipliers is int32 [C], with every value in [2^30,2^31-1]. These are
+  positive Q31 fixed-point per-channel multipliers.
+- right_shifts is int32 [C], with values in [0,31].
+- zero_points is int32 [C], with values in [-128,127].
+- output_scales is FP32 [C], with values exactly in
+  {2^-8,2^-7,2^-6,2^-5,2^-4,2^-3,2^-2,2^-1,1}.
+- All tensors are ordinary torch.Tensor objects, dense, strided, contiguous,
+  and on the same CUDA device. Contiguous views with nonzero storage offsets
+  are legal. Inputs may share storage if each otherwise meets this contract.
+  All have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.
+  Calls run in ordinary non-inference mode without concurrent external writes.
+  This forward operation does not provide autograd.
+
+For each accumulator a=acc[i,c], use m=multipliers[c], r=right_shifts[c],
+z=zero_points[c], and s=output_scales[c]. Define the following using exact
+mathematical integer arithmetic, without intermediate integer overflow:
+
+  P = a*m
+  H = floor((P + 2^30) / 2^31)
+  R = nearest integer to H/2^r, with exact half ties AWAY from zero
+  Q = min(127, max(-128, R + z))
+  target[i,c] = (Q-z)*s
+
+The H stage rounds to nearest with exact half ties toward POSITIVE infinity;
+the R stage has its separately stated tie rule. For r=0, R=H. Since m is
+positive and at most 2^31-1, the exceptional saturating product of two -2^31
+operands cannot occur. Saturation is applied after the two rounding stages
+and zero-point addition. The target is the requantized/dequantized result,
+not the pre-quantization real number. All target values are exactly
+representable in FP32 for this domain.
+
+Return a fresh finite FP32 CUDA tensor [M,C] on acc.device, preserving all
+inputs. Require absolute error <=1e-6 for every element, with relative
+tolerance zero. Signed zeros are numerically equivalent. This tolerance is
+smaller than the smallest nonzero quantization step in the public domain.
+The implementation may fuse stages, use fixed-width product limbs, or
+rearrange the arithmetic if the target above is preserved for the ENTIRE
+legal domain. Correctness is one verdict for the implementation, not one
+verdict per input, seed, shape or channel parameter configuration.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses Python arbitrary-precision integers and the direct two-stage definition;
+it accepts CPU inputs. make_inputs() supplies examples only. This is a
+synthetic implementation of gemmlowp's fixed-point epilogue arithmetic;
+it does not claim to reproduce an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

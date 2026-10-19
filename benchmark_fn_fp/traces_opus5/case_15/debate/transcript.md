@@ -1,12 +1,12 @@
 # Agentic Verification Transcript
 
-- Entry: `case_15`
-- Turns: 8
-- Tool events: 17
+- Entry: `case_16`
+- Turns: 7
+- Tool events: 16
 - Claims: 3
 - Description updates: 1
-- LLM time: 169.698s across 7 calls | tokens: in=256700 out=13641 total=270341
-- Cache tokens: created=0 read=39115
+- LLM time: 141.932s across 6 calls | tokens: in=232980 out=10990 total=243970
+- Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.96
@@ -27,42 +27,42 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_15",
+    "entry": "case_16",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 
-### Turn 2 - `describer` (42.82678241799999s, in=3634 out=3028)
+### Turn 2 - `describer` (40.26214716200002s, in=4165 out=2775)
 
 Tool calls:
 
@@ -70,37 +70,36 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
-      "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
-      "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
-      "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
-      "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
+      "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+      "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+      "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+      "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+      "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
     ],
     "kernel_model": [
-      "Grid is (n_rows,), one program per row; r
-  ...[truncated 5644 chars]
+      "kernel.py:30-41 host wr
+  ...[truncated 5335 chars]
   Output summary:
   {
     "contract_model": [
-      "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
-      "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
-      "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
-      "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
-      "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
+      "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+      "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+      "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+      "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+      "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
-      "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
-  
-  ...[truncated 5334 chars]
+      "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+      "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, 
+  ...[truncated 5025 chars]
 
-### Turn 3 - `skeptic` (24.39172567500009s, in=18131 out=1974)
+### Turn 3 - `skeptic` (25.409407057999942s, in=18712 out=1991)
 
 Message:
 
 ```text
-Recording the highest-risk, directly testable claims from the contract's explicit non-multiple `n_cols` domain.
+The contract explicitly names non-multiple-of-BLOCK_K K as in-domain, and the loop bound `K // BLOCK_K` with no K-dimension load mask is a direct violation candidate. Recording the two sharpest testable claims plus one about garbage leakage from the K-unmasked loads at ragged M/N.
 ```
 
 Tool calls:
@@ -108,87 +107,100 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
+    "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
+        "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
       },
       {
-        "so
-  ...[truncated 828 chars]
+        "source": "kernel.py:40",
+        "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
+      }
+    ],
+    "scope_rationale": "problem.txt is the
+  ...[truncated 748 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
+    "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
+        "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
       },
       {
-        "source": "problem.txt",
-        "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
+        "source": "kernel.py:40",
+        "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
       }
     ],
-    "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative
-  ...[truncated 462 chars]
+    "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.
+  ...[truncated 382 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
+    "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
+        "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
       }
     ],
-    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
-    "statement": "When n_cols &l
-  ...[truncated 228 chars]
+    "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile)
+  ...[truncated 247 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
+    "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
+        "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
       }
     ],
-    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
-    "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
+    "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+    "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
     "status": "open"
   }
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
-    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so 
-  ...[truncated 238 chars]
+    "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+      }
+    ],
+    "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+    "statement": "With K a multi
+  ...[truncated 466 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
-    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
-    "status": "open"
-  }
+    "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+      }
+    ],
+    "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+    "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the l
+  ...[truncated 100 chars]
 
-### Turn 4 - `experimenter` (27.880424401000028s, in=24538 out=2659)
+### Turn 4 - `experimenter` (25.401565952000055s, in=25977 out=2484)
 
 Message:
 
 ```text
-Three claims are independent in design: c1 (tail truncation, n_cols=100), c2 (n_cols<group_size), and c3 (rounding ties, tested on an exact-multiple n_cols=64 so the tail bug cannot confound it). Launching all three now.
+Launching all three probes together — they are independent: c1 (K not multiple of 32), c2 (K<32 degenerate), c3 (ragged M/N with K divisible by 32, so the K-tail defect cannot confound it).
 ```
 
 Tool calls:
@@ -197,8 +209,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, gs):\n    y = torch.empty_like(x)\n    n = x.shape[1]\n    for s in range(0, n, gs):\n        e = min(s+gs, n)\n        g = x[:, s:e]\n        am = g.abs().amax(dim=1, keepdim=True)\n        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)\n        q = torch.round(g/sc).clamp(-127,127)\n        y[:, s:e] = q*sc\n    return y\n\ntorch.manual_seed(0)\nx = torch.randn(4, 100, device=\"cuda\", dtype=torch.float32)\nout = k.group_quant_dequant(x, 64)\nr = ref(x, 64)\nhead_err = (out[:, :64]-r[:, :64]).abs().max().item()\ntail_err = (out[:, 64:]-r[
-  ...[truncated 729 chars]
+    "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nres = {}\nfor K in [32, 64, 128, 33, 40, 47, 100]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = (a.double() @ b.double()).float()\n    Kt = (K // 32) * 32\n    trunc = (a[:, :Kt].double() @ b[:Kt].double()).float()\n    err_full = (c - ref).abs().max().item()\n    err_trunc = (c - trunc).abs().max().item()\n    rel_full = err_full / ref.abs().max().item()\n    res[str(K)] = dict(K=K, Ktail=K - Kt, max_abs_e
+  ...[truncated 581 chars]
   Output summary:
   {
     "artifacts": [
@@ -206,13 +218,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+        "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+        "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -224,18 +236,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+        "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group
-  ...[truncated 3344 chars]
+    "claim_statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those
+  ...[truncated 8699 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, gs):\n    y = torch.empty_like(x); n = x.shape[1]\n    for s in range(0, n, gs):\n        e = min(s+gs, n); g = x[:, s:e]\n        am = g.abs().amax(dim=1, keepdim=True)\n        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)\n        y[:, s:e] = torch.round(g/sc).clamp(-127,127)*sc\n    return y\n\ntorch.manual_seed(1)\nx = torch.randn(4, 40, device=\"cuda\", dtype=torch.float32)\nout = k.group_quant_dequant(x, 64)\nr = ref(x, 64)\nprint(json.dumps({\n \"shape\": list(x.shape), \"group_size\": 64,\n \"out_nonzero_count\": int((out != 0).su
-  ...[truncated 382 chars]
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nres = {}\nfor K in [1, 8, 31]:\n    M = N = 64\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    c = m.matmul(a, b)\n    ref = a @ b\n    res[str(K)] = dict(K=K, kernel_all_zero=bool((c == 0).all().item()),\n                       kernel_abs_max=c.abs().max().item(),\n                       ref_abs_max=ref.abs().max().item(),\n                       max_abs_err=(c - ref).abs().max().item(),\n                       nonzero_frac=float((c != 0).float().mean().item(
+  ...[truncated 163 chars]
   Output summary:
   {
     "artifacts": [
@@ -243,13 +255,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
+        "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
+        "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -261,18 +273,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
+        "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quanti
-  ...[truncated 2925 chars]
+    "claim_statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, 
+  ...[truncated 4260 chars]
 - `run_claim_probe -> t11 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsc = 1.0/8.0   # exactly representable; absmax = 127*sc\nvals = []\n# ties at +/- (m + 0.5)*sc for m = 0..30\nfor m in range(31):\n    vals.append((m+0.5)*sc)\n    vals.append(-(m+0.5)*sc)\nvals = vals[:63]\nvals.append(127*sc)   # set absmax so scale == sc exactly\nx = torch.tensor([vals], device=\"cuda\", dtype=torch.float32)\nassert x.shape == (1,64)\n\nam = x.abs().amax(dim=1, keepdim=True)\nscale = am/127.0\nratio = x/scale\nhalf_even = torch.round(ratio).clamp(-127,127)*scale          # torch.round = half-to-even\nhalf_away = torch.where(ratio>=0, torch.f
-  ...[truncated 1148 chars]
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_16/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(2)\nres = {}\nfor (M, N, K) in [(70, 100, 64), (65, 65, 32), (100, 70, 128)]:\n    a = torch.randn(M, K, device='cuda', dtype=torch.float32)\n    b = torch.randn(K, N, device='cuda', dtype=torch.float32)\n    try:\n        c = m.matmul(a, b)\n        torch.cuda.synchronize()\n        ref = (a.double() @ b.double()).float()\n        err = (c - ref).abs().max().item()\n        rel = err / ref.abs().max().item()\n        # poison test: same logical matrices inside a larger buffer with garbage past the end\n        bigA = torch.full((M + 8, K), 1e6,
+  ...[truncated 1326 chars]
   Output summary:
   {
     "artifacts": [
@@ -280,37 +292,37 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
+        "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t11_stderr.txt",
-        "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
-    "duration_s": 3.276405,
-    "event_id": "t11",
-    "evidence_draft": {
-      "claim_id": "c3",
-      "data": {
-        "artif
-  ...[truncated 2298 chars]
+    "claim_statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read u
+  ...[truncated 5730 chars]
 
-### Turn 5 - `experimenter` (30.772091065999803s, in=35623 out=2852)
+### Turn 5 - `experimenter` (27.45818612900007s, in=42647 out=2304)
 
 Message:
 
 ```text
-c1 and c2 both returned decisive results; finalizing them now. The c3 probe crashed on my own shape assertion (I generated 63 values, not 64), so I'm relaunching it with a corrected construction in the same response.
+All three probe results are in and decisive; finalizing them together. c1 and c2 are confirmed (K-tail dropped, K<32 gives all zeros), and c3 is rebutted (ragged M/N with divisible K is exact, even with poisoned out-of-range memory). No further probes are needed.
 ```
 
 Tool calls:
@@ -319,30 +331,45 @@ Tool calls:
   Args:
   {
     "data": {
-      "allclose_atol_1e-3": false,
-      "dtype": "float32",
-      "group_size": 64,
-      "head_max_abs_err": 0.0,
-      "shape": [
-        4,
-        100
-      ],
-      "tail_exact_zero_count": 144,
-      "tail_input_nonzero_count": 144,
-      "tail_max_abs_err": 3.12982439994812,
-      "tail_ref_max_abs": 3.12982439994812,
-      "tail_total": 144
-    },
-    "event_id": "t9",
-    "status": "confirmed",
-    "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclo
-  ...[truncated 156 chars]
+      "K_divisible_max_abs_err": {
+        "128": 1.52587890625e-05,
+        "32": 4.76837158203125e-06,
+        "64": 8.58306884765625e-06
+      },
+      "K_nondivisible_max_abs_err_vs_torch": {
+        "100": 11.031343460083008,
+        "33": 9.890376091003418,
+        "40": 12.810418128967285,
+        "47": 17.772851943969727
+      },
+      "K_nondivisible_max_rel_err_vs_torch": {
+        "100": 0.2857711996676445,
+        "33": 0.3782863197049291,
+        "40": 0.4572077519513882,
+        "47": 0.5820121805351536
+      },
+      "allclose_torch_rtol_atol_1e-3": {
+        "100": false,
+        "128": true,
+        "32": true,
+        "33": false,
+        "40": false,
+        "47": false,
+        "64": true
+      },
+      "allclose_truncated_ref_1e-3": {
+        "100": true,
+        "33": true,
+        "40": true,
+        "47": true
+    
+  ...[truncated 1041 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
+    "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
     "supports": "confirmed",
     "tool_event_id": "t9"
   }
@@ -350,167 +377,134 @@ Tool calls:
   Args:
   {
     "data": {
-      "allclose_atol_1e-3": false,
-      "dtype": "float32",
-      "group_size": 64,
-      "max_abs_err": 2.78844952583313,
-      "out_nonzero_count": 0,
-      "out_total": 160,
-      "ref_max_abs": 2.78844952583313,
-      "ref_nonzero_count": 160,
-      "shape": [
-        4,
-        40
-      ]
+      "kernel_abs_max": {
+        "1": 0.0,
+        "31": 0.0,
+        "8": 0.0
+      },
+      "kernel_all_zero": {
+        "1": true,
+        "31": true,
+        "8": true
+      },
+      "max_abs_err": {
+        "1": 6.549962997436523,
+        "31": 21.460908889770508,
+        "8": 10.059889793395996
+      },
+      "nonzero_frac": {
+        "1": 0.0,
+        "31": 0.0,
+        "8": 0.0
+      },
+      "ref_abs_max": {
+        "1": 6.549962997436523,
+        "31": 21.460908889770508,
+        "8": 10.059889793395996
+      },
+      "relative_error": 1.0,
+      "shape": "M=N=64, fp32 cuda"
     },
     "event_id": "t10",
     "status": "confirmed",
-    "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
-    "supports": "confirmed"
-  }
+    "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref ab
+  ...[truncated 271 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
+    "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
     "supports": "confirmed",
     "tool_event_id": "t10"
   }
-- `run_claim_probe -> t14 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsc = 0.125  # exactly representable; absmax = 127*sc = 15.875\nvals = []\nfor m in range(32):\n    vals.append((m + 0.5) * sc)\n    vals.append(-(m + 0.5) * sc)\nvals = vals[:63]\nvals.append(127 * sc)  # absmax element so that scale == 0.125 exactly\nx = torch.tensor([vals], device=\"cuda\", dtype=torch.float32)\nassert tuple(x.shape) == (1, 64), tuple(x.shape)\n\nam = x.abs().amax(dim=1, keepdim=True)\nscale = am / 127.0\nstep = scale.item()\nratio = x / scale\nhalf_even = torch.round(ratio).clamp(-127, 127) * scale\nhalf_away = torch.where(ratio >= 0, torch.
-  ...[truncated 1724 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t14_probe.py",
-        "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t14_stdout.txt",
-        "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t14_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t14_json_result.json",
-        "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some 
-  ...[truncated 5581 chars]
-
-### Turn 6 - `experimenter` (19.18037270700006s, in=50714 out=1494)
-
-Message:
-
-```text
-t14 returned a decisive result for c3: the kernel's output matches the half-up (`floor(r+0.5)`) reference exactly on all 64 elements, while differing from `torch.round` (half-to-even) on 31 of 63 exact ties by exactly one quantization step, and from half-away-from-zero on all 31 negative ties. Finalizing as confirmed on the mechanism; note the claim's scope remains `unknown` because problem.txt does not fix a tie-break rule, so this is a tie-only, one-step difference and is much weaker than the c1/c2 tail-truncation failures. No further probes are needed — all three claims (c1, c2, c3) now carry direct runtime evidence.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t15 ok`
+- `finalize_probe_evidence -> t14 ok`
   Args:
   {
     "data": {
-      "dtype": "float32",
-      "exact_tie_count": 63,
-      "group_size": 64,
-      "max_abs_err_vs_half_away": 0.125,
-      "max_abs_err_vs_half_even": 0.125,
-      "max_err_in_steps_vs_half_even": 1.0,
-      "mismatch_negative_ties_vs_half_away": 31,
-      "mismatch_negative_ties_vs_half_even": 15,
-      "mismatch_positive_ties_vs_half_even": 16,
-      "mismatch_vs_half_away_from_zero": 31,
-      "mismatch_vs_half_up_floor_kernel_semantics": 0,
-      "mismatch_vs_torch_round_half_even": 31,
-      "n_elems": 64,
-      "quantization_step": 0.125,
-      "sample_half_away_first8": [
-        0.125,
-        -0.125,
-        0.25,
-        -0.25,
-        0.375,
-        -0.375,
-        0.5,
-        -0.5
+      "allclose_1e-3": true,
+      "cases": [
+        "70x100x64",
+        "65x65x32",
+        "100x70x128"
       ],
-      "sample_half_even_first8": [
-        0.0,
-        -0.0,
-        0.25,
-        -0.25,
-        0.25,
-        -0.25,
-        0.5,
-    
-  ...[truncated 1216 chars]
+      "fault": false,
+      "max_abs_err": {
+        "100x70x128": 1.52587890625e-05,
+        "65x65x32": 4.76837158203125e-06,
+        "70x100x64": 9.5367431640625e-06
+      },
+      "max_abs_err_poisoned_alloc": {
+        "100x70x128": 1.52587890625e-05,
+        "65x65x32": 4.76837158203125e-06,
+        "70x100x64": 9.5367431640625e-06
+      },
+      "max_rel_err": {
+        "100x70x128": 3.302807683783908e-07,
+        "65x65x32": 1.9317652602308026e-07,
+        "70x100x64": 2.84870742749185e-07
+      },
+      "poison_allclose_1e-3": true,
+      "poison_value": 1000000.0
+    },
+    "event_id": "t11",
+    "status": "rebutted",
+    "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x1
+  ...[truncated 613 chars]
   Output summary:
   {
     "claim_id": "c3",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c3.e1",
-    "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
-    "supports": "confirmed",
-    "tool_event_id": "t14"
+    "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+    "supports": "rebutted",
+    "tool_event_id": "t11"
   }
 
-### Turn 7 - `skeptic` (10.816902527000138s, in=60966 out=659)
+### Turn 6 - `skeptic` (9.381978481000033s, in=69843 out=471)
 
 Message:
 
 ```text
-This is my final review turn. c1 and c2 are confirmed, in-scope contract violations (trailing partial group left as zeros; entire output zero when n_cols < group_size), and c3's tie-break difference is confirmed as a mechanism but bounded to one LSB with no contract-specified tie rule. Nothing in the new evidence points to an uncovered, material, in-scope defect, so I'm not holding up the verdict.
+This is my final review turn. The two K-dimension claims (c1, c2) are confirmed with decisive runtime evidence, and c3 (M/N edge leakage) is cleanly rebutted including a poisoned-allocation control. The contract-named failure is fully localized to the dropped partial K tile; nothing in the new evidence points at an uncovered in-scope defect, so I have no reason to hold up the verdict.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_no_new_claims -> t15 ok`
   Args:
   {
-    "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence 
-  ...[truncated 341 chars]
+    "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
+    "reviewed_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ]
+  }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence upgrades it. Remaining unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16 dtype, non-contiguous strides, missing explicit clamp) are either out of the stated contract or add nothing beyond the already-confirmed failure, so no further claims are warranted.",
+    "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
     "reviewed_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reviewed_tool_event_count
-  ...[truncated 20 chars]
+    "reviewed_tool_event_count": 14,
+    "turn": 6
+  }
 
-### Turn 8 - `judge` (13.829638014000011s, in=63094 out=975)
+### Turn 7 - `judge` (14.018583272000114s, in=71636 out=965)
 
 Message:
 
 ```text
-Claim coverage is complete, Skeptic recorded no new claims after reviewing all evidence, and two in-scope claims are confirmed with direct runtime evidence. Recording the verdict.
+All claims have evidence, the Skeptic reviewed the latest results and recorded no new claims, so I can finalize. The contract in problem.txt explicitly requires the partial final K tile to contribute, and confirmed runtime evidence shows it does not.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `record_verdict -> t16 ok`
   Args:
   {
     "confidence": 0.96,
@@ -518,8 +512,8 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, i
-  ...[truncated 1265 chars]
+    "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-a
+  ...[truncated 1036 chars]
   Output summary:
   {
     "confidence": 0.96,
@@ -527,146 +521,146 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs again
-  ...[truncated 865 chars]
+    "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=
+  ...[truncated 636 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
-    "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
-    "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
-    "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
-    "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
+    "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+    "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+    "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+    "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+    "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
   ],
   "kernel_model": [
-    "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
-    "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
-    "Output buffer is torch.zeros_like(x) (kernel.py:28), so any column never stored keeps the value 0.0 rather than being an obvious garbage read.",
-    "BLOCK is passed equal to GROUP (kernel.py:30), so the `in_group = arange < GROUP` mask (kernel.py:16) is always all-true and the `cols < n_cols` mask is also always true for full groups; both masks are effectively dead for the executed iterations.",
-    "Scale: absmax/127 with a where(absmax==0, 1.0, ...) guard (kernel.py:19), so all-zero groups dequantize to 0 without division by zero.",
-    "Rounding is tl.floor(x/scale + 0.5) (kernel.py:20), i.e. round-half-up, then cast to int8; no explicit clamp is applied, relying on |x/scale| <= 127 by construction.",
-    "Dequant is done in fp32 (kernel.py:21) and stored into the output dtype implicitly by tl.store."
-  ],
-...[truncated 3917 chars]
+    "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+    "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+    "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+    "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+    "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+    "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges are handled; the store nev
+...[truncated 3765 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_15 implements per-group symmetric INT8 quant-dequant in Triton, one program per row looping over n_cols // GROUP full groups. The contract explicitly requires the trailing partial group (n_cols not a multiple of group_size) to be quantized with its own scale, but the loop bound truncates, so tail columns appear to be left at the zeros of the preallocated output. Secondary surfaces: round-half-up vs torch.round half-to-even, tl.arange power-of-two requirement on group_size, and contiguity assumptions.
+- `du1` tasks=`initial`: case_16 is a tiled fp32 Triton GEMM. The contract explicitly demands support for K not divisible by BLOCK_K, but the kernel's K loop runs exactly `K // BLOCK_K` iterations with no K masking, so any partial trailing K tile is silently dropped (and K<32 yields an all-zero result). Secondary surfaces: tl.dot TF32 precision, and no dtype/shape validation.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.
+Statement: For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices — a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group "is still a group with its own scale". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.
+Scope rationale: problem.txt is the operative contract (no test.py exists) and it explicitly states "K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum." The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.
 
 Scope evidence:
-- `problem.txt`: "`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale."
-- `problem.txt`: "Every column of the input must be quantized under the scale of the group it belongs to."
+- `problem.txt`: Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum.
+- `kernel.py:40`: Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case.
 
-Rationale: kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.
+Rationale: kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.
 
 ### c2 - `confirmed`
 
-Statement: When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.
+Statement: For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.
+Scope rationale: problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named "partial final K tile" case (the whole of K is the partial tile).
 
 Scope evidence:
-- `problem.txt`: Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale.
+- `problem.txt`: "M, N and K may each be any positive integer" — no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior.
 
-Rationale: Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.
-
-Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.
-
-### c3 - `confirmed`
-
-Statement: The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.
-
-Scope: `unknown`
-
-Scope rationale: problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.
-
-Rationale: floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.
+Rationale: Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t14: x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).
+
+### c3 - `rebutted`
+
+Statement: With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.
+
+Scope evidence:
+- `problem.txt`: M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n.
+
+Rationale: Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.
+
+Evidence:
+- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t11: No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
-    "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
-    "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
-    "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
-    "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
+    "Compute dense C = A @ B for float32 operands, C[m,n] = sum_k A[m,k]*B[k,n] (problem.txt).",
+    "M, N, K may each be ANY positive integer; the contract calls out explicitly that K is NOT required to be a multiple of the kernel's K block size.",
+    "When K % BLOCK_K != 0 the final partial K tile must still contribute its first (K mod BLOCK_K) elements to the sum \u2014 i.e. the K tail is part of the required answer, not an optional optimization.",
+    "Implied: output shape (M, N), dtype float32, on the same device as inputs; accuracy comparable to a torch.matmul reference within a float32 tolerance.",
+    "No test_code is provided in the artifact, so the operative contract is the prose in problem.txt only."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
-    "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
-    "Output buffer is torch.zeros_like(x) (kernel.py:28), so any column never stored keeps the value 0.0 rather than being an obvious garbage read.",
-    "BLOCK is passed equal to GROUP (kernel.py:30), so the `in_group = arange < GROUP` mask (kernel.py:16) is always all-true and the `cols < n_cols` mask is also always true for full groups; both masks are effectively dead for the executed iterations.",
-    "Scale: absmax/127 with a where(absmax==0, 1.0, ...) guard (kernel.py:19), so all-zero groups dequantize to 0 without division by zero.",
-    "Rounding is tl.floor(x/scale + 0.5) (kernel.py:20), i.e. round-half-up, then cast to int8; no explicit clamp is applied, relying on |x/scale| <= 127 by construction.",
-    "Dequant is done in fp32 (kernel.py:21) and stored into the output dtype imp
-...[truncated 4534 chars]
+    "kernel.py:30-41 host wrapper: reads M,K from a.shape and K2,N from b.shape, asserts K==K2, allocates c as torch.empty((M,N), float32), launches a 2-D grid (cdiv(M,64), cdiv(N,64)) with BLOCK_M=BLOCK_N=64, BLOCK_K=32, passing all six strides.",
+    "kernel.py:12-14 computes offs_m/offs_n from program ids and a fixed offs_k = arange(0, BLOCK_K); pointer arithmetic at 16-17 is fully stride-based, so non-contiguous / transposed operands are handled in principle.",
+    "kernel.py:19 the K reduction loop bound is `K // BLOCK_K` (floor division), so it iterates only over whole 32-wide K tiles and never visits the remainder tile.",
+    "kernel.py:20-21 loads mask only on the M dimension for A (offs_m < M) and only on the N dimension for B (offs_n < N); there is no `offs_k + k*BLOCK_K < K` mask component on either load, meaning the code has no mechanism to load a partial K tile safely even if the loop were extended.",
+    "kernel.py:22 accumulates with tl.dot into an fp32 accumulator; no explicit allow_tf32/input_precision argument is given, so it inherits the Triton default precision for fp32 dot.",
+    "kernel.py:26-27 stores acc with a correct 2-D M/N bounds mask, so M/N ragged edges 
+...[truncated 4225 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
+  "rationale": "kernel.py:19 loops `range(0, K // BLOCK_K)` with BLOCK_K=32, so only floor(K/32) whole tiles are visited; loads at kernel.py:20-21 carry no offs_k+k*BLOCK_K < K mask, so there is no partial-tile path at all. The store mask (line 27) only bounds M/N.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
+      "summary": "Input domain: M, N and K may each be any positive integer; K explicitly NOT required to be a multiple of the kernel's K block size, and the partial final K tile must contribute its first (K mod BLOCK_K) entries to the sum."
     },
     {
-      "source": "problem.txt",
-      "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
+      "source": "kernel.py:40",
+      "summary": "Wrapper hardcodes BLOCK_K=32, making K%32!=0 (e.g. K=40) the concrete contract-named case."
     }
   ],
-  "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.",
-  "statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
+  "scope_rationale": "problem.txt is the operative contract (no test.py exists) and it explicitly states \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel fixes BLOCK_K=32 at kernel.py:40, so K=40 is a representative in-domain input the contract admits and specifically calls out.",
+  "statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
   "status": "open"
 }
 
@@ -674,16 +668,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
+  "rationale": "Degenerate instance of the floor-division loop bound at kernel.py:19; acc from kernel.py:18 is stored unmodified at kernel.py:27. Worth separating from claim 1 because the failure mode (all-zero output, 100% relative error) is qualitatively different and unmistakable.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
+      "summary": "\"M, N and K may each be any positive integer\" \u2014 no lower bound excluding K<BLOCK_K; the partial-tile rule is stated as required behavior."
     }
   ],
-  "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
-  "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
+  "scope_rationale": "problem.txt states M, N and K may each be any positive integer, so K=8 is inside the stated input domain; with BLOCK_K=32 this is the extreme of the contract's named \"partial final K tile\" case (the whole of K is the partial tile).",
+  "statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
   "status": "open"
 }
 
@@ -691,11 +685,16 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
-  "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+  "rationale": "Asymmetric masking: A is masked on rows only and B on columns only. For divisible K this should be harmless (the unmasked dimension stays in range), but the last M/N tile reads beyond the logical matrix, and the masked-lane `other=0.0` values feed tl.dot; needs a runtime check to confirm ragged M/N does not corrupt in-bounds results.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "M, N and K may each be any positive integer, and C[m,n] = sum_k A[m,k]*B[k,n] is required for all in-range m,n."
+    }
+  ],
+  "scope_rationale": "problem.txt admits any positive M and N, so M=70/N=100 with K=64 is inside the stated domain; the claim is about the required C[m,n] formula holding on those shapes.",
+  "statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
   "status": "open"
 }
 
@@ -707,13 +706,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+      "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+      "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -725,12 +724,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+      "sha256": "cddf39eafc65d478b63d5b5f1b178f9ff5bd100e37e60f4cff1f231936a974cc"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
-  "duration_s": 6.796496,
+  "claim_statement": "For K not a multiple of 32 (e.g. M=64,N=64,K=40 or K=33,47,100 float32 CUDA tensors), matmul() omits the trailing (K mod 32) k-slices from the contraction, so C differs from torch.matmul(a,b) by the sum over those tail indices \u2014 a large relative error (order sqrt(K_tail/K), far above any fp32/TF32 tolerance), not a rounding artifact.",
+  "duration_s": 8.718147,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -740,17 +739,17 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+          "sha256": "92e2e2398da88e409f5afd013a441e31f9d2c92008ba428fcc75dafc05bb2f72"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t9_stdout.txt",
-          "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+          "sha256": "705b2903691072724f3ba512055a611eaea5f3b770857db89b6dcb5b1088eace"
         },
         {
-          "description": "Captured stderr from the pro
-...[truncated 2544 chars]
+          "description": "Captured s
+...[truncated 7899 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -760,13 +759,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
+      "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
+      "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -778,12 +777,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
+      "sha256": "b3d7cde1009d148669ba6cddc0296dcf84f9db68063b731d61ec6fb5fb6fd1c9"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
-  "duration_s": 5.125774,
+  "claim_statement": "For any positive K < 32 (e.g. M=64,N=64,K=8 or K=1,31), K//32 == 0 so the reduction loop body never executes and matmul() returns the zero-initialized accumulator: C is identically zero regardless of A and B, instead of A@B.",
+  "duration_s": 8.031097,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
@@ -793,19 +792,20 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
+          "sha256": "8ac973bbf8017cb020aa5c13029a163c2a33f3be52591584fb46f7009446e218"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
+          "sha256": "dae98c8efff5ceda6ad48c17ccff7a6825bcec86de1fe644ba1314df1887dfe1"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t10_stde
-...[truncated 2125 chars]
+          "path": "probes/t10_stderr.txt",
+      
+...[truncated 3460 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -815,24 +815,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
+      "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "5aba89aba302e554df272e1f74a62aed56fdce2032fd5dc666b260115ce482c0"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t11_stderr.txt",
-      "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "ae9382c38b7c4b1d9f197be3224a503a5d8d2ab8328a21fe761fa716c5bb9755"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
-  "duration_s": 3.276405,
+  "claim_statement": "With K a multiple of 32 but M and/or N not a multiple of 64 (e.g. M=70, N=100, K=64), the loads at kernel.py:20-21 mask only A's M dimension and only B's N dimension, so B's k-rows and A's k-columns are read unmasked; if the values fetched for out-of-range positions in the masked dimension are not fully suppressed, in-bounds outputs C[m,n] (m<M, n<N) could still deviate from torch.matmul, or the launch could fault on out-of-bounds reads past the end of the A/B allocations.",
+  "duration_s": 8.539535,
   "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
@@ -842,24 +848,14 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t11_probe.py",
-          "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
+          "sha256": "8ded936cc60e09a1d2cafc4e772533919319f29b9af892d8f06588fee68983ef"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t11_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t11_stderr.txt",
-          "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
-        }
-      ],
-      "duration_s": 3.276405,
-     
-...[truncated 1498 chars]
+
+...[truncated 4930 chars]
 
 ### t12 - finalize_probe_evidence - ok
 
@@ -867,7 +863,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
+  "summary": "K-tail is dropped exactly as claimed. For K=33/40/47/100 (M=N=64, fp32 CUDA) the kernel's output disagrees with torch.matmul by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.38/0.46/0.58/0.29) yet matches the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose rtol=atol=1e-3 True). For K=32/64/128 the kernel matches torch.matmul to <=1.5e-5 (rel <=3.7e-7), so the failure is specifically the missing partial K tile, not a general GEMM or precision error; error magnitude is 5-6 orders above the fp32/TF32 floor observed on divisible K.",
   "supports": "confirmed",
   "tool_event_id": "t9"
 }
@@ -878,90 +874,37 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
+  "summary": "Degenerate K<32 case confirmed: for K=1, 8, 31 (M=N=64, fp32 CUDA) the kernel output is exactly all zeros (kernel_abs_max=0.0, nonzero_frac=0.0) while torch.matmul is nonzero (ref abs max 6.55/10.06/21.46), giving max abs err equal to the full reference magnitude, i.e. 100% relative error. Matches the source reading that K//32==0 skips the reduction loop and stores the zero-initialized accumulator (kernel.py:18-19, 27).",
   "supports": "confirmed",
   "tool_event_id": "t10"
 }
 
-### t14 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t14_probe.py",
-      "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t14_stdout.txt",
-      "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t14_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t14_json_result.json",
-      "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
-  "duration_s": 6.162171,
-  "event_id": "t14",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t14_probe.py",
-          "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t14_stdout.txt",
-          "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
-        },
-        {
-          "description": "Capt
-...[truncated 4781 chars]
-
-### t15 - finalize_probe_evidence - ok
+### t14 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c3",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c3.e1",
-  "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
-  "supports": "confirmed",
-  "tool_event_id": "t14"
+  "summary": "No M/N-edge leakage or fault. With K divisible by 32 and ragged M/N (70x100x64, 65x65x32, 100x70x128) in-bounds outputs match an fp64-accumulated torch reference to max abs err <=1.53e-5 (max rel <=3.3e-7), allclose(rtol=atol=1e-3) True, and no CUDA fault occurred. A poisoned-allocation variant (logical A/B viewed inside larger buffers filled with 1e6 so any out-of-range read would pull in 1e6) produced byte-identical error magnitudes, showing the masked lanes' other=0.0 fully suppress out-of-range contributions and out-of-range memory does not leak into in-bounds C. The M/N masking path is correct; the defect is confined to the K dimension (c1/c2).",
+  "supports": "rebutted",
+  "tool_event_id": "t11"
 }
 
-### t16 - record_no_new_claims - ok
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence upgrades it. Remaining unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16 dtype, non-contiguous strides, missing explicit clamp) are either out of the stated contract or add nothing beyond the already-confirmed failure, so no further claims are warranted.",
+  "reason": "All three claims have direct runtime evidence and the defect is fully localized. c1 (K%32!=0 drops the trailing K tile) and c2 (K<32 returns all zeros) are confirmed against the contract's explicitly named input domain, with the truncated-K reference matching to <=1.1e-5 proving the error is the missing partial tile rather than precision. c3 is rebutted, including a poisoned-allocation control showing the M/N masking path leaks nothing. Any remaining surfaces (dtype guards, non-contiguous stride path, TF32 precision) are either out of the stated fp32 contract or already shown benign, and none would change the verdict beyond what c1/c2 establish. No new high-quality in-scope claim to add.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 7
+  "reviewed_tool_event_count": 14,
+  "turn": 6
 }
 
-### t17 - record_verdict - ok
+### t16 - record_verdict - ok
 
 {
   "confidence": 0.96,
@@ -969,17 +912,19 @@ Evidence:
     "c1",
     "c2"
   ],
-  "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs against a 160/160-nonzero reference \u2014 the entire result is zero. Both cases sit squarely inside the input domain the contract explicitly admits, and both are gross failures, not tolerance artifacts; the reference is finite and well-defined in each.\\n\\nc3 (round-half-up vs torch.round half-to-even) is confirmed only at the mechanism level and its scope remains unknown: problem.txt writes only `round(x/scale)` without fixing a tie-break rule, and the deviation is bounded at one quantization step on exactly-representable ties. I set c3 aside as a non-decisive note; it neither supports nor is needed for this verdict. Unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16, non-contiguous strides, missing explicit clamp) are likewise set aside as they cannot change the al
-...[truncated 65 chars]
+  "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+  "verdict": "reject"
+}
 
 ## Verdict
 
 {
   "confidence": 0.96,
-  "created_at": "2026-09-08T15:02:48Z",
+  "created_at": "2026-09-08T15:03:17Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs against a 160/160-nonzero reference \u2014 the entire result is zero. Both cases sit squarely inside the input domain the contract explicitly admits, and both are gross failures, not tolerance artifacts; the reference is finite and well-defined in each.\\n\\nc3 (round-half-up vs torch.round half-to-even) is confirmed only at the mechanism level and its scope remains unknown: problem.txt writes only `round(x/scale)` without fixing a tie-break rule, and the deviation is bounded at one quantization step on exactly-representable ties. I set c3 aside as a non-decisive note; it neither supports nor is needed for this verdict. Unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16, non-contiguous strides, missing explicit clamp) are likewis
-...[truncated 105 chars]
+  "reason": "The artifact ships only kernel.py, meta.json and problem.txt \u2014 no test.py or get_inputs \u2014 so problem.txt is the operative contract. It explicitly states \"M, N and K may each be any positive integer\" and that \"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\" The kernel loops `range(0, K // BLOCK_K)` (kernel.py:19) with BLOCK_K hardcoded to 32 (kernel.py:40) and carries no K-dimension load mask (kernel.py:20-21), so the partial tile is never visited.\n\nConfirmed runtime evidence (t9/c1.e1) at M=N=64 fp32 CUDA: for K=33/40/47/100 the output disagrees with an fp64-accumulated torch reference by max abs err 9.89/12.81/17.77/11.03 (max rel err 0.29-0.58), while matching the truncated reference A[:, :32*(K//32)] @ B[:32*(K//32)] to <=1.1e-5 (allclose 1e-3 True). That truncated-reference control localizes the defect precisely to the dropped K tail rather than to reduction order or precision \u2014 for K=32/64/128 the same kernel matches torch to <=1.5e-5 (rel <=3.7e-7), 5-6 orders smaller. So this is not a declared-precision, TF32, accumulation-order, or near-zero artifact; it is a failure to implement the contraction the contract explicitly requires. Evidence t10/c2.e1 confirms the degenerate extreme: for K=1/8/31 the output is exactly all zeros (nonzero_frac=0.0) against nonzero references, i.e. 100% relative error.\n\nc3 (M/N ragged-edge leakage) was cleanly rebutted, including a poisoned-allocation control showing masked lanes suppress out-of-range reads; that narrows but does not excuse the K-dimension defect. No unresolved claim remains. Verdict: reject.",
+  "verdict": "reject"
+}

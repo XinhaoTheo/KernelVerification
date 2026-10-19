@@ -1,3 +1,5 @@
+Historical discussion notes: the numbers below are the previous IDs. Cases 36–61 are now archived as cases 93–118. The questions and original wording are preserved; see the [current case index](CASE_INDEX.md) for the mapping.
+
 ## Solo vs Debate/Single (with Tools vs without Tools)
 
 ### 36-37:

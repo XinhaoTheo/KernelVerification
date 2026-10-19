@@ -16,7 +16,7 @@ def write(path, value):
 def root(tmp_path):
     root = tmp_path / "single_call_vs_tools_challenges"
     cases = {}
-    for case, truth in (("case_36", "reject"), ("case_37", "trust")):
+    for case, truth in (("case_93", "reject"), ("case_94", "trust")):
         public = root.parent / "triton_eval_cases" / case
         public.mkdir(parents=True)
         code = "def run(x):\n    return x\n"
@@ -26,13 +26,13 @@ def root(tmp_path):
         cases[case] = {"ground_truth": truth, "errors": [0.2 if truth == "reject" else 0.05],
                        "kernel_sha256": report.digest(code), "problem_sha256": report.digest(problem)}
     write(root / "private_data/correlation_pair/validation_gpu.json", {"cases": cases, "environment": {"gpu": "T4"}})
-    write(root / "private_data/validation_gpu.json", {"cases": {"case_38": {"ground_truth": "unrelated"}}})
+    write(root / "private_data/validation_gpu.json", {"cases": {"case_95": {"ground_truth": "unrelated"}}})
     (root / "README.md").write_text("Manual protocol.\n" + report.BEGIN_RESULTS
                                    + "\nOld generated text.\n" + report.END_RESULTS + "\nManual audit.\n")
     return root
 
 
-def single(root, case="case_36", trial="r1", batch="r1", cap=32768,
+def single(root, case="case_93", trial="r1", batch="r1", cap=32768,
            variant="original", provider="fireworks", stop="stop", verdict="reject", saved=0.123):
     model = "accounts/fireworks/models/glm-5p3" if provider == "fireworks" else "claude-opus-5"
     tree = "traces_glm" if provider == "fireworks" else "traces_opus5"
@@ -63,7 +63,7 @@ def single(root, case="case_36", trial="r1", batch="r1", cap=32768,
 def test_shared_trees_keep_batches_budgets_and_saved_prices_separate(root):
     single(root)
     single(root, trial="r2", batch="r2_64k", cap=65536, saved=0.234)
-    single(root, case="case_37", stop="length", verdict="no_verdict", saved=0.345)
+    single(root, case="case_94", stop="length", verdict="no_verdict", saved=0.345)
     single(root, trial="r3", batch="neutral1", provider="anthropic", variant="neutral_contract", saved=0.456)
     result = report.derive(root)
     assert result["attempts"] == 4
@@ -81,7 +81,7 @@ def test_shared_trees_keep_batches_budgets_and_saved_prices_separate(root):
 
 def test_archived_report_keeps_attempts_prices_and_relative_links(root):
     single(root)
-    single(root, case="case_37", provider="anthropic", verdict="trust", saved=0.456)
+    single(root, case="case_94", provider="anthropic", verdict="trust", saved=0.456)
     before = report.derive(root)
     benchmark = root.parent
     archive = benchmark / "archive/input_specific"
@@ -93,7 +93,7 @@ def test_archived_report_keeps_attempts_prices_and_relative_links(root):
         case: {"dataset": "correlation_pair", "status": "archived",
                "public_dir": f"archive/input_specific/triton_eval_cases/{case}",
                "archive_root": "archive/input_specific", "archived_ground_truth": truth}
-        for case, truth in (("case_36", "reject"), ("case_37", "trust"))}})
+        for case, truth in (("case_93", "reject"), ("case_94", "trust"))}})
 
     after = report.derive(archived_root)
     assert after["attempts"] == before["attempts"] == 2
@@ -116,15 +116,15 @@ def test_neutral_ablation_does_not_exempt_unrelated_hash_changes(root):
 
 def test_public_source_and_historical_tool_artifact_hashes_still_checked(root):
     single(root)
-    (root.parent / "triton_eval_cases/case_36/kernel.py").write_text("changed")
+    (root.parent / "triton_eval_cases/case_93/kernel.py").write_text("changed")
     with pytest.raises(ValueError, match="Frozen public source changed"):
         report.derive(root)
 
 
 def test_tool_history_uses_historical_profile_without_claiming_raw_capture(root):
-    path = root.parent / "traces_opus5/case_37/solo/r1"
-    public = root.parent / "triton_eval_cases/case_37"
-    write(path / "trace_meta.json", {"case": "case_37", "arm": "solo", "trial": "r1",
+    path = root.parent / "traces_opus5/case_94/solo/r1"
+    public = root.parent / "triton_eval_cases/case_94"
+    write(path / "trace_meta.json", {"case": "case_94", "arm": "solo", "trial": "r1",
         "original_trial": "r1", "dataset": "correlation_pair", "provider": "anthropic",
         "model": "claude-opus-5", "status": "historical"})
     run = {"artifact": {"kernel_code": (public / "kernel.py").read_text(),

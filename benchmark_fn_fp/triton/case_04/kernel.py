@@ -1,36 +1,39 @@
-"""Triton kernel under test: fp6_liger_rmsnorm_relative_error_near_zero."""
+"""Triton kernel under test: fp1_vllm_topp_tie_epsilon."""
 import torch
 import triton
 import triton.language as tl
 
-try:
-    from triton.language.extra.libdevice import rsqrt
-except ModuleNotFoundError:
-    from triton.language.extra.cuda.libdevice import rsqrt
+_TIE_EPS = 1e-3
 
 
 @triton.jit
-def _rms_norm_forward_kernel(
-    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,
-    n_cols, eps,
-    BLOCK_SIZE: tl.constexpr,
-):
-    row_idx = tl.program_id(0).to(tl.int64)
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = col_offsets < n_cols
-    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)
-    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols
-    rstd = rsqrt(mean_square + eps)
-    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)
-    Y_row = X_row * rstd
-    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)
+def _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, sentinel, EPS: tl.constexpr):
+    tile_min = tl.min(tl.where(above_mask, data, sentinel))
+    tile_eq = above_mask & (tl.abs(data - tile_min) < EPS)
+    tile_cnt = tl.sum(tile_eq)
+    is_new = tile_min < min_larger
+    is_same = tl.abs(tile_min - min_larger) < EPS
+    num_min_larger = tl.where(is_new, tile_cnt, num_min_larger + tile_cnt * is_same)
+    min_larger = tl.minimum(min_larger, tile_min)
+    return min_larger, num_min_larger
 
 
-def rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:
-    num_rows, n_cols = X.shape
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    X32 = X.float()
-    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)
-    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)
-    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)
-    return Y
+@triton.jit
+def _count_tied_at_boundary_kernel(scores_ptr, count_ptr, N: tl.constexpr, pivot, EPS: tl.constexpr):
+    offs = tl.arange(0, N)
+    data = tl.load(scores_ptr + offs)
+    above_mask = data > pivot
+    min_larger = tl.full((), float("inf"), tl.float32)
+    num_min_larger = tl.zeros((), tl.int32)
+    min_larger, num_min_larger = _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, float("inf"), EPS)
+    tl.store(count_ptr, num_min_larger)
+
+
+def count_tied_at_boundary(scores: torch.Tensor, pivot: float) -> int:
+    """Real vLLM primitive: how many values above `pivot` are tied with the
+    smallest of them (within EPS). A real multi-pass top-k kernel uses this
+    count to know how many boundary candidates remain to fill the last slots."""
+    N = scores.shape[0]
+    count = torch.empty(1, dtype=torch.int32, device=scores.device)
+    _count_tied_at_boundary_kernel[(1,)](scores, count, N=N, pivot=pivot, EPS=_TIE_EPS)
+    return int(count.item())

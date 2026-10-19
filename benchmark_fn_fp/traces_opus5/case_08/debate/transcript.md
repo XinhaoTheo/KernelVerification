@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_08`
-- Turns: 7
-- Tool events: 17
-- Claims: 3
-- Description updates: 1
-- LLM time: 335.531s across 6 calls | tokens: in=241202 out=26470 total=267672
-- Cache tokens: created=0 read=32852
+- Entry: `case_09`
+- Turns: 12
+- Tool events: 19
+- Claims: 2
+- Description updates: 2
+- LLM time: 387.572s across 11 calls | tokens: in=537291 out=28658 total=565949
+- Cache tokens: created=0 read=59858
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.82
+- Verdict: `reject`
+- Confidence: 0.93
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_08",
+    "entry": "case_09",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 
-### Turn 2 - `describer` (85.99251423400001s, in=3201 out=6342)
+### Turn 2 - `describer` (80.712237492s, in=6008 out=5788)
 
 Message:
 
 ```text
-Reading the loaded artifact context (kernel source, problem text, metadata) is enough here — no new files exist beyond what's already provided — so I'll go straight to building the shared description model for this stochastic-rounding kernel, focusing on where a "looks-fine" RNG kernel can hide distribution- or float-dependent failures.
+Reading the loaded artifact context is enough here — the kernel is upstream Triton's bitonic `sort`/`argsort` primitive wrapped as a top-1 gate, and the contract adds an explicit tie-break requirement that the upstream network does not obviously honor. Recording the description model now.
 ```
 
 Tool calls:
@@ -75,132 +75,142 @@ Tool calls:
 - `record_description_update -> t5 ok`
   Args:
   {
-    "contract_model": [
-      "stochastic_round_to_grid(x, seed) must map each element to one of its two neighbouring multiples of STEP=0.05: lower=floor(x/STEP)*STEP or lower+STEP",
-      "The upper neighbour must be chosen with probability exactly (x-lower)/STEP, i.e. the fractional distance, so that E[out]==x (the problem states this expectation property explicitly)",
-      "Randomness must come from the supplied seed, drawn via Triton's counter-based Philox RNG (tl.rand), per the problem's explicit mention of tl.rand",
-      "Input domain is restricted: x is 1-D, length is a power of two, and fits in a single block; nothing is promised about dtype, device, contiguity, or value range",
-      "Because the source of randomness is a counter-based RNG with a user seed, the natural test is statistical
-  ...[truncated 6676 chars]
+    "contract_model": "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1.",
+    "kernel_model": "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20).",
+    "open_questions": "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug.",
+    "risk_map": "Downstream masking effect: because the final answer is mean-pool
+  ...[truncated 1090 chars]
   Output summary:
   {
     "contract_model": [
-      "stochastic_round_to_grid(x, seed) must map each element to one of its two neighbouring multiples of STEP=0.05: lower=floor(x/STEP)*STEP or lower+STEP",
-      "The upper neighbour must be chosen with probability exactly (x-lower)/STEP, i.e. the fractional distance, so that E[out]==x (the problem states this expectation property explicitly)",
-      "Randomness must come from the supplied seed, drawn via Triton's counter-based Philox RNG (tl.rand), per the problem's explicit mention of tl.rand",
-      "Input domain is restricted: x is 1-D, length is a power of two, and fits in a single block; nothing is promised about dtype, device, contiguity, or value range",
-      "Because the source of randomness is a counter-based RNG with a user seed, the natural test is statistical (mean over seeds / per-element frequency) and/or structural (outputs lie on the grid, outputs are one of the two neighbours), not bitwise comparison against a CPU torch reference"
+      "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Single-program launch: grid=(1,), no tl.program_id, offs=tl.arange(0, N) with N passed as tl.constexpr from x.shape[0]; loads and stores are unmasked, so the kerne
-  ...[truncated 6366 chars]
+      "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20)."
+    ],
+    "open_questions": [
+      "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug."
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible."
+    ],
+    "scope_notes": [
+      "No test code is provided in t
+  ...[truncated 830 chars]
 
-### Turn 3 - `skeptic` (64.79447835700002s, in=20053 out=4999)
+### Turn 3 - `skeptic` (60.324247963999994s, in=10316 out=4287)
 
 Message:
 
 ```text
-Kernel is a literal transcription of the spec, so the risk is concentrated in the probabilistic contract and float behaviour at grid boundaries. Recording three directly testable claims.
+The contract's explicit tie rule is the obvious attack surface, and the descending compare-and-swap predicate fires on equality. Recording that as the primary claim, plus a baseline correctness claim for distinct scores so a passing tie probe isn't confused with a globally correct sort.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The Bernoulli source is r = tl.rand(seed, offs) with offsets always 0..N-1 and only the seed varying (kernel.py:15). Any bias in the seed-key direction of the Philox stream, or an r distribution that is not uniform on [0,1), yields a systematic per-element bias that a single-seed allclose probe cannot see. Decision metric: per-element upper-frequency vs p_up (z-score) and per-element mean(out) - x against fp32 tolerance.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Specifies P(out = lower + STEP) = (x - lower)/STEP and 'so that E[out] == x', with input domain 'x is a 1-D tensor whose length is a power of two and fits in a single block'."
+        "summary": "Explicitly requires lower-index-wins on exactly equal scores, and defines the call as `sorted_topk_indices(scores, k=1)` returning the highest-scoring expert index per token, with `scores` having a power-of-two number of columns."
+      },
+      {
+        "source": "kernel.py lines 24-27, 56, 69",
+        "summary": "Swap predicate `(left > right) != flip` with flip=DESCENDING=1 fires on equality, and the id XOR-swap on line 26 exchanges ids for tied elements; line 69 launches with DESCENDING=True."
       }
     ],
-    "scope_rationale": "problem.txt states the required probability P(
-  ...[truncated 742 chars]
+    "scope_rationale": "problem.txt states an explicit required behavior: \"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\" Per the rules,
+  ...[truncated 1736 chars]
   Output summary:
   {
-    "id": "c1",
-    "rationale": "The Bernoulli source is r = tl.rand(seed, offs) with offsets always 0..N-1 and only the seed varying (kernel.py:15). Any bias in the seed-key direction of the Philox stream, or an r distribution that is not uniform on [0,1), yields a systematic per-element bias that a single-seed allclose probe cannot see. Decision metric: per-element upper-frequency vs p_up (z-score) and per-element mean(out) - x against fp32 tolerance.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Specifies P(out = lower + STEP) = (x - lower)/STEP and 'so that E[out] == x', with input domain 'x is a 1-D tensor whose length is a power of two and fits in a single block'."
-      }
-    ],
-    "scope_rationale": "problem.txt states the required probability P(out = lower+STEP) = (x-lower)/STEP and explicitly asserts E[out] == x, and fixes the input domain to 1-D power-of-two-length tensors fitting in one block; the probed inputs are exactly such tensors, so this tests a stated required behaviour on contract-admitted inputs.",
-    "statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two 
-  ...[truncated 376 chars]
+    "error_type": "ToolRegistryError",
+    "message": "tool record_claim missing required arg: rationale"
+  }
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "0.05 is not binary-representable; x/STEP for an exact multiple can land just below or above the integer, so floor may pick k-1 (p_up ~ 1, output reconstructed as lower+STEP which need not bit-match k*0.05) or k (p_up ~ -epsilon). Kernel never clamps p_up into [0,1] and reconstructs upper by accumulation rather than as (k+1)*STEP (kernel.py:12-16). Decision metric: max |out - nearest_multiple_of_0.05| and the fraction of exact-grid inputs whose output differs from the input by ~STEP.",
+    "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Requires rounding 'each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain only constrains 1-D, power-of-two length, single block, not the 
-  ...[truncated 917 chars]
+        "summary": "Requires the per-token highest-scoring expert index and 
+  ...[truncated 1432 chars]
   Output summary:
   {
-    "id": "c2",
-    "rationale": "0.05 is not binary-representable; x/STEP for an exact multiple can land just below or above the integer, so floor may pick k-1 (p_up ~ 1, output reconstructed as lower+STEP which need not bit-match k*0.05) or k (p_up ~ -epsilon). Kernel never clamps p_up into [0,1] and reconstructs upper by accumulation rather than as (k+1)*STEP (kernel.py:12-16). Decision metric: max |out - nearest_multiple_of_0.05| and the fraction of exact-grid inputs whose output differs from the input by ~STEP.",
+    "id": "c1",
+    "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Requires rounding 'each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain only constrains 1-D, power-of-two length, single block, not the values."
-      }
-    ],
-    "scope_rationale": "problem.txt requires the output be one of the two neighbouring multiples of STEP with the stated probability; exact multiples of 0.05 and their neighbours are ordinary 1-D power-of-two-length inputs admitted by the stated input domain (no value-range restriction is given), so this tests a stated invariant on representative admitted inputs.",
-  
-  ...[truncated 551 chars]
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "The kernel derives all per-element randomness from the offset vector 0..N-1 with the seed as Philox key (kernel.py:15); if the offset-to-counter mapping collides or is broadcast, every call reuses the same degenerate pattern, which single-seed mean checks would not reveal. Decision metric: for constant x with p_up=0.5 and N=1024, fraction of upper picks per seed, chi-square against Binomial(N,0.5), and count of distinct output patterns / index-wise correlation across seeds.",
-    "scope": "in_scope",
-    "scope_evidence": [
+        "summary": "Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated."
+      },
       {
-        "source": "problem.txt",
-        "summary": "States per-element probabilistic rounding with randomness 'drawn from the supplied seed' using Triton's counter-based Philox RNG (tl.rand), for 1-D power-of-two-length single-block inputs."
+        "source": "kernel.py lines 44-58",
+        "summary": "Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N."
       }
     ],
-  
-  ...[truncated 788 chars]
-  Output summary:
-  {
-    "id": "c3",
-    "rationale": "The kernel derives all per-element randomness from the offset vector 0..N-1 with the seed as Philox key (kernel.py:15); if the offset-to-counter mapping collides or is broadcast, every call reuses the same degenerate pattern, which single-seed mean checks would not reveal. Decision metric: for constant x with p_up=0.5 and N=1024, fraction of upper picks per seed, chi-square against Binomial(N,0.5), and count of distinct output patterns / index-wise correlation across seeds.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "States per-element probabilistic rounding with randomness 'drawn from the supplied seed' using Triton's counter-based Philox RNG (tl.rand), for 1-D power-of-two-length single-block inputs."
-      }
-    ],
-    "scope_rationale": "problem.txt requires each element to be rounded up with probability equal to its own fractional distance and names tl.rand as the RNG; a constant 1-D power-of-two-length vector is inside the stated input domain, and per-element independence is what makes the stated per-element probability meaningful.",
-    "statement": "Per-element randomness degeneracy: within a 
-  ...[truncated 422 chars]
+    "scope_rational
+  ...[truncated 1066 chars]
 
-### Turn 4 - `experimenter` (38.50273798399999s, in=28465 out=3546)
+### Turn 4 - `experimenter` (29.232102679999997s, in=16118 out=2546)
 
 Message:
 
 ```text
-All three claims are independent (statistical bias over seeds, grid/float behavior at exact multiples, within-call RNG independence), so I'm launching all three probes in one response.
+Only c1 is open (the skeptic's tie claim failed to record due to a tool error, so it isn't in the ledger). I'm launching the c1 baseline probe (all-distinct float32 rows across N = 2…1024, checking k=1 vs argmax plus full-row permutation validity and monotonicity) and, in parallel, an untied exploratory probe of the exact-tie behavior so the tie surface is measured this turn even though no claim currently holds it. The two probes use disjoint input families (strictly distinct vs. deliberately tied), so neither confounds the other.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t9 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json, math, torch\nsys.path.insert(0,\"/root/cases/case_08\")\nfrom kernel import stochastic_round_to_grid, STEP\n\ntorch.manual_seed(0)\ndev=\"cuda\"\nN=1024\nfr=[0.1,0.25,0.5,0.75,0.9]\nks=torch.arange(N, device=dev)//len(fr) - 100\nf=torch.tensor(fr*(N//len(fr)+1), device=dev)[:N]\nx=((ks.float()*STEP)+f*STEP).float()\nlower=torch.floor(x/STEP)*STEP\nupper=lower+STEP\np_up=((x-lower)/STEP).clamp(0,1)\n\nS=3000\ncnt=torch.zeros(N, device=dev, dtype=torch.float64)\nacc=torch.zeros(N, device=dev, dtype=torch.float64)\nbad_membership=0\nfor s in range(S):\n    out=stochastic_round_to_grid(x, s+12345)\n    is_up=(out==upper)\n    is_lo=(out==lower)\n    bad_membership+=int((~(is_up|is_lo)).sum().item())\n    cnt+=is_up.double()\n    acc+=out.dou
-  ...[truncated 909 chars]
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\noverall = {\"argmax_mismatch_rows\": 0, \"invalid_perm_rows\": 0, \"inversion_rows\": 0, \"total_rows\": 0}\nerr = None\nfor nd in range(1, 11):\n    N = 2**nd\n    B = 64\n    # strictly distinct values per row: random permutation of a distinct grid, scaled/shifted per row\n    base = torch.randn(B, N, device=\"cuda\", dtype=torch.float32)\n    # enforce distinctness by ranking and rebuilding from a distinct grid\n    order = base.argsort(dim=1)\n    grid = torch.linspace(-3.0, 3.0, N, device=\"cuda\", dtype=torch.float32)\n   
+  ...[truncated 1799 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "b63a74cbd4bb560f8fa41561c8ea0586ba36007d8252d05587d9d8b186d7f05c"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t8_json_result.json",
+        "sha256": "4e92424add792153e7547036003e515297e78d214a105e1317e32455be0a527f"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512
+  ...[truncated 10028 chars]
+- `run_python_probe -> t9 ok`
+  Args:
+  {
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nrows = []\ncases = []\n# N=4: duplicate max at (i,j) for all i<j, rest lower distinct\nfor N in [2, 4, 8, 16]:\n    for i in range(N):\n        for j in range(i+1, N):\n            r = torch.full((N,), -1.0)\n            r[i] = 1.0; r[j] = 1.0\n            cases.append((N, i, j, r))\nsummary = {}\nfor N in [2, 4, 8, 16]:\n    sub = [(i, j, r) for (n, i, j, r) in cases if n == N]\n    scores = torch.stack([r for (_, _, r) in sub]).cuda()\n    top1 = m.sorted_topk_indices(scores, 1).squeeze(1).cpu()\n    lo = torch.tensor([i for (i, _, _) in sub])\n    hi = torch.tensor([j for (_, 
+  ...[truncated 577 chars]
   Output summary:
   {
     "artifacts": [
@@ -208,13 +218,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "2812cfc4e483c80df154987cedc6dddaac32ea3eae98a89f65602dabb4501e28"
+        "sha256": "358c80df1d7f86340d01c672f3971a1f24975ed911928ac3599014de6c3da457"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "6d9989491336e80ccae269d02cc249485cb03b39285ba72af80ae5a59530f6ec"
+        "sha256": "5dbfba5a3a39c5fea45a5a892039ad2916400c2820463e231c642c8738d1d79a"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -226,448 +236,580 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "391b4542b4d4e6a791a193a0e078fd2476c8c5d99d594ab29f53466843c9cb9a"
+        "sha256": "9ddca2d5ee7fbe24b29e0ad63da3f56b9aa4e83445b15d6e87cc01648a1ea898"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the e
-  ...[truncated 4137 chars]
-- `run_claim_probe -> t10 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "\nimport sys, json, torch\nsys.path.insert(0,\"/root/cases/case_08\")\nfrom kernel import stochastic_round_to_grid, STEP\ndev=\"cuda\"\nN=128\nk=torch.arange(-64,64, device=dev).float()\nx_exact=(k*STEP).float()\nx_dn=torch.nextafter(x_exact, torch.tensor(-1e30, device=dev))\nx_up=torch.nextafter(x_exact, torch.tensor(1e30, device=dev))\n\ndef stats(x, tag, S=200):\n    moved=torch.zeros(N, device=dev)\n    offgrid_max=0.0\n    for s in range(S):\n        o=stochastic_round_to_grid(x, 777+s)\n        nearest=torch.round(o/STEP)*STEP\n        offgrid_max=max(offgrid_max, float((o-nearest).abs().max()))\n        moved+=( (o-x).abs() > 0.5*STEP ).float()\n    fr=moved/S\n    return {tag+\"_max_offgrid_abs\":offgrid_max,\n            tag+\"_max_frac_moved_full_
-  ...[truncated 1084 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t10_probe.py",
-        "sha256": "77be0b3ad5cd03b78821c682d4744ed54d539ecf58a6d0b3016abe3dc0e37150"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t10_stdout.txt",
-        "sha256": "59506ac2a55c15b916c3f5264e5ab9728214bf0869dcc77f647712d173cadc45"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t10_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t10_json_result.json",
-        "sha256": "5787b540e908e379cd2ed3f8546ac0c38248b25724243c536c572b50fae18310"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "Grid/neighbour violation at and near exact grid multiples: for in-contract inputs x = k*0.05 (k spanning e.g. -64..64) and x = k*0.05 +/- 1ulp, fp32 evaluation of floor(x/0.05)*0.05 and upper = lower + 0.05 ca
-  ...[truncated 5292 chars]
-- `run_claim_probe -> t11 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport sys, json, math, torch\nsys.path.insert(0,\"/root/cases/case_08\")\nfrom kernel import stochastic_round_to_grid, STEP\ndev=\"cuda\"\nN=4096\nx=torch.full((N,), 0.125, device=dev)  # lower=0.10, p_up=0.5\nlower=torch.floor(x/STEP)*STEP; upper=lower+STEP\np=float(((x-lower)/STEP)[0])\n\nfracs=[]; runs=[]; pats=set(); bits_list=[]\nfor s in range(64):\n    o=stochastic_round_to_grid(x, 1000+s)\n    b=(o==upper).to(torch.int8)\n    bits_list.append(b)\n    fracs.append(float(b.double().mean()))\n    bl=b.cpu().numpy()\n    mx=1; cur=1\n    for i in range(1,len(bl)):\n        cur = cur+1 if bl[i]==bl[i-1] else 1\n        mx=max(mx,cur)\n    runs.append(mx)\n    pats.add(bytes(bl.tobytes()))\n\nB=torch.stack(bits_list).double()\nz=[(f-p)/math.sqrt(p*(1-p
-  ...[truncated 1022 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "a8f8b5c2abd9ba7111962ce5c898e4c4089838d2a51e2d3fc11e132407378acb"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "e20fe813a5980e093126cdb8e179c1a5e5ee5a7b906b7d0b426f0ccb72b945e5"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "b3c90bd7f059f81fbb9933404d3b1310273efbb9c69432c1a629e42c013059e3"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "Per-element randomness degeneracy: within a single call with one seed, the draws r = tl.rand(seed, offs) may be correlated or duplicated across offsets (e.g. identical values for groups of indices), so for a c
-  ...[truncated 3971 chars]
-
-### Turn 5 - `experimenter` (102.37497104599998s, in=43371 out=8514)
-
-Message:
-
-```text
-Interpreting the first batch: c2 and c3 are cleanly decided (no grid drift, no RNG degeneracy). c1's t9 result is confounded — I classified membership by bitwise equality against host-computed `lower`/`upper`, and the "nonmember" fraction (0.141) exactly equals the frequency deficit (-0.141), which is the signature of the kernel producing values 1-ulp off my host reference rather than of a probability bias. So I finalize t9 as inconclusive and relaunch c1 with a double-precision, tolerance-based classifier plus a separate off-grid metric.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t12 ok`
-  Args:
-  {
-    "data": {
-      "N": 128,
-      "STEP": 0.05,
-      "exact_frac_lower_ne_x": 0.0703125,
-      "exact_max_frac_moved_full_step": 0.0,
-      "exact_max_offgrid_abs": 0.0,
-      "exact_num_elems_moved_ge_50pct": 0,
-      "exact_p_up_max": 0.9999990463256836,
-      "exact_p_up_min": 0.0,
-      "example_max_abs_out_minus_x": 0.0,
-      "minus1ulp_max_frac_moved_full_step": 0.0,
-      "minus1ulp_max_offgrid_abs": 0.0,
-      "plus1ulp_max_frac_moved_full_step": 0.0,
-      "plus1ulp_max_offgrid_abs": 0.0,
-      "seeds_per_family": 200
-    },
-    "event_id": "t10",
-    "status": "rebutted",
-    "summary": "Exact-grid and +/-1ulp inputs (x = k*0.05, k in -64..63, N=128, 200 seeds each) show no grid or neighbour violation: every output is bitwise equal to round(out/0.05)*0.05 (max off-grid deviation 0.0 for all three input families
-  ...[truncated 463 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "Exact-grid and +/-1ulp inputs (x = k*0.05, k in -64..63, N=128, 200 seeds each) show no grid or neighbour violation: every output is bitwise equal to round(out/0.05)*0.05 (max off-grid deviation 0.0 for all three input families), and no element ever moved by a full STEP away from an exact grid point (max fraction moved = 0.0, 0 elements moved >=50% of trials). Host-side inspection confirms the float hazard exists (7.03% of exact multiples have floor(x/0.05)*0.05 != x, with p_up up to 0.99999905) but the kernel's r < p_up selection then reconstructs lower+STEP to exactly x, so the observable output stays on grid and equal to the input. Claim c2 rebutted.",
-    "supports": "rebutted",
-    "tool_event_id": "t10"
-  }
-- `finalize_probe_evidence -> t13 ok`
-  Args:
-  {
-    "data": {
-      "N": 4096,
-      "cross_seed_max_pattern_match": 0.523681640625,
-      "distinct_patterns": 64,
-      "max_abs_z": 3.3437538146972714,
-      "max_frac": 0.526123046875,
-      "max_run_len": 17,
-      "mean_lag1_autocorr": 0.0014885122431867778,
-      "mean_run_len": 12.40625,
-      "min_frac": 0.4833984375,
-      "p_up": 0.5,
-      "same_seed_reproducible": true,
-      "seeds": 64
-    },
-    "event_id": "t11",
-    "status": "rebutted",
-    "summary": "No within-call RNG degeneracy. Constant input x=0.125 (p_up=0.5), N=4096, 64 seeds: per-seed upper-fraction ranged 0.4834..0.5261 with max |z| = 3.34 (expected max of 64 standard normals ~2.7-3.2, so consistent with independent Bernoulli), longest same-value run 17 (mean 12.4; expected ~log2(4096)=12 for iid bits), mean lag-1 autocorrelation 0.0015, all 
-  ...[truncated 225 chars]
-  Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "rebutted",
-    "evidence_id": "c3.e1",
-    "summary": "No within-call RNG degeneracy. Constant input x=0.125 (p_up=0.5), N=4096, 64 seeds: per-seed upper-fraction ranged 0.4834..0.5261 with max |z| = 3.34 (expected max of 64 standard normals ~2.7-3.2, so consistent with independent Bernoulli), longest same-value run 17 (mean 12.4; expected ~log2(4096)=12 for iid bits), mean lag-1 autocorrelation 0.0015, all 64 seeds produced distinct bit patterns, cross-seed pattern agreement max 0.5237 (~chance 0.5), and the same seed reproduced identical output (counter-based determinism intact). Claim c3 rebutted.",
-    "supports": "rebutted",
-    "tool_event_id": "t11"
-  }
-- `finalize_probe_evidence -> t14 ok`
-  Args:
-  {
-    "data": {
-      "N": 1024,
-      "confound": "bitwise equality membership test vs host fp32 reference",
-      "frac_abs_z_gt_5": 0.2822265625,
-      "grand_mean_out_minus_x": -5.128781884804668e-06,
-      "grand_mean_sampling_std_est": 1.4e-05,
-      "max_abs_mean_err": 0.00125001519918444,
-      "max_abs_mean_err_rel_STEP": 0.0250003039836888,
-      "max_abs_z_bitwise_metric": 164.31816019739543,
-      "nonmember_count": 432330,
-      "nonmember_fraction": 0.14073,
-      "overall_freq_minus_p": -0.14083500137696198,
-      "seeds": 3000
-    },
+    "duration_s": 5.539129,
     "event_id": "t9",
-    "status": "inconclusive",
-    "summary": "Metric artifact, not decisive for c1. The probe classified \"upper chosen\" by bitwise equality out==upper against host fp32 lower=floor(x/0.05)*0.05, upper=lower+0.05. It reported max |z| = 164 and overall fre
-  ...[truncated 666 chars]
+    "exit_code": 0,
+    "json_result": {
+      "metric": "returned k=1 index vs lowest tied max index (contract: LOWER wins)",
+      "tie_probe": {
+        "16": {
+          "pairs": 120,
+          "returned_higher_index": 
+  ...[truncated 2591 chars]
+
+### Turn 5 - `experimenter` (40.668712579000015s, in=28150 out=3287)
+
+Message:
+
+```text
+Consuming t8 and t9. t8 shows the distinct-value baseline is clean at every N in 2…1024, so c1 is rebutted. The unbound exploratory tie probe (t9) shows real contract violations on exactly-tied maxima (e.g. pairs (0,1),(2,3)… return the *higher* index), but the skeptic's tie claim failed to record (tool error t6), so there is no claim to bind it to — I am attaching it to c1 as a scope-adjacent agent_analysis note so it is not lost, and launching a broader exploratory characterization (realistic quantized/duplicated score rows at larger N plus the downstream mean-pooled effect) to quantify how often that violation fires.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t10 ok`
+  Args:
+  {
+    "data": {
+      "N_tested": [
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024
+      ],
+      "argmax_mismatch_rows": 0,
+      "input": "strictly distinct float32 rows, permuted linspace(-3,3,N)",
+      "invalid_perm_rows": 0,
+      "inversion_rows": 0,
+      "launch_or_compile_errors": 0,
+      "metric": "k=1 index vs torch.argmax; full-row permutation validity; non-increasing gathered scores",
+      "rows_per_N": 64,
+      "total_rows": 640
+    },
+    "event_id": "t8",
+    "status": "rebutted",
+    "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile
+  ...[truncated 276 chars]
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "inconclusive",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Metric artifact, not decisive for c1. The probe classified \"upper chosen\" by bitwise equality out==upper against host fp32 lower=floor(x/0.05)*0.05, upper=lower+0.05. It reported max |z| = 164 and overall freq-minus-p = -0.14084, but simultaneously 432330/3072000 = 0.14073 of samples matched neither host lower nor host upper: the frequency deficit equals the nonmember fraction almost exactly, so the apparent bias is entirely explained by the kernel emitting values that differ from my host reference by a tiny (sub-ulp/1-ulp) amount rather than by a wrong Bernoulli probability. Supporting this benign reading: grand mean(out)-x = -5.13e-06, versus the sampling std of that grand mean ~1.4e-05 (0.05*0.5/sqrt(1024*3000)), i.e. within noise. Relaunching with a double-precision nearest-neighbour classifier and a separate off-grid metric.",
-    "supports": "inconclusive",
-    "tool_event_id": "t9"
+    "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.",
+    "supports": "rebutted",
+    "tool_event_id": "t8"
   }
-- `run_claim_probe -> t15 ok`
+- `append_evidence -> t11 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport sys, json, math, torch\nsys.path.insert(0,\"/root/cases/case_08\")\nfrom kernel import stochastic_round_to_grid, STEP\n\ndev=\"cuda\"\ntorch.manual_seed(0)\nN=1024\n# half structured mid-cell values (incl. negatives), half uniform random in [-5,5]\nfr=[0.1,0.25,0.5,0.75,0.9]\nks=torch.arange(N//2, device=dev)//len(fr) - 50\nf=torch.tensor(fr*(N//2//len(fr)+1), device=dev)[:N//2]\nx1=((ks.float()*STEP)+f*STEP).float()\nx2=(torch.rand(N//2, device=dev)*10.0-5.0).float()\nx=torch.cat([x1,x2]).contiguous()\n\nxd=x.double()\nkf=torch.floor(xd/0.05)\nlo=kf*0.05\nup=lo+0.05\np=((xd-lo)/0.05).clamp(0.0,1.0)\n\nS=8000\ncnt=torch.zeros(N, device=dev, dtype=torch.float64)\nacc=torch.zeros(N, device=dev, dtype=torch.float64)\nmax_offgrid=0.0\nmax_nbr_dist=0.0\
-  ...[truncated 2278 chars]
+    "data": {
+      "contract": "problem.txt: on exactly equal scores the LOWER index must be kept",
+      "note": "evidence attached to c1 only because no tie claim exists in ledger (record_claim tool error t6)",
+      "per_N": {
+        "16": {
+          "higher": 28,
+          "pairs": 120
+        },
+        "2": {
+          "higher": 1,
+          "pairs": 1
+        },
+        "4": {
+          "higher": 1,
+          "pairs": 6
+        },
+        "8": {
+          "higher": 6,
+          "pairs": 28
+        }
+      },
+      "returned_higher_index_total": 36,
+      "returned_neither_total": 0,
+      "source_refs": [
+        "kernel.py:24",
+        "kernel.py:25",
+        "kernel.py:26",
+        "kernel.py:69"
+      ],
+      "tie_pairs_tested": 155,
+      "violation_rate": 0.2323
+    },
+    "kind": "runtime_probe",
+    "summary": "SCOPE
+  ...[truncated 967 chars]
+  Output summary:
+  {
+    "id": "c1.e2",
+    "summary": "SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.",
+    "supports": "inconclusive"
+  }
+- `run_python_probe -> t12 ok`
+  Args:
+  {
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nout = {}\n# realistic tie-producing gate scores: small integer / quantized value sets\nfor N in [8, 64, 256, 1024]:\n    for nlev in [2, 4, 8]:\n        B = 256\n        scores = torch.randint(0, nlev, (B, N), device=\"cuda\").float()\n        top1 = m.sorted_topk_indices(scores, 1).squeeze(1)\n        ref = scores.argmax(dim=1)  # torch.argmax = first (lowest) occurrence of max\n        mism = (top1 != ref)\n        # confirm mismatches are ties (same value), i.e. contract violation not value error\n        val_ok = int((scores.gather(1, top1[:,None]).squeeze
+  ...[truncated 1337 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "84fa47bb8335e84d7e1de9ad63f489f133e0e3ef3db13b0374e0fde0b7eb9d26"
+        "path": "probes/t12_probe.py",
+        "sha256": "924f49df28b04f0e63ab92c27f720fc77c528ec6825c8807a975e9e0d49a676c"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "04ab4f6775979b3523abe1d0c42913d3128d43f48771a59236405ffe0ffc068f"
+        "path": "probes/t12_stdout.txt",
+        "sha256": "41f9fd7d816b577a80871e2a8707076dab618635f3a1893fe711fe8d3d7f83aa"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
+        "path": "probes/t12_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t15_json_result.json",
-        "sha256": "d436a08c2b4ba31f3418d8c6d5b4bbe8fb4a2c899d508f73642969f153d1c004"
+        "path": "probes/t12_json_result.json",
+        "sha256": "388317f687537e8529a40b0c94e1f874883e5d4c447bc9b35225c670c4f6633d"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), t
-  ...[truncated 6246 chars]
+    "duration_s": 5.467788,
+    "event_id": "t12",
+    "exit_code": 0,
+    "json_result": {
+      "metric": "k=1 index vs torch.argmax (lowest-index tie-break) on quantized score rows; plus mean-pooled expert-output diff",
+      "quantized_tie_scan": {
+        "N10
+  ...[truncated 3869 chars]
 
-### Turn 6 - `skeptic` (15.459507396999982s, in=71339 out=991)
+### Turn 6 - `skeptic` (24.359995735999973s, in=48966 out=1765)
 
 Message:
 
 ```text
-The final probe (t15) with a double-precision nearest-neighbour classifier resolves the earlier metric artifact: max |z| = 4.22 across 1024 elements with zero elements above 5 sigma, grand-mean z = -1.07, off-grid deviation 2.9e-7 (~0.6 fp32 ulp at |x|=5, 5.7e-6 of STEP), and zero neighbour-set violations. That is consistent with a correct Bernoulli probability and E[out]==x within fp32 representation limits. c2 and c3 are already cleanly rebutted. Nothing in this evidence exposes a new in-scope failure mode, so I am closing my review.
+This is a review turn, but the ledger has a material gap: the tie-break violation demonstrated by probes t9 and t12 has **no home claim** — my original tie claim failed to record due to tool error t6, and c1 (rebutted) is scoped only to all-distinct inputs. The Judge cannot act on a contract violation that no claim carries. Recording exactly that claim now, so the existing evidence has a proper home.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_claim -> t13 ok`
   Args:
   {
-    "reason": "Review turn. The re-run c1 probe (t15) removes the earlier bitwise-membership confound: with double-precision nearest-neighbour classification over 8000 seeds, per-element upper-frequency matches p_true within binomial noise (max |z| = 4.22 over N=1024, frac |z|>5 = 0.0, mean z = -0.048, std z = 1.03), the grand mean(out)-x = -7.48e-06 is z = -1.07 against its own sampling sigma, all outputs lie within 2.86e-07 of a multiple of 0.05 (~0.6 fp32 ulp at |x|=5, i.e. 5.7e-6 of STEP), and outside_neighbour_count = 0. Combined with c2 (no grid/neighbour violation at exact multiples and +/-1ulp) and c3 (no within-call RNG degeneracy, per-seed determinism intact), the three stated contract requirements from problem.txt (neighbour membership, P(upper) = (x-lower)/STEP, E[out] == x, se
-  ...[truncated 601 chars]
+    "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" 
+  ...[truncated 3071 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" with no claim of its own.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER i
+  ...[truncated 2705 chars]
+
+### Turn 7 - `describer` (53.67930096399999s, in=52782 out=3824)
+
+Message:
+
+```text
+No open description tasks, but the ledger state changed materially: c2 is now the home claim for the tie-break finding and it has zero attached evidence, while the decisive data (t9, t12) sits on rebutted c1. I'm updating the description model so the mechanism, the exact failing-pair pattern, and the scope boundary (upstream `argsort` is not stable, but problem.txt adds a hard tie rule) are recorded for the Judge, and flagging the evidence-placement gap.
+```
+
+Tool calls:
+
+- `record_description_update -> t14 ok`
+  Args:
+  {
+    "contract_model": "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector).",
+    "impact_on_claims": "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone.",
+    "kernel_model": "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
+  ...[truncated 1855 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
+    ],
+    "impact_on_claims": [
+      "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone."
+    ],
+    "kernel_model": [
+      "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
+    ],
+    "open_questions": [
+      "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `
+  ...[truncated 1579 chars]
+
+### Turn 8 - `skeptic` (15.484833768000044s, in=58387 out=933)
+
+Message:
+
+```text
+This is a review turn. The tie-break finding now has a proper home claim (c2), and the decisive runtime data (t9: 36/155 enumerated duplicate-max pairs returning the higher index; t12: 10–47% mismatch with `lower_than_ref == 0` in all 12 in-domain configurations, value always still the row max, downstream pooled rel-L2 0.42) plus the source mechanism (line 24 `(left > right) != flip` firing on equality, line 26 XOR-swapping ids) are already in the run record. c1 is settled as rebutted by t8. The remaining surfaces I noted earlier (k>1 tie ordering, non-float32 dtypes, inf/NaN through the `y*mask` sum trick) are generalization curiosity, not required by problem.txt, so they do not justify holding up the verdict.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t15 ok`
+  Args:
+  {
+    "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-flo
+  ...[truncated 557 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Review turn. The re-run c1 probe (t15) removes the earlier bitwise-membership confound: with double-precision nearest-neighbour classification over 8000 seeds, per-element upper-frequency matches p_true within binomial noise (max |z| = 4.22 over N=1024, frac |z|>5 = 0.0, mean z = -0.048, std z = 1.03), the grand mean(out)-x = -7.48e-06 is z = -1.07 against its own sampling sigma, all outputs lie within 2.86e-07 of a multiple of 0.05 (~0.6 fp32 ulp at |x|=5, i.e. 5.7e-6 of STEP), and outside_neighbour_count = 0. Combined with c2 (no grid/neighbour violation at exact multiples and +/-1ulp) and c3 (no within-call RNG degeneracy, per-seed determinism intact), the three stated contract requirements from problem.txt (neighbour membership, P(upper) = (x-lower)/STEP, E[out] == x, seeded tl.rand) are all covered by evidence with no residual failure signal. Remaining surfaces I considered \u2014 non-power-of-two N, multi-block sizes, fp16/bf16 dtype, non-contiguous or CPU tensors, |x| large enough to lose integer resolution in x/STEP, and unusual seed typing \u2014 are excluded or unsupported by the stated input domain (\"x is a 1-D tensor whose 
-  ...[truncated 280 chars]
+    "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction) are not required by problem.txt, which specifies only k=1 top-1 routing over float32 scores with power-of-two column count, so they are generalization notes rather than decisive claims. Only ledger bookkeeping remains: the t9/t12 evidence is physically attached to rebutted c1
+  ...[truncated 236 chars]
 
-### Turn 7 - `judge` (28.407187461999968s, in=74773 out=2078)
+### Turn 9 - `experimenter` (24.93218258799999s, in=60010 out=2363)
 
 Message:
 
 ```text
-All three claims have evidence, the Skeptic reviewed the latest probe (t15) and recorded no new claims, and no confirmed in-scope defect exists. Recording a trust verdict.
+Only c2 remains open and it has no evidence of its own (the t9/t12 data lives on rebutted c1). I'm launching a single decisive probe bound directly to c2: both the enumerated duplicate-max-pair construction and quantized/low-level-set rows across in-domain power-of-two N, reporting returned index vs lowest-index-tie-break argmax, direction of the mismatch, and the paired check that the returned index's value still equals the row max (tie-break violation vs value error), plus the downstream mean-pooled effect. No other claim is open, so nothing is held back.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `run_claim_probe -> t16 ok`
   Args:
   {
-    "confidence": 0.82,
-    "decisive_claims": [
-      "c1",
-      "c2",
-      "c3"
-    ],
-    "reason": "The operative contract here is problem.txt (no test.py/get_inputs exist): out must be one of the two neighbouring multiples of STEP=0.05 with P(upper)=(x-lower)/STEP so that E[out]==x, randomness from tl.rand seeded by the caller, over 1-D power-of-two-length single-block inputs. The kernel (kernel.py:12-17) is a literal transcription of that formula, and each of the three stated requirements is backed by runtime evidence on in-domain inputs.\\n\\nc2 (grid/neighbour violation from the non-representability of 0.05) is rebutted by t10: for x = k*0.05, k in -64..63, and x +/- 1 ulp, over 200 seeds per family, max off-grid deviation was exactly 0.0 and no element ever moved a full STEP away from an ex
-  ...[truncated 2078 chars]
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(7)\nout = {}\n\n# Part A: exhaustive duplicate-max pairs (i<j), rest strictly lower\npartA = {}\ntot_pairs = tot_high = tot_low = tot_other = 0\nfor N in [2, 4, 8, 16, 32]:\n    subs = [(i, j) for i in range(N) for j in range(i+1, N)]\n    rows = []\n    for (i, j) in subs:\n        r = torch.full((N,), -1.0); r[i] = 1.0; r[j] = 1.0\n        rows.append(r)\n    scores = torch.stack(rows).cuda()\n    got = m.sorted_topk_indices(scores, 1).squeeze(1).cpu()\n    lo = torch.tensor([i for (i, _) in subs]); hi = torch.tensor([j for (_, j) in subs])\n
+  ...[truncated 3787 chars]
   Output summary:
   {
-    "confidence": 0.82,
-    "decisive_claims": [
-      "c1",
-      "c2",
-      "c3"
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t16_probe.py",
+        "sha256": "ccf6d49ffb5478fd065ed48d012a5e66933fdc08e8ee4114d6c7e9b1ad8b0dad"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t16_stdout.txt",
+        "sha256": "d1a5c0c954e12730993ad1662262fd6f91d376e21deb41633f0eec646319369f"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t16_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t16_json_result.json",
+        "sha256": "84b756e05ee0704336e267fb40f012e8c7577a889c137bcecb0ae194b00e1023"
+      }
     ],
-    "reason": "The operative contract here is problem.txt (no test.py/get_inputs exist): out must be one of the two neighbouring multiples of STEP=0.05 with P(upper)=(x-lower)/STEP so that E[out]==x, randomness from tl.rand seeded by the caller, over 1-D power-of-two-length single-block inputs. The kernel (kernel.py:12-17) is a literal transcription of that formula, and each of the three stated requirements is backed by runtime evidence on in-domain inputs.\\n\\nc2 (grid/neighbour violation from the non-representability of 0.05) is rebutted by t10: for x = k*0.05, k in -64..63, and x +/- 1 ulp, over 200 seeds per family, max off-grid deviation was exactly 0.0 and no element ever moved a full STEP away from an exact grid point, even though 7.03% of exact multiples do hit the floor(x/STEP)*STEP != x hazard on the host. c3 (RNG degeneracy across offsets) is rebutted by t11: constant input with p_up=0.5, N=4096, 64 seeds gave per-seed upper-fractions 0.4834-0.5261 (max |z| 3.34), longest run 17 vs the ~12 expected for iid bits, lag-1 autocorrelation 0.0015, 64 distinct patterns, cross-seed agreement 0.524 (c
-  ...[truncated 1678 chars]
+    "claim_id": "c2",
+    "claim_statement": "For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-b
+  ...[truncated 22682 chars]
+
+### Turn 10 - `experimenter` (24.880976883000017s, in=71288 out=1988)
+
+Message:
+
+```text
+Consuming t16, the probe bound directly to c2. The results are decisive: exhaustive duplicate-max pairs return the higher tied index in 156/651 cases (0 returned a non-tied index, all 651 returned values still equal the row max), quantized in-domain rows show 1098/3840 mismatches with `lower_than_ref == 0` in all 15 configurations and `value_still_max == 3840`, the strictly-distinct control has 0 mismatches (so this is not confounded by an ordering defect — consistent with c1 being rebutted), and downstream mean-pooled rel-L2 is 0.41. That is a tie-break violation, not a value error. No claims remain uncovered after this, so I am not launching further probes.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t17 ok`
+  Args:
+  {
+    "data": {
+      "contract_ref": "problem.txt: on exactly equal scores the LOWER index must be kept",
+      "distinct_control_mismatch_rows": 0,
+      "distinct_control_rows": 256,
+      "downstream_B": 256,
+      "downstream_D": 32,
+      "downstream_N": 64,
+      "downstream_misrouted_tokens": 69,
+      "downstream_pooled_max_abs_diff": 0.3134760558605194,
+      "downstream_pooled_rel_l2": 0.41262760758399963,
+      "metric": "returned k=1 index vs lowest-index-tie-break argmax; direction of mismatch; value-still-max check",
+      "pairwise_N_tested": [
+        2,
+        4,
+        8,
+        16,
+        32
+      ],
+      "pairwise_example_failures": [
+        [
+          0,
+          1,
+          1
+        ],
+        [
+          4,
+          6,
+          6
+        ],
+        [
+          4,
+          7,
+          7
+        ],
+        [
+          5,
+     
+  ...[truncated 3155 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_ab
+  ...[truncated 862 chars]
+
+### Turn 11 - `skeptic` (11.059979813999973s, in=92768 out=736)
+
+Message:
+
+```text
+This is a review turn. c2 now has decisive, directly-bound evidence (t16) and c1 is settled as rebutted; the remaining surfaces I noted are generalization curiosity, not contract requirements.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t18 ok`
+  Args:
+  {
+    "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly viola
+  ...[truncated 700 chars]
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly violates problem.txt's stated rule that the LOWER index must be kept on exactly equal scores. c1 remains rebutted by t8 and should not be reopened. No new in-scope claim is warranted: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction, non-power-of-two N) are outside the stated contra
+  ...[truncated 380 chars]
+
+### Turn 12 - `judge` (22.23710922400005s, in=92498 out=1141)
+
+Message:
+
+```text
+All claims have evidence, the Skeptic reviewed the latest probe (t16) and recorded no new claims, and c2 is confirmed with directly bound in-domain evidence. Recording the verdict.
+```
+
+Tool calls:
+
+- `record_verdict -> t19 ok`
+  Args:
+  {
+    "confidence": 0.93,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs a
+  ...[truncated 1680 chars]
+  Output summary:
+  {
+    "confidence": 0.93,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a 
+  ...[truncated 1280 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "stochastic_round_to_grid(x, seed) must map each element to one of its two neighbouring multiples of STEP=0.05: lower=floor(x/STEP)*STEP or lower+STEP",
-    "The upper neighbour must be chosen with probability exactly (x-lower)/STEP, i.e. the fractional distance, so that E[out]==x (the problem states this expectation property explicitly)",
-    "Randomness must come from the supplied seed, drawn via Triton's counter-based Philox RNG (tl.rand), per the problem's explicit mention of tl.rand",
-    "Input domain is restricted: x is 1-D, length is a power of two, and fits in a single block; nothing is promised about dtype, device, contiguity, or value range",
-    "Because the source of randomness is a counter-based RNG with a user seed, the natural test is statistical (mean over seeds / per-element frequency) and/or structural (outputs lie on the grid, outputs are one of the two neighbours), not bitwise comparison against a CPU torch reference"
+    "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1.",
+    "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
   ],
   "kernel_model": [
-    "Single-program launch: grid=(1,), no tl.program_id, offs=tl.arange(0, N) with N passed as tl.constexpr from x.shape[0]; loads and stores are unmasked, so the kernel assumes N is a power of two and small enough for one block (kernel.py:10-11, 17, 23)",
-    "lower=tl.floor(x/STEP)*STEP, upper=lower+STEP, p_up=(x-lower)/STEP with STEP=0.05 as a constexpr Python float, so all grid arithmetic happens in the tensor's floating-point type rather than in exact grid-index space (kernel.py:12-14)",
-    "Bernoulli draw is r=tl.rand(seed, offs); one distinct draw per element index, seed used as the Philox key, so per-element streams are distinct but the offsets are always 0..N-1 for every call (kernel.py:15)",
-    "Selection is out = tl.where(r < p_up, upper, lower): strict less-than, no clamping of p_up into [0,1], so p_up slightly >1 forces the upper branch and p_up slightly <0 forces the lower branch (kernel.py:16)",
-    "Host wrapper allocates out=torch.empty_like(x) and passes the r
-...[truncated 4880 chars]
+    "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20).",
+    "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
+  ],
+  "open_questions": [
+    "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug.",
+    "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
+  ],
+  "risk_map": [
+    "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible.",
+    "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `ids[:, :k]` list tied indices in descending index 
+...[truncated 686 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_08 implements 1-D stochastic rounding onto a 0.05 grid in a single Triton block using tl.rand(seed, offs) as the Bernoulli source. The mapping from the spec (lower=floor(x/STEP)*STEP, p_up=(x-lower)/STEP, upper on r<p_up) is transcribed literally, so the interesting risk is not the formula but (a) whether the test can be an exact-match test at all given a counter-based RNG, (b) float32 non-representability of STEP=0.05 causing p_up to leave [0,1] and outputs to drift off the exact grid, and (c) unstated assumptions about contiguity, dtype, block size, and seed typing.
+- `du1` tasks=`initial`: case_09 wraps the (self-declared byte-for-byte) Triton/NSA bitonic argsort network in a host helper `sorted_topk_indices(scores, k)` used as a top-1 expert gate. The contract adds a hard tie-break rule (lower index wins on exactly equal scores) that the descending bitonic compare-and-swap does not obviously satisfy: with DESCENDING=True the swap predicate is `(left > right) != 1`, i.e. it fires on `left <= right`, so equal keys DO swap their ids. That is the primary bug surface, plus the `y*(1-mask)`/`y*mask` sum-reduction trick which is not inf/NaN-safe.
+- `du2` tasks=`initial`: case_09 is the Triton/NSA bitonic argsort network wrapped as a top-1 expert gate via `sorted_topk_indices(scores, k)`. Runtime evidence now separates two behaviors cleanly: the network's *ordering* machinery is sound (t8: distinct-valued rows give exact argmax, valid full-row permutation, and non-increasing gathered scores at every N in 2..1024), while its *tie-break* behavior contradicts the contract (t9: 36/155 enumerated duplicate-max pairs return the higher index; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in all 12 configurations and the returned value always still equal to the row max). Mechanism is line 24: `cond = (left > right) != flip` is true on exact equality whenever flip=1, and lines 25-26 XOR-swap both value and id for those lanes, so equal keys exchange positions in descending sub-blocks. Ledger placement issue: claim c2 (the tie claim) currently has zero evidence entries; the decisive t9/t12 data is attached to rebutted c1 and self-labeled "scope-adjacent".
 
 ## Claims
 
-### c1 - `inconclusive`
+### c1 - `rebutted`
 
-Statement: Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the empirical frequency with which stochastic_round_to_grid selects the upper neighbour over many distinct seeds deviates from p_up=(x-lower)/0.05 by more than binomial sampling error (e.g. >5 sigma), so E[out] != x as required by problem.txt.
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt states the required probability P(out = lower+STEP) = (x-lower)/STEP and explicitly asserts E[out] == x, and fixes the input domain to 1-D power-of-two-length tensors fitting in one block; the probed inputs are exactly such tensors, so this tests a stated required behaviour on contract-admitted inputs.
-
-Scope evidence:
-- `problem.txt`: Specifies P(out = lower + STEP) = (x - lower)/STEP and 'so that E[out] == x', with input domain 'x is a 1-D tensor whose length is a power of two and fits in a single block'.
-
-Rationale: The Bernoulli source is r = tl.rand(seed, offs) with offsets always 0..N-1 and only the seed varying (kernel.py:15). Any bias in the seed-key direction of the Philox stream, or an r distribution that is not uniform on [0,1), yields a systematic per-element bias that a single-seed allclose probe cannot see. Decision metric: per-element upper-frequency vs p_up (z-score) and per-element mean(out) - x against fp32 tolerance.
-
-Evidence:
-- `c1.e1` runtime_probe supports `inconclusive`, tool_event_id=t9: Metric artifact, not decisive for c1. The probe classified "upper chosen" by bitwise equality out==upper against host fp32 lower=floor(x/0.05)*0.05, upper=lower+0.05. It reported max |z| = 164 and overall freq-minus-p = -0.14084, but simultaneously 432330/3072000 = 0.14073 of samples matched neither host lower nor host upper: the frequency deficit equals the nonmember fraction almost exactly, so the apparent bias is entirely explained by the kernel emitting values that differ from my host reference by a tiny (sub-ulp/1-ulp) amount rather than by a wrong Bernoulli probability. Supporting this benign reading: grand mean(out)-x = -5.13e-06, versus the sampling std of that grand mean ~1.4e-05 (0.05*0.5/sqrt(1024*3000)), i.e. within noise. Relaunching with a double-precision nearest-neighbour classifier and a separate off-grid metric.
-
-### c2 - `rebutted`
-
-Statement: Grid/neighbour violation at and near exact grid multiples: for in-contract inputs x = k*0.05 (k spanning e.g. -64..64) and x = k*0.05 +/- 1ulp, fp32 evaluation of floor(x/0.05)*0.05 and upper = lower + 0.05 can (a) return values that are not the correctly rounded fp32 representation of a multiple of 0.05, and/or (b) make an exact grid point round away from itself (out != x) with probability far above 0, breaking the "out is one of the two neighbouring multiples with P(upper) = (x-lower)/STEP" requirement.
+Statement: Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. Decisive metric: (a) fraction of rows where returned k=1 index != torch.argmax; (b) for a full-row read of `ids`, whether the permutation is valid (each of 0..N-1 exactly once) and whether `scores.gather(1, ids)` is non-increasing along the row.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires the output be one of the two neighbouring multiples of STEP with the stated probability; exact multiples of 0.05 and their neighbours are ordinary 1-D power-of-two-length inputs admitted by the stated input domain (no value-range restriction is given), so this tests a stated invariant on representative admitted inputs.
+Scope rationale: problem.txt defines the required output ("must return, for each token, the index of the highest-scoring expert") and the input domain ("`scores` has a power-of-two number of columns"). Testing distinct-valued float32 rows at several power-of-two N is squarely inside that declared domain, and the claim targets the stated output requirement rather than a generalization beyond it.
 
 Scope evidence:
-- `problem.txt`: Requires rounding 'each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain only constrains 1-D, power-of-two length, single block, not the values.
+- `problem.txt`: Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated.
+- `kernel.py lines 44-58`: Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N.
 
-Rationale: 0.05 is not binary-representable; x/STEP for an exact multiple can land just below or above the integer, so floor may pick k-1 (p_up ~ 1, output reconstructed as lower+STEP which need not bit-match k*0.05) or k (p_up ~ -epsilon). Kernel never clamps p_up into [0,1] and reconstructs upper by accumulation rather than as (k+1)*STEP (kernel.py:12-16). Decision metric: max |out - nearest_multiple_of_0.05| and the fraction of exact-grid inputs whose output differs from the input by ~STEP.
+Rationale: The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Exact-grid and +/-1ulp inputs (x = k*0.05, k in -64..63, N=128, 200 seeds each) show no grid or neighbour violation: every output is bitwise equal to round(out/0.05)*0.05 (max off-grid deviation 0.0 for all three input families), and no element ever moved by a full STEP away from an exact grid point (max fraction moved = 0.0, 0 elements moved >=50% of trials). Host-side inspection confirms the float hazard exists (7.03% of exact multiples have floor(x/0.05)*0.05 != x, with p_up up to 0.99999905) but the kernel's r < p_up selection then reconstructs lower+STEP to exactly x, so the observable output stays on grid and equal to the input. Claim c2 rebutted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t8: Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.
+- `c1.e2` runtime_probe supports `inconclusive`, tool_event_id=t9: SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.
 
-### c3 - `rebutted`
+### c2 - `confirmed`
 
-Statement: Per-element randomness degeneracy: within a single call with one seed, the draws r = tl.rand(seed, offs) may be correlated or duplicated across offsets (e.g. identical values for groups of indices), so for a constant input vector x with p_up = 0.5 the outputs across elements are not independent Bernoulli draws — detectable as an across-element upper-fraction far from 0.5 or as long runs / repeated identical patterns for a single seed.
+Statement: For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-break rule. Representative in-domain inputs: float32 `scores` of shape (B, N) with N a power of two (N in {2, 8, 64, 256, 1024}), rows built either as a duplicated max at columns i<j or as quantized/small-level-set score rows (e.g. `randint(0, L)` with L in {2,4,8}). Decisive metric: returned k=1 index vs the lowest-index-tie-break argmax (`torch.argmax`, which returns the first occurrence of the row max); report count of rows where they differ and whether the returned index is higher or lower than the reference. A nonzero count of "higher than reference" rows confirms the claim; the paired check that the returned index's value still equals the row max establishes that this is a tie-break violation rather than a value error.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires each element to be rounded up with probability equal to its own fractional distance and names tl.rand as the RNG; a constant 1-D power-of-two-length vector is inside the stated input domain, and per-element independence is what makes the stated per-element probability meaningful.
+Scope rationale: problem.txt is the operative contract (no test.py exists; test_code is empty and meta.json has passed: null). It states an explicit required behavior: "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept." Per the rules, a claim that the kernel violates a stated tie-break rule is in-scope even with no test file, using representative inputs the contract admits. The inputs used are exactly the declared domain: 2-D float32 `scores` with a power-of-two number of columns, called as `sorted_topk_indices(scores, k=1)`. Ties are not an exotic or undefined case here — they are the specific case the contract legislates, and the reference behavior is fully specified (lowest index), so this is not a reference-undefined situation.
 
 Scope evidence:
-- `problem.txt`: States per-element probabilistic rounding with randomness 'drawn from the supplied seed' using Triton's counter-based Philox RNG (tl.rand), for 1-D power-of-two-length single-block inputs.
+- `problem.txt`: States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER index must be kept.
+- `meta.json / artifact_files`: Artifact contains only kernel.py, meta.json, problem.txt; no test.py and empty test_code, so problem.txt alone is the authoritative contract and its written tie rule is the operative requirement.
+- `kernel.py lines 24-27, 56, 69`: Swap predicate `(left > right) != flip` fires on exact equality when flip=DESCENDING=1 (set at line 69, threaded through line 56), and line 26 XOR-swaps the ids for those lanes, so tied keys exchange positions.
+- `tool events t9, t12`: Runtime probes on in-domain power-of-two N show tied-max rows returning the higher index (36/155 enumerated pairs; 10-47% of quantized rows, with lower_than_ref==0 in all 12 configurations and the returned value always still equal to the row max).
 
-Rationale: The kernel derives all per-element randomness from the offset vector 0..N-1 with the seed as Philox key (kernel.py:15); if the offset-to-counter mapping collides or is broadcast, every call reuses the same degenerate pattern, which single-seed mean checks would not reveal. Decision metric: for constant x with p_up=0.5 and N=1024, fraction of upper picks per seed, chi-square against Binomial(N,0.5), and count of distinct output patterns / index-wise correlation across seeds.
+Rationale: Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly "scope-adjacent" with no claim of its own.
 
 Evidence:
-- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t11: No within-call RNG degeneracy. Constant input x=0.125 (p_up=0.5), N=4096, 64 seeds: per-seed upper-fraction ranged 0.4834..0.5261 with max |z| = 3.34 (expected max of 64 standard normals ~2.7-3.2, so consistent with independent Bernoulli), longest same-value run 17 (mean 12.4; expected ~log2(4096)=12 for iid bits), mean lag-1 autocorrelation 0.0015, all 64 seeds produced distinct bit patterns, cross-seed pattern agreement max 0.5237 (~chance 0.5), and the same seed reproduced identical output (counter-based determinism intact). Claim c3 rebutted.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t16: c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_abs_diff 0.3135, pooled_rel_l2 0.4126 -- the misroute survives batch mean-pooling and is not diluted below any plausible tolerance. (D) Control: strictly-distinct randn rows (B=256, N=64) gave 0 mismatches, so the failure is exclusive to exact ties and does not confound with the ordering machinery (c1, rebutted by t8). Mechanism matches source: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56), and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. problem.txt states "when two experts have exactly equal scores, the LOWER index must be the one kept", so this is a direct violation of the operative contract, with the reference behavior fully specified (not a reference-undefined case).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "stochastic_round_to_grid(x, seed) must map each element to one of its two neighbouring multiples of STEP=0.05: lower=floor(x/STEP)*STEP or lower+STEP",
-    "The upper neighbour must be chosen with probability exactly (x-lower)/STEP, i.e. the fractional distance, so that E[out]==x (the problem states this expectation property explicitly)",
-    "Randomness must come from the supplied seed, drawn via Triton's counter-based Philox RNG (tl.rand), per the problem's explicit mention of tl.rand",
-    "Input domain is restricted: x is 1-D, length is a power of two, and fits in a single block; nothing is promised about dtype, device, contiguity, or value range",
-    "Because the source of randomness is a counter-based RNG with a user seed, the natural test is statistical (mean over seeds / per-element frequency) and/or structural (outputs lie on the grid, outputs are one of the two neighbours), not bitwise comparison against a CPU torch reference"
+    "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Single-program launch: grid=(1,), no tl.program_id, offs=tl.arange(0, N) with N passed as tl.constexpr from x.shape[0]; loads and stores are unmasked, so the kernel assumes N is a power of two and small enough for one block (kernel.py:10-11, 17, 23)",
-    "lower=tl.floor(x/STEP)*STEP, upper=lower+STEP, p_up=(x-lower)/STEP with STEP=0.05 as a constexpr Python float, so all grid arithmetic happens in the tensor's floating-point type rather than in exact grid-index space (kernel.py:12-14)",
-    "Bernoulli draw is r=tl.rand(seed, offs); one distinct draw per element index, seed used as the Philox key, so per-element streams are distinct but the offsets are always 0..N-1 for every call (kernel.py:15)",
-    "Selection is out = tl.where(r < p_up, upper, lower): strict less-than, no clamping of p_up into [0,1], so p_up slightly >1 forces the upper branch and p_up slightly <0 forces the lower branch (kernel.py:16)",
-    "Host wrapper allocates out=torch.empt
-...[truncated 5566 chars]
+    "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20)."
+  ],
+  "open_questions": [
+    "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible."
+  ],
+  "scope_notes": [
+    "No test code is provided in the artifact (`test_code` is empty, meta.json has `passed: null`), so the operative contract is problem.txt alone; tie-break behavior must be judged against the written rule, not an observed test tolerance."
+  ],
+  "summary": "case_09 wraps the (self-declared byte-for-byte) Triton/NSA bitonic argsort network in a host helper `sorted_topk_indices(scores, k)` used as a top-1 expert gate. The contract adds a hard tie-break rule (lower index wins on exactly equal scores) that the descending bitonic compare-and-swap does not obviously satisfy: with DESCENDING=True the swap predicate is `(left > right) != 1`, i.e. it fires on `left <= right`, so equal keys DO swap their ids. That is the primary bug surface, plus the `y*(1-mask)`/`y*mask` sum-reduction trick which is not inf/NaN-safe.",
+  "task_id
+...[truncated 30 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "The Bernoulli source is r = tl.rand(seed, offs) with offsets always 0..N-1 and only the seed varying (kernel.py:15). Any bias in the seed-key direction of the Philox stream, or an r distribution that is not uniform on [0,1), yields a systematic per-element bias that a single-seed allclose probe cannot see. Decision metric: per-element upper-frequency vs p_up (z-score) and per-element mean(out) - x against fp32 tolerance.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Specifies P(out = lower + STEP) = (x - lower)/STEP and 'so that E[out] == x', with input domain 'x is a 1-D tensor whose length is a power of two and fits in a single block'."
-    }
-  ],
-  "scope_rationale": "problem.txt states the required probability P(out = lower+STEP) = (x-lower)/STEP and explicitly asserts E[out] == x, and fixes the input domain to 1-D power-of-two-length tensors fitting in one block; the probed inputs are exactly such tensors, so this tests a stated required behaviour on contract-admitted inputs.",
-  "statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the empirical frequency with which stochastic_round_to_grid selects the upper neighbour over many distinct seeds deviates from p_up=(x-lower)/0.05 by more than binomial sampling error (e.g. >5 sigma), so E[out] != x as required by problem.txt.",
-  "status": "open"
+  "error_type": "ToolRegistryError",
+  "message": "tool record_claim missing required arg: rationale"
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "0.05 is not binary-representable; x/STEP for an exact multiple can land just below or above the integer, so floor may pick k-1 (p_up ~ 1, output reconstructed as lower+STEP which need not bit-match k*0.05) or k (p_up ~ -epsilon). Kernel never clamps p_up into [0,1] and reconstructs upper by accumulation rather than as (k+1)*STEP (kernel.py:12-16). Decision metric: max |out - nearest_multiple_of_0.05| and the fraction of exact-grid inputs whose output differs from the input by ~STEP.",
+  "id": "c1",
+  "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Requires rounding 'each element to one of the two neighbouring multiples of STEP' with lower = floor(x/STEP)*STEP; input domain only constrains 1-D, power-of-two length, single block, not the values."
+      "summary": "Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated."
+    },
+    {
+      "source": "kernel.py lines 44-58",
+      "summary": "Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N."
     }
   ],
-  "scope_rationale": "problem.txt requires the output be one of the two neighbouring multiples of STEP with the stated probability; exact multiples of 0.05 and their neighbours are ordinary 1-D power-of-two-length inputs admitted by the stated input domain (no value-range restriction is given), so this tests a stated invariant on representative admitted inputs.",
-  "statement": "Grid/neighbour violation at and near exact grid multiples: for in-contract inputs x = k*0.05 (k spanning e.g. -64..64) and x = k*0.05 +/- 1ulp, fp32 evaluation of floor(x/0.05)*0.05 and upper = lower + 0.05 can (a) return values that are not the correctly rounded fp32 representation of a multiple of 0.05, and/or (b) make an exact grid point round away from itself (out != x) with probability far above 0, breaking the \"out is one of the two neighbouring multiples with P(upper) = (x-lower)/STEP\" requirement.",
-  "status": "open"
-}
+  "scope_rationale": "problem.txt defines the required output (\"must return, for each token, the index of the highest-scoring expert\") and the input domain (\"`scores` has a power-of-two number of columns\"). Testing distinct-valued float32 rows at several power-of-two N is squarely inside that declared domain, and the claim targets the stated output requirement rather than a generalization beyond it.",
+  "statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. De
+...[truncated 266 chars]
 
-### t8 - record_claim - ok
+### t8 - run_claim_probe - ok
 
 {
-  "id": "c3",
-  "rationale": "The kernel derives all per-element randomness from the offset vector 0..N-1 with the seed as Philox key (kernel.py:15); if the offset-to-counter mapping collides or is broadcast, every call reuses the same degenerate pattern, which single-seed mean checks would not reveal. Decision metric: for constant x with p_up=0.5 and N=1024, fraction of upper picks per seed, chi-square against Binomial(N,0.5), and count of distinct output patterns / index-wise correlation across seeds.",
-  "scope": "in_scope",
-  "scope_evidence": [
+  "artifacts": [
     {
-      "source": "problem.txt",
-      "summary": "States per-element probabilistic rounding with randomness 'drawn from the supplied seed' using Triton's counter-based Philox RNG (tl.rand), for 1-D power-of-two-length single-block inputs."
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "b63a74cbd4bb560f8fa41561c8ea0586ba36007d8252d05587d9d8b186d7f05c"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "4e92424add792153e7547036003e515297e78d214a105e1317e32455be0a527f"
     }
   ],
-  "scope_rationale": "problem.txt requires each element to be rounded up with probability equal to its own fractional distance and names tl.rand as the RNG; a constant 1-D power-of-two-length vector is inside the stated input domain, and per-element independence is what makes the stated per-element probability meaningful.",
-  "statement": "Per-element randomness degeneracy: within a single call with one seed, the draws r = tl.rand(seed, offs) may be correlated or duplicated across offsets (e.g. identical values for groups of indices), so for a constant input vector x with p_up = 0.5 the outputs across elements are not independent Bernoulli draws \u2014 detectable as an across-element upper-fraction far from 0.5 or as long runs / repeated identical patterns for a single seed.",
-  "status": "open"
-}
+  "claim_id": "c1",
+  "claim_statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. Decisive metric: (a) fraction of rows where returned k=1 index != torch.argmax; (b) for a full-row read of `ids`, whether the permutation is valid (each of 0..N-1 exactly once) and whether `scores.gather(1, ids)` is non-increasing along the row.",
+  "duration_s": 32.160729,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
+       
+...[truncated 9228 chars]
 
-### t9 - run_claim_probe - ok
+### t9 - run_python_probe - ok
 
 {
   "artifacts": [
@@ -675,13 +817,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "2812cfc4e483c80df154987cedc6dddaac32ea3eae98a89f65602dabb4501e28"
+      "sha256": "358c80df1d7f86340d01c672f3971a1f24975ed911928ac3599014de6c3da457"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "6d9989491336e80ccae269d02cc249485cb03b39285ba72af80ae5a59530f6ec"
+      "sha256": "5dbfba5a3a39c5fea45a5a892039ad2916400c2820463e231c642c8738d1d79a"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -693,247 +835,294 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "391b4542b4d4e6a791a193a0e078fd2476c8c5d99d594ab29f53466843c9cb9a"
+      "sha256": "9ddca2d5ee7fbe24b29e0ad63da3f56b9aa4e83445b15d6e87cc01648a1ea898"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the empirical frequency with which stochastic_round_to_grid selects the upper neighbour over many distinct seeds deviates from p_up=(x-lower)/0.05 by more than binomial sampling error (e.g. >5 sigma), so E[out] != x as required by problem.txt.",
-  "duration_s": 9.166848,
+  "duration_s": 5.539129,
   "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "2812cfc4e483c80df154987cedc6dddaac32ea3eae98a89f65602dabb4501e28"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "6d9989491336
-...[truncated 3337 chars]
+  "exit_code": 0,
+  "json_result": {
+    "metric": "returned k=1 index vs lowest tied max index (contract: LOWER wins)",
+    "tie_probe": {
+      "16": {
+        "pairs": 120,
+        "returned_higher_index": 28,
+        "returned_lower_index": 92,
+        "returned_neither": 0,
+        "sample": [
+          [
+            0,
+            1,
+            1
+          ],
+          [
+            0,
+            2,
+            0
+          ],
+          [
+            0,
+            3,
+            0
+          ],
+          [
+            0,
+            4,
+            0
+          ],
+          [
+            0,
+            5,
+            0
+          ],
+          [
+            0,
+            6,
+            0
+          ]
+        ]
+      },
+      "2": {
+        "pairs": 1,
+        "returned_higher_index": 1,
+        "returned_lower_index": 0,
+        "returned_neither": 0,
+        "sample": [
+          [
+            0,
+            1,
+            1
+          ]
+        ]
+      },
+      "4": {
+        "pairs": 6,
+  
+...[truncated 1791 chars]
 
-### t10 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t10_probe.py",
-      "sha256": "77be0b3ad5cd03b78821c682d4744ed54d539ecf58a6d0b3016abe3dc0e37150"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t10_stdout.txt",
-      "sha256": "59506ac2a55c15b916c3f5264e5ab9728214bf0869dcc77f647712d173cadc45"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t10_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t10_json_result.json",
-      "sha256": "5787b540e908e379cd2ed3f8546ac0c38248b25724243c536c572b50fae18310"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "Grid/neighbour violation at and near exact grid multiples: for in-contract inputs x = k*0.05 (k spanning e.g. -64..64) and x = k*0.05 +/- 1ulp, fp32 evaluation of floor(x/0.05)*0.05 and upper = lower + 0.05 can (a) return values that are not the correctly rounded fp32 representation of a multiple of 0.05, and/or (b) make an exact grid point round away from itself (out != x) with probability far above 0, breaking the \"out is one of the two neighbouring multiples with P(upper) = (x-lower)/STEP\" requirement.",
-  "duration_s": 6.86706,
-  "event_id": "t10",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t10_probe.py",
-          "sha256": "77be0b3ad5cd03b78821c682d4744ed54d539ecf58a6d0b3016abe3dc0e37150"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-         
-...[truncated 4492 chars]
-
-### t11 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "a8f8b5c2abd9ba7111962ce5c898e4c4089838d2a51e2d3fc11e132407378acb"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "e20fe813a5980e093126cdb8e179c1a5e5ee5a7b906b7d0b426f0ccb72b945e5"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "b3c90bd7f059f81fbb9933404d3b1310273efbb9c69432c1a629e42c013059e3"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "Per-element randomness degeneracy: within a single call with one seed, the draws r = tl.rand(seed, offs) may be correlated or duplicated across offsets (e.g. identical values for groups of indices), so for a constant input vector x with p_up = 0.5 the outputs across elements are not independent Bernoulli draws \u2014 detectable as an across-element upper-fraction far from 0.5 or as long runs / repeated identical patterns for a single seed.",
-  "duration_s": 7.099937,
-  "event_id": "t11",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "a8f8b5c2abd9ba7111962ce5c898e4c4089838d2a51e2d3fc11e132407378acb"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "e20fe813a5980
-...[truncated 3171 chars]
-
-### t12 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "rebutted",
-  "evidence_id": "c2.e1",
-  "summary": "Exact-grid and +/-1ulp inputs (x = k*0.05, k in -64..63, N=128, 200 seeds each) show no grid or neighbour violation: every output is bitwise equal to round(out/0.05)*0.05 (max off-grid deviation 0.0 for all three input families), and no element ever moved by a full STEP away from an exact grid point (max fraction moved = 0.0, 0 elements moved >=50% of trials). Host-side inspection confirms the float hazard exists (7.03% of exact multiples have floor(x/0.05)*0.05 != x, with p_up up to 0.99999905) but the kernel's r < p_up selection then reconstructs lower+STEP to exactly x, so the observable output stays on grid and equal to the input. Claim c2 rebutted.",
-  "supports": "rebutted",
-  "tool_event_id": "t10"
-}
-
-### t13 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c3",
-  "claim_status": "rebutted",
-  "evidence_id": "c3.e1",
-  "summary": "No within-call RNG degeneracy. Constant input x=0.125 (p_up=0.5), N=4096, 64 seeds: per-seed upper-fraction ranged 0.4834..0.5261 with max |z| = 3.34 (expected max of 64 standard normals ~2.7-3.2, so consistent with independent Bernoulli), longest same-value run 17 (mean 12.4; expected ~log2(4096)=12 for iid bits), mean lag-1 autocorrelation 0.0015, all 64 seeds produced distinct bit patterns, cross-seed pattern agreement max 0.5237 (~chance 0.5), and the same seed reproduced identical output (counter-based determinism intact). Claim c3 rebutted.",
-  "supports": "rebutted",
-  "tool_event_id": "t11"
-}
-
-### t14 - finalize_probe_evidence - ok
+### t10 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "inconclusive",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Metric artifact, not decisive for c1. The probe classified \"upper chosen\" by bitwise equality out==upper against host fp32 lower=floor(x/0.05)*0.05, upper=lower+0.05. It reported max |z| = 164 and overall freq-minus-p = -0.14084, but simultaneously 432330/3072000 = 0.14073 of samples matched neither host lower nor host upper: the frequency deficit equals the nonmember fraction almost exactly, so the apparent bias is entirely explained by the kernel emitting values that differ from my host reference by a tiny (sub-ulp/1-ulp) amount rather than by a wrong Bernoulli probability. Supporting this benign reading: grand mean(out)-x = -5.13e-06, versus the sampling std of that grand mean ~1.4e-05 (0.05*0.5/sqrt(1024*3000)), i.e. within noise. Relaunching with a double-precision nearest-neighbour classifier and a separate off-grid metric.",
-  "supports": "inconclusive",
-  "tool_event_id": "t9"
+  "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.",
+  "supports": "rebutted",
+  "tool_event_id": "t8"
 }
 
-### t15 - run_claim_probe - ok
+### t11 - append_evidence - ok
+
+{
+  "id": "c1.e2",
+  "summary": "SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.",
+  "supports": "inconclusive"
+}
+
+### t12 - run_python_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "84fa47bb8335e84d7e1de9ad63f489f133e0e3ef3db13b0374e0fde0b7eb9d26"
+      "path": "probes/t12_probe.py",
+      "sha256": "924f49df28b04f0e63ab92c27f720fc77c528ec6825c8807a975e9e0d49a676c"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "04ab4f6775979b3523abe1d0c42913d3128d43f48771a59236405ffe0ffc068f"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "41f9fd7d816b577a80871e2a8707076dab618635f3a1893fe711fe8d3d7f83aa"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
+      "path": "probes/t12_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t15_json_result.json",
-      "sha256": "d436a08c2b4ba31f3418d8c6d5b4bbe8fb4a2c899d508f73642969f153d1c004"
+      "path": "probes/t12_json_result.json",
+      "sha256": "388317f687537e8529a40b0c94e1f874883e5d4c447bc9b35225c670c4f6633d"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "Statistical contract violation: for a fixed in-contract input (1-D fp32 CUDA tensor, power-of-two length, mid-cell values such as x = k*0.05 + f*0.05 with f in {0.1,0.25,0.5,0.75,0.9}, plus negative values), the empirical frequency with which stochastic_round_to_grid selects the upper neighbour over many distinct seeds deviates from p_up=(x-lower)/0.05 by more than binomial sampling error (e.g. >5 sigma), so E[out] != x as required by problem.txt.",
-  "duration_s": 8.799743,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "84fa47bb8335e84d7e1de9ad63f489f133e0e3ef3db13b0374e0fde0b7eb9d26"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "04ab4
-...[truncated 5446 chars]
+  "duration_s": 5.467788,
+  "event_id": "t12",
+  "exit_code": 0,
+  "json_result": {
+    "metric": "k=1 index vs torch.argmax (lowest-index tie-break) on quantized score rows; plus mean-pooled expert-output diff",
+    "quantized_tie_scan": {
+      "N1024_lev2": {
+        "higher_than_ref": 107,
+        "index_mismatch_rows": 107,
+        "lower_than_ref": 0,
+        "mismatch_rate": 0.418,
+        "rows": 256,
+        "rows_where_value_still_max": 256,
+        "tied_max_rows": 256
+      },
+      "N1024_lev4": {
+        "higher_than_ref": 66,
+        "index_mismatch_rows": 66,
+        "lower_than_ref": 0,
+        "mismatch_rate": 0.2578,
+        "rows": 256,
+        "rows_where_value_still_max": 256,
+        "tied_max_rows": 256
+      },
+      "N1024_lev8": {
+        "higher_than_ref": 45,
+        "index_mismatch_rows": 45,
+        "lower_than_ref": 0,
+        "mismatch_rate": 0.1758,
+        "rows": 256,
+        "rows_where_value_still_max": 256,
+        "tied_max_rows": 256
+      },
+      "N256_lev2": {
+        "higher_than_ref": 110,
 
-### t16 - record_no_new_claims - ok
+...[truncated 3069 chars]
+
+### t13 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" with no claim of its own.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER index must be kept."
+    },
+    {
+      "source": "meta.json / artifact_files",
+      "summary": "Artifact contains only kernel.py, meta.json, problem.txt; no test.py and empty test_code, so problem.txt alone is the authoritative contract and its written tie rule is the operative requirement."
+    },
+    {
+      "source": "kernel.py lines 24-27, 56, 69",
+      "summary": "Swap predicate `(left > right) != flip` fires on exact equality when flip=DESCENDING=1 (set at line 69, threaded through line 56), and line 26 XOR-swaps the ids for those lanes, so tied keys exchange positions."
+    },
+    {
+      "source": "tool events t9, t12",
+      "summary": "Runtime probes on in-domain power-of-two N show tied-max rows returning the higher index (36/155 enumerated pairs; 10-47% of quantized rows, wit
+...[truncated 1905 chars]
+
+### t14 - record_description_update - ok
+
+{
+  "contract_model": [
+    "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
+  ],
+  "impact_on_claims": [
+    "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone."
+  ],
+  "kernel_model": [
+    "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
+  ],
+  "open_questions": [
+    "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `ids[:, :k]` list tied indices in descending index order?), non-float32 dtypes through the line-20 bitcast, and inf/NaN inputs through the `y*(1-mask)` / `y*mask` sum-reduction trick on lines 11-12, which is not inf/NaN-safe."
+  ],
+  "scope_notes": [
+    "c1 is settled and should not be reopened: the distinct-value baseline (host-side N_DIMS, the `i + (n_dims - stage)` stage index, the one-program-per-row launcher) was clean on 640/640 rows across the whole power-of-two range tested."
+  ],
+  "summary": "case_09 is the Triton/NSA bitonic argsort network wrapped as a top-1 expert gate via `sorted_topk_indices(scores, k)`. Runtime evidence now separates two behaviors cleanly: the network's *ordering* machinery is sound (t8: distinct-valued rows give exact argmax, valid full-row permutation, an
+...[truncated 779 chars]
+
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Review turn. The re-run c1 probe (t15) removes the earlier bitwise-membership confound: with double-precision nearest-neighbour classification over 8000 seeds, per-element upper-frequency matches p_true within binomial noise (max |z| = 4.22 over N=1024, frac |z|>5 = 0.0, mean z = -0.048, std z = 1.03), the grand mean(out)-x = -7.48e-06 is z = -1.07 against its own sampling sigma, all outputs lie within 2.86e-07 of a multiple of 0.05 (~0.6 fp32 ulp at |x|=5, i.e. 5.7e-6 of STEP), and outside_neighbour_count = 0. Combined with c2 (no grid/neighbour violation at exact multiples and +/-1ulp) and c3 (no within-call RNG degeneracy, per-seed determinism intact), the three stated contract requirements from problem.txt (neighbour membership, P(upper) = (x-lower)/STEP, E[out] == x, seeded tl.rand) are all covered by evidence with no residual failure signal. Remaining surfaces I considered \u2014 non-power-of-two N, multi-block sizes, fp16/bf16 dtype, non-contiguous or CPU tensors, |x| large enough to lose integer resolution in x/STEP, and unusual seed typing \u2014 are excluded or unsupported by the stated input domain (\"x is a 1-D tensor whose length is a power of two and fits in a single block\"), so they would be generalization notes rather than decisive in-scope claims and are not worth holding up the verdict.",
+  "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction) are not required by problem.txt, which specifies only k=1 top-1 routing over float32 scores with power-of-two column count, so they are generalization notes rather than decisive claims. Only ledger bookkeeping remains: the t9/t12 evidence is physically attached to rebutted c1 and self-labeled \"scope-adjacent\"; it should be read as supporting c2, whose statement and scope_evidence cite those exact tool events.",
   "reviewed_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 6
+  "reviewed_tool_event_count": 14,
+  "turn": 8
 }
 
-### t17 - record_verdict - ok
+### t16 - run_claim_probe - ok
 
 {
-  "confidence": 0.82,
-  "decisive_claims": [
-    "c1",
-    "c2",
-    "c3"
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t16_probe.py",
+      "sha256": "ccf6d49ffb5478fd065ed48d012a5e66933fdc08e8ee4114d6c7e9b1ad8b0dad"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t16_stdout.txt",
+      "sha256": "d1a5c0c954e12730993ad1662262fd6f91d376e21deb41633f0eec646319369f"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t16_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t16_json_result.json",
+      "sha256": "84b756e05ee0704336e267fb40f012e8c7577a889c137bcecb0ae194b00e1023"
+    }
   ],
-  "reason": "The operative contract here is problem.txt (no test.py/get_inputs exist): out must be one of the two neighbouring multiples of STEP=0.05 with P(upper)=(x-lower)/STEP so that E[out]==x, randomness from tl.rand seeded by the caller, over 1-D power-of-two-length single-block inputs. The kernel (kernel.py:12-17) is a literal transcription of that formula, and each of the three stated requirements is backed by runtime evidence on in-domain inputs.\\n\\nc2 (grid/neighbour violation from the non-representability of 0.05) is rebutted by t10: for x = k*0.05, k in -64..63, and x +/- 1 ulp, over 200 seeds per family, max off-grid deviation was exactly 0.0 and no element ever moved a full STEP away from an exact grid point, even though 7.03% of exact multiples do hit the floor(x/STEP)*STEP != x hazard on the host. c3 (RNG degeneracy across offsets) is rebutted by t11: constant input with p_up=0.5, N=4096, 64 seeds gave per-seed upper-fractions 0.4834-0.5261 (max |z| 3.34), longest run 17 vs the ~12 expected for iid bits, lag-1 autocorrelation 0.0015, 64 distinct patterns, cross-seed agreement 0.524 (chance), and identical output for a repeated seed (counter-based determinism intact).\\n\\nc1 is the one claim still formally logged as inconclusive, because its first probe (t9) used a bitwise-equality membership test against a host fp32 reference; that metric was self-refuting \u2014 the frequency deficit (-0.1408) matched the non-member fraction (0.1407) almost exactly, i.e. an artifact of last-bit differences, not a Bernoulli bias. I am not setting the claim aside on rhetoric: the follow-up tool event t15 re-ran it with a double-precision nearest-neighbour classifier over 8000 seeds on 1024 mixed structured-and-random in-domain values, and found per-element upper-frequency consistent with p_true (max |z| = 4.22 over 1024 elements, frac |z|>5 = 0.0, mean z = -0.048, std z = 1.03 \u2014 e
-...[truncated 878 chars]
+  "claim_id": "c2",
+  "claim_statement": "For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-break rule. Representative in-domain inputs: float32 `scores` of shape (B, N) with N a power of two (N in {2, 8, 64, 256, 1024}), rows built either as a duplicated max at columns i<j or as quantized/small-level-set score rows (e.g. `randint(0, L)` with L in {2,4,8}). Decisive metric: returned k=1 index vs the lowest-index-tie-break argmax (`torch.argmax`, which returns the first occurrence of the row max); report count of rows where they differ and whether the returned index is higher or lower than the reference. A nonzero count of \"higher than reference\" rows confirms the claim; the paired check that the returned index's value still equals the row max establishes that this is a tie-break violation rather than a value error.",
+  "duration_s": 6.524888,
+  "event_id": "t16",
+  "evidence_dra
+...[truncated 21882 chars]
+
+### t17 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_abs_diff 0.3135, pooled_rel_l2 0.4126 -- the misroute survives batch mean-pooling and is not diluted below any plausible tolerance. (D) Control: strictly-distinct randn rows (B=256, N=64) gave 0 mismatches, so the failure is exclusive to exact ties and does not confound with the ordering machinery (c1, rebutted by t8). Mechanism matches source: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56), and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. problem.txt states \"when two experts have exactly equal scores, the LOWER index must be the one kept\", so this is a direct violation of the operative contract, with the reference behavior fully specified (not a reference-undefined 
+...[truncated 62 chars]
+
+### t18 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly violates problem.txt's stated rule that the LOWER index must be kept on exactly equal scores. c1 remains rebutted by t8 and should not be reopened. No new in-scope claim is warranted: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction, non-power-of-two N) are outside the stated contract (top-1 routing, float32 scores, power-of-two columns) and are generalization notes only. Ledger note for the Judge: the earlier exploratory t9/t12 data is physically attached to rebutted c1 as \"scope-adjacent\"; it corroborates c2 but c2 stands on its own bound evidence c2.e1.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 17,
+  "turn": 11
+}
+
+### t19 - record_verdict - ok
+
+{
+  "confidence": 0.93,
+  "decisive_claims": [
+    "c2"
+  ],
+  "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a true row max so this is purely a tie-break-direction defect, not a value error; (C) the misroute survives the contract's batch mean-pooling (69 misrouted tokens, pooled rel-L2 0.41, max abs diff 0.31), so it is not diluted below any plausible tolerance; (D) a strictly-distinct control had 0 mismatches, isolating the defect to exact ties. The source mechanism matches: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56) and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. The reference behavior is fully specified (lowest index), so this is not a reference-undefined or unspecified-tie-break case that the safe-harbor rules would excuse; the contract explicitly legislates the exac
+...[truncated 480 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.82,
-  "created_at": "2026-09-08T15:27:11Z",
+  "confidence": 0.93,
+  "created_at": "2026-09-08T15:54:11Z",
   "decisive_claims": [
-    "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reason": "The operative contract here is problem.txt (no test.py/get_inputs exist): out must be one of the two neighbouring multiples of STEP=0.05 with P(upper)=(x-lower)/STEP so that E[out]==x, randomness from tl.rand seeded by the caller, over 1-D power-of-two-length single-block inputs. The kernel (kernel.py:12-17) is a literal transcription of that formula, and each of the three stated requirements is backed by runtime evidence on in-domain inputs.\\n\\nc2 (grid/neighbour violation from the non-representability of 0.05) is rebutted by t10: for x = k*0.05, k in -64..63, and x +/- 1 ulp, over 200 seeds per family, max off-grid deviation was exactly 0.0 and no element ever moved a full STEP away from an exact grid point, even though 7.03% of exact multiples do hit the floor(x/STEP)*STEP != x hazard on the host. c3 (RNG degeneracy across offsets) is rebutted by t11: constant input with p_up=0.5, N=4096, 64 seeds gave per-seed upper-fractions 0.4834-0.5261 (max |z| 3.34), longest run 17 vs the ~12 expected for iid bits, lag-1 autocorrelation 0.0015, 64 distinct patterns, cross-seed agreement 0.524 (chance), and identical output for a repeated seed (counter-based determinism intact).\\n\\nc1 is the one claim still formally logged as inconclusive, because its first probe (t9) used a bitwise-equality membership test against a host fp32 reference; that metric was self-refuting \u2014 the frequency deficit (-0.1408) matched the non-member fraction (0.1407) almost exactly, i.e. an artifact of last-bit differences, not a Bernoulli bias. I am not setting the claim aside on rhetoric: the follow-up tool event t15 re-ran it with a double-precision nearest-neighbour classifier over 8000 seeds on 1024 mixed structured-and-random in-domain values, and found per-element upper-frequency consistent with p_true (max |z| = 4.22 over 1024 elements, frac |z|>5 = 0.0
-...[truncated 918 chars]
+  "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a true row max so this is purely a tie-break-direction defect, not a value error; (C) the misroute survives the contract's batch mean-pooling (69 misrouted tokens, pooled rel-L2 0.41, max abs diff 0.31), so it is not diluted below any plausible tolerance; (D) a strictly-distinct control had 0 mismatches, isolating the defect to exact ties. The source mechanism matches: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56) and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. The reference behavior is fully specified (lowest index), so this is not a reference-undefined or unspecified-tie-break case that the safe-harbor rules would excuse; the
+...[truncated 520 chars]

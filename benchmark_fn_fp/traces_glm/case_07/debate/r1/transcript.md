@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_07`
+- Entry: `case_08`
 - Turns: 10
-- Tool events: 22
-- Claims: 3
+- Tool events: 17
+- Claims: 2
 - Description updates: 2
-- LLM time: 251.084s across 9 calls | tokens: in=278285 out=12897 total=291182
+- LLM time: 115.503s across 9 calls | tokens: in=180744 out=5677 total=186421
 - Stop reason: `verdict_recorded`
-- Verdict: `needs_more_evidence`
-- Confidence: 0.8
+- Verdict: `trust`
+- Confidence: 0.9
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,51 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
   Output summary:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
   Output summary:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
   Output summary:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_07",
+    "entry": "case_08",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_07"
+    "entry": "case_08"
   }
 
-### Turn 2 - `describer` (65.43940686600001s, in=5826 out=2615)
+### Turn 2 - `describer` (11.76079968000002s, in=4050 out=652)
 
 Message:
 
 ```text
-Analyze kernel and record description update.
-
-Key observations:
-- GPTQ reference: b_ptrs uses (offs_k[:, None] // infearure_per_bits) * stride_bk, scales stride_bk is K // infearure_per_bits. In reference AutoGPTQ, b_ptrs built with stride_bk = K // infearure_per_bits and g_ptrs stride g = K. Here kernel passes b_packed.stride(0) — b_packed shape presumably (K//8, N), stride(0)=N. Reference passes stride_bk = K // infearure_per_bits, which assumes N == that... Actually in AutoGPTQ reference, they pass K // infearure_per_bits as stride for b, exploiting that b is (K/8, N) contiguous with row stride N. Only correct if N == K//8, a known quirk? Actually the reference passes b.stride(0) I think. In the real kernel: "b.stride(0), b.stride(1), b.stride(2)"... The real quant_matmul_248 passes stride_bk = K // infearure_per_bits? Let me recall: gptq_matmul sets strides via b.stride(0) etc. In original: `a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), ...`? Original b is (K//inf, N). They use (offs_k // infearure_per_bits) * stride_bk — with stride_bk=b.stride(0)=N this is correct. But original code actually uses `offs_k // infearure_per_bits` times... Actually original us
-...[truncated 3272 chars]
+I have full context; recording the description model.
 ```
 
 Tool calls:
@@ -79,748 +75,667 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-      "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
-      "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
-      "Output is expected in float32 (kernel allocates fp32 C)."
+      "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+      "Unbiasedness E[out] == x is the stated invariant.",
+      "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+      "Input domain: 1-D tensor, length a power of two, fits in a single block."
     ],
     "kernel_model": [
-      "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask
-  ...[truncated 4500 chars]
+      "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+      "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+      "seed is passed as a runtime scalar argument (not const
+  ...[truncated 2001 chars]
   Output summary:
   {
     "contract_model": [
-      "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-      "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
-      "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
-      "Output is expected in float32 (kernel allocates fp32 C)."
+      "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+      "Unbiasedness E[out] == x is the stated invariant.",
+      "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+      "Input domain: 1-D tensor, length a power of two, fits in a single block."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
-      "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride 
-  ...[truncated 4190 chars]
+      "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+      "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+      "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+      "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+    ],
+    "open_questions": [],
+    "resolved_tasks": [],
+    "risk_map": [
+      "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce indep
+  ...[truncated 1725 chars]
 
-### Turn 3 - `skeptic` (21.607006401999996s, in=16395 out=1152)
+### Turn 3 - `skeptic` (23.010367247999994s, in=9886 out=1215)
 
 Message:
 
 ```text
-The description is thorough. The most contract-relevant suspicion is the kernel's `zeros + 1` step: problem.txt states the dequantization formula as `(unpacked_q - zero) * scale` with no +1 offset, yet line 46 unconditionally adds 1 to the unpacked zero-point, so on any input where the stored zero-point is nonzero the kernel computes a systematically biased product. That's directly testable against the stated formula. I'll also record the K-tail truncation and unmasked-N load risks (scope unknown since no test harness is available).
+The kernel matches the contract formula closely, so I'll focus claims on the two highest-risk, testable surfaces: the E[out]==x unbiasedness invariant and floating-point behavior at exact STEP=0.05 grid multiples (where 0.05 is not binary-representable and the floor/reconstruction can shift the grid point).
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+    "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+        "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
       }
     ],
-    "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the o
-  ...[truncated 487 chars]
+    "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from th
+  ...[truncated 59 chars]
   Output summary:
   {
-    "id": "c1",
-    "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
-      }
-    ],
-    "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
-    "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violatin
-  ...[truncated 121 chars]
-- `record_claim -> t7 ok`
-  Args:
-  {
-    "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
-    "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop i
-  ...[truncated 229 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
-    "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-    "status": "open"
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+- `record_claim -> t7 error`
+  Args:
+  {
+    "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the st
+  ...[truncated 444 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 4 - `skeptic` (11.372143869000013s, in=11482 out=689)
+
+Message:
+
+```text
+Both prior claim records failed for missing `scope_rationale`; I'm re-sending them with that field filled in.
+```
+
+Tool calls:
+
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
-    "scope": "unknown",
-    "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
-    "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the sto
-  ...[truncated 21 chars]
+    "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per t
+  ...[truncated 338 chars]
   Output summary:
   {
-    "id": "c3",
-    "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
-    "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+    "id": "c1",
+    "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+    "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
     "status": "open"
   }
+- `record_claim -> t9 ok`
+  Args:
+  {
+    "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the st
+  ...[truncated 759 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+      }
+    ],
+    "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated
+  ...[truncated 393 chars]
 
-### Turn 4 - `experimenter` (42.051997469000014s, in=20750 out=2966)
+### Turn 5 - `describer` (17.380606458000017s, in=12950 out=745)
 
 Message:
 
 ```text
-I'll run runtime probes for all three open claims in parallel: c1 (zero-point +1 bias vs the stated contract formula), c2 (K not a multiple of BLOCK_SIZE_K=16 → unmasked out-of-bounds tail loads), and c3 (N not a multiple of BLOCK_SIZE_N=32 → unmasked N loads). Each probe builds a quantized-reference comparison per the contract.
+Both open claims (c1 unbiasedness, c2 exact-grid-multiple behavior) map directly onto the risk surfaces already in the description model. I'll add targeted scope guidance for the Experimenter on what evidence would decide each claim, without asserting outcomes.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t9 ok`
+- `record_description_update -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "\nimport torch, json, sys\n\nsys.path.insert(0, '/root/cases/case_07')\ntry:\n    from kernel import gptq_matmul\nexcept Exception as e:\n    try:\n        import importlib.util\n        spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\n        m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n        gptq_matmul = m.gptq_matmul\n    except Exception as e2:\n        print(json.dumps({\"error\": str(e2)})); sys.exit(0)\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nM, K, N = 16, 64, 64\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\n\n# random scales and nonzero zero-points\nscales = (torch.rand(num_groups, N, device=de
-  ...[truncated 2325 chars]
+    "kernel_model": [
+      "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+      "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+      "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+    ],
+    "open_questions": [
+      "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+      "Does the test compare outputs statistically across seeds, or b
+  ...[truncated 1856 chars]
   Output summary:
   {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
-      }
+    "contract_model": [],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+      "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+      "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
     ],
-    "claim_id": "c1",
-    "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-    "duration_s": 4.866047,
-    "event_id": "t9",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-    
-  ...[truncated 2699 chars]
-- `run_claim_probe -> t10 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 56, 64   # K = 56 = 3*16 + 8, multiple of 8 (packing OK) but not of 16\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.int32)\nq_vals = torch
-  ...[truncated 1824 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t10_probe.py",
-        "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t10_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t10_stderr.txt",
-        "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
-      }
+    "open_questions": [
+      "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+      "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
     ],
-    "claim_id": "c2",
-    "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-    "duration_s": 3.903096,
-    "event_id": "t10",
-    "evidence_draft": {
-      "claim_id": "c2",
-      "data": {
-        "artifacts": [
-          {
-         
-  ...[truncated 2542 chars]
-- `run_claim_probe -> t11 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA, cannot run triton kernel\"})); sys.exit(0)\n\nM, K, N = 16, 64, 40   # N = 40: multiple of 8 (zeros word n//8=5 valid up to 39) but not multiple of 32\nnum_groups = 4\ng_idx = torch.randint(0, num_groups, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(num_groups, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(0, 16, (num_groups, N), device=dev, dtype=torch.in
-  ...[truncated 1721 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
-        "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
-    "duration_s": 3.903301,
-    "event_id": "t11",
-    "evidence_draft": {
-      "claim_id": "c3",
-      "data": {
-        
-  ...[truncated 2560 chars]
+    "resolved_tasks": [],
+    "risk_map": [
+      "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everyw
+  ...[truncated 1570 chars]
 
-### Turn 5 - `experimenter` (52.74197542999997s, in=30020 out=3661)
+### Turn 6 - `skeptic` (9.062146184s, in=19267 out=368)
 
 Message:
 
 ```text
-The three prior probes all crashed in my own packing helper (I packed zeros along the wrong dimension, creating a zero-row tensor) — a probe bug, not kernel evidence. I'll record those as inconclusive and immediately relaunch corrected probes for all three claims with proper GPTQ packing (zeros packed along N: shape (groups, N/8); b packed along K: shape (K/8, N)).
+Both high-risk surfaces (unbiasedness invariant c1 and fp32 grid-multiple behavior c2) are already recorded with in-scope evidence and await experimenter probes. The description model already covers remaining minor risks (seed-0 edge, comparison boundary at p_up∈{0,1}) as non-decisive, and no new evidence has arrived since the claims were recorded. I'll note that I found no additional in-scope claims.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t12 ok`
+- `record_no_new_claims -> t11 ok`
   Args:
   {
-    "event_id": "t9",
-    "status": null,
-    "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
-    "supports": "inconclusive"
-  }
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "inconclusive",
-    "evidence_id": "c1.e1",
-    "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
-    "supports": "inconclusive",
-    "tool_event_id": "t9"
-  }
-- `finalize_probe_evidence -> t13 ok`
-  Args:
-  {
-    "event_id": "t10",
-    "status": null,
-    "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
-    "supports": "inconclusive"
-  }
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "inconclusive",
-    "evidence_id": "c2.e1",
-    "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
-    "supports": "inconclusive",
-    "tool_event_id": "t10"
-  }
-- `finalize_probe_evidence -> t14 ok`
-  Args:
-  {
-    "event_id": "t11",
-    "status": null,
-    "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
-    "supports": "inconclusive"
-  }
-  Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "inconclusive",
-    "evidence_id": "c3.e1",
-    "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
-    "supports": "inconclusive",
-    "tool_event_id": "t11"
-  }
-- `run_claim_probe -> t15 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 64, 4\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)  # nonzero zeros\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):  # (K,N) -> (K/8, N), pack along dim0\n 
-  ...[truncated 1800 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "4ed7b538d59e39048385c584da5ebd29ba5fc5e32526d2b45b2a19757b469d23"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
-        "sha256": "e20d549e23caf4df83a351924bef2750e9d9e65a553768266177d4e9f2772eaa"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-    "duration_s": 4.873874,
-    "event_id": "t15",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          
-  ...[truncated 2710 chars]
-- `run_claim_probe -> t16 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 56, 64, 4   # K=56: multiple of 8, not of 16\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\
-  ...[truncated 1747 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t16_probe.py",
-        "sha256": "524bafb5bb90c7cd4c09837b5f3ed3c25cdbcf4a665186c335b003f23625da9e"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t16_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t16_stderr.txt",
-        "sha256": "33447075f85a3cf8d9170159b5c9f1c03c5afac7651eb75b7178d87f6ec677ce"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-    "duration_s": 4.460732,
-    "event_id": "t16",
-    "evidence_draft": {
-      "claim_id": "c2",
-      "data": {
-        "artifacts": [
-          {
-         
-  ...[truncated 2290 chars]
-- `run_claim_probe -> t17 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "import torch, json, sys, importlib.util\n\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_07/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ngptq_matmul = m.gptq_matmul\n\ntorch.manual_seed(2)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev != 'cuda':\n    print(json.dumps({\"error\": \"no CUDA\"})); sys.exit(0)\n\nM, K, N, G = 16, 64, 40, 4   # N=40: multiple of 8, not of 32\ng_idx = torch.randint(0, G, (K,), device=dev, dtype=torch.int32)\nscales = (torch.rand(G, N, device=dev) * 0.1 + 0.01).float()\nz_vals = torch.randint(1, 16, (G, N), device=dev, dtype=torch.int32)\nq_vals = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n\ndef packK(x):\n    Kd, Nd = x.shape\
-  ...[truncated 1812 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t17_probe.py",
-        "sha256": "747ca8a4a71fa9a4aa1c3097294de1cb8736834f775490358513a96ef0e4d95a"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t17_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t17_stderr.txt",
-        "sha256": "d5d42091380f09bafc8d726c23484a9de4e277dd09e16b41e948df24f981099c"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
-    "duration_s": 4.02419,
-    "event_id": "t17",
-    "evidence_draft": {
-      "claim_id": "c3",
-      "data": {
-        "
-  ...[truncated 2334 chars]
-
-### Turn 6 - `skeptic` (8.422715646000029s, in=40310 out=301)
-
-Message:
-
-```text
-This is the final review turn. All probes so far crashed due to the Experimenter's own packing/unpacking bugs, so no new kernel evidence exists; the three existing claims (zero-point +1, K-tail, N-tail) already cover the material hypotheses, and nothing new from the latest events warrants additional claims.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t18 ok`
-  Args:
-  {
-    "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+    "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
     "reviewed_claims": [
-      "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
-      "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-      "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+      "c1",
+      "c2"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+    "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
     "reviewed_claims": [
-      "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
-      "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-      "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+      "c1",
+      "c2"
     ],
-    "reviewed_tool_event_count": 17,
+    "reviewed_tool_event_count": 10,
     "turn": 6
   }
 
-### Turn 7 - `judge` (14.741337875s, in=40375 out=430)
+### Turn 7 - `experimenter` (15.392582878000013s, in=20316 out=834)
 
 Message:
 
 ```text
-The decisive claim (c1: zero-point +1 vs the stated contract formula) remains inconclusive — all six probes failed in the Experimenter's own packing/unpacking code, not the kernel. A working probe could settle it, so I'm asking for one more debate round focused on correctly-executed probes.
+Launching both probes together: c1 (statistical unbiasedness over many seeds and repeated elements) and c2 (fp32 behavior at exact decimal multiples of STEP). They are independent, so I'll run both in one batch and finalize next turn.
 ```
 
 Tool calls:
 
-- `request_more_debate -> t19 ok`
+- `run_claim_probe -> t12 ok`
   Args:
   {
-    "focus_claims": [
-      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
-    ],
-    "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, execut
-  ...[truncated 110 chars]
+    "claim_id": "c1",
+    "code": "import torch, json\ntorch.manual_seed(0)\nfrom kernel import stochastic_round_to_grid\n\nSTEP = 0.05\nN = 64  # power of two, single block\n# repeated elements with varied fractional distances, incl. negatives\nvals = [0.375, -0.375, 0.0125, -0.0625, 1.234, -2.567, 0.9999, -0.9999] * 8\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nS = 2000\nouts = torch.stack([stochastic_round_to_grid(x, s) for s in range(S)])\nmean_out = outs.mean().item()\nmean_in = x.mean().item()\nstd_mc = (outs.std() / (S**0.5)).item()\nbias = mean_out - mean_in\nz = bias / std_mc if std_mc > 0 else 0.0\nprint(json.dumps({\n    \"N\": N, \"seeds\": S, \"mean_in\": mean_in, \"mean_out\": mean_out,\n    \"bias\": bias, \"mc_std\": std_mc, \"z_score\": z,\n    \"metric\": \
+  ...[truncated 205 chars]
   Output summary:
   {
-    "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, executing probe would convert c1 (and possibly c2/c3) from inconclusive to confirmed/rebutted before the verdict.",
-    "request": "more_debate"
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t12_probe.py",
+        "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t12_stdout.txt",
+        "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t12_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t12_json_result.json",
+        "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+    "duration_s": 8.54061
+  ...[truncated 3179 chars]
+- `run_claim_probe -> t13 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import torch, json\nfrom kernel import stochastic_round_to_grid\nSTEP = 0.05\nvals = [0.15, -0.25, 0.30, -0.55, 1.10, 0.05, -0.05, 0.20, 0.35, -0.10]\nx = torch.tensor(vals, dtype=torch.float32, device='cuda')\nres = {}\nS = 100\nfor v in vals:\n    xi = torch.full((16,), v, dtype=torch.float32, device='cuda')\n    o = torch.stack([stochastic_round_to_grid(xi, s) for s in range(S)])\n    # fp32 grid computation per contract formula\n    lo = (torch.floor(xi / STEP) * STEP)\n    p_up = ((xi - lo) / STEP)\n    out_lo = o.min().item(); out_hi = o.max().item()\n    frac_up = (o > lo[0].item() + STEP/2).float().mean().item()\n    # distance of outputs from exact decimal grid (k*0.05)\n    k = torch.round(o / STEP)\n    resid = (o - k * STEP).abs().max().item()\n
+  ...[truncated 563 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on 
+  ...[truncated 9193 chars]
+
+### Turn 8 - `experimenter` (10.591459789999988s, in=27415 out=563)
+
+Message:
+
+```text
+Both probe results are available and decisive: c1 shows bias well within Monte-Carlo noise (z ≈ -0.002), and c2 shows p_up exactly 0 with outputs on the grid at all tested exact multiples. I'll finalize both as rebutted.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "bias": -5.251169204711914e-05,
+      "mc_std": 0.02519967406988144,
+      "mean_in": -0.17287498712539673,
+      "mean_out": -0.17292749881744385,
+      "metric": "sample mean vs input mean, Monte-Carlo z-score",
+      "n_elements": 64,
+      "seeds": 2000,
+      "z_score": -0.0020838242550875264
+    },
+    "event_id": "t12",
+    "status": "rebutted",
+    "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+    "supports": "rebutted",
+    "tool_event_id": "t12"
+  }
+- `finalize_probe_evidence -> t15 ok`
+  Args:
+  {
+    "data": {
+      "frac_upper_max": 0.0,
+      "max_resid_from_decimal_grid": 0.0,
+      "p_up_max": 0.0,
+      "tested_values": [
+        0.15,
+        -0.25,
+        0.3,
+        -0.55,
+        1.1,
+        0.05,
+        -0.05,
+        0.2,
+        0.35,
+        -0.1
+      ],
+      "wrong_grid_point_count": 0
+    },
+    "event_id": "t13",
+    "status": "rebutted",
+    "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "rebutted",
+    "evidence_id": "c2.e1",
+    "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+    "supports": "rebutted",
+    "tool_event_id": "t13"
   }
 
-### Turn 8 - `describer` (17.878342099000008s, in=39144 out=863)
+### Turn 9 - `skeptic` (7.993247774000054s, in=37590 out=221)
 
 Message:
 
 ```text
-The description model is already complete for case_07; the only thing missing is a corrected, executing probe. I'll record a targeted update giving the Experimenter the exact reference-dequant layout (which every failed probe got wrong), so the next probe can settle c1–c3 rather than crash again.
+Both in-scope claims (c1 unbiasedness, c2 grid-multiple behavior) are rebutted by decisive probes, and the kernel matches the contract formula directly. No new evidence exposes a material in-scope problem.
 ```
 
 Tool calls:
 
-- `record_description_update -> t20 ok`
+- `record_no_new_claims -> t16 ok`
   Args:
   {
-    "contract_model": [
-      "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
-      "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
-    ],
-    "kernel_model": [
-      "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
-    ],
-    "open_questions": [
-      "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract
-  ...[truncated 1862 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
-      "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
-    ],
-    "open_questions": [
-      "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
-      "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shap
-  ...[truncated 1552 chars]
-
-### Turn 9 - `skeptic` (15.637966149000022s, in=44169 out=359)
-
-Message:
-
-```text
-This is a new debate round, but nothing new has emerged since my review: the description update (du2) only confirms the existing claim structure (zero-point +1, K-tail, N-tail) and provides probe-fix guidance for the Experimenter. No new claims are warranted.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t21 ok`
-  Args:
-  {
-    "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+    "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
     "reviewed_claims": [
-      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmas
-  ...[truncated 42 chars]
+      "c1",
+      "c2"
+    ]
+  }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
+    "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
     "reviewed_claims": [
-      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+      "c1",
+      "c2"
     ],
-    "reviewed_tool_event_count": 20,
+    "reviewed_tool_event_count": 15,
     "turn": 9
   }
 
-### Turn 10 - `judge` (12.563398417999963s, in=41296 out=550)
+### Turn 10 - `judge` (8.940017810000029s, in=37788 out=390)
 
 Message:
 
 ```text
-All three claims remain inconclusive: every probe (t9–t11, t15–t17) crashed in the probe's own reference code, so no runtime evidence exists. The decisive in-scope claim c1 (kernel adds +1 to the zero-point vs the literal contract formula) is untested, and c2/c3 are unknown-scope. With no confirmed evidence either way, the honest verdict is needs_more_evidence.
+All claims are settled: both in-scope claims (c1 unbiasedness, c2 grid-multiple behavior) are decisively rebutted by runtime probes, the Skeptic signed off with no new claims, and the kernel directly implements the contract formula. Recording a trust verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t22 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.8,
+    "confidence": 0.9,
     "decisive_claims": [
-      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+      "c1",
+      "c2"
     ],
-    "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable
-  ...[truncated 550 chars]
+    "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula comp
+  ...[truncated 431 chars]
   Output summary:
   {
-    "confidence": 0.8,
+    "confidence": 0.9,
     "decisive_claims": [
-      "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-      "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-      "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+      "c1",
+      "c2"
     ],
-    "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evi
-  ...[truncated 150 chars]
+    "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure re
+  ...[truncated 31 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-    "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
-    "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
-    "Output is expected in float32 (kernel allocates fp32 C).",
-    "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
-    "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
+    "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+    "Unbiasedness E[out] == x is the stated invariant.",
+    "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+    "Input domain: 1-D tensor, length a power of two, fits in a single block."
   ],
   "kernel_model": [
-    "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
-    "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
-    "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
-    "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multip
-...[truncated 5172 chars]
+    "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+    "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+    "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+    "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype.",
+    "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+    "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+    "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+  ],
+  "open_questions": [
+    "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+    "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+  ],
+  "risk_map": [
+    "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each
+...[truncated 2888 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_07: an INT4 GPTQ-style packed dequant-matmul Triton kernel; contract is C = A @ dequant(B) with per-(group,column) scale and packed zero-point; kernel mirrors AutoGPTQ quant_matmul_248 layout and zero-point+1 convention, but has no masking on the K/N loads and truncates a non-multiple-of-16 K tail.
-- `du2` tasks=`initial`: Probe-fix guidance for case_07: describe the exact reference-dequant layout so the Experimenter's next probe executes — packed zeros are (groups, N/8) packed along N, so per-column unpacking must use word n//8; claims c1/c2/c3 remain untested because all six probes crashed in the probe's own packing/unpacking code.
+- `du1` tasks=`initial`: Described case_08: stochastic rounding to a 0.05 grid via Triton Philox tl.rand; kernel matches the contract formula; main risk surfaces are seed/RNG semantics, grid-multiple floating-point edge cases, and dtype handling.
+- `du2` tasks=`initial`: Refined case_08 description with claim-directed probe guidance for c1 (statistical unbiasedness via deterministic-per-seed Philox sampling) and c2 (fp32 grid-multiple behavior of STEP=0.05), plus open questions on benchmark dtype and test comparison mode.
 
 ## Claims
 
-### c1 - `inconclusive`
+### c1 - `rebutted`
 
-Statement: The kernel adds +1 to the unpacked zero-point (kernel.py line 46, "zeros = zeros + 1") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].
+Statement: Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.
 
 Scope: `in_scope`
 
-Scope rationale: The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.
+Scope rationale: problem.txt explicitly states the invariant \"so that E[out] == x\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.
 
 Scope evidence:
-- `problem.txt`: The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' — no +1 adjustment to the zero-point appears anywhere in the stated contract.
+- `problem.txt`: "so that E[out] == x. The randomness is drawn from the supplied seed." — unbiasedness is the explicitly stated invariant of the operation.
 
-Rationale: problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.
-
-Evidence:
-- `c1.e1` runtime_probe supports `inconclusive`, tool_event_id=t9: Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.
-
-### c2 - `inconclusive`
-
-Statement: If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.
-
-Scope: `unknown`
-
-Scope rationale: problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.
-
-Rationale: The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.
+Rationale: The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.
 
 Evidence:
-- `c2.e1` runtime_probe supports `inconclusive`, tool_event_id=t10: Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.
 
-### c3 - `inconclusive`
+### c2 - `rebutted`
 
-Statement: If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.
+Statement: At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x±0.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.
 
-Scope: `unknown`
+Scope: `in_scope`
 
-Scope rationale: No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.
+Scope rationale: problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.
 
-Rationale: All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.
+Scope evidence:
+- `problem.txt`: "must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP" — outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it.
+
+Rationale: STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.
 
 Evidence:
-- `c3.e1` runtime_probe supports `inconclusive`, tool_event_id=t11: Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_07"
+  "entry": "case_08"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_07"
+  "entry": "case_08"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_07"
+  "entry": "case_08"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_07"
+  "entry": "case_08"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Contract is C = A @ dequant(B) where B is INT4 weights packed into int32 words (8 values per word for bits=4), with per-(group, column) scale and zero-point: dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-    "Grouping along K is given by g_idx (length K), so scale/zero lookup is per-k-element via g_idx, and scales has layout (num_groups, N) while zeros are packed like B (num_groups, N/8 int32 words).",
-    "Correctness must be judged against the declared 4-bit format (quantized reference), not a continuous-weight FP32 reference with a loose tolerance.",
-    "Output is expected in float32 (kernel allocates fp32 C)."
+    "Stochastic rounding of each element to neighboring multiples of STEP=0.05: lower = floor(x/STEP)*STEP, upper = lower + STEP, P(upper) = (x-lower)/STEP, else lower.",
+    "Unbiasedness E[out] == x is the stated invariant.",
+    "Randomness must come from the supplied seed via Triton's counter-based Philox RNG (tl.rand).",
+    "Input domain: 1-D tensor, length a power of two, fits in a single block."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Faithful-looking port of AutoGPTQ quant_matmul_248: unpack b words via shifter=(k%8)*4 and mask maxq=15; zeros unpacked via zeros_shifter=(n%8)*4 and offset by +1 (GPTQ zero-point convention: effective zero is stored zero + 1).",
-    "scales_ptrs indexes scales as (groups, N) using stride_scales = scales.stride(0) with column offset offs_bn; zeros_ptrs indexes packed zeros as (groups, N/8) using offs_bn // infearure_per_bits * stride_zeros then adds g_idx * stride along groups \u2014 both match the standard GPTQ layout.",
-    "K-loop iterates num_pid_k = cdiv(K, 16) times but pointer arithmetic advances full BLOCK_SIZE_K each step; loads of a, b, and g are unmasked in K, so any K not a multiple of BLOCK_SIZE_K=16 silently drops the tail K elements (and may read out of bounds).",
-    "b and zeros/scales loads are unmasked in N; only the C store is masked with offs_am<M & offs_bn<N, so N (and K) not multiples of BLOCK_SIZE_N=32 (16) risk out-of-bounds reads or garbage in accumulation, though garbage lanes are masked out at the store.",
-    "A loads are masked only on rows (offs_am<M), other=0.0; assumes a row-major with stride_am/stride_ak passed correctly.",
-    "Grid swizzle uses GROUP_SIZE_M=1, block sizes 32/32/16; with GROUP_SIZE_M=1 the pid deco
-...[truncated 3390 chars]
+    "Single Triton kernel launched on grid (1,) with tl.arange(0, N) covering all elements in one block; N and STEP passed as constexpr.",
+    "Computes lower/upper/p_up exactly per the contract formula and selects via tl.where(r < p_up, upper, lower) with tl.rand(seed, offs) as r.",
+    "seed is passed as a runtime scalar argument (not constexpr); N constexpr implies specialization per length.",
+    "Python wrapper allocates out with torch.empty_like and returns it; no dtype handling beyond inherited dtype."
+  ],
+  "open_questions": [],
+  "resolved_tasks": [],
+  "risk_map": [
+    "seed handling: tl.rand(seed, offs) treats seed as an offset/counter base; if the test expects each distinct seed to produce independent streams or a specific seed-to-Philox-counter mapping, verify semantics. Also seed=0 vs seed None edge cases.",
+    "tl.rand returns values in [0,1); boundary r < p_up vs r <= p_up is immaterial for continuous p_up but relevant for p_up==0 (always lower, correct) and p_up==1.",
+    "Floating-point grid computation: x/STEP with STEP=0.05 (not exactly representable in binary) may make x - lower/STEP slightly >1 or <0 at exact multiples, producing off-grid outputs or wrong probabilities; exact multiples of STEP are a risk surface.",
+    "tl.floor and division in the kernel's dtype (likely fp32): if x is fp64, empty_like + kernel loads may downcast or mismatch; dtype assumption unverified.",
+    "tl.rand requires the offset arg to be int; offs is int32 arange \u2014 fine, but r's distrib
+...[truncated 925 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
-    }
-  ],
-  "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
-  "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t7 - record_claim - ok
+### t7 - record_claim - error
 
 {
-  "id": "c2",
-  "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
-  "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t8 - record_claim - ok
 
 {
-  "id": "c3",
-  "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
-  "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+  "id": "c1",
+  "rationale": "The contract states E[out] == x as the invariant; any systematic bias in tl.rand usage or the grid computation (e.g., asymmetric handling of negative x or p_up slightly >1/<0 at grid multiples) would show up as a mean error well above Monte-Carlo noise. This is the operator's stated correctness metric, so a statistical probe over many seeds and random inputs should decide it.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"so that E[out] == x. The randomness is drawn from the supplied seed.\" \u2014 unbiasedness is the explicitly stated invariant of the operation."
+    }
+  ],
+  "scope_rationale": "problem.txt explicitly states the invariant \\\"so that E[out] == x\\\"; inputs are 1-D power-of-two-length tensors per the stated input domain, and repeated samples across seeds are exactly the domain the contract's probabilistic requirement applies to.",
+  "statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
   "status": "open"
 }
 
-### t9 - run_claim_probe - ok
+### t9 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "STEP=0.05 is not exactly representable in binary; in fp32 the quotient x/0.05 can land just below or above an integer at values that are exact decimal multiples of 0.05, making floor pick the wrong grid index and making the reconstructed lower/upper (floor(x/STEP)*STEP, +STEP) differ from true multiples by ~1e-8 with p_up near 0 or 1 instead of exactly 0, biasing ties and producing outputs not on the decimal grid.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"must round each element to one of the two neighbouring multiples of STEP ... lower = floor(x / STEP) * STEP\" \u2014 outputs are required to be neighbouring multiples of STEP per the stated formula, so exact-grid inputs like 0.15, 0.30, -0.25 are within the stated contract and any off-grid or wrong-grid-point output violates it."
+    }
+  ],
+  "scope_rationale": "problem.txt requires outputs to be one of the two neighbouring multiples of STEP computed by the stated floor formula; exact decimal multiples of STEP (e.g. 0.15, -0.25, 0.30) are admitted 1-D inputs, and any off-grid output or wrong neighbouring-pair selection violates the stated formula.",
+  "statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+  "status": "open"
+}
+
+### t10 - record_description_update - ok
+
+{
+  "contract_model": [],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "kernel.py line 15: r = tl.rand(seed, offs) uses the same Philox seed for every element, with offs (0..N-1) as the counter offset, so outputs are fully deterministic given (x, seed).",
+    "kernel.py line 12-14: lower/p_up are computed in the tensor's native dtype; if x is fp32, x/STEP and floor results inherit fp32 rounding of STEP=0.05 (binary ~0.05000000074505806).",
+    "kernel.py line 23: single launch with grid (1,) and N constexpr; no masking is needed only because every loaded offset is valid, which holds iff x.numel() == N exactly."
+  ],
+  "open_questions": [
+    "What input dtype does the benchmark use (fp32 vs fp64)? This decides whether the fp32 STEP rounding risk in c2 is triggered.",
+    "Does the test compare outputs statistically across seeds, or bit-exactly against a fixed per-seed reference? This decides whether seed-dependent determinism or only distribution matters."
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "For c1: since tl.rand(seed, offs) is deterministic per (seed, offset), a bias probe can reuse one tensor across many seeds; a repeated-element tensor (e.g. x_i = 0.375 everywhere) with S seeds gives S*N samples whose empirical upper-round frequency should converge to p_up per element.",
+    "For c2: at exact decimal multiples of STEP, fp32 x/STEP can land epsilon above an integer, making p_up ~1 instead of 0 so the element rounds up to the next grid point with near-certainty across all seeds; conversely epsilon below gives p_up ~0 (correct). A probe should report p_up values and output grid positions at x in {0.15, -0.25, 0.30, -0.55, 1.10} in fp32.",
+    "For c2: the reconstructed lower = floor(x/STEP)*STEP in fp32 yields values like 0.15000000596 rather than exact decimal multiples; whether that counts as 'on the grid' depends on the test's tolerance, so probes should measure the residual against exact decimal multiples, not assume it."
+  ],
+  "scope_notes":
+...[truncated 770 chars]
+
+### t11 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The two open in-scope claims (c1 statistical unbiasedness, c2 fp32 behavior at exact STEP=0.05 multiples) cover the highest-risk, testable surfaces, and the description model's remaining notes (p_up==0/1 boundary semantics, seed=0) are either immaterial to the stated formula or lack contract support for a decisive case. No new evidence since these claims were recorded suggests any additional material claim.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 10,
+  "turn": 6
+}
+
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+      "path": "probes/t12_probe.py",
+      "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+      "path": "probes/t12_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t12_json_result.json",
+      "sha256": "eb57ad1d2de04d38acc8f6590afa65a5a3bc710eb0d47edbe9f8dd7e6123ebe8"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-  "duration_s": 4.866047,
-  "event_id": "t9",
+  "claim_statement": "Statistical unbiasedness may be violated: over many seeds and repeated elements, the sample mean of outputs may deviate from the input mean beyond Monte-Carlo noise, i.e. E[out] != x.",
+  "duration_s": 8.54061,
+  "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -828,54 +743,55 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
+          "path": "probes/t12_probe.py",
+          "sha256": "df2020bdef8ce12d42dfcb01c7ad103a9d2e911b0ab05e9e256774f0d5eafb4a"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "path": "probes/t12_stdout.txt",
+          "sha256": "53f89cbfa0a4fdebb732c61639a19db9d9323ff00f6315f3783e8af8dd3c2dce"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t9_stderr.txt",
-          "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
-        }
-      ],
-      "duration_s": 4.866047,
-      "exit_code": 1,
-      "
-...[truncated 1899 chars]
+          "path": "probes/t12_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996
+...[truncated 2379 chars]
 
-### t10 - run_claim_probe - ok
+### t13 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t10_probe.py",
-      "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+      "path": "probes/t13_probe.py",
+      "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t10_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "path": "probes/t13_stdout.txt",
+      "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t10_stderr.txt",
-      "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
+      "path": "probes/t13_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t13_json_result.json",
+      "sha256": "c392d51502cf60848a6379987151b108fbd06bba9fc57355a58980075543394c"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-  "duration_s": 3.903096,
-  "event_id": "t10",
+  "claim_statement": "At exact decimal multiples of STEP (e.g. x = 0.15, -0.25, 0.30 in fp32), the kernel's floor(x/STEP)*STEP computation may select the wrong neighbouring grid multiples or produce outputs that are not exactly on the x\u00b10.05 grid, with p_up close to 1 instead of 0 (or vice versa), so the output can sit on the wrong grid point relative to x.",
+  "duration_s": 7.893873,
+  "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -883,361 +799,75 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t10_probe.py",
-          "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+          "path": "probes/t13_probe.py",
+          "sha256": "69671ab07c26727a55403e040387287e30309173aa98bdda97e931b1823fbc59"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t10_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "path": "probes/t13_stdout.txt",
+          "sha256": "1f918f4a89d8f7908060a369a0d40c27923adfa1e3e45fa24176069a62c97ad5"
         },
         {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t10_stderr.txt",
-          "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
-        }
-      ],
-      "duration_s": 3.903096,
-      "exit_code": 1,
-      "ex
-...[truncated 1742 chars]
-
-### t11 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
-      "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
-  "duration_s": 3.903301,
-  "event_id": "t11",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t11_stderr.txt",
-          "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
-        }
-      ],
-      "duration_s": 3.903301,
-...[truncated 1760 chars]
-
-### t12 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "inconclusive",
-  "evidence_id": "c1.e1",
-  "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
-  "supports": "inconclusive",
-  "tool_event_id": "t9"
-}
-
-### t13 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "inconclusive",
-  "evidence_id": "c2.e1",
-  "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
-  "supports": "inconclusive",
-  "tool_event_id": "t10"
-}
+          "description": "C
+...[truncated 8393 chars]
 
 ### t14 - finalize_probe_evidence - ok
 
 {
-  "claim_id": "c3",
-  "claim_status": "inconclusive",
-  "evidence_id": "c3.e1",
-  "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
-  "supports": "inconclusive",
-  "tool_event_id": "t11"
-}
-
-### t15 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "4ed7b538d59e39048385c584da5ebd29ba5fc5e32526d2b45b2a19757b469d23"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
-      "sha256": "e20d549e23caf4df83a351924bef2750e9d9e65a553768266177d4e9f2772eaa"
-    }
-  ],
   "claim_id": "c1",
-  "claim_statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
-  "duration_s": 4.873874,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "4ed7b538d59e39048385c584da5ebd29ba5fc5e32526d2b45b2a19757b469d23"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t15_stderr.txt",
-          "sha256": "e20d549e23caf4df83a351924bef2750e9d9e65a553768266177d4e9f2772eaa"
-        }
-      ],
-      "duration_s": 4.873874,
-      "exit_code": 1,
+  "claim_status": "rebutted",
+  "evidence_id": "c1.e1",
+  "summary": "Over 2000 seeds and 64 repeated elements (mixed signs and fractional distances), sample mean of outputs is -0.172927 vs input mean -0.172875; bias -5.25e-5 is far inside Monte-Carlo noise (z=-0.002). No evidence of E[out] != x.",
+  "supports": "rebutted",
+  "tool_event_id": "t12"
+}
 
-...[truncated 1910 chars]
-
-### t16 - run_claim_probe - ok
+### t15 - finalize_probe_evidence - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t16_probe.py",
-      "sha256": "524bafb5bb90c7cd4c09837b5f3ed3c25cdbcf4a665186c335b003f23625da9e"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t16_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t16_stderr.txt",
-      "sha256": "33447075f85a3cf8d9170159b5c9f1c03c5afac7651eb75b7178d87f6ec677ce"
-    }
-  ],
   "claim_id": "c2",
-  "claim_statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
-  "duration_s": 4.460732,
-  "event_id": "t16",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t16_probe.py",
-          "sha256": "524bafb5bb90c7cd4c09837b5f3ed3c25cdbcf4a665186c335b003f23625da9e"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t16_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t16_stderr.txt",
-          "sha256": "33447075f85a3cf8d9170159b5c9f1c03c5afac7651eb75b7178d87f6ec677ce"
-        }
-      ],
-      "duration_s": 4.460732,
-      "exit_code": 1,
-      "ex
-...[truncated 1490 chars]
+  "claim_status": "rebutted",
+  "evidence_id": "c2.e1",
+  "summary": "At 10 exact decimal multiples of STEP (positive and negative), fp32 p_up is exactly 0.0 (not ~1), outputs are deterministic (never jump to the next grid point; frac_upper=0 across 100 seeds), and outputs are exactly on the k*STEP grid (max residual vs rounded decimal grid 0.0). The fp32 floor/STEP reconstruction did not select wrong grid points or produce off-grid outputs at these values.",
+  "supports": "rebutted",
+  "tool_event_id": "t13"
+}
 
-### t17 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t17_probe.py",
-      "sha256": "747ca8a4a71fa9a4aa1c3097294de1cb8736834f775490358513a96ef0e4d95a"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t17_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t17_stderr.txt",
-      "sha256": "d5d42091380f09bafc8d726c23484a9de4e277dd09e16b41e948df24f981099c"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
-  "duration_s": 4.02419,
-  "event_id": "t17",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t17_probe.py",
-          "sha256": "747ca8a4a71fa9a4aa1c3097294de1cb8736834f775490358513a96ef0e4d95a"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t17_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t17_stderr.txt",
-          "sha256": "d5d42091380f09bafc8d726c23484a9de4e277dd09e16b41e948df24f981099c"
-        }
-      ],
-      "duration_s": 4.02419,
- 
-...[truncated 1534 chars]
-
-### t18 - record_no_new_claims - ok
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the latest probe events (t15\u2013t17) all failed in the probe's own reference-unpacking code (shape mismatch in unpacking packed zeros), so they provide no new kernel evidence. The three recorded claims (c1 zero-point +1 offset vs contract formula, c2 K%16 unmasked tail, c3 N%32 unmasked loads) already cover all material, testable hypotheses raised in this run; no additional in-scope claims are warranted.",
+  "reason": "Both in-scope claims are decisively rebutted: c1 (E[out]==x) shows bias far within Monte-Carlo noise (z=-0.002 over 2000 seeds), and c2 shows p_up exactly 0 and outputs on the grid at all tested exact STEP multiples. The kernel implements the contract formula directly (floor/STEP grid, p_up via fractional distance, tl.rand comparison), and remaining notes (seed=0 edge, r<p_up boundary at p_up=1) are immaterial given tl.rand returns [0,1). No material, testable, in-scope problem remains uncovered.",
   "reviewed_claims": [
-    "c1: kernel adds +1 to unpacked zero-point, deviating from the contract formula (q - zero)*scale",
-    "c2: K not multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-    "c3: N not multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
+    "c1",
+    "c2"
   ],
-  "reviewed_tool_event_count": 17,
-  "turn": 6
-}
-
-### t19 - request_more_debate - ok
-
-{
-  "reason": "Every probe so far (t9-t11, t15-t17) crashed in the Experimenter's own reference code (wrong packing dimension, then a broadcast shape mismatch unpacking zeros), so no runtime evidence exists for any claim. The in-scope claim c1 (zero-point +1 vs the contract formula) is directly decidable by a corrected probe: the t15 code only needs the zeros unpacking fixed to broadcast word j//8 over columns. One more round with a corrected, executing probe would convert c1 (and possibly c2/c3) from inconclusive to confirmed/rebutted before the verdict.",
-  "request": "more_debate"
-}
-
-### t20 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Contract: C = A @ dequant(B), INT4 weights packed 8-per-int32-word, dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] per problem.txt, with NO +1 adjustment.",
-    "Tensor layouts implied by kernel indexing: b_packed shape (K//8, N) packed along K; scales shape (num_groups, N); zeros packed shape (num_groups, N//8) packed along N; g_idx int32 length K."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Kernel line 46 does zeros = zeros + 1, i.e. it computes (q - (zero_unpacked + 1)) * scale, which is the upstream AutoGPTQ GPTQ convention but deviates from the literal problem.txt formula unless the test's zeros follow the +1 convention."
-  ],
-  "open_questions": [
-    "c1 remains undecided pending a working probe: does the test/reference use raw zero-point (contract literal) or GPTQ +1 convention? The probe should compare kernel output against BOTH references.",
-    "c2/c3 remain undecided: any corrected probe should also run K%16!=0 and N%32!=0 shapes against the +1-convention reference."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Probe-correctness risk (not a kernel bug): every failed probe unpacked packed zeros with a shape mismatch. The safe reference dequant is column-wise: for column n, word = zeros_packed[g, n // 8] >> ((n % 8) * 4) & 15 (and optionally +1); build a full (G,N) zeros matrix this way before the outer-product accumulation.",
-    "Probe risk: do not index z_vals per k; zero lookup is per (group g_idx[k], column n), not per k row.",
-    "Kernel risks unchanged: +1 zero-point vs contract formula (c1), unmasked K-tail loads for K%16!=0 (c2), unmasked N loads for N%32!=0 (c3)."
-  ],
-  "scope_notes": [
-    "For the corrected probe: unpack zeros as zrow[n] = (zeros_packed[g, n//8] >> ((n%8)*4)) & 15 \u2014 zeros_packed has N/8 columns, so indexing per column n requires n//8, then optionally +1 for the GPTQ convention; both conventions should be reported so c1 is decidable.",
-    "Probe scope remi
-...[truncated 752 chars]
-
-### t21 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The description update (du2) confirms the existing claim structure and only adds probe-correctness guidance (packed zeros are (groups, N/8) packed along N, unpack via word n//8) for the Experimenter's next round; it raises no new kernel risks beyond the three recorded claims (c1 zero-point +1 vs contract formula, c2 K%16 unmasked tail loads, c3 N%32 unmasked N loads). No additional in-scope, testable hypotheses are warranted from the current evidence.",
-  "reviewed_claims": [
-    "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-    "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads / wrong C",
-    "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N-dimension loads"
-  ],
-  "reviewed_tool_event_count": 20,
+  "reviewed_tool_event_count": 15,
   "turn": 9
 }
 
-### t22 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.8,
+  "confidence": 0.9,
   "decisive_claims": [
-    "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-    "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-    "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+    "c1",
+    "c2"
   ],
-  "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
-  "verdict": "needs_more_evidence"
+  "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.8,
-  "created_at": "2026-09-30T08:22:02Z",
+  "confidence": 0.9,
+  "created_at": "2026-09-30T08:20:04Z",
   "decisive_claims": [
-    "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-    "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-    "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+    "c1",
+    "c2"
   ],
-  "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
-  "verdict": "needs_more_evidence"
+  "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+  "verdict": "trust"
 }

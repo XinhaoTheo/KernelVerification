@@ -1,10 +1,9 @@
 {
-  "confidence": 0.9,
-  "created_at": "2026-09-30T08:20:04Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:22:04Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
-  "verdict": "trust"
+  "reason": "Confirmed in-scope claim c1: the kernel violates problem.txt's explicit tie contract (\"when two experts have exactly equal scores, the LOWER index must be one kept\"). Runtime probe t12 shows exactly-tied maxima return a non-lowest tied index at every tested power-of-two N in {2,4,8,16,64} (e.g. N=2 tied max returns 1 instead of 0; an all-equal 64-wide row returns index 32 instead of 0), against the torch.argmax reference which keeps the lowest tied index. The artifact contains no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires this tie-break behavior \u2014 the bitonic network's flip=1 sub-stages swap exactly-tied pairs, so no lower-index stability is ever preserved. The reference (argmax) is well-defined here (not NaN/undefined), so this is not a reference-undefined artifact. c2 (order direction on unique maxima) is rebutted by probe t13 with zero mismatches across 80 unique-max rows. No unresolved claims remain; Skeptic signed off after reviewing the latest evidence.",
+  "verdict": "reject"
 }

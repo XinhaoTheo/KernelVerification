@@ -1,22 +1,39 @@
 
-import torch, json, importlib.util, sys
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_23/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import torch, json, importlib.util, math
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_24/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-res = {}
+def ref(a,b,eps=1e-8):
+    A=a.double(); B=b.double()
+    dot=(A*B).sum(1); na=A.pow(2).sum(1).sqrt(); nb=B.pow(2).sum(1).sqrt()
+    den=(na*nb).clamp_min(eps)
+    return dot/den
+
+res={}
 torch.manual_seed(0)
-for (N,C,H,W) in [(2,64,8,8),(1,32,4,4),(3,128,5,7)]:
-    x_nchw = torch.randn(N,C,H,W, device='cuda')
-    x = x_nchw.to(memory_format=torch.channels_last)
-    scale = torch.randn(C, device='cuda')
-    out = m.scale_channels(x, scale, C)
-    ref = x * scale.view(1,C,1,1)
-    err = (out.float()-ref.float()).abs().max().item()
-    res[f"NHWC_{N}x{C}x{H}x{W}"] = dict(max_abs_err=err,
-        out_is_cl=out.is_contiguous(memory_format=torch.channels_last),
-        out_contig=out.is_contiguous())
-    # also plain contiguous NCHW input (kernel convention NOT honored) - informational
-    out2 = m.scale_channels(x_nchw.contiguous(), scale, C)
-    ref2 = x_nchw * scale.view(1,C,1,1)
-    res[f"NCHW_{N}x{C}x{H}x{W}_informational"] = (out2-ref2).abs().max().item()
-print(json.dumps(res, indent=1))
+for (R,N) in [(4,16),(8,256),(8,257),(16,1000),(32,4096),(4,100000),(3,1)]:
+    a=torch.randn(R,N,device='cuda',dtype=torch.float32)
+    b=torch.randn(R,N,device='cuda',dtype=torch.float32)
+    o=k.cosine_similarity(a,b)
+    r=ref(a,b)
+    res[f"{R}x{N}"]={"maxabs":float((o.double()-r).abs().max()),
+                     "out_range":[float(o.min()),float(o.max())],
+                     "finite":bool(torch.isfinite(o).all())}
+
+# scaled magnitudes
+for scale in [1e-4, 1e4, 1e-20, 1e20]:
+    a=(torch.randn(8,512,device='cuda')*scale)
+    b=(torch.randn(8,512,device='cuda')*scale)
+    o=k.cosine_similarity(a,b); r=ref(a,b)
+    res[f"scale{scale:g}"]={"maxabs":float((o.double()-r).abs().max()),
+                            "finite":bool(torch.isfinite(o).all()),
+                            "out":[round(float(x),6) for x in o[:4]],
+                            "ref":[round(float(x),6) for x in r[:4]]}
+
+# highly correlated / near-identical rows (should be ~1)
+a=torch.randn(8,4096,device='cuda')
+b=a+1e-6*torch.randn_like(a)
+o=k.cosine_similarity(a,b); r=ref(a,b)
+res["near_identical"]={"maxabs":float((o.double()-r).abs().max()),"out":[float(x) for x in o[:3]]}
+
+print(json.dumps(res,indent=1))

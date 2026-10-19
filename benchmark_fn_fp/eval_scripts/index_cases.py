@@ -68,9 +68,9 @@ def main():
         else:
             archived.append(case)
     lines = ["# Benchmark 案例总索引", "",
-        "所有题库和 traces 共用 `case_数字` 编号。同一编号始终指向同一道题；来源记录在 case_map.json，部分题库共用统一公开目录。",
+        "所有题库和 traces 共用 `case_数字` 编号。本次重排后的编号、旧编号与来源记录在 case_map.json，部分题库共用统一公开目录。",
         "本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。", "",
-        f"当前 {len(details) - len(archived)} 题；另有 {len(archived)} 题已归档。归档编号保留，不复用、不进入默认实验。", "",
+        f"当前 {len(details) - len(archived)} 题；另有 {len(archived)} 题已归档。当前题连续编号；归档题排在其后，不进入默认实验。", "",
         "| 编号范围 | 数量 | 测什么 | 说明与题目 |", "|---|---:|---|---|"]
     for dataset, cases in groups.items():
         path = cases_dir(ROOT.parent, dataset).relative_to(ROOT).as_posix()
@@ -85,8 +85,9 @@ def main():
                          f"{len(cases)} | 题目、原始标签、构造记录与历史 traces；不计入当前题库 |")
     lines += [""] + curation_lines(details)
     retired = ", ".join(f"`{name}`" for name in registry.get("retired_ids", [])) or "无"
-    lines += ["", f"已退休且不复用的编号：{retired}。下一可用编号从 {registry.get('next_case_number', '注册表')} 开始。",
+    lines += ["", f"当前编号体系的退休编号：{retired}。下一可用编号从 {registry.get('next_case_number', '注册表')} 开始。",
         "`real_kernel_challenges/` 保存真实源码衍生的专门构造挑战；标签针对固定实现与合同，结果单独统计。", "",
+        "2026-10-19 重排：当前题 case_01–case_90；归档题 case_91–case_162。旧 case_03 的退休记录留在注册表迁移历史中。", "",
         "每道题的完整对应关系如下。旧编号仅用于查阅历史记录，今后运行请使用新编号。", "",
         "| 统一编号 | 状态 | 旧编号 | 题库 / 来源机制 | 公开题目 | GLM traces |",
         "|---|---|---|---|---|---|"]
@@ -112,7 +113,7 @@ def main():
         "目录已统一编号；历史请求、回复和 probe 代码保留原始字节；目录和 metadata 的身份、迁移字段按索引更新。"
         "原始内容中的旧编号不是另一道题，读取程序根据当前目录与本注册表核对身份。",
         "归档案例的公开题目与 traces 按上表移入对应归档目录，历史来源字段和原始调用内容不改写。",
-        "早期数值 pilot（case_82–case_105）和它的 72 条 GLM 记录移入 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出；"
+        "早期数值 pilot（case_139–case_162）和它的 72 条 GLM 记录移入 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出；"
         "过去 104 题的历史报告保留原结论。", "",
         "## 文件清理说明", "",
         "各来源组的 `private_data/` 保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。归档组的资料留在归档目录。",

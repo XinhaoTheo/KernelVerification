@@ -4,64 +4,53 @@ import sys
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from kernel import rms_norm_forward as rms_norm_buggy
+from kernel import gqa_gather  # buggy: modulo instead of floor-division
 
 import triton
 import triton.language as tl
 
-try:
-    from triton.language.extra.libdevice import rsqrt
-except ModuleNotFoundError:
-    from triton.language.extra.cuda.libdevice import rsqrt
-
 
 @triton.jit
-def _rms_norm_forward_kernel_ref(
-    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,
-    n_cols, eps,
-    BLOCK_SIZE: tl.constexpr,
-):
-    row_idx = tl.program_id(0).to(tl.int64)
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask = col_offsets < n_cols
-    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0)
-    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols
-    rstd = rsqrt(mean_square + eps)  # real kernel: eps inside the sqrt
-    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)
-    Y_row = X_row * rstd
-    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)
+def _gqa_gather_kernel_ref(kv_ptr, out_ptr, n_rep, dim: tl.constexpr):
+    q_head = tl.program_id(0)
+    kv_head = q_head // n_rep  # real: floor-division groups consecutive query heads
+    offs_d = tl.arange(0, dim)
+    kv = tl.load(kv_ptr + kv_head * dim + offs_d)
+    tl.store(out_ptr + q_head * dim + offs_d, kv)
 
 
-def rms_norm_forward_reference(X, eps):
-    num_rows, n_cols = X.shape
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    Y = torch.empty_like(X)
-    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)
-    _rms_norm_forward_kernel_ref[(num_rows,)](Y, Y.stride(0), X, X.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)
-    return Y
+def gqa_gather_reference(kv, num_q_heads):
+    num_kv_heads, dim = kv.shape
+    n_rep = num_q_heads // num_kv_heads
+    out = torch.empty(num_q_heads, dim, device=kv.device, dtype=kv.dtype)
+    _gqa_gather_kernel_ref[(num_q_heads,)](kv, out, n_rep, dim=dim)
+    return out
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     device = "cuda"
-    eps = 1e-6
+    num_q_heads, num_kv_heads, dim = 8, 2, 4
 
-    x_normal = torch.randn(8, 16, device=device)
-    ref_normal = rms_norm_forward_reference(x_normal, eps)
-    cand_normal = rms_norm_buggy(x_normal, eps)
-    normal_pass = torch.allclose(cand_normal, ref_normal, rtol=1e-2, atol=1e-2)
+    # (a) homogeneous KV data: every head is the same base vector -> bug invisible
+    base = torch.randn(1, dim, device=device)
+    kv_homogeneous = base.expand(num_kv_heads, dim).clone().contiguous()
+    ref_h = gqa_gather_reference(kv_homogeneous, num_q_heads)
+    cand_h = gqa_gather(kv_homogeneous, num_q_heads)
+    homogeneous_pass = torch.allclose(cand_h, ref_h, rtol=1e-2, atol=1e-2)
 
-    x_tiny = torch.full((1, 16), 2e-8, device=device)
-    ref_tiny = rms_norm_forward_reference(x_tiny, eps)
-    cand_tiny = rms_norm_buggy(x_tiny, eps)
-    tiny_pass = torch.allclose(cand_tiny, ref_tiny, rtol=1e-2, atol=1e-2)
+    # (b) distinguishable KV data: bug exposed
+    kv_distinct = torch.stack([torch.full((dim,), float(i * 100), device=device) for i in range(num_kv_heads)])
+    ref_d = gqa_gather_reference(kv_distinct, num_q_heads)
+    cand_d = gqa_gather(kv_distinct, num_q_heads)
+    distinct_pass = torch.allclose(cand_d, ref_d, rtol=1e-2, atol=1e-2)
 
-    print(f"normal rows: allclose={normal_pass}")
-    print(f"near-zero row: allclose={tiny_pass}, ref={ref_tiny.abs().max().item():.3e}, cand={cand_tiny.abs().max().item():.3e}")
-    print("FN DEMONSTRATED" if normal_pass and not tiny_pass else "tune constants")
-    # What a conventional CI test would conclude: 高斯行，均方永远不接近零
-    print(f"NAIVE_ALLCLOSE_VERDICT: {normal_pass}")
-    return normal_pass and not tiny_pass
+    print(f"homogeneous KV data: allclose={homogeneous_pass} (bug hidden)")
+    print(f"distinguishable KV data: allclose={distinct_pass} (bug exposed)")
+    print("FN DEMONSTRATED" if homogeneous_pass and not distinct_pass else "tune constants")
+    # What a conventional CI test would conclude: 偷懒的同质 KV 数据，路由错也看不出
+    print(f"NAIVE_ALLCLOSE_VERDICT: {homogeneous_pass}")
+    return homogeneous_pass and not distinct_pass
 
 
 if __name__ == "__main__":

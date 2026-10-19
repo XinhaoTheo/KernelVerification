@@ -1,13 +1,12 @@
-Operation: the chunked state-passing recurrence of Mamba2/SSD
-(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).
+Operation: grouped INT4 dequantization fused with a matrix multiply
+(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).
 
-Given per-chunk local states `new_states[c]` and per-chunk cumulative
-log-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks
-exactly:
+The kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed
+into int32 words with a per-(group, column) scale and zero-point, and
 
-    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1
+    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]
 
-starting from state = 0, and return the final state after the last chunk.
-
-The recurrence is exact: it introduces no approximation of its own beyond
-ordinary floating-point arithmetic, at any sequence length.
+The declared numeric format of the weights is 4-bit: the weight values it
+consumes were produced by quantizing continuous weights onto 16 levels per
+group, and the kernel's job is to evaluate the matmul faithfully in that
+declared format.

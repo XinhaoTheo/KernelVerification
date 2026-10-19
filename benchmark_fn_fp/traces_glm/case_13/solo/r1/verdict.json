@@ -1,9 +1,9 @@
 {
   "confidence": 0.99,
-  "created_at": "2026-09-30T08:24:53Z",
+  "created_at": "2026-09-30T08:24:40Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) explicitly requires consecutive GQA grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads. Runtime probe t7 (num_kv_heads=2, num_q_heads=4, dim=4) showed the kernel returns rows [kv0,kv1,kv0,kv1] while torch.repeat_interleave reference gives [kv0,kv0,kv1,kv1] \u2014 8 of 16 elements mismatch. Claim c1 is confirmed and in_scope with contract scope evidence, so the kernel violates a required behavior.",
+  "reason": "Contract (problem.txt) explicitly requires per-row scale absmax = max(max(|x_row|), 1e-10), scale = absmax/127, with no clipping by its own scale. Kernel source (kernel.py line 19) hardcodes absmax = STALE_ABSMAX = 4.0 instead of computing each row's own absmax. Runtime probe t6 confirmed the violation on a 4x64 fp32 CUDA input containing rows the contract admits: the row with absmax 26.44 was clipped at fixed scale 4/127, producing max abs error 22.44 and mean row error 4.06, versus ~0.007 quantization-level error on sub-4 rows; kernel scales were constant 0.0315 (=4/127) across all rows instead of per-row. This directly violates the stated scale formula and the no-clipping invariant.",
   "verdict": "reject"
 }

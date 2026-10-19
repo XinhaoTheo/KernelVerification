@@ -16,7 +16,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_142": "trust", "case_143": "reject"}
+EXPECTED = {"case_69": "trust", "case_70": "reject"}
 WIDTHS = (32, 64, 128)
 ATOL = RTOL = 0
 

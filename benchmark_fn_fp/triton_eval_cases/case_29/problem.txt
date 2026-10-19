@@ -1,13 +1,17 @@
-Operation: round a float32 tensor to the nearest value representable in the FP8
-e4m3 format, the storage step of FP8 inference and training kernels.
+Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,
+select the expert with the largest router logit.
 
-e4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can
-represent 8 evenly spaced values. Rounding to that grid is the point of the
-format, not an implementation shortcut: the resulting relative error is bounded
-by half a mantissa step, about 2^-4 = 6.25%.
+    expert[t] = argmax over e of logits[t, e]
 
-The contract is that every value is rounded to the nearest representable e4m3
-value. Deviation from the float32 input up to the format's own rounding step is
-the intended behavior of the operation.
+Tie rule: router logits are computed in reduced precision and distinct logits
+routinely round to the same representable value, so ties are a normal
+occurrence rather than a curiosity. When several experts share the largest
+logit, the contract requires the LOWEST expert index to win, so that routing is
+reproducible across runs and across replicas holding the experts in the same
+order.
 
-Does fp8_roundtrip() satisfy this contract?
+The selected expert's output is what the layer returns, and different experts
+are independently trained, so which one wins a tie changes the continuous
+output substantially.
+
+Does route_top1() satisfy this contract?

@@ -1,36 +1,23 @@
 
-import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_15/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-
-def ref(x, gs):
-    y = torch.empty_like(x)
-    n = x.shape[1]
-    for s in range(0, n, gs):
-        e = min(s+gs, n)
-        g = x[:, s:e]
-        am = g.abs().amax(dim=1, keepdim=True)
-        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)
-        q = torch.round(g/sc).clamp(-127,127)
-        y[:, s:e] = q*sc
-    return y
-
+import json, sys, importlib.util, torch
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_16/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 torch.manual_seed(0)
-x = torch.randn(4, 100, device="cuda", dtype=torch.float32)
-out = k.group_quant_dequant(x, 64)
-r = ref(x, 64)
-head_err = (out[:, :64]-r[:, :64]).abs().max().item()
-tail_err = (out[:, 64:]-r[:, 64:]).abs().max().item()
-tail_zeros = int((out[:, 64:] == 0).sum().item())
-tail_total = out[:, 64:].numel()
-tail_x_nonzero = int((x[:, 64:] != 0).sum().item())
-print(json.dumps({
- "shape": list(x.shape), "group_size": 64,
- "head_max_abs_err": head_err,
- "tail_max_abs_err": tail_err,
- "tail_exact_zero_count": tail_zeros,
- "tail_total": tail_total,
- "tail_input_nonzero_count": tail_x_nonzero,
- "tail_ref_max_abs": r[:,64:].abs().max().item(),
- "overall_allclose_atol1e-3": bool(torch.allclose(out, r, atol=1e-3))
-}))
+res = {}
+for K in [32, 64, 128, 33, 40, 47, 100]:
+    M = N = 64
+    a = torch.randn(M, K, device='cuda', dtype=torch.float32)
+    b = torch.randn(K, N, device='cuda', dtype=torch.float32)
+    c = m.matmul(a, b)
+    ref = (a.double() @ b.double()).float()
+    Kt = (K // 32) * 32
+    trunc = (a[:, :Kt].double() @ b[:Kt].double()).float()
+    err_full = (c - ref).abs().max().item()
+    err_trunc = (c - trunc).abs().max().item()
+    rel_full = err_full / ref.abs().max().item()
+    res[str(K)] = dict(K=K, Ktail=K - Kt, max_abs_err_vs_torch=err_full,
+                       max_rel_err_vs_torch=rel_full,
+                       max_abs_err_vs_truncated_ref=err_trunc,
+                       allclose_torch_1e3=bool(torch.allclose(c, ref, rtol=1e-3, atol=1e-3)),
+                       allclose_trunc_1e3=bool(torch.allclose(c, trunc, rtol=1e-3, atol=1e-3)))
+print(json.dumps(res))

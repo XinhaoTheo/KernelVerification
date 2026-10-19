@@ -12,11 +12,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "solo_vs_debate_challenges"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
+from case_registry import load_registry, remap_validation_cases
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
 
-CASES = tuple(f"case_{i + 61:02d}" for i in range(1, 5))
+CASES = tuple(f"case_{i + 118:02d}" for i in range(1, 5))
 ARMS = ("single_call", "solo", "debate")
 TRIALS = ("ea_pilot_r1", "ea_pilot_r2")
 MODEL = "accounts/fireworks/models/glm-5p3"
@@ -148,7 +149,9 @@ def pilot_gate(rows, *, cases=CASES, trials=TRIALS):
 
 def derive(*, cases=CASES, trials=TRIALS):
     benchmark = benchmark_root(ROOT)
-    frozen = {case: row for case, row in read(ROOT / "private_data" / "validation_gpu.json")["cases"].items()
+    frozen = {case: row for case, row in remap_validation_cases(
+        read(ROOT / "private_data" / "validation_gpu.json")["cases"],
+        "evidence_challenges", load_registry(benchmark)).items()
               if case in cases}
     for case, label in frozen.items():
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):

@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_160": "trust", "case_161": "reject"}
+EXPECTED = {"case_87": "trust", "case_88": "reject"}
 
 
 def dependency_hashes():

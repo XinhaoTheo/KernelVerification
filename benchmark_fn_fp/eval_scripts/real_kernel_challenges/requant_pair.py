@@ -1,4 +1,4 @@
-"""Independent integer requantization qualification for case_124/125.
+"""Independent integer requantization qualification for case_51/125.
 
 The reference uses Python arbitrary-precision integers and the mathematical
 two-round contract. It does not import or call candidate arithmetic helpers.
@@ -16,7 +16,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_124": "trust", "case_125": "reject"}
+EXPECTED = {"case_51": "trust", "case_52": "reject"}
 ATOL = 1e-6
 MASK = (1 << 32) - 1
 INT_MIN, INT_MAX = -(1 << 31), (1 << 31) - 1

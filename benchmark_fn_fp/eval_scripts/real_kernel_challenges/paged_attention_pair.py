@@ -1,4 +1,4 @@
-"""Private independent qualification for case_114/115; no model calls.
+"""Private independent qualification for case_41/115; no model calls.
 
 Historical sliding-window value masking mechanism from vLLM PR #30887.
 The fixed expected labels refer to whole public contracts, never input seeds.
@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-EXPECTED = {"case_114": "reject", "case_115": "trust"}
+EXPECTED = {"case_41": "reject", "case_42": "trust"}
 GROUND_TRUTH = EXPECTED
 
 

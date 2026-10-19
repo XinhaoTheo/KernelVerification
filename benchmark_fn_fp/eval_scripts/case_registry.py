@@ -88,6 +88,36 @@ def load_registry(benchmark: Path) -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
 
 
+def case_aliases(case: str, detail: dict) -> set[str]:
+    """Authenticate old identifiers without changing historical trace payloads."""
+    return {name for name in (case, detail.get("previous_id"), detail.get("source_name"),
+                              *detail.get("aliases", [])) if isinstance(name, str)}
+
+
+def remap_validation_cases(cases: dict, dataset: str, registry: dict) -> dict:
+    """Read frozen validation IDs through the current, dataset-scoped registry.
+
+    A validation file is historical evidence. Its case keys need not match the
+    current directory names. Each migrated registry row identifies the exact
+    historical key; numeric coincidences in another dataset are never aliases.
+    """
+    details = registry.get("case_details", {})
+    if not details:
+        return dict(cases)
+    dataset = canonical_dataset(dataset)
+    return {case: cases[detail.get("validation_case_id", case)]
+            for case, detail in details.items()
+            if detail["dataset"] == dataset
+            and detail.get("validation_case_id", case) in cases}
+
+
+def validation_cases(benchmark: Path, dataset: str, *, registry: dict | None = None) -> dict:
+    """Return frozen evidence under current IDs while preserving its file bytes."""
+    registry = load_registry(benchmark) if registry is None else registry
+    payload = json.loads(validation_path(benchmark, dataset).read_text())
+    return remap_validation_cases(payload["cases"], dataset, registry)
+
+
 def validation_path(benchmark: Path, dataset: str) -> Path:
     dataset = canonical_dataset(dataset)
     root = dataset_root(benchmark, dataset)
@@ -125,7 +155,7 @@ def resolve_trace_case(path_case: str, metadata: dict, registry: dict) -> tuple[
     detail = details.get(canonical)
     if detail is None:
         matches = [(name, row) for name, row in details.items()
-                   if row.get("previous_id") == path_case and row.get("dataset") == dataset]
+                   if path_case in case_aliases(name, row) and row.get("dataset") == dataset]
         if len(matches) == 1:
             canonical, detail = matches[0]
         elif path_case in registry.get("retired_ids", []):
@@ -137,7 +167,7 @@ def resolve_trace_case(path_case: str, metadata: dict, registry: dict) -> tuple[
     expected_dataset = detail["dataset"]
     if "dataset" in metadata and dataset != expected_dataset:
         raise ValueError(f"Trace dataset mismatch for {canonical}: {dataset} != {expected_dataset}")
-    aliases = {canonical, detail.get("previous_id"), detail.get("source_name")}
+    aliases = case_aliases(canonical, detail)
     if original not in aliases:
         raise ValueError(f"Trace case mismatch for {canonical}: historical metadata names {original}")
     return canonical, original, expected_dataset

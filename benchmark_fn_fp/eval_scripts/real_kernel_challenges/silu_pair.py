@@ -1,4 +1,4 @@
-"""Directed mathematical SiLU qualification for the fixed case_130/131 pair.
+"""Directed mathematical SiLU qualification for the fixed case_57/131 pair.
 
 The numerical target uses exp directly and is independent of the candidates'
 base-two exponential argument reduction and serialized constants.
@@ -16,7 +16,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_130": "trust", "case_131": "reject"}
+EXPECTED = {"case_57": "trust", "case_58": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 TAIL_CUTOFF = 32

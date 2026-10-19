@@ -4,28 +4,21 @@ import triton.language as tl
 
 
 @triton.jit
-def _cosine_kernel(A, B, Out, stride, N, eps, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    a_row = A + row * stride
-    b_row = B + row * stride
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        mask = cols < N
-        a = tl.load(a_row + cols, mask=mask, other=0.0).to(tl.float32)
-        b = tl.load(b_row + cols, mask=mask, other=0.0).to(tl.float32)
-        dot += tl.sum(a * b, axis=0)
-        na += tl.sum(a * a, axis=0)
-        nb += tl.sum(b * b, axis=0)
-    denom = tl.sqrt(na) * tl.sqrt(nb)
-    tl.store(Out + row, dot / tl.maximum(denom, eps))
+def _requant_step_kernel(X, OUT, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    x = tl.load(X + offs, mask=mask, other=0.0)
+    absmax = tl.max(tl.abs(x), axis=0)
+    scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)
+    q = tl.floor(x / scale).to(tl.int8)
+    tl.store(OUT + offs, q.to(tl.float32) * scale, mask=mask)
 
 
-def cosine_similarity(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-8):
-    """Row-wise cosine similarity of two 2-D float32 tensors."""
-    n_rows, n_cols = a.shape
-    out = torch.empty(n_rows, device=a.device, dtype=torch.float32)
-    _cosine_kernel[(n_rows,)](a, b, out, a.stride(0), n_cols, eps, BLOCK=256)
+def requantize(x: torch.Tensor) -> torch.Tensor:
+    """One symmetric INT8 quantize-dequantize round trip over a 1-D tensor."""
+    n = x.numel()
+    out = torch.empty_like(x)
+    BLOCK = 1024
+    _requant_step_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
     return out

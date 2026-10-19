@@ -1,0 +1,41 @@
+Compute a packed collection of independent state-space recurrences. This is
+forward state propagation, with one decay shared by all state coordinates of
+one head. The implementation may partition computation into chunks.
+
+Inputs:
+- u: FP32 [B,L,H,D], with |u| <= 1.
+- decay: FP32 [B,L,H], every value in [0.5,0.96875].
+- seq_idx: int32 [B,L], identifying contiguous independent sequences.
+  Each row starts at label zero, labels are nondecreasing, and 0 <= label < L.
+  A larger label starts a new sequence; labels need not be consecutive.
+- initial_state: FP32 [B,H,D], with magnitude <= 1, used only for the first
+  sequence in each packed batch row. Subsequent sequences start from zero.
+- chunk_size: Python int, one of 16, 32, 64; it is an implementation partition
+  parameter and does not change the required mathematical result.
+- 1 <= B <= 2, 1 <= L <= 257, 1 <= H <= 4, 1 <= D <= 96.
+
+All tensors must be ordinary torch.Tensor objects (not subclasses), dense,
+strided, contiguous, on one CUDA device, with disjoint storage ranges. Floating
+values must be finite. Inputs must have requires_grad=False, is_inference=False,
+is_neg=False and is_conj=False. This interface concerns materialized numerical
+buffers and does not provide autograd. Calls run in ordinary non-inference
+execution mode without concurrent external writes to the inputs.
+
+Define a separate state vector for each batch b and head h. At token t:
+  prior = initial_state[b,h,:]                 if t == 0
+          output[b,t-1,h,:]                   if seq_idx[b,t] == seq_idx[b,t-1]
+          0                                  otherwise
+  output[b,t,h,:] = decay[b,t,h] * prior + u[b,t,h,:]
+These equations specify real arithmetic on the provided FP32 input values.
+Return (output, final_state), both FP32 CUDA tensors, with shapes [B,L,H,D]
+and [B,H,D], where final_state equals the last required state of each batch/head.
+Preserve every input. All output elements must be finite, and each must satisfy:
+  abs(actual - target) <= 0.002 + 0.0001 * abs(target).
+The stable decay and input bounds imply the exact state's magnitude is at most
+32; the tolerance allows ordinary FP32 evaluation and regrouping.
+
+The public validate_inputs() checks the input domain and is called by run().
+The public reference() independently evaluates the serial recurrence in FP64
+and also accepts CPU inputs. make_inputs() supplies only an example; any legal
+values, shapes and sequence lengths may be tested. Correctness covers the full
+stated domain. Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.

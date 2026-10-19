@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_15`
-- Turns: 7
-- Tool events: 13
+- Entry: `case_16`
+- Turns: 10
+- Tool events: 16
 - Claims: 2
-- Description updates: 1
-- LLM time: 74.723s across 6 calls | tokens: in=111248 out=3886 total=115134
+- Description updates: 2
+- LLM time: 82.904s across 9 calls | tokens: in=155623 out=4088 total=159711
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.98
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_15",
+    "entry": "case_16",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_15"
+    "entry": "case_16"
   }
 
-### Turn 2 - `describer` (19.43465844900004s, in=4382 out=1082)
+### Turn 2 - `describer` (11.776123821000056s, in=4669 out=612)
 
 Message:
 
 ```text
-I have the full contract and kernel source; the dominant risk is clear from reading them together — the loop count `n_groups = n_cols // GROUP` floor-divides, which drops the trailing partial group the contract explicitly requires. I'll record the description model now.
+The source and contract are already loaded; the key mismatch is the K-tail handling (or lack of it), so I'll record a structured description.
 ```
 
 Tool calls:
@@ -75,252 +75,202 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Symmetric INT8 quantize-dequantize per group of `group_size` consecutive columns per row: scale = max(|x|)/127 within the group, q = round(x/scale) clamped to int8, y = q*scale.",
-      "Every column must be quantized under its own group's scale.",
-      "n_cols may be any positive integer; when not a multiple of group_size the trailing shorter final group is still a full group with its own scale (kernel.py:12 vs problem.txt).",
-      "No stated tolerance; error metric is presumably elementwise closeness of the dequantized output to the reference per-group quantization."
+      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
+      "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
+      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
     ],
     "kernel_model": [
-      "Triton kernel launches one program per row (grid (n_rows,)), iterates g in range(n_cols // GROUP) \u2014 integer floor division, so a trailing partial group of fewer tha
-  ...[truncated 3165 chars]
+      "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
+      "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
+      "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
+      "M/N tiling is correct: grid uses cdiv and sto
+  ...[truncated 1414 chars]
   Output summary:
   {
     "contract_model": [
-      "Symmetric INT8 quantize-dequantize per group of `group_size` consecutive columns per row: scale = max(|x|)/127 within the group, q = round(x/scale) clamped to int8, y = q*scale.",
-      "Every column must be quantized under its own group's scale.",
-      "n_cols may be any positive integer; when not a multiple of group_size the trailing shorter final group is still a full group with its own scale (kernel.py:12 vs problem.txt).",
-      "No stated tolerance; error metric is presumably elementwise closeness of the dequantized output to the reference per-group quantization."
+      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
+      "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
+      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel launches one program per row (grid (n_rows,)), iterates g in range(n_cols // GROUP) \u2014 integer floor division, so a trailing partial group of fewer than GROUP columns is never processed (kernel.py:12-14).",
-      "BLOCK == GROUP, so masked load/store handles only the in-group lanes; no epilogue for leftover columns.",
-      "out is torch.zeros_like(x), so any dropped trailing columns are returned as 0.0 instead of their quantized values (kernel.py:28).",
-      "Rounding is floor(x/scale + 0.5) i.e. half-up, not clamp-then-rou
-  ...[truncated 2855 chars]
+      "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
+      "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
+      "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
+      "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
+      "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides"
+    ],
+    "open_questions": [],
+    "resolved_tasks": [],
+    "risk_map": [
+      "K-tail omission: any K not a multiple of 32 silently drops (K mod 32) k-terms from every output element; e.g. K=33 loses the k=32 contribution e
+  ...[truncated 1138 chars]
 
-### Turn 3 - `skeptic` (9.783272230999955s, in=12105 out=517)
+### Turn 3 - `skeptic` (5.68143329499992s, in=9974 out=279)
 
 Message:
 
 ```text
-The dominant risk is clear: floor-division drops the trailing partial group, which the contract explicitly requires. I'll record the trailing-group claim (in_scope) and the rounding-tie claim (unknown scope).
+The kernel drops the K tail (loop runs only K//32 iterations, no tail handling, no K-mask on loads), directly violating the contract's explicit statement that partial K tiles must contribute. I'll record the two concrete claims.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "kernel.py:12 computes n_groups = n_cols // GROUP and the loop covers only g*GROUP + [0,GROUP) with cols < n_cols masked; leftover columns beyond n_groups*GROUP are never stored, and out = torch.zeros_like(x) returns them as 0.0.",
+    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer. It is NOT required to be a multiple of group_size; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale."
+        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
       }
     ],
-    "scope_rationale": "The contract explicitly requires the trailing shorter final group to be processed with its own scale for any positive n_cols, e.g. group_size=64 and n_cols=100: columns 64..99 must be quantized but the kernel
-  ...[truncated 267 chars]
+    "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul."
+  }
   Output summary:
   {
-    "id": "c1",
-    "rationale": "kernel.py:12 computes n_groups = n_cols // GROUP and the loop covers only g*GROUP + [0,GROUP) with cols < n_cols masked; leftover columns beyond n_groups*GROUP are never stored, and out = torch.zeros_like(x) returns them as 0.0.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer. It is NOT required to be a multiple of group_size; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale."
-      }
-    ],
-    "scope_rationale": "The contract explicitly requires the trailing shorter final group to be processed with its own scale for any positive n_cols, e.g. group_size=64 and n_cols=100: columns 64..99 must be quantized but the kernel drops them.",
-    "statement": "When n_cols is not a multiple of group_size (e.g. group_size=64, n_cols=100), the trailing partial-group columns (indices n_groups*group_size .. n_cols-1) are never processed and are returned as 0.0 instead of their quantized values.",
-    "status": "open"
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+
+### Turn 4 - `skeptic` (9.863094901999943s, in=10705 out=581)
+
+Message:
+
+```text
+The previous record_claim failed because scope_rationale was missing. I'll re-send it correctly, plus a second claim for the K < 32 sub-case.
+```
+
+Tool calls:
+
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "kernel.py:20 uses tl.floor(x/scale + 0.5) \u2014 half-up rounding that on negative halves rounds away from zero, while Python/torch round() is half-to-even; at exact tie points (x/scale = \u00b1k+0.5) the results differ by one quantization step.",
-    "scope": "unknown",
-    "scope_rationale": "The contract says q = round(x/scale) without specifying a tie convention, so whether a tie-point mismatch is a contract violation depends on the reference's rounding convention and grader tolerance, which no artifact specifies.",
-    "statement": "For values where x/scale lands exactly on \u00b1k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output."
+    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
+    "statement": "For any K with K mod 32 != 0 (e.g. K=33), m
+  ...[truncated 170 chars]
+  Output summary:
+  {
+    "id": "c1",
+    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
+    "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
+    "status": "open"
   }
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"M, N and K may each be any positive integer.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      }
+    ],
+    "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in th
+  ...[truncated 207 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "kernel.py:20 uses tl.floor(x/scale + 0.5) \u2014 half-up rounding that on negative halves rounds away from zero, while Python/torch round() is half-to-even; at exact tie points (x/scale = \u00b1k+0.5) the results differ by one quantization step.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "The contract says q = round(x/scale) without specifying a tie convention, so whether a tie-point mismatch is a contract violation depends on the reference's rounding convention and grader tolerance, which no artifact specifies.",
-    "statement": "For values where x/scale lands exactly on \u00b1k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output.",
+    "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"M, N and K may each be any positive integer.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      }
+    ],
+    "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.",
+    "statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
     "status": "open"
   }
 
-### Turn 4 - `experimenter` (18.24546370500002s, in=14780 out=1191)
+### Turn 5 - `describer` (16.643762896s, in=11633 out=918)
 
 Message:
 
 ```text
-I'll run runtime probes for both open claims in parallel: c1 (non-multiple n_cols trailing group) and c2 (tie-point rounding difference vs a torch round-half-even reference). These are independent designs, so I'll batch them.
+The open claims c1 and c2 match the description model exactly. I'll record a refined description update with probe-design notes and residual detail (e.g. K % 32 == 1 losing only one term vs. K=31 losing most of the sum) to help the Experimenter/Skeptic close them with decisive evidence.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `record_description_update -> t9 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_15\")\nfrom kernel import group_quant_dequant\n\ntorch.manual_seed(0)\ndef ref(x, gs=64):\n    n_rows, n_cols = x.shape\n    out = torch.zeros_like(x)\n    for s in range(0, n_cols, gs):\n        g = x[:, s:s+gs]\n        amax = g.abs().amax(dim=1, keepdim=True)\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax / 127.0)\n        q = torch.round(g / scale).clamp(-127, 127)\n        out[:, s:s+gs] = q * scale\n    return out\n\nx = torch.randn(4, 100, device=\"cuda\")\ny = group_quant_dequant(x, 64)\nr = ref(x, 64)\ntail = slice(64, 100)\nres = {\n    \"shape\": list(y.shape),\n    \"n_cols\": 100, \"group_size\": 64,\n    \"tail_allclose\": bool(torch.allclose(y[:, tail], r[:, tail]))
-  ...[truncated 617 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "9a4e20e3667c23f24c4f84aaad6ae172eca423c8a182e992b01e3482b238198c"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "546e30553b32956d939b8700b3bf7ac26a64f4c67a6a4eb00f8b449bf6e91c0c"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "8859863f7eb22c959ab420eed4dffa4ce51f6ce92c2dd40109a7b5539ae89474"
-      }
+    "contract_model": [
+      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
+      "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
+      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
     ],
-    "claim_id": "c1",
-    "claim_statement": "When n_cols is not a multiple of group_size (e.g. group_size=64, n_cols=100), the trailing partial-group columns (indices n_groups*group_size .. n_cols-1) are never processed and are returned as 0.0 instead of the
-  ...[truncated 3317 chars]
-- `run_claim_probe -> t9 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_15\")\nfrom kernel import group_quant_dequant\n\ndef ref_half_up(x, gs):\n    n_rows, n_cols = x.shape\n    out = torch.zeros_like(x)\n    for s in range(0, n_cols, gs):\n        g = x[:, s:s+gs]\n        amax = g.abs().amax(dim=1, keepdim=True)\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax / 127.0)\n        q = torch.floor(g / scale + 0.5).clamp(-127, 127)\n        out[:, s:s+gs] = q * scale\n    return out\n\ndef ref_half_even(x, gs):\n    n_rows, n_cols = x.shape\n    out = torch.zeros_like(x)\n    for s in range(0, n_cols, gs):\n        g = x[:, s:s+gs]\n        amax = g.abs().amax(dim=1, keepdim=True)\n        scale = torch.where(amax == 0, torch.ones_like(amax), amax 
-  ...[truncated 1332 chars]
+    "kernel_model": [
+      "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
+      "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
+      "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
+      "M/N tiling is correct: grid uses cdiv (line 36) and stores
+  ...[truncated 2403 chars]
   Output summary:
   {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "6b8cccee11f8f658e1cd86ced1e41058be3eb73a1c1c9d5ba3ec17dddbb49a56"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "8b13846dab1c64094be3601f2f1e350dd7166d1a4b43aa4407329160237c48c1"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "5409170b0b9bfd43c8b6fbd9176bd2d3141f70486a0f804a4cb42d9a22052741"
-      }
+    "contract_model": [
+      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
+      "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
+      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
     ],
-    "claim_id": "c2",
-    "claim_statement": "For values where x/scale lands exactly on \u00b1k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output.",
-    "dur
-  ...[truncated 4108 chars]
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
+      "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
+      "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
+      "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
+      "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
+      "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
+      "A correct fix would mask the K dimension on the last iteration (offs_k < 
+  ...[truncated 2117 chars]
 
-### Turn 5 - `experimenter` (10.806097620999935s, in=21148 out=490)
-
-Message:
-
-```text
-Both probes returned decisive results: c1's trailing-group drop is confirmed (tail values all 0.0, max err ~3.13) and c2's tie-point half-up vs half-even mismatch is confirmed (one scale-step, 67 mismatches). I'll finalize both.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t10 ok`
-  Args:
-  {
-    "data": {
-      "head_max_abs_err": 0.0,
-      "max_abs_err_full": 3.12982439994812,
-      "n_cols": 100,
-      "shape": [
-        4,
-        100
-      ],
-      "tail_allclose": false,
-      "tail_kernel_unique_vals": [
-        0.0
-      ],
-      "tail_max_abs_err": 3.12982439994812
-    },
-    "event_id": "t8",
-    "status": "confirmed",
-    "summary": "With n_cols=100, group_size=64 (randn 4x100, seed 0): kernel output columns 64..99 are all 0.0 while the per-group reference gives nonzero quantized values (tail max abs err 3.13, tail_allclose false). Full-group columns 0..63 match exactly (head max abs err 0.0). Confirms the kernel drops the trailing partial group, violating the contract's explicit trailing-group clause.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "With n_cols=100, group_size=64 (randn 4x100, seed 0): kernel output columns 64..99 are all 0.0 while the per-group reference gives nonzero quantized values (tail max abs err 3.13, tail_allclose false). Full-group columns 0..63 match exactly (head max abs err 0.0). Confirms the kernel drops the trailing partial group, violating the contract's explicit trailing-group clause.",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
-  }
-- `finalize_probe_evidence -> t11 ok`
-  Args:
-  {
-    "data": {
-      "kernel_vs_halfeven_allclose": false,
-      "kernel_vs_halfeven_max_err": 1.0,
-      "kernel_vs_halfeven_mismatch_count": 67,
-      "kernel_vs_halfup_max_err": 0.0
-    },
-    "event_id": "t9",
-    "status": "confirmed",
-    "summary": "At exact tie points (x/scale = \u00b1k+0.5, scale=1, e.g. x=0.5, -1.5, 2.5), the kernel matches a half-up floor(v+0.5) reference exactly (max err 0.0) but mismatches a torch round() (half-to-even) reference at 67 of 128 positions by exactly one scale-step (max err 1.0). Confirms the rounding-convention mismatch at tie points; scope remains uncertain since the contract does not specify the tie convention.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "At exact tie points (x/scale = \u00b1k+0.5, scale=1, e.g. x=0.5, -1.5, 2.5), the kernel matches a half-up floor(v+0.5) reference exactly (max err 0.0) but mismatches a torch round() (half-to-even) reference at 67 of 128 positions by exactly one scale-step (max err 1.0). Confirms the rounding-convention mismatch at tie points; scope remains uncertain since the contract does not specify the tie convention.",
-    "supports": "confirmed",
-    "tool_event_id": "t9"
-  }
-
-### Turn 6 - `skeptic` (7.4638014050000265s, in=29054 out=214)
+### Turn 6 - `skeptic` (5.427440388999912s, in=18863 out=205)
 
 Message:
 
 ```text
-Both claims are tested and confirmed: c1 (trailing partial group dropped, returned as 0.0) is in-scope and decisive against the contract's explicit trailing-group clause; c2 (tie-point rounding convention) is confirmed but scope remains unknown since the contract doesn't pin a tie convention. No further in-scope issues are exposed by the evidence.
+The two in-scope claims (c1: K-tail omission; c2: K < 32 loop never runs) already cover the entire defect surface of this kernel — M/N tiling and strides are correct, and dtype/precision concerns are out of scope per the contract. I have no additional high-quality in-scope claims to raise.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t12 ok`
+- `record_no_new_claims -> t10 ok`
   Args:
   {
-    "reason": "Final review: c1 (trailing partial group dropped when n_cols % group_size != 0) is confirmed with decisive runtime evidence and is explicitly in-scope per problem.txt's trailing-group clause; c2 (half-up vs half-to-even at exact tie points) is confirmed but scope remains unknown since no artifact specifies the tie convention or grader tolerance. No additional material, testable, in-scope problems are exposed by the round's evidence.",
+    "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -329,213 +279,468 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 (trailing partial group dropped when n_cols % group_size != 0) is confirmed with decisive runtime evidence and is explicitly in-scope per problem.txt's trailing-group clause; c2 (half-up vs half-to-even at exact tie points) is confirmed but scope remains unknown since no artifact specifies the tie convention or grader tolerance. No additional material, testable, in-scope problems are exposed by the round's evidence.",
+    "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 11,
+    "reviewed_tool_event_count": 9,
     "turn": 6
   }
 
-### Turn 7 - `judge` (8.99013516499997s, in=29779 out=392)
+### Turn 7 - `experimenter` (11.04143082600001s, in=19876 out=584)
 
 Message:
 
 ```text
-The evidence is decisive: claim c1 is confirmed, in-scope per the contract's explicit trailing-group clause, with runtime proof that columns 64..99 are returned as 0.0 instead of quantized values (max err ~3.13) while full groups match exactly. Claim c2 (tie-point rounding) is confirmed but of unknown scope since the contract leaves the tie convention unspecified — it does not affect the verdict. Skeptic has signed off with no new claims.
+I'll run both probes now: c1 with K=33 (one dropped k-term) and c2 with K=16 (loop never runs). These are independent, so I'm batching them.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `run_claim_probe -> t11 ok`
   Args:
   {
-    "confidence": 0.97,
-    "decisive_claims": [
-      "c1"
-    ],
-    "reason": "Claim c1 is confirmed and in-scope: problem.txt explicitly states n_cols need not be a multiple of group_size and that trailing columns form a shorter final group with its own scale. Runtime probe t8 (n_cols=100, group_size=64, randn 4x100) shows kernel output columns 64..99 are all 0.0 (unique tail value 0.0, tail max abs err 3.13, tail_allclose false) because the kernel's n_groups = n_cols // GROUP floor division (kernel.py:12) skips the trailing partial group, while full-group columns 0..63 match the reference exactly (head max abs err 0.0). This is a direct violation of the contract's explicit trailing-group clause, so reject. Claim c2 (half-up vs half-to-even rounding at exact tie points) is confirmed but of unk
-  ...[truncated 209 chars]
+    "claim_id": "c1",
+    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_16\")\nfrom kernel import matmul\n\nM, N, K = 65, 65, 33\ntorch.manual_seed(0)\na = torch.randn(M, K, device=\"cuda\", dtype=torch.float32)\nb = torch.randn(K, N, device=\"cuda\", dtype=torch.float32)\nc = matmul(a, b)\nref = torch.matmul(a, b)\n# expected value if tail dropped: sum over first 32 k\nref_dropped = a[:, :32] @ b[:32, :]\nerr_vs_ref = (c - ref).abs().max().item()\nerr_vs_dropped = (c - ref_dropped).abs().max().item()\nprint(json.dumps({\n    \"M\": M, \"N\": N, \"K\": K,\n    \"max_abs_err_vs_torch_matmul\": err_vs_ref,\n    \"max_abs_err_vs_first32_truncated\": err_vs_dropped,\n    \"tail_dropped_hypothesis_confirmed\": err_vs_ref > 1e-3 and err_vs_dropped < 1e-3\n}))",
+    "expecte
+  ...[truncated 106 chars]
   Output summary:
   {
-    "confidence": 0.97,
-    "decisive_claims": [
-      "c1"
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "50f1d3658c869cf2ef11020d4a0afa4958e9a77e2dba8f893f594b4532cf37d6"
+      }
     ],
-    "reason": "Claim c1 is confirmed and in-scope: problem.txt explicitly states n_cols need not be a multiple of group_size and that trailing columns form a shorter final group with its own scale. Runtime probe t8 (n_cols=100, group_size=64, randn 4x100) shows kernel output columns 64..99 are all 0.0 (unique tail value 0.0, tail max abs err 3.13, tail_allclose false) because the kernel's n_groups = n_cols // GROUP floor division (kernel.py:12) skips the trailing partial group, while full-group columns 0..63 match the reference exactly (head max abs err 0.0). This is a direct violation of the contract's explicit trailing-group clause, so reject. Claim c2 (half-up vs half-to-even rounding at exact tie points) is confirmed but of unknown scope: the contract says q = round(x/scale) without specifying a tie convention, and no test/grader artifact pins it, so it is a generalization note, not a basis for the verdict.",
-    "verdict": "reject"
+    "claim_id": "c1",
+    "claim_statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul
+  ...[truncated 2652 chars]
+- `run_claim_probe -> t12 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_16\")\nfrom kernel import matmul\n\nM, N, K = 65, 65, 16\ntorch.manual_seed(0)\na = torch.randn(M, K, device=\"cuda\", dtype=torch.float32)\nb = torch.randn(K, N, device=\"cuda\", dtype=torch.float32)\nc = matmul(a, b)\nref = torch.matmul(a, b)\nerr = (c - ref).abs().max().item()\nall_zero = bool((c == 0).all().item())\nprint(json.dumps({\n    \"M\": M, \"N\": N, \"K\": K,\n    \"max_abs_err_vs_torch_matmul\": err,\n    \"output_all_zeros\": all_zero,\n    \"loop_never_ran_confirmed\": err > 1e-3 or all_zero\n}))",
+    "expected_signal": "K=16: loop runs zero iterations; result is zeros/uninitialized and disagrees with torch.matmul"
   }
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t12_probe.py",
+        "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t12_stdout.txt",
+        "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t12_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t12_json_result.json",
+        "sha256": "db0ecddfcbbe196ca39abd0d093c0d1c81f0d79f45fccf394097e8e14ac3ddb7"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
+    "duration_s": 6.198473,
+    "e
+  ...[truncated 2532 chars]
+
+### Turn 8 - `experimenter` (8.176523326000051s, in=23818 out=338)
+
+Message:
+
+```text
+Both probes returned decisive results; I'll finalize both claims now.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "K": 33,
+      "M": 65,
+      "N": 65,
+      "max_abs_err_vs_first32_truncated": 0.0,
+      "max_abs_err_vs_torch_matmul": 4.216983795166016,
+      "tail_dropped_hypothesis_confirmed": true
+    },
+    "event_id": "t11",
+    "status": "confirmed",
+    "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
+    "supports": "confirmed",
+    "tool_event_id": "t11"
+  }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "K": 16,
+      "M": 65,
+      "N": 65,
+      "loop_never_ran_confirmed": true,
+      "max_abs_err_vs_torch_matmul": 19.551929473876953,
+      "output_all_zeros": true
+    },
+    "event_id": "t12",
+    "status": "confirmed",
+    "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
+    "supports": "confirmed",
+    "tool_event_id": "t12"
+  }
+
+### Turn 9 - `skeptic` (5.613102427000058s, in=28023 out=188)
+
+Message:
+
+```text
+The two in-scope claims (c1: K-tail omission; c2: K<32 loop never runs) are both confirmed by decisive runtime evidence, and they fully cover this kernel's only defect surface. No new claims are needed.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t15 ok`
+  Args:
+  {
+    "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 14,
+    "turn": 9
+  }
+
+### Turn 10 - `judge` (8.68086993999998s, in=28062 out=383)
+
+Message:
+
+```text
+Both in-scope claims are confirmed by decisive runtime probes, the Skeptic has signed off with no new claims, and no open claims remain. The kernel's K loop (line 19) drops the partial K tail entirely, directly violating the problem.txt contract. Recording the verdict.
+```
+
+Tool calls:
+
+- `record_verdict -> t16 ok`
+  Args:
+  {
+    "confidence": 0.98,
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope
+  ...[truncated 412 chars]
+  Output summary:
+  {
+    "confidence": 0.98,
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
+    "verdict"
+  ...[truncated 12 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Symmetric INT8 quantize-dequantize per group of `group_size` consecutive columns per row: scale = max(|x|)/127 within the group, q = round(x/scale) clamped to int8, y = q*scale.",
-    "Every column must be quantized under its own group's scale.",
-    "n_cols may be any positive integer; when not a multiple of group_size the trailing shorter final group is still a full group with its own scale (kernel.py:12 vs problem.txt).",
-    "No stated tolerance; error metric is presumably elementwise closeness of the dequantized output to the reference per-group quantization."
+    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
+    "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
+    "No tolerance or dtype conversion requirements stated beyond float32 operands/output",
+    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
+    "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum"
   ],
   "kernel_model": [
-    "Triton kernel launches one program per row (grid (n_rows,)), iterates g in range(n_cols // GROUP) \u2014 integer floor division, so a trailing partial group of fewer than GROUP columns is never processed (kernel.py:12-14).",
-    "BLOCK == GROUP, so masked load/store handles only the in-group lanes; no epilogue for leftover columns.",
-    "out is torch.zeros_like(x), so any dropped trailing columns are returned as 0.0 instead of their quantized values (kernel.py:28).",
-    "Rounding is floor(x/scale + 0.5) i.e. half-up, not clamp-then-round; since |x| <= absmax, q is in [-127, 127] by construction, so int8 clamp is a no-op unless padding zeros inflate nothing (masked other=0.0 keeps absmax correct).",
-    "absmax == 0 group uses scale 1.0, producing q=0 -> y=0, consistent with the contract's formula degenerating.",
-    "Assumes 2-D input x (n_rows, n_cols unpacked from x.shape) and contiguous-enough row strides; strides passed explicitly so row stride is handled."
+    "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
+    "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
+    "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
+    "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
+    "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides",
+    "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
+    "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
+    "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
+    "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
+    "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
+    "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
+    "A correct fix would mask the K dimension on the last iteration (offs_k < K with other=0) and iterate cdiv(K, 32) times"
   ],
-  "open_questions": [
-    "What tolerance the grader uses, i.e. whether a quantization-step-sized difference from an alternate rounding convention counts as failure.",
-    "Whether tests include non-multiple-of-group_size n_cols (contract strongly implies yes, making this decisive).",
-    "Whether negative-tie values (x/scale = -k - 0.5) are exercised; behavior differs between floor(
-...[truncated 1766 chars]
+  "open_quest
+...[truncated 2700 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Kernel implements symmetric per-group INT8 quant-dequant in Triton. Primary risk: n_groups = n_cols // GROUP floor-division drops the trailing partial group required by the contract.
+- `du1` tasks=`initial`: Kernel is a standard 64x64x32 tiled Triton GEMM, but the K loop runs only K // BLOCK_K iterations with no tail handling, so partial K tiles are dropped — directly violating the stated contract that K may be any positive integer.
+- `du2` tasks=`initial`: Description model refined to align with open claims c1/c2: the 64x64x32 tiled GEMM omits the partial K tail entirely, and for K < 32 the loop never runs at all. Added probe-design detail and fix sketch so the claims can be closed decisively.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: When n_cols is not a multiple of group_size (e.g. group_size=64, n_cols=100), the trailing partial-group columns (indices n_groups*group_size .. n_cols-1) are never processed and are returned as 0.0 instead of their quantized values.
+Statement: For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.
 
 Scope: `in_scope`
 
-Scope rationale: The contract explicitly requires the trailing shorter final group to be processed with its own scale for any positive n_cols, e.g. group_size=64 and n_cols=100: columns 64..99 must be quantized but the kernel drops them.
+Scope rationale: problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.
 
 Scope evidence:
-- `problem.txt`: Input domain: n_cols may be any positive integer. It is NOT required to be a multiple of group_size; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.
+- `problem.txt`: "K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum."
 
-Rationale: kernel.py:12 computes n_groups = n_cols // GROUP and the loop covers only g*GROUP + [0,GROUP) with cols < n_cols masked; leftover columns beyond n_groups*GROUP are never stored, and out = torch.zeros_like(x) returns them as 0.0.
+Rationale: Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: With n_cols=100, group_size=64 (randn 4x100, seed 0): kernel output columns 64..99 are all 0.0 while the per-group reference gives nonzero quantized values (tail max abs err 3.13, tail_allclose false). Full-group columns 0..63 match exactly (head max abs err 0.0). Confirms the kernel drops the trailing partial group, violating the contract's explicit trailing-group clause.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t11: K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 — the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.
 
 ### c2 - `confirmed`
 
-Statement: For values where x/scale lands exactly on ±k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output.
+Statement: For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.
 
-Scope: `unknown`
+Scope: `in_scope`
 
-Scope rationale: The contract says q = round(x/scale) without specifying a tie convention, so whether a tie-point mismatch is a contract violation depends on the reference's rounding convention and grader tolerance, which no artifact specifies.
+Scope rationale: problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.
 
-Rationale: kernel.py:20 uses tl.floor(x/scale + 0.5) — half-up rounding that on negative halves rounds away from zero, while Python/torch round() is half-to-even; at exact tie points (x/scale = ±k+0.5) the results differ by one quantization step.
+Scope evidence:
+- `problem.txt`: "M, N and K may each be any positive integer."
+- `problem.txt`: "when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum."
+
+Rationale: When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: At exact tie points (x/scale = ±k+0.5, scale=1, e.g. x=0.5, -1.5, 2.5), the kernel matches a half-up floor(v+0.5) reference exactly (max err 0.0) but mismatches a torch round() (half-to-even) reference at 67 of 128 positions by exactly one scale-step (max err 1.0). Confirms the rounding-convention mismatch at tie points; scope remains uncertain since the contract does not specify the tie convention.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t12: K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul — output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_15"
+  "entry": "case_16"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Symmetric INT8 quantize-dequantize per group of `group_size` consecutive columns per row: scale = max(|x|)/127 within the group, q = round(x/scale) clamped to int8, y = q*scale.",
-    "Every column must be quantized under its own group's scale.",
-    "n_cols may be any positive integer; when not a multiple of group_size the trailing shorter final group is still a full group with its own scale (kernel.py:12 vs problem.txt).",
-    "No stated tolerance; error metric is presumably elementwise closeness of the dequantized output to the reference per-group quantization."
+    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
+    "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
+    "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel launches one program per row (grid (n_rows,)), iterates g in range(n_cols // GROUP) \u2014 integer floor division, so a trailing partial group of fewer than GROUP columns is never processed (kernel.py:12-14).",
-    "BLOCK == GROUP, so masked load/store handles only the in-group lanes; no epilogue for leftover columns.",
-    "out is torch.zeros_like(x), so any dropped trailing columns are returned as 0.0 instead of their quantized values (kernel.py:28).",
-    "Rounding is floor(x/scale + 0.5) i.e. half-up, not clamp-then-round; since |x| <= absmax, q is in [-127, 127] by construction, so int8 clamp is a no-op unless padding zeros inflate nothing (masked other=0.0 keeps absmax correct).",
-    "absmax == 0 group uses scale 1.0, producing q=0 -> y=0, consistent with the contract's formula degenerating.",
-    "Assumes 2-D input x (n_rows, n_cols unpacked from x.shape) and contiguous-enough row strides; strides passed explicitly so row stride is handled."
+    "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
+    "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
+    "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
+    "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
+    "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides"
   ],
-  "open_questions": [
-    "What tolerance the grader uses, i.e. whether a quantization-step-sized difference from an alternate rounding convention counts as failure.",
-    "Whether tests include non-multiple-of-group_size n_cols (contract strongly implies yes, making this decisive).",
-    "Whether negative-tie values (x/scale = -k - 0.5) are exercised; behav
-...[truncated 2055 chars]
+  "open_questions": [],
+  "resolved_tasks": [],
+  "risk_map": [
+    "K-tail omission: any K not a multiple of 32 silently drops (K mod 32) k-terms from every output element; e.g. K=33 loses the k=32 contribution entirely",
+    "Because inputs are FP32 and not quantized, this is a direct additive error in C proportional to the dropped A[m,k]*B[k,n] terms, easily exposed by comparing to torch.matmul",
+    "If K < 32, K // BLOCK_K == 0 and the loop never runs, leaving C as uninitialized torch.empty memory rather than zeros",
+    "M/N masking looks correct, so errors should appear only in the K dimension, not tile edges of M/N"
+  ],
+  "scope_notes": [
+    "Contract explicitly scopes the interesting failure mode to K not being a multiple of the block size, so probes with K % 32 != 0 (including K < 32) are in scope\", \"K a multiple of 32 falls into a benign-pass region and should not be used alone to confirm correctness\", \"No tests are bundled with the artifact; benchmark/test domain appears to be arb
+...[truncated 338 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "kernel.py:12 computes n_groups = n_cols // GROUP and the loop covers only g*GROUP + [0,GROUP) with cols < n_cols masked; leftover columns beyond n_groups*GROUP are never stored, and out = torch.zeros_like(x) returns them as 0.0.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Input domain: n_cols may be any positive integer. It is NOT required to be a multiple of group_size; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale."
-    }
-  ],
-  "scope_rationale": "The contract explicitly requires the trailing shorter final group to be processed with its own scale for any positive n_cols, e.g. group_size=64 and n_cols=100: columns 64..99 must be quantized but the kernel drops them.",
-  "statement": "When n_cols is not a multiple of group_size (e.g. group_size=64, n_cols=100), the trailing partial-group columns (indices n_groups*group_size .. n_cols-1) are never processed and are returned as 0.0 instead of their quantized values.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "kernel.py:20 uses tl.floor(x/scale + 0.5) \u2014 half-up rounding that on negative halves rounds away from zero, while Python/torch round() is half-to-even; at exact tie points (x/scale = \u00b1k+0.5) the results differ by one quantization step.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "The contract says q = round(x/scale) without specifying a tie convention, so whether a tie-point mismatch is a contract violation depends on the reference's rounding convention and grader tolerance, which no artifact specifies.",
-  "statement": "For values where x/scale lands exactly on \u00b1k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output.",
+  "id": "c1",
+  "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+    }
+  ],
+  "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
+  "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t8 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"M, N and K may each be any positive integer.\""
+    },
+    {
+      "source": "problem.txt",
+      "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+    }
+  ],
+  "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.",
+  "statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
+  "status": "open"
+}
+
+### t9 - record_description_update - ok
+
+{
+  "contract_model": [
+    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
+    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
+    "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
+    "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
+    "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
+    "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
+    "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
+    "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
+    "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
+    "A correct fix would mask the K dimension on the last iteration (offs_k < K with other=0) and iterate cdiv(K, 32) times"
+  ],
+  "open_questions": [],
+  "resolved_tasks": [],
+  "risk_map": [
+    "K-tail omission (claim c1): any K with K % 32 != 0 silently drops the last (K % 32) k-terms from every output element",
+    "K < 32 (claim c2): the loop runs zero iterations and acc=0 is stored over a torch.empty allocation; the result is deterministic zeros for the kernel-written part, but the contract requires the full dot product, so it fails against torch.matmul regardless of allocator behavior",
+    "Decisive probe for c1: use K=33 so exactly one k-column is dropped; the error equals A[:,32] @ B[32,:] and is nonzero for generic inputs",
+    "Alternative isolation probe for c1: set all entries of the final dropped k-slice to 0 (expected identical results) vs nonzero 
+...[truncated 1317 chars]
+
+### t10 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 9,
+  "turn": 6
+}
+
+### t11 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "9a4e20e3667c23f24c4f84aaad6ae172eca423c8a182e992b01e3482b238198c"
+      "path": "probes/t11_probe.py",
+      "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "546e30553b32956d939b8700b3bf7ac26a64f4c67a6a4eb00f8b449bf6e91c0c"
+      "path": "probes/t11_stdout.txt",
+      "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t11_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "8859863f7eb22c959ab420eed4dffa4ce51f6ce92c2dd40109a7b5539ae89474"
+      "path": "probes/t11_json_result.json",
+      "sha256": "50f1d3658c869cf2ef11020d4a0afa4958e9a77e2dba8f893f594b4532cf37d6"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When n_cols is not a multiple of group_size (e.g. group_size=64, n_cols=100), the trailing partial-group columns (indices n_groups*group_size .. n_cols-1) are never processed and are returned as 0.0 instead of their quantized values.",
-  "duration_s": 9.383208,
-  "event_id": "t8",
+  "claim_statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
+  "duration_s": 7.723511,
+  "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -543,55 +748,55 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "9a4e20e3667c23f24c4f84aaad6ae172eca423c8a182e992b01e3482b238198c"
+          "path": "probes/t11_probe.py",
+          "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "546e30553b32956d939b8700b3bf7ac26a64f4c67a6a4eb00f8b449bf6e91c0c"
+          "path": "probes/t11_stdout.txt",
+          "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-     
-...[truncated 2517 chars]
+          "path": "probes/t11_stderr.txt",
+          "sha256": 
+...[truncated 1852 chars]
 
-### t9 - run_claim_probe - ok
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "6b8cccee11f8f658e1cd86ced1e41058be3eb73a1c1c9d5ba3ec17dddbb49a56"
+      "path": "probes/t12_probe.py",
+      "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "8b13846dab1c64094be3601f2f1e350dd7166d1a4b43aa4407329160237c48c1"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
+      "path": "probes/t12_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "5409170b0b9bfd43c8b6fbd9176bd2d3141f70486a0f804a4cb42d9a22052741"
+      "path": "probes/t12_json_result.json",
+      "sha256": "db0ecddfcbbe196ca39abd0d093c0d1c81f0d79f45fccf394097e8e14ac3ddb7"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For values where x/scale lands exactly on \u00b1k+0.5, floor(x/scale+0.5) rounds half-up while a torch round() reference rounds half-to-even, producing a one-scale-step mismatch in the dequantized output.",
-  "duration_s": 7.251285,
-  "event_id": "t9",
+  "claim_statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
+  "duration_s": 6.198473,
+  "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -599,76 +804,78 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "6b8cccee11f8f658e1cd86ced1e41058be3eb73a1c1c9d5ba3ec17dddbb49a56"
+          "path": "probes/t12_probe.py",
+          "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "8b13846dab1c64094be3601f2f1e350dd7166d1a4b43aa4407329160237c48c1"
+          "path": "probes/t12_stdout.txt",
+          "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t9_stderr.txt",
-          "sha256": "e3b0c44298fc1
-...[truncated 3308 chars]
+          "path": "probes/t12_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb9242
+...[truncated 1732 chars]
 
-### t10 - finalize_probe_evidence - ok
+### t13 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "With n_cols=100, group_size=64 (randn 4x100, seed 0): kernel output columns 64..99 are all 0.0 while the per-group reference gives nonzero quantized values (tail max abs err 3.13, tail_allclose false). Full-group columns 0..63 match exactly (head max abs err 0.0). Confirms the kernel drops the trailing partial group, violating the contract's explicit trailing-group clause.",
+  "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
   "supports": "confirmed",
-  "tool_event_id": "t8"
+  "tool_event_id": "t11"
 }
 
-### t11 - finalize_probe_evidence - ok
+### t14 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "At exact tie points (x/scale = \u00b1k+0.5, scale=1, e.g. x=0.5, -1.5, 2.5), the kernel matches a half-up floor(v+0.5) reference exactly (max err 0.0) but mismatches a torch round() (half-to-even) reference at 67 of 128 positions by exactly one scale-step (max err 1.0). Confirms the rounding-convention mismatch at tie points; scope remains uncertain since the contract does not specify the tie convention.",
+  "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
   "supports": "confirmed",
-  "tool_event_id": "t9"
+  "tool_event_id": "t12"
 }
 
-### t12 - record_no_new_claims - ok
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 (trailing partial group dropped when n_cols % group_size != 0) is confirmed with decisive runtime evidence and is explicitly in-scope per problem.txt's trailing-group clause; c2 (half-up vs half-to-even at exact tie points) is confirmed but scope remains unknown since no artifact specifies the tie convention or grader tolerance. No additional material, testable, in-scope problems are exposed by the round's evidence.",
+  "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 11,
-  "turn": 6
+  "reviewed_tool_event_count": 14,
+  "turn": 9
 }
 
-### t13 - record_verdict - ok
+### t16 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.98,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed and in-scope: problem.txt explicitly states n_cols need not be a multiple of group_size and that trailing columns form a shorter final group with its own scale. Runtime probe t8 (n_cols=100, group_size=64, randn 4x100) shows kernel output columns 64..99 are all 0.0 (unique tail value 0.0, tail max abs err 3.13, tail_allclose false) because the kernel's n_groups = n_cols // GROUP floor division (kernel.py:12) skips the trailing partial group, while full-group columns 0..63 match the reference exactly (head max abs err 0.0). This is a direct violation of the contract's explicit trailing-group clause, so reject. Claim c2 (half-up vs half-to-even rounding at exact tie points) is confirmed but of unknown scope: the contract says q = round(x/scale) without specifying a tie convention, and no test/grader artifact pins it, so it is a generalization note, not a basis for the verdict.",
+  "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:26:24Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-30T08:27:23Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "Claim c1 is confirmed and in-scope: problem.txt explicitly states n_cols need not be a multiple of group_size and that trailing columns form a shorter final group with its own scale. Runtime probe t8 (n_cols=100, group_size=64, randn 4x100) shows kernel output columns 64..99 are all 0.0 (unique tail value 0.0, tail max abs err 3.13, tail_allclose false) because the kernel's n_groups = n_cols // GROUP floor division (kernel.py:12) skips the trailing partial group, while full-group columns 0..63 match the reference exactly (head max abs err 0.0). This is a direct violation of the contract's explicit trailing-group clause, so reject. Claim c2 (half-up vs half-to-even rounding at exact tie points) is confirmed but of unknown scope: the contract says q = round(x/scale) without specifying a tie convention, and no test/grader artifact pins it, so it is a generalization note, not a basis for the verdict.",
+  "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
   "verdict": "reject"
 }

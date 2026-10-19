@@ -1,12 +1,11 @@
-Operation: RMSNorm forward
-(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).
+Operation: the query-head to KV-head mapping of Grouped Query Attention, in
+the style of the index arithmetic in vllm-project/vllm,
+vllm/v1/attention/ops/triton_unified_attention.py.
 
-For each row x:
+With num_q_heads query heads and num_kv_heads key/value heads
+(n_rep = num_q_heads // num_kv_heads), GQA groups CONSECUTIVE query heads onto
+the same KV head: query heads 0..n_rep-1 read KV head 0, query heads
+n_rep..2*n_rep-1 read KV head 1, and so on.
 
-    mean_square = sum(x * x) / n_cols
-    rstd        = 1 / sqrt(mean_square + eps)
-    y           = x * rstd
-
-The epsilon is the standard RMSNorm stabilizer: it must keep the normalizer
-finite as the row norm approaches zero, so that a row of (near-)zero input
-does not blow the output up.
+`gqa_gather(kv, num_q_heads)` must return, for each query head, the KV row
+that query head is supposed to read.

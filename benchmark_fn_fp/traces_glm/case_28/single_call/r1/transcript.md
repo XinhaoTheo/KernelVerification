@@ -21,29 +21,19 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,
-the activation quantization step of INT8 inference.
+Operation: round a float32 tensor to the nearest value representable in the FP8
+e4m3 format, the storage step of FP8 inference and training kernels.
 
-    scale = calibration(|x|) / 127
-    q     = round(x / scale), clamped to [-127, 127]
-    y     = q * scale
+e4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can
+represent 8 evenly spaced values. Rounding to that grid is the point of the
+format, not an implementation shortcut: the resulting relative error is bounded
+by half a mantissa step, about 2^-4 = 6.25%.
 
-Accuracy requirement: the relative reconstruction error of each row,
+The contract is that every value is rounded to the nearest representable e4m3
+value. Deviation from the float32 input up to the format's own rounding step is
+the intended behavior of the operation.
 
-    ||y - x|| / ||x||        (Euclidean norm over the row)
-
-must not exceed 5%. That is the usual way INT8 quantization quality is stated,
-and it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's
-dynamic range leaves a residual well under 1%. It is not loose enough to absorb
-a value that has been clamped away, since a clamped entry removes its whole
-magnitude from the reconstruction.
-
-Input domain: real transformer activations, whose per-channel magnitudes are
-heavy-tailed. A small number of channels carrying values one or two orders of
-magnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and
-those channels are exactly the ones downstream layers depend on.
-
-Does quant_dequant() satisfy this contract?
+Does fp8_roundtrip() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -55,33 +45,27 @@ import triton.language as tl
 
 
 @triton.jit
-def _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    cols = tl.arange(0, BLOCK)
-    valid = cols < N
-    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)
+def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    x = tl.load(X + offs, mask=mask, other=0.0)
 
+    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
     ax = tl.abs(x)
-    absmax = tl.max(ax, axis=0)
-    # Calibrate on the bulk of the row rather than on its single largest value.
-    thresh = absmax
-    for _ in range(PCTL_LEVELS):
-        below = tl.where(ax < thresh, ax, 0.0)
-        thresh = tl.max(below, axis=0)
-
-    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)
-    q = tl.floor(x / scale + 0.5)
-    q = tl.minimum(tl.maximum(q, -127.0), 127.0)
-    tl.store(OUT + row * stride + cols, q * scale, mask=valid)
+    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
+    step = tl.exp2(e - 3.0)
+    q = tl.floor(x / step + 0.5) * step
+    q = tl.where(ax == 0.0, 0.0, q)
+    tl.store(OUT + offs, q, mask=mask)
 
 
-def quant_dequant(x, pctl_levels: int = 2):
-    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.
-    n_rows, n_cols = x.shape
+def fp8_roundtrip(x):
+    # Round a float32 tensor to the nearest value representable in e4m3.
+    n = x.numel()
     out = torch.empty_like(x)
-    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,
-                             PCTL_LEVELS=pctl_levels,
-                             BLOCK=triton.next_power_of_2(n_cols))
+    BLOCK = 1024
+    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
     return out
 
 ```
@@ -90,18 +74,24 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-The calibration excludes the top values (like top-k exclusion), clamping outliers to 127, which loses their magnitude. That violates accuracy for heavy-tailed rows. But contract says per-row calibrated scale; does it require using absmax? Contract: "scale = calibration(|x|)/127" — calibration unspecified? The stated reference: scale = calibration(|x|)/127, q clamped, y = q*scale. Here thresh = 3rd largest value, so top-2 entries get clamped, removing their whole magnitude → error likely >5% for heavy-tailed inputs. This is the intended rejection: excluding outliers causes clamping. Reject.
+Rounding to nearest with .5 floor — ties-to-even vs ties-away. Nearest representable: ties could round to either? Contract says round to nearest; ties at exact half-step are ambiguous but format typically ties-to-even. Ties-away is arguably a valid nearest rounding? Also mantissa overflow: values just below binade boundary rounding up to 2^(e+1)·step grid — step doubles, but quantizing x/step grid: at the top of a binade, x near 2^(e+1) with step 2^(e-3); values 2^(e+1)-2^(e-4)... rounding up to 2^(e+1) which is representable in next binade. Fine. Also subnormals/limits not covered but generic rounding ok. Main flaw: ties handling — with floor(x/step+0.5), exact half-ulp ties round away from zero; nearest representable is ambiguous at ties, both are equidistant, so ties-any is valid "nearest". Actually two values equidistant — either is nearest. So acceptable.
+
+But another subtlety: x/step+0.5 rounding: for negative x, floor(x/step+0.5) is symmetric round-half-up which equals round-half-away for negatives? floor(-1.5)=-2, so -1.5*step → -2*step: away from zero. Fine.
+
+log2 for ax in (0,1): e negative, step = exp2(e-3) fine. e4m3 min subnormal 2^-9; rounding smaller values to multiples of 2^-9 — this kernel gives finer grids, deviating more than the format's step... wait, contract: round to nearest value representable in e4m3. For tiny values, the grid spacing is 2^-9; this kernel would produce values like 2^-20·(k/8) which are NOT representable in e4m3. Also large values beyond e4m3 max (448) — kernel keeps quantizing to 1/8 binade, but e4m3 can't represent those at all (overflow). Actually for large values the grid 1/8 binade is exactly the e4m3 grid, so representable. For small values, subnormal region grid is coarser (2^-9), so kernel produces non-representable values. Violates "nearest representable e4m3 value". Also e4m3 max is 448 with limited range... values above 448: not representable; e4m3 saturates or NaN. But the problem focuses on relative error bound 6.25% — for subnormals the relative error bound doesn't hold anyway. Hmm, is subnormal handling a real defect? Contract says "every value is rounded to the nearest representable e4m3 value". For x=2^-20, kernel returns 2^-20 rounded to 8·2^-23 grid... e= -20, step=2^-23, q = multiple of 2^-23 near x — likely not representable in e4m3 (subnormal grid 2^-9). So violates. I'd reject.
+
+Also tie-breaking: fine. Main defect: subnormal region (|x| < 2^-6) grid spacing should be 2^-9.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.9, "reason": "The 'calibration' is the (k+1)-th largest absolute value (it iteratively zeros values >= the current max, so the top pctl_levels entries are excluded from the scale), which forces heavy-tailed outlier channels to clamp to ±127*scale and lose their full magnitude. The contract explicitly says clamped entries remove their whole magnitude from the reconstruction and exceed the 5% error budget, and outlier channels one–two orders above the bulk are in the input domain, so rows containing such channels can exceed 5% relative error."}
+{"verdict": "reject", "confidence": 0.7, "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.9,
-  "reason": "The 'calibration' is the (k+1)-th largest absolute value (it iteratively zeros values >= the current max, so the top pctl_levels entries are excluded from the scale), which forces heavy-tailed outlier channels to clamp to ±127*scale and lose their full magnitude. The contract explicitly says clamped entries remove their whole magnitude from the reconstruction and exceed the 5% error budget, and outlier channels one–two orders above the bulk are in the input domain, so rows containing such channels can exceed 5% relative error."
+  "confidence": 0.7,
+  "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."
 }
 
 ## Usage and stop reason
@@ -111,22 +101,22 @@ The calibration excludes the top values (like top-k exclusion), clamping outlier
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.9,
-    "reason": "The 'calibration' is the (k+1)-th largest absolute value (it iteratively zeros values >= the current max, so the top pctl_levels entries are excluded from the scale), which forces heavy-tailed outlier channels to clamp to ±127*scale and lose their full magnitude. The contract explicitly says clamped entries remove their whole magnitude from the reconstruction and exceed the 5% error budget, and outlier channels one–two orders above the bulk are in the input domain, so rows containing such channels can exceed 5% relative error."
+    "confidence": 0.7,
+    "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 884,
-    "output_tokens": 267
+    "input_tokens": 737,
+    "output_tokens": 846
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 5.691255167126656,
-  "kernel_sha256": "87cad83343d2799468afb726e8ab65b80ff1d2a5a6e1931ac1c7b1a5f5d9a3dc",
-  "problem_sha256": "d3092d4261bcc88a44dcb6812dbfc0062407fe639b1c4b2db491301a814f756a",
+  "elapsed_s": 14.61638916702941,
+  "kernel_sha256": "c74b7b471be73f5a6cc5577e7566de375ae3723f40008665ccd26cacb9bb417a",
+  "problem_sha256": "f9010893c023707f7a678e52f69878482bd1ef79956fe5b625058ce8c9575acb",
   "prompt_variant": "original",
-  "estimated_usd": 0.0024124,
+  "estimated_usd": 0.0047542,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

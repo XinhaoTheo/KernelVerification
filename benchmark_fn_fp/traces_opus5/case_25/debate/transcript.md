@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_25`
+- Entry: `case_26`
 - Turns: 7
-- Tool events: 13
-- Claims: 2
+- Tool events: 17
+- Claims: 3
 - Description updates: 1
-- LLM time: 112.234s across 6 calls | tokens: in=145383 out=8253 total=153636
+- LLM time: 314.71s across 6 calls | tokens: in=280129 out=24274 total=304403
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.85
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,85 +27,75 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
   Output summary:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
   Output summary:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
   Output summary:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_25",
+    "entry": "case_26",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_25"
+    "entry": "case_26"
   }
 
-### Turn 2 - `describer` (18.630747147000022s, in=3131 out=1219)
-
-Message:
-
-```text
-Reading the loaded context is enough here: the contract explicitly demands round-to-nearest, and the kernel uses `tl.floor`. Recording the description model.
-```
+### Turn 2 - `describer` (100.185704224s, in=3529 out=7171)
 
 Tool calls:
 
 - `record_description_update -> t5 ok`
   Args:
   {
-    "contract_model": "Compute scale = max(|x|)/127 over a block of the 1-D input (problem.txt line: \"scale = max(|x|) / 127        per block\").",
-    "kernel_model": "Grid is 1-D over ceil(n/1024); each program handles one BLOCK=1024 tile, so \"per block\" scaling is per-1024-element tile \u2014 this appears to match the stated per-block contract rather than a global absmax.",
-    "open_questions": "Does the intended reference use round-half-to-even (torch.round / rint) or round-half-away-from-zero? This matters only for exact-tie inputs, not for the main floor-vs-nearest bias question.",
-    "risk_map": "Primary: line 14 uses tl.floor(x/scale) instead of round-to-nearest (e.g. libdevice rint / tl.extra round / floor(x/scale + 0.5) semantics). floor truncates toward -infinity, giving an expec
-  ...[truncated 818 chars]
+    "contract_model": [
+      "Row-wise operation on a 2D score tensor: out[j] = scores[j] if scores[j] is among the k largest of its row, else 0 (problem.txt).",
+      "Tie policy is deliberately underspecified: admitting ALL entries tied at the k-th value and admitting exactly k are BOTH explicitly accepted readings, so a tie-count difference vs torch.topk is in-contract, not a bug.",
+      "The binding invariant stated is monotone/threshold consistency: every kept entry must be >= every dropped entry.",
+      "Implicit remaining requirement from the formula: kept entries must actually be among the k largest, i.e. no entry strictly smaller than the k-th largest value may survive (extras are only licensed when they are exactly tied at the cutoff).",
+      "Downstream use is stated as renormalized s
+  ...[truncated 7634 chars]
   Output summary:
   {
     "contract_model": [
-      "Compute scale = max(|x|)/127 over a block of the 1-D input (problem.txt line: \"scale = max(|x|) / 127        per block\")."
+      "Row-wise operation on a 2D score tensor: out[j] = scores[j] if scores[j] is among the k largest of its row, else 0 (problem.txt).",
+      "Tie policy is deliberately underspecified: admitting ALL entries tied at the k-th value and admitting exactly k are BOTH explicitly accepted readings, so a tie-count difference vs torch.topk is in-contract, not a bug.",
+      "The binding invariant stated is monotone/threshold consistency: every kept entry must be >= every dropped entry.",
+      "Implicit remaining requirement from the formula: kept entries must actually be among the k largest, i.e. no entry strictly smaller than the k-th largest value may survive (extras are only licensed when they are exactly tied at the cutoff).",
+      "Downstream use is stated as renormalized sampling weights for top-k sampling, so the numeric values of kept entries and the exact membership set both matter; kept values must be passed through unmodified.",
+      "No test file is present (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), so the operative contract is problem.txt text alone; meta.json has status under_test / passed null."
     ],
     "impact_on_claims": [],
-    "kernel_model": [
-      "Grid is 1-D over ceil(n/1024); each program handles one BLOCK=1024 tile, so \"per block\" scaling is per-1024-element tile \u2014 this appears to match the stated per-block contract rather than a global absmax."
-    ],
-    "open_questions": [
-      "Does the intended reference use round-half-to-even (torch.round / rint) or round-half-away-from-zero? This matters only for exact-tie inputs, not for the main floor-vs-nearest bias question."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Primary: line 14 uses tl.floor(x/scale) instead of round-to-nearest (e.g. libdevice rint / tl.extra round / floor(x/scale + 0.5) semantics). floor truncates toward -infinity, giving an expected error of about -0.5 LSB per element for uniformly distributed residuals \u2014 a systematic downward (not toward-zero) drift that compounds across repeated applications, exactly what the contract forbids."
-    ],
-    "scope_notes": [
-      "No test_code is present in the artifact and meta.json has passed=null, stat
-  ...[truncated 558 chars]
+  
+  ...[truncated 7324 chars]
 
-### Turn 3 - `skeptic` (26.162489168000036s, in=6944 out=1949)
+### Turn 3 - `skeptic` (72.27801855400003s, in=22574 out=5406)
 
 Message:
 
 ```text
-Contract explicitly demands round-to-nearest and unbiasedness; kernel uses `tl.floor`. Recording the primary bias claim plus a narrower saturation/overshoot claim that a probe can decide independently.
+Reading the description model, the tie ambiguity is explicitly sanctioned, so I'm targeting the threshold-search mechanics instead: the bisection's convergence guarantee is only `lo <= v`, and its endpoints come straight from the row's min/max. Three concrete failure hypotheses.
 ```
 
 Tool calls:
@@ -113,112 +103,111 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "tl.floor(v) = round toward -inf; for residuals v - floor(v) uniform in [0,1) the expected quantization error is -0.5 LSB, whereas round-to-nearest gives ~0 expected error. The problem text explicitly forbids a per-step systematic drift.",
-    "scope": "in_scope",
+    "rationale": "lo/hi are initialized from tl.min/tl.max of the row, and mid = (lo+hi)*0.5 is degenerate whenever an endpoint is infinite; the count branch then always takes the same side, so the interval never shrinks. This is not a tie disagreement but a total loss of masking.",
+    "scope": "unknown",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Specifies q = round(x / scale) to the nearest representable level and requires the round trip to be unbiased under repeated application; kernel.py line 14 uses tl.floor instead."
+        "summary": "Describes the operation as the candidate-selection step of top-k sampling over rows of scores, with no stated restriction to finite values; -inf-masked logits are the standard input at that stage."
+      },
+      {
+        "source": "kernel.py:13-19",
+        "summary": "lo = row min, hi = row max, mid = (lo+hi)*0.5 with a count>=K branch; an infinite endpoint makes mid infinite and the interval never contracts."
       }
-    ],
-    "scope_rationale": "problem.txt is the operative contract (no test.py exists) and states q = round(x/scale) \"to the nearest representable level\" and that \"repeated application must not push the tensor systematically\" in one direction. A plain cont
-  ...[truncated 648 chars]
+    
+  ...[truncated 1231 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "tl.floor(v) = round toward -inf; for residuals v - floor(v) uniform in [0,1) the expected quantization error is -0.5 LSB, whereas round-to-nearest gives ~0 expected error. The problem text explicitly forbids a per-step systematic drift.",
-    "scope": "in_scope",
+    "rationale": "lo/hi are initialized from tl.min/tl.max of the row, and mid = (lo+hi)*0.5 is degenerate whenever an endpoint is infinite; the count branch then always takes the same side, so the interval never shrinks. This is not a tie disagreement but a total loss of masking.",
+    "scope": "unknown",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Specifies q = round(x / scale) to the nearest representable level and requires the round trip to be unbiased under repeated application; kernel.py line 14 uses tl.floor instead."
+        "summary": "Describes the operation as the candidate-selection step of top-k sampling over rows of scores, with no stated restriction to finite values; -inf-masked logits are the standard input at that stage."
+      },
+      {
+        "source": "kernel.py:13-19",
+        "summary": "lo = row min, hi = row max, mid = (lo+hi)*0.5 with a count>=K branch; an infinite endpoint makes mid infinite and the interval never contracts."
       }
     ],
-    "scope_rationale": "problem.txt is the operative contract (no test.py exists) and states q = round(x/scale) \"to the nearest representable level\" and that \"repeated application must not push the tensor systematically\" in one direction. A plain contiguous 1-D float32 tensor is exactly the input the contract admits, so a representative torch.randn(4096) probe is in-scope.",
-    "statement": "Line 14 uses tl.floor(x/scale) instead of round-to-nearest, so requantize() truncates toward -infinity: for a typical 1-D float32 input (e.g. torch.randn(4096) on cuda), the output will differ from the reference y = torch.round(x/scale)*scale 
-  ...[truncated 282 chars]
+    "scope_rationale": "problem.txt frames the op as \"the candidate selection step of top-k sampling\", where score rows are commonly already-masked logits containing -inf, and it gives no restriction to finite inputs. However problem.txt does not explicitly require non-finite support and there is no test.py to pin the input domain, so I mark scope unknown rather than in_scope; a c
+  ...[truncated 865 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "x_min/scale evaluates to -127 only if the float division is exact; any rounding down of that quotient makes floor return -128, which is outside the symmetric level set implied by scale = max(|x|)/127 and amplifies the magnitude beyond the input range.",
+    "rationale": "The loop only maintains count(x >= lo) >= K, i.e. lo <= v, with an interval width that shrinks only relative to the initial (max-min) span. When the cutoff magnitude is tiny compared to that span, the residual absolute uncertainty spans many representable values below v, and every element in [lo, v) is admitted with its original value into the downstream renormalization.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "scale = max(|x|)/127 with q = round(x/scale) implies levels in [-127,127] and |y| <= max(|x|); floor can emit -128."
-      }
-    ],
-    "scope_rationale": "The contract defines scale = max(|x|)/127 and q = round(x/scale), which bounds |q| <= 127 and |y| <= max(|x|); a plain 1-D float32 tensor containing a negative absmax element is an ordinary admitted input, not a stress/edge dtype or shape case.",
-    "statement": "Because floor r
-  ...[truncated 570 chars]
+        "summary": "Requires out[j]=scores[j] only when scores[j] is among the k largest, and limits the tie freedom to entries sharing the k-th value; it also says kept entries are renormalized as sampling weights, so extra non-tied survivors change the output distribution."
+      },
+      {
+        "source": "kernel.py:15-21",
+   
+  ...[truncated 1509 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "x_min/scale evaluates to -127 only if the float division is exact; any rounding down of that quotient makes floor return -128, which is outside the symmetric level set implied by scale = max(|x|)/127 and amplifies the magnitude beyond the input range.",
+    "rationale": "The loop only maintains count(x >= lo) >= K, i.e. lo <= v, with an interval width that shrinks only relative to the initial (max-min) span. When the cutoff magnitude is tiny compared to that span, the residual absolute uncertainty spans many representable values below v, and every element in [lo, v) is admitted with its original value into the downstream renormalization.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "scale = max(|x|)/127 with q = round(x/scale) implies levels in [-127,127] and |y| <= max(|x|); floor can emit -128."
+        "summary": "Requires out[j]=scores[j] only when scores[j] is among the k largest, and limits the tie freedom to entries sharing the k-th value; it also says kept entries are renormalized as sampling weights, so extra non-tied survivors change the output distribution."
+      },
+      {
+        "source": "kernel.py:15-21",
+        "summary": "Fixed 40-step bisection on the value axis with keep = x >= lo; only lo <= v is guaranteed, so any element in [lo, v) survives."
       }
     ],
-    "scope_rationale": "The contract defines scale = max(|x|)/127 and q = round(x/scale), which bounds |q| <= 127 and |y| <= max(|x|); a plain 1-D float32 tensor containing a negative absmax element is an ordinary admitted input, not a stress/edge dtype or shape case.",
-    "statement": "Because floor rounds toward -infinity, the most negative element of a block can quantize to q = -128 (floor of a value at or slightly below -127.0 after the float division x/scale), producing y = -128*scale whose magnitude exceeds max(|x|) of that block; the contract's symmetric INT8 levels are [-127,127] and a correct round-to-nearest implementation never exceeds max(|x|). Testable by taking a blo
-  ...[truncated 204 chars]
+    "scope_rationale": "problem.txt states the required output exactly (out[j] = scores[j] only if among the k largest, else 0) and explicitly limits the tie licence to entries that \"share the value at the k-th position\". Admittin
+  ...[truncated 1143 chars]
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "Triton promotes the python 0.5 to the operand dtype, so no fp32 accumulator protects the bisection; low-mantissa dtypes make the residual threshold error macroscopic rather than sub-ulp, and fp16's narrow exponent range makes lo+hi overflow reachable.",
+    "scope": "unknown",
+    "scope_evidence": [
+      {
+        "source": "kernel.py:13-19",
+        "summary": "lo/hi come from tl.min/tl.max of x and mid = (lo+hi)*0.5, all in the input dtype; no fp32 upcast of the search variables."
+      }
+    ],
+    "scope_rationale": "problem.txt fixes no dtype and there is no test.py or get_inputs to pin one, so fp16/bf16 is plausible for top-k sampling logits but not contractually required; per scope policy I mark this unknown. It is recorded because the failure mode (extra non-tied survivors, or 
+  ...[truncated 870 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "Triton promotes the python 0.5 to the operand dtype, so no fp32 accumulator protects the bisection; low-mantissa dtypes make the residual threshold error macroscopic rather than sub-ulp, and fp16's narrow exponent range makes lo+hi overflow reachable.",
+    "scope": "unknown",
+    "scope_evidence": [
+      {
+        "source": "kernel.py:13-19",
+        "summary": "lo/hi come from tl.min/tl.max of x and mid = (lo+hi)*0.5, all in the input dtype; no fp32 upcast of the search variables."
+      }
+    ],
+    "scope_rationale": "problem.txt fixes no dtype and there is no test.py or get_inputs to pin one, so fp16/bf16 is plausible for top-k sampling logits but not contractually required; per scope policy I mark this unknown. It is recorded because the failure mode (extra non-tied survivors, or total mask loss via overflow) is the same contract violation as the fp32 case but with a much larger error magnitude.",
+    "statement": "All threshold arithmetic (lo, hi, mid) inherits the input tensor dtype, so for fp16/bf16 score rows the search grid is the coarse low-precision grid: mid = (lo+hi)*0.5 stalls once mid rounds to lo or hi, leaving lo up to ~1 bf16 ulp (~0.8% relative) 
+  ...[truncated 504 chars]
 
-### Turn 4 - `experimenter` (24.84759452200001s, in=11932 out=2106)
+### Turn 4 - `experimenter` (43.24711949999994s, in=32539 out=3985)
 
 Message:
 
 ```text
-Both claims are independent — c1 is the floor-vs-nearest bias on typical input, c2 is the −128 overshoot on a block whose absmax element is negative — so I'm launching both probes in this response.
+Three claims are mutually independent (non-finite endpoints, fp32 bisection resolution, low-precision dtype), so I'm launching all three probes in one response; none of them needs another's outcome to pick inputs.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_25/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nx = torch.randn(4096, device=dev, dtype=torch.float32)\n\ndef ref(x, BLOCK=1024):\n    y = x.clone()\n    n = x.numel()\n    for i in range(0, n, BLOCK):\n        b = x[i:i+BLOCK]\n        am = b.abs().max()\n        s = torch.where(am == 0, torch.tensor(1.0, device=b.device), am/127.0)\n        y[i:i+BLOCK] = torch.round(b/s)*s\n    return y\n\nout = k.requantize(x)\nr = ref(x)\n\n# per-block scale (all blocks 1024)\nscales = [float(x[i:i+1024].abs().max()/127.0) for i in range(0,4096,1024)]\nmean_scale = sum(scales)/
-  ...[truncated 1397 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "88292a2fd8904f45c30f29243812ba9e815a24fcf554083e5f39e586a14a8a9c"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "65eed3ae9a5be6a4b497b43f3f582993ac177423eebead4084515b4a783ee129"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "5ca47d1e9ab3cbe8b5b04cfceaabc5ff0a19b5b160225534aa64a68cd66b7062"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "Line 14 uses tl.floor(x/scale) instead of round-to-nearest, so requantize() truncates toward -infinity: for a typical 1-D float32 input (e.g. torch.randn(4096) on cuda), the output will differ from the reference y
-  ...[truncated 6417 chars]
 - `run_claim_probe -> t9 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_25/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev=\"cuda\"\ntorch.manual_seed(1)\n\ncases = []\novershoot_count = 0\nfor amax in [3.0, 1.0, 2.5, 0.7, 5.0, 1.3, 0.1, 7.77, 12.5, 0.333]:\n    x = (torch.rand(1024, device=dev)*2-1) * (amax*0.5)   # all |x| < amax\n    x[0] = -amax                                          # absmax element is negative\n    out = k.requantize(x)\n    scale = float(x.abs().max()/127.0)\n    q0 = float(out[0]/scale)\n    ov = float(out.abs().max()) > float(x.abs().max()) + 0.0\n    overshoot_count += int(ov)\n    cases.append({\"amax\": amax, \"scale\": scale, \"q_of_min_elem\": q0,
-  ...[truncated 506 chars]
+    "claim_id": "c1",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_26/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nres = {}\ndef analyze(name, row_list, k):\n    x = torch.tensor([row_list], dtype=torch.float32, device=\"cuda\")\n    out = m.topk_mask(x, k)\n    o = out[0].tolist(); r = x[0].tolist()\n    # kept = output value equals input value (inputs contain no zeros)\n    kept = [i for i in range(len(r)) if o[i] == r[i] and r[i] != 0.0]\n    finite = torch.tensor([v for v in r if v == v], dtype=torch.float64)\n    v = torch.topk(torch.tensor(r, dtype=torch.float64), k).values[-1].item()\n    viol = [r[i] for i in kept if r[i] < v]\n    res[name] = {\n        \"n\": l
+  ...[truncated 771 chars]
   Output summary:
   {
     "artifacts": [
@@ -226,13 +215,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "225ee9ddf831a164b29d454e0529447915d810411b7431ab1da3950dc6c3f478"
+        "sha256": "8c5fc42fbaea6e40f327c6240391860b4494ea3f142f2225a7fbdb014a9caaa7"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "5e97f523d9cfdbe7f10ea36b3f1ff56cb6269faa759ac6e95ecdda1013d1192c"
+        "sha256": "2daaeefec47f7cb891bb5c174aff84ec92abe08951f179c47a9fc2748db4ca55"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -244,343 +233,463 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "3f72d01c7a73ec28806dc873629a29d73e6e7b6f7e07b4009abb79552c0b2247"
+        "sha256": "3bd9c41c9f694cfc8512be46974ce6f78aa15e3d06e431df7156bab5f30ee405"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "When a row contains a non-finite endpoint the bisection never contracts and the kernel degenerates into a no-op mask that keeps ALL N entries. Concretely: (a) with any -inf entry (pre-masked logits), lo = -inf, mi
+  ...[truncated 6491 chars]
+- `run_claim_probe -> t10 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_26/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nres = {}\ndef analyze(name, row, k):\n    x = torch.tensor([row], dtype=torch.float32, device=\"cuda\")\n    r = x[0].tolist()\n    out = m.topk_mask(x, k)[0].tolist()\n    kept = [i for i in range(len(r)) if out[i] == r[i] and r[i] != 0.0]\n    v = torch.topk(torch.tensor(r, dtype=torch.float64), k).values[-1].item()\n    below = [r[i] for i in kept if r[i] < v]\n    ties_at_v = sum(1 for val in r if val == v)\n    res[name] = {\n        \"n\": len(r), \"k\": k, \"kth_largest\": v,\n        \"kept_count\": len(kept),\n        \"n_kept_strictly_below_kth\": 
+  ...[truncated 1062 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t10_probe.py",
+        "sha256": "34cd99e279fb508cba8dfca762e7e2cdf438b88b8f5af5bcc6e5c9eb1a439638"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t10_stdout.txt",
+        "sha256": "36b0d37817e828049b7030466970668914dfa2ac05e3b8dc38badd74b84ec69c"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t10_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t10_json_result.json",
+        "sha256": "29807027832b41dfe3816aef72204e2f30de14e3238afbf04311ff35113b4335"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "Because floor rounds toward -infinity, the most negative element of a block can quantize to q = -128 (floor of a value at or slightly below -127.0 after the float division x/scale), producing y = -128*scale whose 
-  ...[truncated 10190 chars]
+    "claim_statement": "Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-t
+  ...[truncated 6826 chars]
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_26/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nres = {}\ndef analyze(name, row, k, dt):\n    x = torch.tensor([row], dtype=dt, device=\"cuda\")\n    r = [float(v) for v in x[0].tolist()]\n    out = [float(v) for v in m.topk_mask(x, k)[0].tolist()]\n    kept = [i for i in range(len(r)) if out[i] == r[i] and r[i] != 0.0]\n    v = torch.topk(torch.tensor(r, dtype=torch.float64), k).values[-1].item()\n    below = [r[i] for i in kept if r[i] < v]\n    res[name] = {\n        \"dtype\": str(dt), \"n\": len(r), \"k\": k, \"kth_largest\": v,\n        \"kept_count\": len(kept),\n        \"n_kept_strictly_below_kth
+  ...[truncated 1144 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "bdb6a4f88919ced71176e991fc923f1611a4ee4e2c24b48c34f567ec0969f556"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "1b05a6bd142c96dfbec67d90a8d818159acbc99b9942d90fb8456edbb1100c17"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "c1a95102093d458b4febb7818a3455c45fd44877e3b61f7f1afb6b1dbe700721"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "All threshold arithmetic (lo, hi, mid) inherits the input tensor dtype, so for fp16/bf16 score rows the search grid is the coarse low-precision grid: mid = (lo+hi)*0.5 stalls once mid rounds to lo or hi, leavi
+  ...[truncated 6150 chars]
 
-### Turn 5 - `experimenter` (19.42173718700002s, in=25969 out=1546)
+### Turn 5 - `experimenter` (50.9267368159999s, in=50139 out=4387)
 
 Message:
 
 ```text
-Both probes returned. c1 shows a −0.493 LSB mean signed error and monotone downward drift; c2 shows one of ten blocks emitting q = −128 (out magnitude exceeding input absmax). Finalizing both; no further probes are needed since the primary defect is confirmed and c2 is a distinct, already-demonstrated consequence.
+Consuming all three probe results now, and in the same response launching a follow-up on c2 to test whether the bisection-resolution violation appears under realistic top-k-sampling distributions (softmax probability rows, peaked and moderate) rather than only my hand-built outlier row — that scope question matters for the Judge and does not depend on c1/c3 outcomes.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `finalize_probe_evidence -> t12 ok`
   Args:
   {
     "data": {
-      "frac_elems_differ_from_ref": 0.49072265625,
-      "input": "torch.randn(4096) float32 cuda, seed 0",
-      "kernel_mean_drift_10_steps": -0.03698639,
-      "kernel_monotone_decreasing": true,
-      "max_abs_diff_kernel_vs_ref": 0.02610755,
-      "max_abs_err_kernel_in_LSB": 0.999766,
-      "max_abs_err_ref_in_LSB": 0.499889,
-      "mean_scale": 0.02478012,
-      "mean_signed_err_kernel_in_LSB": -0.492805,
-      "mean_signed_err_ref_in_LSB": -0.00208238,
-      "metric_reason": "contract requires round-to-nearest and unbiased repeated application; mean signed error in LSB and multi-step mean drift are the contract-matching metrics",
-      "ref_mean_drift_10_steps": -5.340762e-05
+      "dtype": "float32",
+      "finite_control_k": 3,
+      "finite_control_kept_count": 3,
+      "finite_control_n_kept_below_kth": 0,
+      "neg_inf_row_k": 2,
+      "neg_inf_row_kept_count": 8,
+      "neg_inf_row_kth_largest": 3.0,
+      "neg_inf_row_n": 8,
+      "neg_inf_row_n_kept_below_kth": 6,
+      "neg_inf_row_out_equals_input": true,
+      "pos_inf_row_k": 3,
+      "pos_inf_row_kept_count": 8,
+      "pos_inf_row_n": 8,
+      "pos_inf_row_n_kept_below_kth": 5
     },
-    "event_id": "t8",
+    "event_id": "t9",
     "status": "confirmed",
-    "summary": "torch.randn(4096) cuda float32, BLOCK=1024 per-block 
-  ...[truncated 532 chars]
+    "summary": "Non-finite endpoints stall the bisection exactly as predicted. Row [3,1,-inf,-inf,5,2,-inf,0.5] with k=2 returned the input unchanged: kept_count=8 of N=8, 6 kept entries strictly below the k-th largest (3.0), including three -inf entries passed through instead of zeroed. Row
+  ...[truncated 300 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "torch.randn(4096) cuda float32, BLOCK=1024 per-block absmax reference: kernel mean signed error is -0.4928 LSB vs -0.0021 LSB for round-to-nearest reference; max abs error 0.9998 LSB vs 0.4999 LSB for reference; 49.07% of elements differ from the reference by up to 0.0261 absolute. Under 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699), while the round-to-nearest reference drift is -5.34e-05 and stabilizes after one step. This is exactly the systematic per-step bias problem.txt forbids.",
+    "summary": "Non-finite endpoints stall the bisection exactly as predicted. Row [3,1,-inf,-inf,5,2,-inf,0.5] with k=2 returned the input unchanged: kept_count=8 of N=8, 6 kept entries strictly below the k-th largest (3.0), including three -inf entries passed through instead of zeroed. Row with a single +inf and k=3 likewise returned all 8 entries (5 kept strictly below the k-th largest 5.0). The all-finite control row behaved correctly (kept_count=3=k, 0 kept below the k-th largest), so the failure is specific to infinite endpoints, not a general fault.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t9"
   }
-- `finalize_probe_evidence -> t11 ok`
+- `finalize_probe_evidence -> t13 ok`
   Args:
   {
     "data": {
-      "expected_ratio_128_over_127": 1.0078740157480315,
-      "metric_reason": "contract scale=max|x|/127 with round-to-nearest bounds |q|<=127 and |y|<=max|x|; overshoot count and emitted q level are the decisive metrics",
-      "nonovershoot_q_values": [
-        -127.0,
-        -127.0,
-        -127.0,
-        -127.0,
-        -127.0,
-        -126.99999237060547,
-        -127.0,
-        -127.0,
-        -127.0
-      ],
-      "num_cases": 10,
-      "num_overshoot": 1,
-      "overshoot_amax": 7.77,
-      "overshoot_out_abs_max": 7.831181049346924,
-      "overshoot_q_of_min_elem": -128.0,
-      "overshoot_ratio_out_over_in": 1.007874011399047,
-      "overshoot_x_abs_max": 7.769999980926514
+      "dtype": "float32",
+      "outlier_1e6_cluster_bisect_resolution": 9.094947008634335e-07,
+      "outlier_1e6_cluster_k": 5,
+      "outlier_1e6_cluster_kept_count": 21,
+      "outlier_1e6_cluster_kth_largest": 0.0010000159963965416,
+      "outlier_1e6_cluster_min_kept_below_kth": 0.0010000000474974513,
+      "outlier_1e6_cluster_n": 21,
+      "outlier_1e6_cluster_n_kept_below_kth": 16,
+      "outlier_1e6_cluster_ties_at_kth": 1,
+      "randn_control_k": 8,
+      "randn_control_kept_count": 8,
+      "randn_control_n_kept_below_kth": 0,
+      "softmax_like_tail_bisect_resolution": 9.09e-13,
+      "softmax_like_tail_k": 6,
+      "softmax_like_tail_kept_count": 6,
+      "softmax_like_tail_n_kept_below_kth": 0
     },
-    "event_id": "t9",
+    "event_id": "t10",
     "status": "confirmed",
-    "summary": "Ten single-block (1024-element) cases with the absmax element nega
-  ...[truncated 518 chars]
+    "summary": "Finite-precision non-convergence 
+  ...[truncated 817 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Ten single-block (1024-element) cases with the absmax element negative: 1 of 10 (amax=7.77) produced q=-128 for that element, giving out.abs().max()=7.83118 > x.abs().max()=7.76999 (ratio 1.007874 = 128/127), i.e. a dequantized level outside the symmetric [-127,127] level set and a magnitude exceeding the block absmax. The other 9 cases had the float division x/scale land exactly on -127.0 (or -126.99999) so floor kept -127; the defect is therefore data-dependent on float rounding of the quotient, but it does occur on an ordinary in-contract input.",
+    "summary": "Finite-precision non-convergence confirmed on a wide-dynamic-range fp32 row. Row = [1e6] + 20 values clustered at 1e-3 spaced 1e-9, k=5: the kernel kept ALL 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3), with kept values down to 1.0000000e-3; only 1 entry is exactly tied at the cutoff, so 16 survivors are outside the sanctioned tie licence. Bisection absolute resolution here is (max-min)*2^-40 = 9.09e-7, far coarser than the 1e-9 spacing near the cutoff, matching the mechanism. Two narrower-range cases did NOT fail: softmax-like tail (max 1.0, cutoff 1e-8, spacing 1e-12, resolution 9.1e-13) kept exactly k=6 with 0 violations, and a randn(64) k=8 control kept exactly 8 with 0 violations. So the defect is real but requires the cutoff-cluster spacing to be finer than (max-min)*2^-40.",
     "supports": "confirmed",
-    "tool_event_id": "t9"
+    "tool_event_id": "t10"
   }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "bf16_near_cutoff_k": 4,
+      "bf16_near_cutoff_kept_count": 4,
+      "bf16_near_cutoff_n_kept_below_kth": 0,
+      "fp16_max": 65504.0,
+      "fp16_near_cutoff_k": 4,
+      "fp16_near_cutoff_kept_count": 4,
+      "fp16_near_cutoff_n_kept_below_kth": 0,
+      "fp16_overflow_row_k": 2,
+      "fp16_overflow_row_kept_count": 2,
+      "fp16_overflow_row_lo_plus_hi": 79984.0,
+      "fp16_overflow_row_n_kept_below_kth": 0,
+      "overflow_keep_everything_observed": false
+    },
+    "event_id": "t11",
+    "status": "rebutted",
+    "summary": "The low-precision-dtype hypothesis did not reproduce on any of its three named metrics. bf16 row (100.0 plus 12 values 1 bf16-ulp apart, k=4): kept_count=4=k, 0 kept strictly below the k-th largest (1.0703125). fp16 row of the same shape (k=4): kept_count=4, 0 violatio
+  ...[truncated 513 chars]
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "rebutted",
+    "evidence_id": "c3.e1",
+    "summary": "The low-precision-dtype hypothesis did not reproduce on any of its three named metrics. bf16 row (100.0 plus 12 values 1 bf16-ulp apart, k=4): kept_count=4=k, 0 kept strictly below the k-th largest (1.0703125). fp16 row of the same shape (k=4): kept_count=4, 0 violations. fp16 overflow row (values 30000..49984, so lo+hi = 79984 > 65504 fp16 max, k=2): kept_count=2=k, 0 violations \u2014 no overflow-induced keep-everything, indicating the lo/hi/mid search arithmetic is not stalling or overflowing in fp16 as hypothesized (consistent with the reduction/scalar arithmetic being carried at higher precision than the input dtype). Note this rebuts c3's specific predictions; it does not rebut c2, whose fp32 wide-range failure was reproduced separately.",
+    "supports": "rebutted",
+    "tool_event_id": "t11"
+  }
+- `run_claim_probe -> t15 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_26/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\n\ndef run(name, X, k):\n    X = X.cuda().contiguous()\n    O = m.topk_mask(X, k)\n    Xc = X.double().cpu(); Oc = O.double().cpu()\n    nrows = X.shape[0]\n    tot_viol = 0; rows_viol = 0; kept_counts = []; worst_gap = 0.0; worst_ratio = 0.0\n    for i in range(nrows):\n        r = Xc[i]; o = Oc[i]\n        kept = (o == r) & (r != 0)\n        v = torch.topk(r, k).values[-1].item()\n        kv = r[kept]\n        below = kv[kv < v]\n        kept_counts.append(int(kept.sum()))\n        if below.numel() > 0:\n            rows_viol
+  ...[truncated 1707 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "8fd003aa8c29ad915254281529ce76048b205166103035c3e76d0dc193047104"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "bf1f98b1c954d5c40ab3249bafb2951d774c96fd1361a47fa1371b5417bafa40"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "66a4d4509c3d84666c476e2c796489596c2d5170b11cb131b8aace6e78633de4"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-t
+  ...[truncated 8849 chars]
 
-### Turn 6 - `skeptic` (8.126489592000041s, in=47904 out=407)
+### Turn 6 - `skeptic` (13.807565969000052s, in=84521 out=865)
 
 Message:
 
 ```text
-Both claims are confirmed with contract-matching metrics; the floor-vs-nearest bias is decisive on its own and the −128 overshoot is a distinct consequence already evidenced. Nothing new is worth holding up the verdict.
+This is the final review turn. The newest probe (t15) doesn't open a new attack surface — it strengthens the already-confirmed, in-scope claim c2: on peaked-softmax probability rows (T=0.1, 64×512, k=50) every row violated, keeping up to 427 entries instead of 50, with 17,878 kept entries strictly below the true k-th largest. That is exactly the mechanism and metric c2 already states, just on a realistic top-k-sampling distribution rather than a hand-built row. c1 (non-finite stall) and c3 (rebutted low-precision) are likewise already settled. Nothing new and material to add.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t12 ok`
+- `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Review turn. c1 is confirmed on an ordinary in-contract input (mean signed error -0.4928 LSB vs -0.0021 LSB for round-to-nearest, monotone downward mean drift over 10 repeated applications), directly violating the problem.txt requirements of round-to-nearest and unbiased repeated application. c2 is confirmed as a distinct consequence (q=-128, |y| exceeding block absmax by 128/127). Together these fully cover the single root defect at line 14; any further exploration (e.g. tie-breaking convention, other block sizes) would not change the verdict and no other part of the kernel (per-1024-tile absmax, masking, zero-absmax guard) shows a testable in-scope defect.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
+    "reason": "The round's new evidence (t15) is a scope-strengthening result for the existing confirmed claim c2, not a new failure mode. Peaked-softmax probability rows (fp32, 64x512, k=50) show 64/64 rows violating with 17,878 kept entries strictly below the true k-th largest and kept counts up to 427 vs k=50 \u2014 the same absolute-resolution bisection mechanism and the same metric c2 already names, now on a distribution the problem.txt framing (top-k sampling candidate selection) directly implies. Note the milder finding that raw logits, T=1 softmax, T=0.03 softmax, and a 1e5-outlier logit row all kept exactly k with 0 violations, so the defect is distribution-dependent but reachable on plainly in-domain inputs. c1 (non-finite endpoint stall) is confirmed and c3 (low-precision dtype 
+  ...[truncated 151 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Review turn. c1 is confirmed on an ordinary in-contract input (mean signed error -0.4928 LSB vs -0.0021 LSB for round-to-nearest, monotone downward mean drift over 10 repeated applications), directly violating the problem.txt requirements of round-to-nearest and unbiased repeated application. c2 is confirmed as a distinct consequence (q=-128, |y| exceeding block absmax by 128/127). Together these fully cover the single root defect at line 14; any further exploration (e.g. tie-breaking convention, other block sizes) would not change the verdict and no other part of the kernel (per-1024-tile absmax, masking, zero-absmax guard) shows a testable in-scope defect.",
+    "reason": "The round's new evidence (t15) is a scope-strengthening result for the existing confirmed claim c2, not a new failure mode. Peaked-softmax probability rows (fp32, 64x512, k=50) show 64/64 rows violating with 17,878 kept entries strictly below the true k-th largest and kept counts up to 427 vs k=50 \u2014 the same absolute-resolution bisection mechanism and the same metric c2 already names, now on a distribution the problem.txt framing (top-k sampling candidate selection) directly implies. Note the milder finding that raw logits, T=1 softmax, T=0.03 softmax, and a 1e5-outlier logit row all kept exactly k with 0 violations, so the defect is distribution-dependent but reachable on plainly in-domain inputs. c1 (non-finite endpoint stall) is confirmed and c3 (low-precision dtype / fp16 overflow) is rebutted; no remaining untested surface justifies delaying the verdict.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reviewed_tool_event_count": 11,
+    "reviewed_tool_event_count": 15,
     "turn": 6
   }
 
-### Turn 7 - `judge` (15.045315453s, in=49503 out=1026)
+### Turn 7 - `judge` (34.264664652999954s, in=86827 out=2460)
 
 Message:
 
 ```text
-All claims have evidence, both are confirmed and in scope against the operative contract (problem.txt, since no test.py exists), and the Skeptic has signed off with no new claims. Recording the final verdict.
+The ledger is complete: all claims have evidence, the Skeptic signed off with no new claims, and the decisive claim c2 is confirmed and in-scope under problem.txt (the operative contract, since no test.py exists). I am recording the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.85,
     "decisive_claims": [
-      "c1",
       "c2"
     ],
-    "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain), and it explicitly requires two things: q = round(x/scale) \"to the nearest representable level\", and that repeated application \"must not push the tensor systematically toward zero or away from it\". Line 14 of kernel.py implements tl.floor(x/scale), i.e. round toward -infinity.\n\nClaim c1 (confirmed, in_scope, probe t8) measures exactly the contract-required behavior on an ordinary in-contract input (contiguous 1-D float32 torch.randn(4096), cuda, BLOCK=1024 matching the kernel's own per-block scaling): mean signed error is -0.4928 LSB versus -0.0021 LSB 
-  ...[truncated 1378 chars]
+    "reason": "The artifact ships no test.py/get_inputs (files = kernel.py, meta.json, problem.txt), so problem.txt is the operative contract. It requires out[j] = scores[j] only when scores[j] is among the k largest and out[j] = 0 otherwise, and it limits the tie licence strictly to entries that \"share the value at the k-th position\". Claim c2 is confirmed, in_scope, and its scope evidence cites that contract text plus the kernel's fixed 40-step absolute-range bisection (kernel.py:15-21), which only guarantees lo <= v.\n\nDecisive runtime evidence (t10, c2.e1): fp32 row [1e6] + 20 values clustered near 1e-3 spaced 1e-9, k=5 \u2014 the kernel kept all 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3, only
+  ...[truncated 1359 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.85,
     "decisive_claims": [
-      "c1",
       "c2"
     ],
-    "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain), and it explicitly requires two things: q = round(x/scale) \"to the nearest representable level\", and that repeated application \"must not push the tensor systematically toward zero or away from it\". Line 14 of kernel.py implements tl.floor(x/scale), i.e. round toward -infinity.\n\nClaim c1 (confirmed, in_scope, probe t8) measures exactly the contract-required behavior on an ordinary in-contract input (contiguous 1-D float32 torch.randn(4096), cuda, BLOCK=1024 matching the kernel's own per-block scaling): mean signed error is -0.4928 LSB versus -0.0021 LSB for the round-to-nearest reference, max abs error 0.9998 LSB versus 0.4999 LSB, and 49.1% of elements differ from the reference. Over 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699) while the round-to-nearest reference stabilizes after one step (drift -5.3e-05). This is not a tolerable reduction-order or quantization artifact excused
-  ...[truncated 978 chars]
+    "reason": "The artifact ships no test.py/get_inputs (files = kernel.py, meta.json, problem.txt), so problem.txt is the operative contract. It requires out[j] = scores[j] only when scores[j] is among the k largest and out[j] = 0 otherwise, and it limits the tie licence strictly to entries that \"share the value at the k-th position\". Claim c2 is confirmed, in_scope, and its scope evidence cites that contract text plus the kernel's fixed 40-step absolute-range bisection (kernel.py:15-21), which only guarantees lo <= v.\n\nDecisive runtime evidence (t10, c2.e1): fp32 row [1e6] + 20 values clustered near 1e-3 spaced 1e-9, k=5 \u2014 the kernel kept all 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3, only 1 exact tie), with survivors down to 1.0000000e-3. These extras are not ties, are of the same magnitude as the legitimately selected cluster values, and therefore materially change the renormalized sampling weights the problem says are computed downstream. Follow-up t15 reproduces the same failure on a plainly in-domain distribution: peaked-softmax probability rows (64x512, T=0.1, k=50) violated 
+  ...[truncated 959 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Compute scale = max(|x|)/127 over a block of the 1-D input (problem.txt line: \"scale = max(|x|) / 127        per block\")."
+    "Row-wise operation on a 2D score tensor: out[j] = scores[j] if scores[j] is among the k largest of its row, else 0 (problem.txt).",
+    "Tie policy is deliberately underspecified: admitting ALL entries tied at the k-th value and admitting exactly k are BOTH explicitly accepted readings, so a tie-count difference vs torch.topk is in-contract, not a bug.",
+    "The binding invariant stated is monotone/threshold consistency: every kept entry must be >= every dropped entry.",
+    "Implicit remaining requirement from the formula: kept entries must actually be among the k largest, i.e. no entry strictly smaller than the k-th largest value may survive (extras are only licensed when they are exactly tied at the cutoff).",
+    "Downstream use is stated as renormalized sampling weights for top-k sampling, so the numeric values of kept entries and the exact membership set both matter; kept values must be passed through unmodified.",
+    "No test file is present (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), so the operative contract is problem.txt text alone; meta.json has status under_test / passed null."
   ],
   "kernel_model": [
-    "Grid is 1-D over ceil(n/1024); each program handles one BLOCK=1024 tile, so \"per block\" scaling is per-1024-element tile \u2014 this appears to match the stated per-block contract rather than a global absmax."
-  ],
-  "open_questions": [
-    "Does the intended reference use round-half-to-even (torch.round / rint) or round-half-away-from-zero? This matters only for exact-tie inputs, not for the main floor-vs-nearest bias question."
-  ],
-  "risk_map": [
-    "Primary: line 14 uses tl.floor(x/scale) instead of round-to-nearest (e.g. libdevice rint / tl.extra round / floor(x/scale + 0.5) semantics). floor truncates toward -infinity, giving an expected error of about -0.5 LSB per element for uniformly distributed residuals \u2014 a systematic downward (not toward-zero) drift that compounds across repeated applications, exactly what the contract forbids."
-  ],
-  "scope_notes": [
-    "No test_code is present in the artifact and meta.json has passed=null, status=under_test, so there is no harness tolerance to lean on; the operative contract is problem.txt prose (round-to-nearest, unbiased repeated application)."
-  ]
-}
+    "One Triton program per row (grid = (n_rows,)); BLOCK = next_power_of_2(n_cols), lanes >= N masked off, out-of-range loads default to -inf (kernel.py:8-11).",
+    "Threshold search: lo initialized to the row min over valid lanes (padding replaced by +inf), hi to tl.max(x) over the whole block including -inf padding (lines 13-14).",
+    "Fixed 40-iteration bisection: mid=(lo+hi)*0.5; count = number of valid lanes with x >= mid; if count >= K then lo=mid else hi=mid (lines 15-19). Arithmetic is done in the input dtype of x (fp16/bf16 input means fp16/bf16 lo/hi/mid).",
+    "Loop invariant maintained: count(x >= lo) >= K, so lo <= v where v is the k-th largest value; the search never lets lo exceed v. Consequently at least K entries are always kept when K <= N.",
+    "Final rule keep = valid & 
+...[truncated 6023 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_25 is a symmetric INT8 quantize-dequantize round trip in Triton. The problem text requires per-block absmax scaling with round-to-nearest so the round trip is unbiased under repeated application; the kernel computes the scale correctly but quantizes with tl.floor (round toward -inf), which is the primary suspected contract violation.
+- `du1` tasks=`initial`: case_26 implements a per-row top-k mask via a 40-step float bisection on the score value to find a cutoff threshold, then keeps x >= lo. The problem explicitly declares both tie readings acceptable, so the documented "admit all ties" behavior is not by itself a contract violation; the interesting surfaces are threshold-convergence, non-finite values, K/N edge cases, and stride assumptions.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: Line 14 uses tl.floor(x/scale) instead of round-to-nearest, so requantize() truncates toward -infinity: for a typical 1-D float32 input (e.g. torch.randn(4096) on cuda), the output will differ from the reference y = torch.round(x/scale)*scale by up to ~1 LSB on most elements, and the mean signed error (out - x) will be approximately -0.5*scale rather than ~0, i.e. a systematic negative bias that compounds under repeated application (mean of x drifts monotonically downward over ~10 repeated calls).
+Statement: When a row contains a non-finite endpoint the bisection never contracts and the kernel degenerates into a no-op mask that keeps ALL N entries. Concretely: (a) with any -inf entry (pre-masked logits), lo = -inf, mid = (-inf + hi)*0.5 = -inf, count(x >= -inf) = N >= K so lo = -inf for all 40 iterations and keep = (x >= -inf) is true everywhere; (b) with a +inf entry whose multiplicity is < K, hi = +inf, mid = +inf, count(x >= +inf) < K so hi stays +inf and lo never leaves the row min, again keeping everything. Expected failure metric: kept count == N and entries strictly below the k-th largest (including -inf ones) survive with nonzero/pass-through values, violating "out[j] = 0 otherwise".
 
-Scope: `in_scope`
+Scope: `unknown`
 
-Scope rationale: problem.txt is the operative contract (no test.py exists) and states q = round(x/scale) "to the nearest representable level" and that "repeated application must not push the tensor systematically" in one direction. A plain contiguous 1-D float32 tensor is exactly the input the contract admits, so a representative torch.randn(4096) probe is in-scope.
+Scope rationale: problem.txt frames the op as "the candidate selection step of top-k sampling", where score rows are commonly already-masked logits containing -inf, and it gives no restriction to finite inputs. However problem.txt does not explicitly require non-finite support and there is no test.py to pin the input domain, so I mark scope unknown rather than in_scope; a confirmed failure here is a strong generalization note and only decisive if Describer/Judge accept masked logits as in-domain.
 
 Scope evidence:
-- `problem.txt`: Specifies q = round(x / scale) to the nearest representable level and requires the round trip to be unbiased under repeated application; kernel.py line 14 uses tl.floor instead.
+- `problem.txt`: Describes the operation as the candidate-selection step of top-k sampling over rows of scores, with no stated restriction to finite values; -inf-masked logits are the standard input at that stage.
+- `kernel.py:13-19`: lo = row min, hi = row max, mid = (lo+hi)*0.5 with a count>=K branch; an infinite endpoint makes mid infinite and the interval never contracts.
 
-Rationale: tl.floor(v) = round toward -inf; for residuals v - floor(v) uniform in [0,1) the expected quantization error is -0.5 LSB, whereas round-to-nearest gives ~0 expected error. The problem text explicitly forbids a per-step systematic drift.
+Rationale: lo/hi are initialized from tl.min/tl.max of the row, and mid = (lo+hi)*0.5 is degenerate whenever an endpoint is infinite; the count branch then always takes the same side, so the interval never shrinks. This is not a tie disagreement but a total loss of masking.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: torch.randn(4096) cuda float32, BLOCK=1024 per-block absmax reference: kernel mean signed error is -0.4928 LSB vs -0.0021 LSB for round-to-nearest reference; max abs error 0.9998 LSB vs 0.4999 LSB for reference; 49.07% of elements differ from the reference by up to 0.0261 absolute. Under 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699), while the round-to-nearest reference drift is -5.34e-05 and stabilizes after one step. This is exactly the systematic per-step bias problem.txt forbids.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Non-finite endpoints stall the bisection exactly as predicted. Row [3,1,-inf,-inf,5,2,-inf,0.5] with k=2 returned the input unchanged: kept_count=8 of N=8, 6 kept entries strictly below the k-th largest (3.0), including three -inf entries passed through instead of zeroed. Row with a single +inf and k=3 likewise returned all 8 entries (5 kept strictly below the k-th largest 5.0). The all-finite control row behaved correctly (kept_count=3=k, 0 kept below the k-th largest), so the failure is specific to infinite endpoints, not a general fault.
 
 ### c2 - `confirmed`
 
-Statement: Because floor rounds toward -infinity, the most negative element of a block can quantize to q = -128 (floor of a value at or slightly below -127.0 after the float division x/scale), producing y = -128*scale whose magnitude exceeds max(|x|) of that block; the contract's symmetric INT8 levels are [-127,127] and a correct round-to-nearest implementation never exceeds max(|x|). Testable by taking a block whose minimum is the absmax element (e.g. x with min = -3.0, all other |x| < 3.0) and checking whether out.abs().max() > x.abs().max() or any dequantized level equals -128*scale.
+Statement: Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-th largest value v, so entries that are strictly smaller than v and NOT tied with it are kept. Representative in-contract input: a fp32 row of renormalizable non-negative scores (e.g. softmax-like weights) where max ~1 but the k-th largest is ~1e-8 with several near-cutoff neighbours spaced ~1e-12 apart, or a row with one large outlier score (max ~1e6) and a cutoff near 0. Metric: number of kept entries whose value is strictly less than the true k-th largest of the row (should be 0); any such entry is a contract violation since the tie licence only covers exact equality.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines scale = max(|x|)/127 and q = round(x/scale), which bounds |q| <= 127 and |y| <= max(|x|); a plain 1-D float32 tensor containing a negative absmax element is an ordinary admitted input, not a stress/edge dtype or shape case.
+Scope rationale: problem.txt states the required output exactly (out[j] = scores[j] only if among the k largest, else 0) and explicitly limits the tie licence to entries that "share the value at the k-th position". Admitting an entry strictly below the k-th largest is therefore outside both accepted readings. With no test.py present, the operative contract is problem.txt alone, and it admits arbitrary real-valued score rows; I choose representative rows (wide dynamic range / probability-scale scores) that the stated contract permits.
 
 Scope evidence:
-- `problem.txt`: scale = max(|x|)/127 with q = round(x/scale) implies levels in [-127,127] and |y| <= max(|x|); floor can emit -128.
+- `problem.txt`: Requires out[j]=scores[j] only when scores[j] is among the k largest, and limits the tie freedom to entries sharing the k-th value; it also says kept entries are renormalized as sampling weights, so extra non-tied survivors change the output distribution.
+- `kernel.py:15-21`: Fixed 40-step bisection on the value axis with keep = x >= lo; only lo <= v is guaranteed, so any element in [lo, v) survives.
 
-Rationale: x_min/scale evaluates to -127 only if the float division is exact; any rounding down of that quotient makes floor return -128, which is outside the symmetric level set implied by scale = max(|x|)/127 and amplifies the magnitude beyond the input range.
+Rationale: The loop only maintains count(x >= lo) >= K, i.e. lo <= v, with an interval width that shrinks only relative to the initial (max-min) span. When the cutoff magnitude is tiny compared to that span, the residual absolute uncertainty spans many representable values below v, and every element in [lo, v) is admitted with its original value into the downstream renormalization.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Ten single-block (1024-element) cases with the absmax element negative: 1 of 10 (amax=7.77) produced q=-128 for that element, giving out.abs().max()=7.83118 > x.abs().max()=7.76999 (ratio 1.007874 = 128/127), i.e. a dequantized level outside the symmetric [-127,127] level set and a magnitude exceeding the block absmax. The other 9 cases had the float division x/scale land exactly on -127.0 (or -126.99999) so floor kept -127; the defect is therefore data-dependent on float rounding of the quotient, but it does occur on an ordinary in-contract input.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Finite-precision non-convergence confirmed on a wide-dynamic-range fp32 row. Row = [1e6] + 20 values clustered at 1e-3 spaced 1e-9, k=5: the kernel kept ALL 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3), with kept values down to 1.0000000e-3; only 1 entry is exactly tied at the cutoff, so 16 survivors are outside the sanctioned tie licence. Bisection absolute resolution here is (max-min)*2^-40 = 9.09e-7, far coarser than the 1e-9 spacing near the cutoff, matching the mechanism. Two narrower-range cases did NOT fail: softmax-like tail (max 1.0, cutoff 1e-8, spacing 1e-12, resolution 9.1e-13) kept exactly k=6 with 0 violations, and a randn(64) k=8 control kept exactly 8 with 0 violations. So the defect is real but requires the cutoff-cluster spacing to be finer than (max-min)*2^-40.
+
+### c3 - `rebutted`
+
+Statement: All threshold arithmetic (lo, hi, mid) inherits the input tensor dtype, so for fp16/bf16 score rows the search grid is the coarse low-precision grid: mid = (lo+hi)*0.5 stalls once mid rounds to lo or hi, leaving lo up to ~1 bf16 ulp (~0.8% relative) below the k-th largest value, which admits extra entries that are strictly smaller than v and not tied; additionally lo+hi can overflow to +inf in fp16 for same-signed large-magnitude rows (|lo|,|hi| > 32768), corrupting the search into the "keep everything" mode of the infinite-endpoint case. Metric: count of kept entries strictly below the true k-th largest value of the row, plus observed kept-count vs k, on bf16/fp16 rows with near-cutoff neighbours one-to-two ulps apart.
+
+Scope: `unknown`
+
+Scope rationale: problem.txt fixes no dtype and there is no test.py or get_inputs to pin one, so fp16/bf16 is plausible for top-k sampling logits but not contractually required; per scope policy I mark this unknown. It is recorded because the failure mode (extra non-tied survivors, or total mask loss via overflow) is the same contract violation as the fp32 case but with a much larger error magnitude.
+
+Scope evidence:
+- `kernel.py:13-19`: lo/hi come from tl.min/tl.max of x and mid = (lo+hi)*0.5, all in the input dtype; no fp32 upcast of the search variables.
+
+Rationale: Triton promotes the python 0.5 to the operand dtype, so no fp32 accumulator protects the bisection; low-mantissa dtypes make the residual threshold error macroscopic rather than sub-ulp, and fp16's narrow exponent range makes lo+hi overflow reachable.
+
+Evidence:
+- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t11: The low-precision-dtype hypothesis did not reproduce on any of its three named metrics. bf16 row (100.0 plus 12 values 1 bf16-ulp apart, k=4): kept_count=4=k, 0 kept strictly below the k-th largest (1.0703125). fp16 row of the same shape (k=4): kept_count=4, 0 violations. fp16 overflow row (values 30000..49984, so lo+hi = 79984 > 65504 fp16 max, k=2): kept_count=2=k, 0 violations — no overflow-induced keep-everything, indicating the lo/hi/mid search arithmetic is not stalling or overflowing in fp16 as hypothesized (consistent with the reduction/scalar arithmetic being carried at higher precision than the input dtype). Note this rebuts c3's specific predictions; it does not rebut c2, whose fp32 wide-range failure was reproduced separately.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_25"
+  "entry": "case_26"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_25"
+  "entry": "case_26"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_25"
+  "entry": "case_26"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_25"
+  "entry": "case_26"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Compute scale = max(|x|)/127 over a block of the 1-D input (problem.txt line: \"scale = max(|x|) / 127        per block\")."
+    "Row-wise operation on a 2D score tensor: out[j] = scores[j] if scores[j] is among the k largest of its row, else 0 (problem.txt).",
+    "Tie policy is deliberately underspecified: admitting ALL entries tied at the k-th value and admitting exactly k are BOTH explicitly accepted readings, so a tie-count difference vs torch.topk is in-contract, not a bug.",
+    "The binding invariant stated is monotone/threshold consistency: every kept entry must be >= every dropped entry.",
+    "Implicit remaining requirement from the formula: kept entries must actually be among the k largest, i.e. no entry strictly smaller than the k-th largest value may survive (extras are only licensed when they are exactly tied at the cutoff).",
+    "Downstream use is stated as renormalized sampling weights for top-k sampling, so the numeric values of kept entries and the exact membership set both matter; kept values must be passed through unmodified.",
+    "No test file is present (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), so the operative contract is problem.txt text alone; meta.json has status under_test / passed null."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Grid is 1-D over ceil(n/1024); each program handles one BLOCK=1024 tile, so \"per block\" scaling is per-1024-element tile \u2014 this appears to match the stated per-block contract rather than a global absmax."
-  ],
-  "open_questions": [
-    "Does the intended reference use round-half-to-even (torch.round / rint) or round-half-away-from-zero? This matters only for exact-tie inputs, not for the main floor-vs-nearest bias question."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Primary: line 14 uses tl.floor(x/scale) instead of round-to-nearest (e.g. libdevice rint / tl.extra round / floor(x/scale + 0.5) semantics). floor truncates toward -infinity, giving an expected error of about -0.5 LSB per element for uniformly distributed residuals \u2014 a systematic downward (not toward-zero) drift that compounds across repeated applications, exactly what the contract forbids."
-  ],
-  "scope_notes": [
-    "No test_code is present in the artifact and meta.json has passed=null, status=under_test, so there is no harness tolerance to lean on; the operative contract is problem.txt prose (round-to-nearest, unbiased repeated application)."
-  ],
-  "summary": "case_25 is a symmetric INT8 quantize-dequantize round trip in Triton. The problem text requires per-block absmax scaling with round-to-nearest so the round trip is unbiased under repeated application; the kernel computes the scale correctly but quantizes with tl.floor (round toward -inf), which is the primary suspected contract violation.",
-  "task_ids": [],
-  "update_id": "du1"
-}
+    "One Triton program per row (grid = (n_rows,)); BLOCK = next_power_of_2(n_cols), lanes >= N masked off, out-of-range loads default to -inf (kernel.py:8-11).",
+    "Threshold search: lo initialized to the row min over valid lanes (padding replaced by +inf), hi to tl.max(x) over the whole block including -inf padding (lines 13-14).",
+    "Fixed 40-iteration bisection: mid=(lo+hi)*0.5; count = number of valid lanes with x >= mid; if count >= K then lo=mid else hi=mid (lines 15-19). Arithmetic is done in the input dtype of x (fp16/bf16 input means fp16/bf16 lo/hi/mid).",
+    "Loop invariant maintained: count(x >= lo) >= K, so lo <= v where v is the k-th largest value; the search never lets lo exceed v. Consequently at least K entries are always kept when K <= N.",
+    "
+...[truncated 6524 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "tl.floor(v) = round toward -inf; for residuals v - floor(v) uniform in [0,1) the expected quantization error is -0.5 LSB, whereas round-to-nearest gives ~0 expected error. The problem text explicitly forbids a per-step systematic drift.",
-  "scope": "in_scope",
+  "rationale": "lo/hi are initialized from tl.min/tl.max of the row, and mid = (lo+hi)*0.5 is degenerate whenever an endpoint is infinite; the count branch then always takes the same side, so the interval never shrinks. This is not a tie disagreement but a total loss of masking.",
+  "scope": "unknown",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Specifies q = round(x / scale) to the nearest representable level and requires the round trip to be unbiased under repeated application; kernel.py line 14 uses tl.floor instead."
+      "summary": "Describes the operation as the candidate-selection step of top-k sampling over rows of scores, with no stated restriction to finite values; -inf-masked logits are the standard input at that stage."
+    },
+    {
+      "source": "kernel.py:13-19",
+      "summary": "lo = row min, hi = row max, mid = (lo+hi)*0.5 with a count>=K branch; an infinite endpoint makes mid infinite and the interval never contracts."
     }
   ],
-  "scope_rationale": "problem.txt is the operative contract (no test.py exists) and states q = round(x/scale) \"to the nearest representable level\" and that \"repeated application must not push the tensor systematically\" in one direction. A plain contiguous 1-D float32 tensor is exactly the input the contract admits, so a representative torch.randn(4096) probe is in-scope.",
-  "statement": "Line 14 uses tl.floor(x/scale) instead of round-to-nearest, so requantize() truncates toward -infinity: for a typical 1-D float32 input (e.g. torch.randn(4096) on cuda), the output will differ from the reference y = torch.round(x/scale)*scale by up to ~1 LSB on most elements, and the mean signed error (out - x) will be approximately -0.5*scale rather than ~0, i.e. a systematic negative bias that compounds under repeated application (mean of x drifts monotonically downward over ~10 repeated calls).",
-  "status": "open"
-}
+  "scope_rationale": "problem.txt frames the op as \"the candidate selection step of top-k sampling\", where score rows are commonly already-masked logits containing -inf, and it gives no restriction to finite inputs. However problem.txt does not explicitly require non-finite support and there is no test.py to pin the input domain, so I mark scope unknown rather than in_scope; a confirmed failure here is a strong generalization note and only decisive if Describer/Judge accept masked logits as in-domain.",
+  "statement": "When a row contains a non-finite endpoint the bisection never contracts and the kernel degenerates into a no-op mask that keeps ALL N entries. Concretely: (a) with any -inf entry (pre-masked logits), lo = -inf, mid = (-inf + hi)*0.5 = -inf, count(x >= -inf) = N >= K so lo = -inf for all 40 iterations and keep = (x >= -inf) is true everywhere; (b) with a +inf entry whose multiplicity is < K, hi = +inf, mid = +inf, count(x >= +inf) < K so hi stays +inf and lo never leaves the row min, again keeping everything. Expected failure metric: kept count == N and entries strictly below the k-th largest (including -inf ones) survive with nonzero/pass-through v
+...[truncated 65 chars]
 
 ### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "x_min/scale evaluates to -127 only if the float division is exact; any rounding down of that quotient makes floor return -128, which is outside the symmetric level set implied by scale = max(|x|)/127 and amplifies the magnitude beyond the input range.",
+  "rationale": "The loop only maintains count(x >= lo) >= K, i.e. lo <= v, with an interval width that shrinks only relative to the initial (max-min) span. When the cutoff magnitude is tiny compared to that span, the residual absolute uncertainty spans many representable values below v, and every element in [lo, v) is admitted with its original value into the downstream renormalization.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "scale = max(|x|)/127 with q = round(x/scale) implies levels in [-127,127] and |y| <= max(|x|); floor can emit -128."
+      "summary": "Requires out[j]=scores[j] only when scores[j] is among the k largest, and limits the tie freedom to entries sharing the k-th value; it also says kept entries are renormalized as sampling weights, so extra non-tied survivors change the output distribution."
+    },
+    {
+      "source": "kernel.py:15-21",
+      "summary": "Fixed 40-step bisection on the value axis with keep = x >= lo; only lo <= v is guaranteed, so any element in [lo, v) survives."
     }
   ],
-  "scope_rationale": "The contract defines scale = max(|x|)/127 and q = round(x/scale), which bounds |q| <= 127 and |y| <= max(|x|); a plain 1-D float32 tensor containing a negative absmax element is an ordinary admitted input, not a stress/edge dtype or shape case.",
-  "statement": "Because floor rounds toward -infinity, the most negative element of a block can quantize to q = -128 (floor of a value at or slightly below -127.0 after the float division x/scale), producing y = -128*scale whose magnitude exceeds max(|x|) of that block; the contract's symmetric INT8 levels are [-127,127] and a correct round-to-nearest implementation never exceeds max(|x|). Testable by taking a block whose minimum is the absmax element (e.g. x with min = -3.0, all other |x| < 3.0) and checking whether out.abs().max() > x.abs().max() or any dequantized level equals -128*scale.",
-  "status": "open"
-}
+  "scope_rationale": "problem.txt states the required output exactly (out[j] = scores[j] only if among the k largest, else 0) and explicitly limits the tie licence to entries that \"share the value at the k-th position\". Admitting an entry strictly below the k-th largest is therefore outside both accepted readings. With no test.py present, the operative contract is problem.txt alone, and it admits arbitrary real-valued score rows; I choose representative rows (wide dynamic range / probability-scale scores) that the stated contract permits.",
+  "statement": "Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-th largest value v, so entries that are strictly smaller than v and NOT tied with it are kept. Representative in-contract input: a fp32 row of renormalizable non-negative scores (e.g. softmax-like weights) where max ~1 but the k-th largest is ~1e-8 with sev
+...[truncated 343 chars]
 
-### t8 - run_claim_probe - ok
+### t8 - record_claim - ok
 
 {
-  "artifacts": [
+  "id": "c3",
+  "rationale": "Triton promotes the python 0.5 to the operand dtype, so no fp32 accumulator protects the bisection; low-mantissa dtypes make the residual threshold error macroscopic rather than sub-ulp, and fp16's narrow exponent range makes lo+hi overflow reachable.",
+  "scope": "unknown",
+  "scope_evidence": [
     {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "88292a2fd8904f45c30f29243812ba9e815a24fcf554083e5f39e586a14a8a9c"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "65eed3ae9a5be6a4b497b43f3f582993ac177423eebead4084515b4a783ee129"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "5ca47d1e9ab3cbe8b5b04cfceaabc5ff0a19b5b160225534aa64a68cd66b7062"
+      "source": "kernel.py:13-19",
+      "summary": "lo/hi come from tl.min/tl.max of x and mid = (lo+hi)*0.5, all in the input dtype; no fp32 upcast of the search variables."
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "Line 14 uses tl.floor(x/scale) instead of round-to-nearest, so requantize() truncates toward -infinity: for a typical 1-D float32 input (e.g. torch.randn(4096) on cuda), the output will differ from the reference y = torch.round(x/scale)*scale by up to ~1 LSB on most elements, and the mean signed error (out - x) will be approximately -0.5*scale rather than ~0, i.e. a systematic negative bias that compounds under repeated application (mean of x drifts monotonically downward over ~10 repeated calls).",
-  "duration_s": 7.780197,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "88292a2fd8904f45c30f29243812ba9e815a24fcf554083e5f39e586a14a8a9c"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probe
-...[truncated 5617 chars]
+  "scope_rationale": "problem.txt fixes no dtype and there is no test.py or get_inputs to pin one, so fp16/bf16 is plausible for top-k sampling logits but not contractually required; per scope policy I mark this unknown. It is recorded because the failure mode (extra non-tied survivors, or total mask loss via overflow) is the same contract violation as the fp32 case but with a much larger error magnitude.",
+  "statement": "All threshold arithmetic (lo, hi, mid) inherits the input tensor dtype, so for fp16/bf16 score rows the search grid is the coarse low-precision grid: mid = (lo+hi)*0.5 stalls once mid rounds to lo or hi, leaving lo up to ~1 bf16 ulp (~0.8% relative) below the k-th largest value, which admits extra entries that are strictly smaller than v and not tied; additionally lo+hi can overflow to +inf in fp16 for same-signed large-magnitude rows (|lo|,|hi| > 32768), corrupting the search into the \"keep everything\" mode of the infinite-endpoint case. Metric: count of kept entries strictly below the true k-th largest value of the row, plus observed kept-count vs k, on bf16/fp16 rows with near-cutoff neighbours one-to-two ulps apart.",
+  "status": "open"
+}
 
 ### t9 - run_claim_probe - ok
 
@@ -590,13 +699,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "225ee9ddf831a164b29d454e0529447915d810411b7431ab1da3950dc6c3f478"
+      "sha256": "8c5fc42fbaea6e40f327c6240391860b4494ea3f142f2225a7fbdb014a9caaa7"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "5e97f523d9cfdbe7f10ea36b3f1ff56cb6269faa759ac6e95ecdda1013d1192c"
+      "sha256": "2daaeefec47f7cb891bb5c174aff84ec92abe08951f179c47a9fc2748db4ca55"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -608,81 +717,215 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "3f72d01c7a73ec28806dc873629a29d73e6e7b6f7e07b4009abb79552c0b2247"
+      "sha256": "3bd9c41c9f694cfc8512be46974ce6f78aa15e3d06e431df7156bab5f30ee405"
     }
   ],
-  "claim_id": "c2",
-  "claim_statement": "Because floor rounds toward -infinity, the most negative element of a block can quantize to q = -128 (floor of a value at or slightly below -127.0 after the float division x/scale), producing y = -128*scale whose magnitude exceeds max(|x|) of that block; the contract's symmetric INT8 levels are [-127,127] and a correct round-to-nearest implementation never exceeds max(|x|). Testable by taking a block whose minimum is the absmax element (e.g. x with min = -3.0, all other |x| < 3.0) and checking whether out.abs().max() > x.abs().max() or any dequantized level equals -128*scale.",
-  "duration_s": 6.59915,
+  "claim_id": "c1",
+  "claim_statement": "When a row contains a non-finite endpoint the bisection never contracts and the kernel degenerates into a no-op mask that keeps ALL N entries. Concretely: (a) with any -inf entry (pre-masked logits), lo = -inf, mid = (-inf + hi)*0.5 = -inf, count(x >= -inf) = N >= K so lo = -inf for all 40 iterations and keep = (x >= -inf) is true everywhere; (b) with a +inf entry whose multiplicity is < K, hi = +inf, mid = +inf, count(x >= +inf) < K so hi stays +inf and lo never leaves the row min, again keeping everything. Expected failure metric: kept count == N and entries strictly below the k-th largest (including -inf ones) survive with nonzero/pass-through values, violating \"out[j] = 0 otherwise\".",
+  "duration_s": 7.045028,
   "event_id": "t9",
   "evidence_draft": {
-    "claim_id": "c2",
+    "claim_id": "c1",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "225ee9ddf831a164b29d454e0529447915d810411b7431ab1da3950dc6c3f478"
-        },
-        {
-          "description": "Captured stdout
-...[truncated 9390 chars]
+          "sha256": "8c5fc42fbae
+...[truncated 5691 chars]
 
-### t10 - finalize_probe_evidence - ok
+### t10 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t10_probe.py",
+      "sha256": "34cd99e279fb508cba8dfca762e7e2cdf438b88b8f5af5bcc6e5c9eb1a439638"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t10_stdout.txt",
+      "sha256": "36b0d37817e828049b7030466970668914dfa2ac05e3b8dc38badd74b84ec69c"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t10_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t10_json_result.json",
+      "sha256": "29807027832b41dfe3816aef72204e2f30de14e3238afbf04311ff35113b4335"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-th largest value v, so entries that are strictly smaller than v and NOT tied with it are kept. Representative in-contract input: a fp32 row of renormalizable non-negative scores (e.g. softmax-like weights) where max ~1 but the k-th largest is ~1e-8 with several near-cutoff neighbours spaced ~1e-12 apart, or a row with one large outlier score (max ~1e6) and a cutoff near 0. Metric: number of kept entries whose value is strictly less than the true k-th largest of the row (should be 0); any such entry is a contract violation since the tie licence only covers exact equality.",
+  "duration_s": 6.250057,
+  "event_id": "t10",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "k
+...[truncated 6026 chars]
+
+### t11 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "bdb6a4f88919ced71176e991fc923f1611a4ee4e2c24b48c34f567ec0969f556"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "1b05a6bd142c96dfbec67d90a8d818159acbc99b9942d90fb8456edbb1100c17"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "c1a95102093d458b4febb7818a3455c45fd44877e3b61f7f1afb6b1dbe700721"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "All threshold arithmetic (lo, hi, mid) inherits the input tensor dtype, so for fp16/bf16 score rows the search grid is the coarse low-precision grid: mid = (lo+hi)*0.5 stalls once mid rounds to lo or hi, leaving lo up to ~1 bf16 ulp (~0.8% relative) below the k-th largest value, which admits extra entries that are strictly smaller than v and not tied; additionally lo+hi can overflow to +inf in fp16 for same-signed large-magnitude rows (|lo|,|hi| > 32768), corrupting the search into the \"keep everything\" mode of the infinite-endpoint case. Metric: count of kept entries strictly below the true k-th largest value of the row, plus observed kept-count vs k, on bf16/fp16 rows with near-cutoff neighbours one-to-two ulps apart.",
+  "duration_s": 6.313751,
+  "event_id": "t11",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t11_prob
+...[truncated 5350 chars]
+
+### t12 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "torch.randn(4096) cuda float32, BLOCK=1024 per-block absmax reference: kernel mean signed error is -0.4928 LSB vs -0.0021 LSB for round-to-nearest reference; max abs error 0.9998 LSB vs 0.4999 LSB for reference; 49.07% of elements differ from the reference by up to 0.0261 absolute. Under 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699), while the round-to-nearest reference drift is -5.34e-05 and stabilizes after one step. This is exactly the systematic per-step bias problem.txt forbids.",
+  "summary": "Non-finite endpoints stall the bisection exactly as predicted. Row [3,1,-inf,-inf,5,2,-inf,0.5] with k=2 returned the input unchanged: kept_count=8 of N=8, 6 kept entries strictly below the k-th largest (3.0), including three -inf entries passed through instead of zeroed. Row with a single +inf and k=3 likewise returned all 8 entries (5 kept strictly below the k-th largest 5.0). The all-finite control row behaved correctly (kept_count=3=k, 0 kept below the k-th largest), so the failure is specific to infinite endpoints, not a general fault.",
   "supports": "confirmed",
-  "tool_event_id": "t8"
+  "tool_event_id": "t9"
 }
 
-### t11 - finalize_probe_evidence - ok
+### t13 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Ten single-block (1024-element) cases with the absmax element negative: 1 of 10 (amax=7.77) produced q=-128 for that element, giving out.abs().max()=7.83118 > x.abs().max()=7.76999 (ratio 1.007874 = 128/127), i.e. a dequantized level outside the symmetric [-127,127] level set and a magnitude exceeding the block absmax. The other 9 cases had the float division x/scale land exactly on -127.0 (or -126.99999) so floor kept -127; the defect is therefore data-dependent on float rounding of the quotient, but it does occur on an ordinary in-contract input.",
+  "summary": "Finite-precision non-convergence confirmed on a wide-dynamic-range fp32 row. Row = [1e6] + 20 values clustered at 1e-3 spaced 1e-9, k=5: the kernel kept ALL 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3), with kept values down to 1.0000000e-3; only 1 entry is exactly tied at the cutoff, so 16 survivors are outside the sanctioned tie licence. Bisection absolute resolution here is (max-min)*2^-40 = 9.09e-7, far coarser than the 1e-9 spacing near the cutoff, matching the mechanism. Two narrower-range cases did NOT fail: softmax-like tail (max 1.0, cutoff 1e-8, spacing 1e-12, resolution 9.1e-13) kept exactly k=6 with 0 violations, and a randn(64) k=8 control kept exactly 8 with 0 violations. So the defect is real but requires the cutoff-cluster spacing to be finer than (max-min)*2^-40.",
   "supports": "confirmed",
-  "tool_event_id": "t9"
+  "tool_event_id": "t10"
 }
 
-### t12 - record_no_new_claims - ok
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "rebutted",
+  "evidence_id": "c3.e1",
+  "summary": "The low-precision-dtype hypothesis did not reproduce on any of its three named metrics. bf16 row (100.0 plus 12 values 1 bf16-ulp apart, k=4): kept_count=4=k, 0 kept strictly below the k-th largest (1.0703125). fp16 row of the same shape (k=4): kept_count=4, 0 violations. fp16 overflow row (values 30000..49984, so lo+hi = 79984 > 65504 fp16 max, k=2): kept_count=2=k, 0 violations \u2014 no overflow-induced keep-everything, indicating the lo/hi/mid search arithmetic is not stalling or overflowing in fp16 as hypothesized (consistent with the reduction/scalar arithmetic being carried at higher precision than the input dtype). Note this rebuts c3's specific predictions; it does not rebut c2, whose fp32 wide-range failure was reproduced separately.",
+  "supports": "rebutted",
+  "tool_event_id": "t11"
+}
+
+### t15 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t15_probe.py",
+      "sha256": "8fd003aa8c29ad915254281529ce76048b205166103035c3e76d0dc193047104"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t15_stdout.txt",
+      "sha256": "bf1f98b1c954d5c40ab3249bafb2951d774c96fd1361a47fa1371b5417bafa40"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t15_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t15_json_result.json",
+      "sha256": "66a4d4509c3d84666c476e2c796489596c2d5170b11cb131b8aace6e78633de4"
+    }
+  ],
+  "claim_id": "c2",
+  "claim_statement": "Because the bisection resolution is absolute ((max-min)*2^-40) while the cutoff can be many orders of magnitude smaller than the row range, lo can settle strictly more than one representable step below the k-th largest value v, so entries that are strictly smaller than v and NOT tied with it are kept. Representative in-contract input: a fp32 row of renormalizable non-negative scores (e.g. softmax-like weights) where max ~1 but the k-th largest is ~1e-8 with several near-cutoff neighbours spaced ~1e-12 apart, or a row with one large outlier score (max ~1e6) and a cutoff near 0. Metric: number of kept entries whose value is strictly less than the true k-th largest of the row (should be 0); any such entry is a contract violation since the tie licence only covers exact equality.",
+  "duration_s": 5.244014,
+  "event_id": "t15",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "k
+...[truncated 8049 chars]
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Review turn. c1 is confirmed on an ordinary in-contract input (mean signed error -0.4928 LSB vs -0.0021 LSB for round-to-nearest, monotone downward mean drift over 10 repeated applications), directly violating the problem.txt requirements of round-to-nearest and unbiased repeated application. c2 is confirmed as a distinct consequence (q=-128, |y| exceeding block absmax by 128/127). Together these fully cover the single root defect at line 14; any further exploration (e.g. tie-breaking convention, other block sizes) would not change the verdict and no other part of the kernel (per-1024-tile absmax, masking, zero-absmax guard) shows a testable in-scope defect.",
+  "reason": "The round's new evidence (t15) is a scope-strengthening result for the existing confirmed claim c2, not a new failure mode. Peaked-softmax probability rows (fp32, 64x512, k=50) show 64/64 rows violating with 17,878 kept entries strictly below the true k-th largest and kept counts up to 427 vs k=50 \u2014 the same absolute-resolution bisection mechanism and the same metric c2 already names, now on a distribution the problem.txt framing (top-k sampling candidate selection) directly implies. Note the milder finding that raw logits, T=1 softmax, T=0.03 softmax, and a 1e5-outlier logit row all kept exactly k with 0 violations, so the defect is distribution-dependent but reachable on plainly in-domain inputs. c1 (non-finite endpoint stall) is confirmed and c3 (low-precision dtype / fp16 overflow) is rebutted; no remaining untested surface justifies delaying the verdict.",
   "reviewed_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 11,
+  "reviewed_tool_event_count": 15,
   "turn": 6
 }
 
-### t13 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.85,
   "decisive_claims": [
-    "c1",
     "c2"
   ],
-  "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain), and it explicitly requires two things: q = round(x/scale) \"to the nearest representable level\", and that repeated application \"must not push the tensor systematically toward zero or away from it\". Line 14 of kernel.py implements tl.floor(x/scale), i.e. round toward -infinity.\n\nClaim c1 (confirmed, in_scope, probe t8) measures exactly the contract-required behavior on an ordinary in-contract input (contiguous 1-D float32 torch.randn(4096), cuda, BLOCK=1024 matching the kernel's own per-block scaling): mean signed error is -0.4928 LSB versus -0.0021 LSB for the round-to-nearest reference, max abs error 0.9998 LSB versus 0.4999 LSB, and 49.1% of elements differ from the reference. Over 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699) while the round-to-nearest reference stabilizes after one step (drift -5.3e-05). This is not a tolerable reduction-order or quantization artifact excused by the contract; the contract names round-to-nearest and unbiasedness as the requirements, and the kernel implements a -0.5 LSB biased truncation whose compounding drift is the specific failure the problem text calls out.\n\nClaim c2 (confirmed, probe t9) is a distinct consequence of the same defect: with the block absmax element negative, one of ten ordinary single-block cases (amax=7.77) emitted q=-128, giving |y|max = 7.83118 > |x|max = 7.76999 (ratio 128/127), a level outside the symmetric [-127,127] set implied by scale = max(|x|)/127. This is data-dependent on the float quotient, so it is corroborating rather than the primary basis; c1 alone is decisive.\n\nNo unresolved claims remain (claim_coverage shows no open claim ids), and the Describer's only open question \u2014 round-half-
-...[truncated 178 chars]
+  "reason": "The artifact ships no test.py/get_inputs (files = kernel.py, meta.json, problem.txt), so problem.txt is the operative contract. It requires out[j] = scores[j] only when scores[j] is among the k largest and out[j] = 0 otherwise, and it limits the tie licence strictly to entries that \"share the value at the k-th position\". Claim c2 is confirmed, in_scope, and its scope evidence cites that contract text plus the kernel's fixed 40-step absolute-range bisection (kernel.py:15-21), which only guarantees lo <= v.\n\nDecisive runtime evidence (t10, c2.e1): fp32 row [1e6] + 20 values clustered near 1e-3 spaced 1e-9, k=5 \u2014 the kernel kept all 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3, only 1 exact tie), with survivors down to 1.0000000e-3. These extras are not ties, are of the same magnitude as the legitimately selected cluster values, and therefore materially change the renormalized sampling weights the problem says are computed downstream. Follow-up t15 reproduces the same failure on a plainly in-domain distribution: peaked-softmax probability rows (64x512, T=0.1, k=50) violated in 64/64 rows with 17,878 kept entries strictly below the k-th largest and kept counts up to 427 instead of 50.\n\nThis is not a deviation the contract accounts for: the tie ambiguity clause covers only exact equality at the cutoff, no low-precision format is declared, and the failure is a wrong discrete selection set (and wrong nonzero outputs), not a reduction-order or rounding artifact. c1 (bisection stall on \u00b1inf endpoints, kernel returns the input unchanged) is also confirmed but scoped \"unknown\" because problem.txt does not explicitly require non-finite inputs; I treat it as a corroborating generalization note, not the basis of the verdict. c3 (fp16/bf16 grid and overflow) was rebutted by t11 and is set aside. Note that benign cases (randn logits, T=1 softmax, T=0.03 softmax, 
+...[truncated 159 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-08T16:36:54Z",
+  "confidence": 0.85,
+  "created_at": "2026-09-08T16:42:06Z",
   "decisive_claims": [
-    "c1",
     "c2"
   ],
-  "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py or get_inputs narrows the domain), and it explicitly requires two things: q = round(x/scale) \"to the nearest representable level\", and that repeated application \"must not push the tensor systematically toward zero or away from it\". Line 14 of kernel.py implements tl.floor(x/scale), i.e. round toward -infinity.\n\nClaim c1 (confirmed, in_scope, probe t8) measures exactly the contract-required behavior on an ordinary in-contract input (contiguous 1-D float32 torch.randn(4096), cuda, BLOCK=1024 matching the kernel's own per-block scaling): mean signed error is -0.4928 LSB versus -0.0021 LSB for the round-to-nearest reference, max abs error 0.9998 LSB versus 0.4999 LSB, and 49.1% of elements differ from the reference. Over 10 repeated applications the kernel's tensor mean falls monotonically from -0.01569 to -0.05268 (drift -0.03699) while the round-to-nearest reference stabilizes after one step (drift -5.3e-05). This is not a tolerable reduction-order or quantization artifact excused by the contract; the contract names round-to-nearest and unbiasedness as the requirements, and the kernel implements a -0.5 LSB biased truncation whose compounding drift is the specific failure the problem text calls out.\n\nClaim c2 (confirmed, probe t9) is a distinct consequence of the same defect: with the block absmax element negative, one of ten ordinary single-block cases (amax=7.77) emitted q=-128, giving |y|max = 7.83118 > |x|max = 7.76999 (ratio 128/127), a level outside the symmetric [-127,127] set implied by scale = max(|x|)/127. This is data-dependent on the float quotient, so it is corroborating rather than the primary basis; c1 alone is decisive.\n\nNo unresolved claims remain (claim_coverage shows no open claim ids), and the Describer
-...[truncated 218 chars]
+  "reason": "The artifact ships no test.py/get_inputs (files = kernel.py, meta.json, problem.txt), so problem.txt is the operative contract. It requires out[j] = scores[j] only when scores[j] is among the k largest and out[j] = 0 otherwise, and it limits the tie licence strictly to entries that \"share the value at the k-th position\". Claim c2 is confirmed, in_scope, and its scope evidence cites that contract text plus the kernel's fixed 40-step absolute-range bisection (kernel.py:15-21), which only guarantees lo <= v.\n\nDecisive runtime evidence (t10, c2.e1): fp32 row [1e6] + 20 values clustered near 1e-3 spaced 1e-9, k=5 \u2014 the kernel kept all 21 entries, 16 of them strictly below the true k-th largest (1.0000159e-3, only 1 exact tie), with survivors down to 1.0000000e-3. These extras are not ties, are of the same magnitude as the legitimately selected cluster values, and therefore materially change the renormalized sampling weights the problem says are computed downstream. Follow-up t15 reproduces the same failure on a plainly in-domain distribution: peaked-softmax probability rows (64x512, T=0.1, k=50) violated in 64/64 rows with 17,878 kept entries strictly below the k-th largest and kept counts up to 427 instead of 50.\n\nThis is not a deviation the contract accounts for: the tie ambiguity clause covers only exact equality at the cutoff, no low-precision format is declared, and the failure is a wrong discrete selection set (and wrong nonzero outputs), not a reduction-order or rounding artifact. c1 (bisection stall on \u00b1inf endpoints, kernel returns the input unchanged) is also confirmed but scoped \"unknown\" because problem.txt does not explicitly require non-finite inputs; I treat it as a corroborating generalization note, not the basis of the verdict. c3 (fp16/bf16 grid and overflow) was rebutted by t11 and is set aside. Note that benign cases (ran
+...[truncated 199 chars]

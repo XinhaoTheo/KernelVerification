@@ -16,7 +16,7 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
     root = dataset_root(tmp_path / "benchmark_fn_fp", dataset)
     directory = (tmp_path / "benchmark_fn_fp/triton_eval_cases"
                  if dataset != "numerical_pilot" else root / "eval_cases")
-    case = directory / "case_38"
+    case = directory / "case_95"
     case.mkdir(parents=True)
     (case / "kernel.py").write_text("def run(x): return x\n")
     (case / "problem.txt").write_text("Return x unchanged.\n")
@@ -25,7 +25,7 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}}
     validation = validation_path(tmp_path / "benchmark_fn_fp", dataset)
     validation.parent.mkdir(parents=True, exist_ok=True)
-    validation.write_text(json.dumps({"cases": {"case_38": row}}))
+    validation.write_text(json.dumps({"cases": {"case_95": row}}))
     return case, row
 
 
@@ -34,12 +34,12 @@ def frozen_case(tmp_path, dataset="numerical_challenges"):
                                     "real_kernel_challenges"])
 def test_frozen_sources_checked_without_releasing_labels(tmp_path, dataset):
     case, row = frozen_case(tmp_path, dataset)
-    hashes = checked_case_hashes(tmp_path, dataset, "case_38")
+    hashes = checked_case_hashes(tmp_path, dataset, "case_95")
     assert hashes == {key: value for key, value in row.items() if key.endswith("sha256")}
     assert cases_dir(tmp_path, dataset) == case.parent
     (case / "problem.txt").write_text("Changed numerical contract.\n")
     with pytest.raises(ValueError, match="Frozen case changed"):
-        checked_case_hashes(tmp_path, dataset, "case_38")
+        checked_case_hashes(tmp_path, dataset, "case_95")
 
 
 @pytest.mark.parametrize("identity,directory", [("numerical_challenges", "single_call_vs_tools_challenges"),
@@ -51,12 +51,12 @@ def test_renamed_dataset_filters_shared_cases_and_preserves_trace_identity(tmp_p
     unrelated.mkdir()
     (unrelated / "kernel.py").write_text("original benchmark case")
     (benchmark / "case_map.json").write_text(json.dumps({"case_details": {
-        "case_38": {"dataset": identity}, "case_01": {"dataset": "benchmark_fn_fp"}}}))
+        "case_95": {"dataset": identity}, "case_01": {"dataset": "benchmark_fn_fp"}}}))
     assert canonical_dataset(directory) == identity
-    assert case_names(tmp_path, identity) == case_names(tmp_path, directory) == ["case_38"]
+    assert case_names(tmp_path, identity) == case_names(tmp_path, directory) == ["case_95"]
     assert dataset_root(benchmark, identity) == benchmark / directory
     assert validation_path(benchmark, directory) == validation_path(benchmark, identity)
-    assert checked_case_hashes(tmp_path, directory, "case_38") == {
+    assert checked_case_hashes(tmp_path, directory, "case_95") == {
         k: v for k, v in row.items() if k.endswith("sha256")}
     with pytest.raises(ValueError, match="belongs to"):
         checked_case_hashes(tmp_path, directory, "case_01")
@@ -67,14 +67,14 @@ def test_missing_or_invalid_validation_is_not_silently_accepted(tmp_path):
     validation = validation_path(tmp_path / "benchmark_fn_fp", "single_call_vs_tools_challenges")
     validation.unlink()
     with pytest.raises(FileNotFoundError):
-        checked_case_hashes(tmp_path, "numerical_challenges", "case_38")
+        checked_case_hashes(tmp_path, "numerical_challenges", "case_95")
     validation.write_text('{"cases": {}}')
     with pytest.raises(ValueError, match="No GPU validation"):
-        checked_case_hashes(tmp_path, "numerical_challenges", "case_38")
+        checked_case_hashes(tmp_path, "numerical_challenges", "case_95")
     with pytest.raises(ValueError, match="Unknown dataset"):
         cases_dir(tmp_path, "misspelled")
     with pytest.raises(ValueError, match="Invalid case name"):
-        checked_case_hashes(tmp_path, "numerical_challenges", "../case_38")
+        checked_case_hashes(tmp_path, "numerical_challenges", "../case_95")
 
 
 def test_pilot_requires_its_existing_answer_key_and_usable_label(tmp_path):
@@ -82,13 +82,13 @@ def test_pilot_requires_its_existing_answer_key_and_usable_label(tmp_path):
     root = case.parent.parent
     (root / "answer_key.json").unlink()
     # A similarly shaped unrelated freeze must not silently replace the pilot's key.
-    (root / "validation_gpu.json").write_text(json.dumps({"cases": {"case_38": row}}))
+    (root / "validation_gpu.json").write_text(json.dumps({"cases": {"case_95": row}}))
     with pytest.raises(FileNotFoundError):
-        checked_case_hashes(tmp_path, "numerical_pilot", "case_38")
+        checked_case_hashes(tmp_path, "numerical_pilot", "case_95")
     (root / "answer_key.json").write_text(json.dumps({"cases": {
-        "case_38": {**row, "ground_truth": "unknown"}}}))
+        "case_95": {**row, "ground_truth": "unknown"}}}))
     with pytest.raises(ValueError, match="no usable label"):
-        checked_case_hashes(tmp_path, "numerical_pilot", "case_38")
+        checked_case_hashes(tmp_path, "numerical_pilot", "case_95")
 
 
 def test_validator_refuses_cpu_gpu_disagreements(monkeypatch):
@@ -110,11 +110,11 @@ def test_validator_refuses_cpu_gpu_disagreements(monkeypatch):
     spec.loader.exec_module(validator)
     row = {"input_sha256": ["inputs"], "kernel_sha256": "kernel", "problem_sha256": "problem",
            "ground_truth": "trust"}
-    cpu = {"case_38": {**row, "cpu_ground_truth": "trust"}}
-    validator.check_cpu_agreement({"cases": {"case_38": row}}, cpu)
+    cpu = {"case_95": {**row, "cpu_ground_truth": "trust"}}
+    validator.check_cpu_agreement({"cases": {"case_95": row}}, cpu)
     for key in ("input_sha256", "kernel_sha256", "problem_sha256", "ground_truth"):
         with pytest.raises(ValueError, match="CPU/GPU"):
-            validator.check_cpu_agreement({"cases": {"case_38": {**row, key: "wrong"}}}, cpu)
+            validator.check_cpu_agreement({"cases": {"case_95": {**row, key: "wrong"}}}, cpu)
 
 
 def test_archived_public_and_validation_paths_stay_readable_but_cannot_run(tmp_path):
@@ -126,17 +126,17 @@ def test_archived_public_and_validation_paths_stay_readable_but_cannot_run(tmp_p
     archived.mkdir(parents=True)
     collection = benchmark / "single_call_vs_tools_challenges"
     collection.rename(archived / collection.name)
-    public = archived / "triton_eval_cases/case_38"
+    public = archived / "triton_eval_cases/case_95"
     public.parent.mkdir()
     case.rename(public)
     detail = {"dataset": "numerical_challenges", "status": "archived",
               "archive_root": "archive/input_specific", "public_dir": str(public.relative_to(benchmark))}
-    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {"case_38": detail}}))
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {"case_95": detail}}))
     assert case_names(tmp_path, "single_call_vs_tools_challenges") == []
-    assert case_public_dir(benchmark, "case_38") == public
+    assert case_public_dir(benchmark, "case_95") == public
     assert dataset_root(benchmark, "numerical_challenges") == archived / collection.name
     assert validation_path(benchmark, "numerical_challenges").is_file()
-    assert checked_case_hashes(tmp_path, "numerical_challenges", "case_38") == {
+    assert checked_case_hashes(tmp_path, "numerical_challenges", "case_95") == {
         key: value for key, value in frozen.items() if key.endswith("sha256")}
     with pytest.raises(ValueError, match="archived"):
-        case_dataset(tmp_path, "numerical_challenges", "case_38", require_active=True)
+        case_dataset(tmp_path, "numerical_challenges", "case_95", require_active=True)

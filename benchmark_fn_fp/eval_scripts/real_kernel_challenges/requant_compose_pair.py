@@ -14,7 +14,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_156": "trust", "case_157": "reject"}
+EXPECTED = {"case_83": "trust", "case_84": "reject"}
 ATOL = RTOL = 0
 INT_MIN, INT_MAX = -(1 << 31), (1 << 31) - 1
 

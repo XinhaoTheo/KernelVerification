@@ -1,4 +1,4 @@
-"""Derive the case_44–case_49 extension report from canonical traces, without API calls.
+"""Derive the case_101–case_106 extension report from canonical traces, without API calls.
 
 Updates only README.md's EXTENSION RESULTS block; --json also exports a scoreboard under private_data/reports/. Existing cases,
 traces, protocols and the earlier results block are read-only.
@@ -15,11 +15,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
+from case_registry import load_registry, remap_validation_cases
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
 
-CASES = tuple(f"case_{i:02d}" for i in range(44, 50))
+CASES = tuple(f"case_{i:02d}" for i in range(101, 107))
 ARMS = ("single_call", "solo", "debate")
 MODEL = "accounts/fireworks/models/glm-5p3"
 DATASET = "numerical_challenges"
@@ -60,11 +61,14 @@ def _cost(rows):
 
 
 def _labels(root, cases=CASES):
-    gpu = _read(root / "private_data" / "validation_gpu.json").get("cases", {})
+    registry = load_registry(benchmark_root(root))
+    gpu = remap_validation_cases(
+        _read(root / "private_data" / "validation_gpu.json").get("cases", {}),
+        DATASET, registry)
     cpu = {}
     for path in sorted((root / "private_data").glob("answer_key_*.json")):
         data = _read(path)
-        for case, row in data.get("cases", {}).items():
+        for case, row in remap_validation_cases(data.get("cases", {}), DATASET, registry).items():
             if case in cases:
                 if case in cpu:
                     raise ValueError(f"Duplicate CPU key: {case}")
@@ -199,7 +203,7 @@ def replication_gate(rows, labels, *, cases=CASES, low_trials=LOW_TRIALS, requir
 
 
 def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
-           required_families=2, case_range="case_44–case_49"):
+           required_families=2, case_range="case_101–case_106"):
     root = Path(root)
     labels = _labels(root, cases)
     benchmark = benchmark_root(root)

@@ -21,8 +21,8 @@ def _eligible_case():
         trials = report.LOW_TRIALS if arm == "single_call" else report.LOW_TRIALS[:2]
         for index, trial in enumerate(trials):
             rows.append({
-                "case": "case_44", "arm": arm, "trial": trial, "status": "completed",
-                "protocol_issues": [], "attempt_id": f"case_44/{arm}/{trial}",
+                "case": "case_101", "arm": arm, "trial": trial, "status": "completed",
+                "protocol_issues": [], "attempt_id": f"case_101/{arm}/{trial}",
                 "outcome": "wrong_verdict" if arm == "single_call" and index < 2 else "correct",
                 "request_configs": [{}], "usage_coverage": {
                     "status": "complete", "captured_calls": 1,
@@ -33,7 +33,7 @@ def _eligible_case():
 
 
 def _passed(rows, labels):
-    return report.replication_gate(rows, labels)["cases"]["case_44"]["passed"]
+    return report.replication_gate(rows, labels)["cases"]["case_101"]["passed"]
 
 
 def test_numeric_trial_names_preserve_designated_extension_slots():
@@ -76,7 +76,7 @@ def test_later_retry_cannot_replace_a_failed_fixed_slot():
 
 def test_cpu_only_evidence_cannot_qualify():
     rows, labels = _eligible_case()
-    labels["case_44"]["truth_status"] = "cpu_only"
+    labels["case_101"]["truth_status"] = "cpu_only"
     assert not _passed(rows, labels)
 
 
@@ -88,18 +88,18 @@ def test_length_stop_with_a_json_verdict_remains_a_token_limit():
 def test_new_case_range_has_independent_fixed_trial_windows():
     old_rows, _ = _eligible_case()
     trials = ("oz_low32_r1", "oz_low32_r2", "oz_low32_r3")
-    labels = {"case_50": {"family": "new_family", "truth_status": "gpu_verified"}}
-    new_rows = [{**row, "case": "case_50", "trial": row["trial"].replace("extension_", "oz_")}
+    labels = {"case_107": {"family": "new_family", "truth_status": "gpu_verified"}}
+    new_rows = [{**row, "case": "case_107", "trial": row["trial"].replace("extension_", "oz_")}
                 for row in old_rows]
     # Earlier I--N outcomes do not fill an O--Z slot.
-    missing = report.replication_gate(old_rows, labels, cases=("case_50",),
+    missing = report.replication_gate(old_rows, labels, cases=("case_107",),
                                       low_trials=trials, required_families=1)
     assert not missing["passed"]
-    result = report.replication_gate(old_rows + new_rows, labels, cases=("case_50",),
+    result = report.replication_gate(old_rows + new_rows, labels, cases=("case_107",),
                                      low_trials=trials, required_families=1)
     assert result["passed"]
-    assert result["qualifying_cases"] == ["case_50"]
-    assert not report.replication_gate(new_rows, labels, cases=("case_50",),
+    assert result["qualifying_cases"] == ["case_107"]
+    assert not report.replication_gate(new_rows, labels, cases=("case_107",),
                                        low_trials=trials, required_families=2)["passed"]
 
 

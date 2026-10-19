@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_22`
-- Turns: 8
-- Tool events: 14
+- Entry: `case_23`
+- Turns: 10
+- Tool events: 17
 - Claims: 2
-- Description updates: 1
-- LLM time: 155.123s across 7 calls | tokens: in=137480 out=7921 total=145401
+- Description updates: 2
+- LLM time: 117.906s across 9 calls | tokens: in=173658 out=5803 total=179461
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.7
+- Verdict: `reject`
+- Confidence: 0.9
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
   Output summary:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
   Output summary:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
   Output summary:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_22",
+    "entry": "case_23",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_22"
+    "entry": "case_23"
   }
 
-### Turn 2 - `describer` (24.95071834800001s, in=4042 out=1049)
+### Turn 2 - `describer` (20.396251005000067s, in=3952 out=910)
 
 Message:
 
 ```text
-The artifact context is complete (kernel source, contract, metadata), so I'll build the description model directly. The kernel computes a float32 dot product via SPLIT partitions of size ceil(K/SPLIT), each accumulating locally then atomically adding into a single-element output tensor. Coverage looks mathematically complete (partition starts at part*chunk, mask truncates at min(start+chunk, K), and SPLIT*chunk >= K), so the main risks are non-deterministic atomic summation vs. tolerance, contiguity/dtype assumptions, and degenerate split values.
+The kernel hardcodes an NHWC (channels-contiguous) memory convention: it indexes with `pix * C + offs`, treating each pixel's C channels as contiguous. The contract says a kernel is correct if it honors its own layout convention, so the key question is whether the wrapper makes the layout explicit/enforced for callers and whether it handles non-NHWC inputs, unaligned sizes, or the NCHW default of PyTorch.
 ```
 
 Tool calls:
@@ -75,502 +75,655 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Compute the mathematical inner product out = sum_k a[k]*b[k] for two float32 vectors.",
-      "Split-K partitioning and atomic accumulation are permitted as performance choices; summation order is not fixed.",
-      "Acceptance is the mathematical result within tolerance, not bitwise agreement with any particular summation order.",
-      "No test code or explicit tolerance is provided in the artifact; the benchmark harness presumably compares against a reference dot product with a numerical tolerance."
+      "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel affine scaling.",
+      "Both NCHW (PyTorch default, channel axis has large stride) and NHWC (channels-last) layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+      "A kernel is correct if, under its layout convention, it produces the specified per-channel scaling for arbitrary N, C, H, W and scale values.",
+      "scale is a 1-D tensor of length C; no constraint in the problem limits dtype, contiguity, or C size."
     ],
     "kernel_model": [
-      "Kernel _splitk_dot_kernel launches a grid of `split` programs (default 512); each program handles chunk = cdiv(K, SPLIT) contiguous elements starting at part*chunk.",
-      "Each program loops over its chunk in BLOCK=256 tiles, loads with ma
-  ...[truncated 2829 chars]
+      "Kernel _scale_channels_kernel (kernel.py lines 7-12) assumes a flat memory layout where C channels are contiguous per pixel: it computes address pix * C + offs for X and Out, i.e., NHWC / channels-last conv
+  ...[truncated 2734 chars]
   Output summary:
   {
     "contract_model": [
-      "Compute the mathematical inner product out = sum_k a[k]*b[k] for two float32 vectors.",
-      "Split-K partitioning and atomic accumulation are permitted as performance choices; summation order is not fixed.",
-      "Acceptance is the mathematical result within tolerance, not bitwise agreement with any particular summation order.",
-      "No test code or explicit tolerance is provided in the artifact; the benchmark harness presumably compares against a reference dot product with a numerical tolerance."
+      "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel affine scaling.",
+      "Both NCHW (PyTorch default, channel axis has large stride) and NHWC (channels-last) layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+      "A kernel is correct if, under its layout convention, it produces the specified per-channel scaling for arbitrary N, C, H, W and scale values.",
+      "scale is a 1-D tensor of length C; no constraint in the problem limits dtype, contiguity, or C size."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Kernel _splitk_dot_kernel launches a grid of `split` programs (default 512); each program handles chunk = cdiv(K, SPLIT) contiguous elements starting at part*chunk.",
-      "Each program loops over its chunk in BLOCK=256 tiles, loads with mask idx < min(start+chunk, K), other=0.0, accumulates tl.sum(a*b), then tl.atomic_add(Out, acc).",
-      "Coverage: partition i covers [i*chunk, min((i+1)*chunk, K)); since SPLIT*chunk >= K, all K elements are covered exactly once, with no overlap; idle programs contribute 0.0.",
-      "Host wrapper allocates a zeros(1) float32 tensor on a.device, launches with grid=(split,), 
-  ...[truncated 2529 chars]
+      "Kernel _scale_channels_kernel (kernel.py lines 7-12) assumes a flat memory layout where C channels are contiguous per pixel: it computes address pix * C + offs for X and Out, i.e., NHWC / channels-last convention.",
+      "scale_channels (lines 15-20) launches n_pixels = x.numel() // channels programs, one per pixel position, with C as a constexpr block size (tl.arange(0, C) requires C to be a power of 2 in Triton).",
+      "No stride information, no contiguity check, and no transpose handling: the wrapper passes raw data pointers of x and torch.empty_like(x), which preserves x
+  ...[truncated 2458 chars]
 
-### Turn 3 - `skeptic` (12.264520285000003s, in=10947 out=601)
+### Turn 3 - `skeptic` (19.052080565999972s, in=10862 out=1017)
 
 Message:
 
 ```text
-I have the full context already. I'll record the highest-risk, directly testable claims: the atomic fp32 accumulation error under cancellation-heavy inputs, and the int32 index overflow for very large K in Triton's program-id arithmetic.
+The kernel hardcodes NHWC flat addressing with no stride handling or layout enforcement, and Triton's `tl.arange(0, C)` requires a power-of-two block size. I'll record the two highest-risk testable claims.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The kernel adds up to 512 float32 partial sums in arbitrary atomic order; with inputs where large-magnitude partial sums cancel to a small total, the relative error of the fp32 atomic combination can be orders of magnitude larger than a fused/sequential reference, and the artifact provides no stated tolerance to bound it.",
-    "scope": "unknown",
-    "statement": "On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., relative error growing well beyond 1e-5), with run-to-run variance across repeated calls on identical inputs."
+    "rationale": "The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract asks whether scale_channels() produces the specified per-channel scaling; describer contract_model states 'A kernel is correct if, under its layout convention, it produces the specified per-channel scaling for arbitrary N, C, H, W and scale values' and 'no constraint in the problem limits ... C size'."
+      }
+    ],
+    "statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arang
+  ...[truncated 167 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+- `record_claim -> t7 error`
+  Args:
+  {
+    "rationale": "The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract states 'NCHW : the channel axis has the larger stride (PyTorch default)' and both layouts 'appear in production stacks', then asks 'Does scale_channels() satisfy this contract?'. A wrapper that silently returns wrong values for PyTorch-default NCHW inputs wi
+  ...[truncated 585 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 4 - `skeptic` (12.370838283000012s, in=12547 out=752)
+
+Message:
+
+```text
+Both claims were rejected for missing `scope_rationale`; I'll re-send them with that field filled in.
+```
+
+Tool calls:
+
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract asks whether scale_channels() produces the specified per-channel scaling out[n,c,h,w] = x[n,c,h,w]*scale[c] for the operation generally; the contract imposes no constraint on the channel count C, so any C the contract admits (e.g., 3 or 48) must still produce correct scaling."
+      }
+    ],
+    "scope_rationale": "The contract requires correct per-channel scaling for the operation as stated in problem.txt (out[n,c,h,w] =
+  ...[truncated 421 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel adds up to 512 float32 partial sums in arbitrary atomic order; with inputs where large-magnitude partial sums cancel to a small total, the relative error of the fp32 atomic combination can be orders of magnitude larger than a fused/sequential reference, and the artifact provides no stated tolerance to bound it.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "",
-    "statement": "On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., relative error growing well beyond 1e-5), with run-to-run variance across repeated calls on identical inputs.",
-    "status": "open"
-  }
-- `record_claim -> t7 ok`
+    "rationale": "The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract asks whether scale_channels() produces the specified per-channel scaling out[n,c,h,w] = x[n,c,h,w]*scale[c] for the operation generally; the contract imposes no constraint on the channel count C, so any C the contract admits (e.g., 3 or 48) must still produce correct scaling."
+      }
+    ],
+    "scope_rationale": "The contract requires correct per-channel scaling for the operation as stated in problem.txt (out[n,c,h,w] = x[n,c,h,w] * scale[c]) and places no constraint on C; a call with a contract-admitted non-power-of-two C must still produce the specified scaling.",
+    "statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requirement of 
+  ...[truncated 55 chars]
+- `record_claim -> t9 ok`
   Args:
   {
-    "rationale": "Triton typically specializes scalar int args as int32 and program_id is int32; start = part*chunk can reach K, and idx = start+off+arange can reach beyond K when masked loads compute addresses before masking only via `other`, so for K approaching or exceeding 2^31 the index arithmetic overflows, causing wrong or masked-out loads and a wrong sum.",
-    "scope": "unknown",
-    "statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product."
-  }
+    "rationale": "The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract explicitly lists 'NCHW : the channel axis has the larger stride (PyTorch default)' as a common production layout and asks 'Does scale_channels() satisfy this contract?'; the kernel neither documents nor enforces its NHWC convention to the caller, so the PyTo
+  ...[truncated 921 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Triton typically specializes scalar int args as int32 and program_id is int32; start = part*chunk can reach K, and idx = start+off+arange can reach beyond K when masked loads compute addresses before masking only via `other`, so for K approaching or exceeding 2^31 the index arithmetic overflows, causing wrong or masked-out loads and a wrong sum.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "",
-    "statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
-    "status": "open"
-  }
+    "rationale": "The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract explicitly lists 'NCHW : the channel axis has the larger stride (PyTorch default)' as a common production layout and asks 'Does scale_channels() satisfy this contract?'; the kernel neither documents nor enforces its NHWC convention to the caller, so the PyTorch-default NCHW input is a contract-admitted case that yields wrong scaling."
+      }
+    ],
+    "scope_rationale": "problem.txt names NCHW as the PyTorch-default production layout and asks whether scale_channels() satisfies the contract for this operation; the wrapper silently returns wrong values for a default-contiguous NCHW input without enforcing or converting to its documented chann
+  ...[truncated 555 chars]
 
-### Turn 4 - `experimenter` (26.828253330999928s, in=12941 out=1508)
+### Turn 5 - `describer` (14.496803022999984s, in=14265 out=706)
 
 Message:
 
 ```text
-I'll launch two independent probes: c1 tests the atomic-accumulation error on cancellation-heavy inputs with run-to-run variance; c2 tests whether the scalar K argument and program_id arithmetic are int32 in Triton (which determines the overflow risk for K > 2^31, since actually allocating 2^31-element tensors is impractical).
+The description model already covers this artifact; the two open claims (c1 non-power-of-two C, c2 NCHW misaddressing) now need evidence. I'll record a small update clarifying evidence-relevant conditions and remaining unknowns to guide the Experimenter.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `record_description_update -> t10 ok`
+  Args:
+  {
+    "contract_model": [
+      "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel scaling.",
+      "Both NCHW and NHWC layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+      "No stated constraint on C (any channel count) or on scale dtype/contiguity."
+    ],
+    "kernel_model": [
+      "Kernel hardcodes NHWC flat addressing: X + pix*C + offs with C as a tl.arange(0, C) constexpr block size, one program per pixel, no masking.",
+      "Wrapper does no contiguity or layout conversion; empty_like(x) preserves x's memory format.",
+      "The wrapper's only statement of its convention is the line-16 comment 'channels contiguous in memory'."
+    ],
+    "open_questions": [
+      "Does the benchmark harness feed NHWC (channels-last) or PyTorch-defau
+  ...[truncated 1650 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel scaling.",
+      "Both NCHW and NHWC layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+      "No stated constraint on C (any channel count) or on scale dtype/contiguity."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Kernel hardcodes NHWC flat addressing: X + pix*C + offs with C as a tl.arange(0, C) constexpr block size, one program per pixel, no masking.",
+      "Wrapper does no contiguity or layout conversion; empty_like(x) preserves x's memory format.",
+      "The wrapper's only statement of its convention is the line-16 comment 'channels contiguous in memory'."
+    ],
+    "open_questions": [
+      "Does the benchmark harness feed NHWC (channels-last) or PyTorch-default NCHW tensors to scale_channels? This determines whether claim c2's failure mode is contract-decisive or masked; test_code is empty so it is unknown.",
+      "Does the installed Triton version enforce power-of-two tl.arange bounds, and does C=3/48 raise at compile time (claim c1)?",
+      "Is non-power-of-two C in scope at all for this case's hidden tests, or do tests only 
+  ...[truncated 1340 chars]
+
+### Turn 6 - `skeptic` (5.5982688370000915s, in=20480 out=227)
+
+Message:
+
+```text
+Both open claims (c1 non-power-of-two C, c2 NCHW misaddressing) are already in the ledger and await evidence; I have no additional high-quality in-scope claims to raise.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t11 ok`
+  Args:
+  {
+    "reason": "The two decisive, testable hypotheses for this kernel are already recorded: c1 (Triton tl.arange(0, C) power-of-two constraint makes non-power-of-two channel counts like C=3/48 fail) and c2 (hardcoded NHWC flat addressing yields scale[linear % C] instead of scale[c] on PyTorch-default NCHW-contiguous inputs). The remaining risks (non-contiguous sliced views, unusual dtypes, numel truncation) are either out-of-scope per the scope policy or subsumed by c2's addressing failure. No new in-scope claims beyond these two.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "The two decisive, testable hypotheses for this kernel are already recorded: c1 (Triton tl.arange(0, C) power-of-two constraint makes non-power-of-two channel counts like C=3/48 fail) and c2 (hardcoded NHWC flat addressing yields scale[linear % C] instead of scale[c] on PyTorch-default NCHW-contiguous inputs). The remaining risks (non-contiguous sliced views, unusual dtypes, numel truncation) are either out-of-scope per the scope policy or subsumed by c2's addressing failure. No new in-scope claims beyond these two.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 10,
+    "turn": 6
+  }
+
+### Turn 7 - `experimenter` (11.898927767000032s, in=21638 out=700)
+
+Message:
+
+```text
+I'm launching probes for both open claims in parallel: c1 (non-power-of-two C behavior) and c2 (NCHW default-contiguous input misaddressing). These are independent experiments, so I batch them.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t12 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_22/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nK = 8 * 1024 * 1024  # 8M elements, cancellation-heavy\n# construct b so that the true dot is tiny while partial sums are large\na = (torch.randn(K, device=\"cuda\", dtype=torch.float32) * 1e3)\nb = torch.randn(K, device=\"cuda\", dtype=torch.float32)\nb -= (a @ b) / (a @ a) * a  # orthogonalize so exact dot = 0-ish\nref64 = torch.dot(a.double(), b.double()).item()\n\nvals = [k.splitk_dot(a, b).item() for _ in range(50)]\nimport statistics\nspread = max(vals) - min(vals)\nmax_abs_err = max(abs(v - ref64) for v in vals)\n# measure magn
-  ...[truncated 640 chars]
+    "code": "import torch, json, traceback, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_23/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nres = {}\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nfor C in [3, 48, 4]:\n    try:\n        x = torch.randn(2, C, 5, 5, device=dev)\n        s = torch.randn(C, device=dev)\n        out = k.scale_channels(x, s, C)\n        ref = x * s.view(1, C, 1, 1)\n        err = (out - ref).abs().max().item() if out.shape == ref.shape else None\n        res[f\"C{C}\"] = {\"raised\": False, \"max_abs_err_vs_nchw_ref\": err}\n    except Exception as e:\n        res[f\"C{C}\"] = {\"raised\": True, \"exc_type\": type(e).__name__, \"msg\": str(e)[:200]}\nprint(
+  ...[truncated 156 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "d20c37158c1c11bb5e1df5ca4807b441de68634bd0017c461db527937783d675"
+        "path": "probes/t12_probe.py",
+        "sha256": "ed888df883f0cb01c30aba8148d3f7893674d49e641ef8ba66ffda172e433c7d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "72179edf29af9adbbd604e97b193edca07f2770efb483891707046ee106798c4"
+        "path": "probes/t12_stdout.txt",
+        "sha256": "b963aef52caed34ba4b68bcb5f8ce3db6803e165158dcee6edff8b51f2138e83"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
+        "path": "probes/t12_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "632b0ae0605054ecb0b5ab45932ea882ced900e3e4fe11e3338badaeb28670a3"
+        "path": "probes/t12_json_result.json",
+        "sha256": "7d7c7917215ebbed56104c61572352a9ee61f88a2fa88c87224396b85f896721"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., 
-  ...[truncated 3428 chars]
-- `run_claim_probe -> t9 ok`
+    "claim_statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requ
+  ...[truncated 4396 chars]
+- `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import torch, json, triton\n# Determine whether scalar K arg and program_id arithmetic are int32,\n# which decides overflow for K >= 2^31, without allocating 2^31 floats.\nimport triton.language as tl\n\n@triton.jit\ndef _probe_kernel(K, Out):\n    part = tl.program_id(0)\n    chunk = tl.cdiv(K, 512)\n    start = part * chunk\n    tl.store(Out + part, start.to(tl.int64))\n\nK_val = 2**31 + 100  # exceeds int32 range\n# chunk for small real K: emulate real kernel's params with tiny K to inspect dtype\nreal_K = 1000\nout = torch.zeros(512, device=\"cuda\", dtype=torch.int64)\n\n# Inspect the compiled signature of the real kernel for scalar K dtype\nfrom triton.compiler import ASTSource\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"ke
-  ...[truncated 1389 chars]
+    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_23/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\ntorch.manual_seed(0)\nN, C, H, W = 2, 4, 3, 3\nx = torch.randn(N, C, H, W, device=dev)  # default NCHW-contiguous\nassert x.is_contiguous() and not x.is_contiguous(memory_format=torch.channels_last)\ns = torch.arange(1, C+1, dtype=x.dtype, device=dev)  # generic non-uniform\nout = k.scale_channels(x, s, C)\nref = x * s.view(1, C, 1, 1)\nmism = (out != ref)\nlin = torch.arange(N*C*H*W, device=dev) % C\nwrong_ref = x.reshape(-1) * s[lin]\nmatch_wrong = torch.equal(out.reshape(-1), wrong_ref)\nprint(json.dumps({\n 
+  ...[truncated 336 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "49783c37f9bd9ee491779d701d36b8b642bae03a6d932fd50f24dcd02ce35572"
+        "path": "probes/t13_probe.py",
+        "sha256": "26179e344c168d99d0f22326ec643bd82dc0fe58fa7807bba9d4f525e7631a71"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "path": "probes/t13_stdout.txt",
+        "sha256": "83bd1b7c2cd04c33817751e48dd0ab9d1c71eccd249908bf239b5bf4a6dee914"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "89e1f1e2502c4299af5fe7cc2dcc0821791e15c934324d66debaf5fb538bba3d"
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "7e184fc953e5defe28b98751f309870e837a1eb28e4b46f9038eef646bcf13e3"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
-    "duration_s": 6.064993,
-    "event_id": "t9",
-    "evidence_draft": {
-      "claim_id": "c2",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t9_pro
-  ...[truncated 2124 chars]
+    "claim_statement": "When called on a PyTorch-default NCHW-contiguous 4-D tensor x of shape (N, C, H, W) without any channels-last conversion, scale_channels(x, scale, C) returns out[n,c,h,w] = x[n,c,h,w] * scale[(n*C*H*W + c*H*W 
+  ...[truncated 2911 chars]
 
-### Turn 5 - `experimenter` (49.18536544400001s, in=18171 out=2843)
+### Turn 8 - `experimenter` (9.569721352999977s, in=25969 out=463)
 
 Message:
 
 ```text
-The c1 probe completed with a decisive result: on the cancellation-heavy 8M-element input, repeated identical calls gave results from -0.42 to 1.17 (run-to-run spread 1.59) against an fp64 reference of 0.345, so relative error vs. the mathematical inner product is >2.0 and well beyond a 1e-5 tolerance — though the absolute error is tiny relative to the ~5e9 partial-sum magnitude, which I'll note as a scope caveat for the Judge. The c2 probe crashed on a Triton API assumption (`JITFunction.cache`); I'm finalizing t8 and relaunching a redesigned c2 probe that directly exercises the index arithmetic at the K≈2^31 boundary with int64 stores, since Triton typically promotes scalar args larger than int32 to i64 (which would rebut the overflow claim).
+Both probes completed and directly decide the two open claims: C=3/48 raise Triton CompilationError at tl.arange (c1), and the NCHW probe shows the wrong scaling pattern exactly matching scale[linear % C] (c2). I'll finalize both evidence entries.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `finalize_probe_evidence -> t14 ok`
   Args:
   {
     "data": {
-      "K": 8388608,
-      "kernel_max": 1.171875,
-      "kernel_min": -0.421875,
-      "max_abs_err_vs_ref": 0.8267248159972951,
-      "max_rel_err_vs_partial_scale": 1.5480466850479868e-10,
-      "max_rel_err_vs_ref": 2.3952611191156605,
-      "reference_dot_fp64": 0.3451501840027049,
-      "run_to_run_spread": 1.59375,
-      "split": 512
+      "C3_exc_type": "CompilationError",
+      "C3_raised": true,
+      "C48_exc_type": "CompilationError",
+      "C48_raised": true,
+      "C4_raised": false,
+      "device": "cuda",
+      "error_line": "tl.arange(0, C) at kernel.py line 9"
     },
-    "event_id": "t8",
+    "event_id": "t12",
     "status": "confirmed",
-    "summary": "Cancellation-heavy fp32 input (K=8M, a scaled by 1e3, b orthogonalized so true dot \u2248 0.345) with 512-way split-K atomic accumulation: 50 repeated calls on identical inputs produced results in [-0.42, 1.17], run-to-run spread 1.59, max abs error 0.83 vs fp64 reference, relative error vs the mathematical inner product \u2248 2.4 (far beyond a 1e-5 tolerance). Confirms the claim's factual cont
-  ...[truncated 502 chars]
+    "summary": "On CUDA, C=3 and C=48 both raise a Triton CompilationError pointing at tl.arange(0, C) in _scale_channels_kernel (kernel.py line 9), while power-of-two C=4 runs (its large error vs the NCHW reference is the separate c2 layout issue, not a compile failure). This confirms c1: non-power-of-two channel counts fail to compile instead of producing output.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Cancellation-heavy fp32 input (K=8M, a scaled by 1e3, b orthogonalized so true dot \u2248 0.345) with 512-way split-K atomic accumulation: 50 repeated calls on identical inputs produced results in [-0.42, 1.17], run-to-run spread 1.59, max abs error 0.83 vs fp64 reference, relative error vs the mathematical inner product \u2248 2.4 (far beyond a 1e-5 tolerance). Confirms the claim's factual content: non-deterministic run-to-run variance and relative error far exceeding typical tolerance on cancellation-heavy inputs. Caveat for Judge: the error is only 1.5e-10 relative to the ~5.3e9 sum of |a*b| magnitudes (catastrophic cancellation scale), and a plain fp32 sequential dot would also show large relative error here; benchmark tolerance semantics and input distribution are unknown (no test code in artifact), so scope of this failure for the verdict is uncertain.",
+    "summary": "On CUDA, C=3 and C=48 both raise a Triton CompilationError pointing at tl.arange(0, C) in _scale_channels_kernel (kernel.py line 9), while power-of-two C=4 runs (its large error vs the NCHW reference is the separate c2 layout issue, not a compile failure). This confirms c1: non-power-of-two channel counts fail to compile instead of producing output.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t12"
   }
-- `run_claim_probe -> t11 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import torch, json, triton\nimport triton.language as tl\n\n@triton.jit\ndef _idx_probe(K, SPLIT: tl.constexpr, Start, Idx):\n    part = tl.program_id(0)\n    chunk = tl.cdiv(K, SPLIT)\n    start = part * chunk\n    # emulate the kernel's last tile index arithmetic: off = chunk-256 rounded down\n    off = ((chunk - 256) // 256) * 256\n    idx = start + off + tl.arange(0, 256)\n    mask = idx < tl.minimum(start + chunk, K)\n    tl.store(Start + part, start.to(tl.int64))\n    # store the max index under this mask (0 if none), as int64\n    mx = tl.max(tl.where(mask, idx, -2147483648), axis=0)\n    tl.store(Idx + part, mx.to(tl.int64))\n\ndef check(K):\n    starts = torch.zeros(512, device=\"cuda\", dtype=torch.int64)\n    idxs = torch.full((512,), -1, device=
-  ...[truncated 1348 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "8f020897b67594a1ddd8dd21f1974d5269035fd7eff1ed71b3e3422f9cc40099"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "48004ef7fa1f8780c31a6657c169eaf004178534060da15fb00b7cefa82cde8f"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "2ba59fb063a432bdc53bef764eb653a8e47d596fb131681a5b13a627694e3ce7"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
-    "duration_s": 7.2
-  ...[truncated 5124 chars]
-
-### Turn 6 - `experimenter` (19.389536094999926s, in=26626 out=916)
-
-Message:
-
-```text
-The redesigned c2 probe (t11) completed cleanly: an arithmetic-only replication of the kernel's `start = part*chunk` and `idx` computation at K just below and just above 2^31, with int64 stores to expose any int32 wraparound. All 512 partition starts matched expected values exactly, no negative starts appeared, and max stored index stayed within int32 range even at K = 2^31+100. This directly contradicts the overflow hypothesis as stated, so I'm finalizing it as rebutted with a note that it is an arithmetic replication (not a full 2^31-element load test) and far outside any plausible benchmark input domain.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t12 ok`
+- `finalize_probe_evidence -> t15 ok`
   Args:
   {
     "data": {
-      "K_over_2p31": 2147483748,
-      "K_under_2p31": 2147383648,
-      "expected_max_start_over2p31": 2143289855,
-      "max_start_over_2p31": 2143289855,
-      "negative_start_count": 0,
-      "sample_idx_max_over2p31": 2143289853,
-      "sample_idx_max_under2p31": 2147383647,
-      "start_matches_expected": true,
-      "triton_version": "3.4.0"
+      "matches_scale_of_linear_mod_C": true,
+      "max_abs_err": 5.2877,
+      "num_mismatch": 48,
+      "numel": 72,
+      "shape": [
+        2,
+        4,
+        3,
+        3
+      ]
     },
-    "event_id": "t11",
-    "status": "rebutted",
-    "summary": "Arithmetic-only replication of the kernel's index computation (grid of 512 programs, chunk = cdiv(K,512), start = part*chunk, idx = start+off+arange, mask vs min(start+chunk,K)) with int64 stores, run at K = 2^31+100 and K = 2^31-100000 on Triton 3.4.0. All 512 partition starts exactly matched the expected mathematical values, negative_start_count = 0 in both cases, max observed index s
-  ...[truncated 707 chars]
+    "event_id": "t13",
+    "status": "confirmed",
+    "summary": "For a default NCHW-contiguous x of shape (2,4,3,3) with scale=[1,2,3,4], 48 of 72 elements mismatch the correct reference x*scale.view(1,C,1,1) (max abs err 5.29), and the output exactly equals x.reshape(-1)*scale[linear_index % C] (matches_scale_of_linear_mod_C=true). This confirms c2: on PyTorch-default NCHW inputs the kernel scales each element by the wrong per-channel factor.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Arithmetic-only replication of the kernel's index computation (grid of 512 programs, chunk = cdiv(K,512), start = part*chunk, idx = start+off+arange, mask vs min(start+chunk,K)) with int64 stores, run at K = 2^31+100 and K = 2^31-100000 on Triton 3.4.0. All 512 partition starts exactly matched the expected mathematical values, negative_start_count = 0 in both cases, max observed index stayed within int32 range even for K > 2^31, and sample masked-index maxima were correct. No int32 wraparound in start/idx arithmetic was observed at the K\u22482^31 boundary, rebutting the claim's stated overflow mechanism in this environment. Caveats for Judge: (1) this replicates the index arithmetic only \u2014 an actual 2^31-element (2x8GB) tensor load test was infeasible (15.6GB VRAM); (2) no coverage/load test at K > 2^31 was run; (3) the claim is far outside the benchmark's plausible input domain anyway (no test code in the artifact fixes any size, but nothing suggests 2-billion-element vectors). Scope: generalization/stress case, not a decisive in-scope failure.",
-    "supports": "rebutted",
-    "tool_even
-  ...[truncated 14 chars]
+    "summary": "For a default NCHW-contiguous x of shape (2,4,3,3) with scale=[1,2,3,4], 48 of 72 elements mismatch the correct reference x*scale.view(1,C,1,1) (max abs err 5.29), and the output exactly equals x.reshape(-1)*scale[linear_index % C] (matches_scale_of_linear_mod_C=true). This confirms c2: on PyTorch-default NCHW inputs the kernel scales each element by the wrong per-channel factor.",
+    "supports": "confirmed",
+    "tool_event_id": "t13"
+  }
 
-### Turn 7 - `skeptic` (8.879763018000176s, in=32173 out=334)
+### Turn 9 - `skeptic` (9.143949568999915s, in=31980 out=273)
 
 Message:
 
 ```text
-The two claims cover the main risk surfaces. c1 is confirmed but with a major caveat: the cancellation-heavy probe's error is 1.5e-10 relative to partial-sum magnitude, and a plain fp32 sequential dot would show similar relative error on that crafted input — so it's not clearly a kernel-specific in-scope failure. c2's overflow mechanism was rebutted. No new material in-scope evidence has emerged; this is a final review turn.
+Both in-scope claims (c1 non-power-of-two C compile failure, c2 NCHW misaddressing) are confirmed by direct runtime evidence that decisively matches their predicted failure modes. No additional material in-scope problems are exposed by the new evidence.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t13 ok`
+- `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: c1 (atomic accumulation error) is already confirmed with runtime evidence, but its scope remains unknown \u2014 the artifact fixes no tolerance or input distribution, and the probe's error is at catastrophic-cancellation scale (1.5e-10 relative to partial-sum magnitude) where even a sequential fp32 dot would show large relative error, so it does not expose a new material in-scope failure. c2 (int32 index overflow) was rebutted by direct arithmetic replication at the K\u22482^31 boundary. Coverage math is sound (partitions cover K exactly once), and no new evidence suggests further in-scope defects worth holding the verdict for.",
+    "reason": "Final review: both recorded in-scope claims are confirmed by direct runtime evidence. c1 (non-power-of-two C=3/48 raises Triton CompilationError at tl.arange, kernel.py line 9, while power-of-two C=4 compiles) and c2 (default NCHW-contiguous input yields out == x.reshape(-1)*scale[linear % C] with 48/72 mismatches vs x*scale.view(1,C,1,1)) directly reproduce the predicted failure modes. The probes were scoped exactly to the claims; no new failure surfaces (e.g., NHWC benign-path behavior, contiguity guards) expose a material, testable, in-scope problem not already covered, and remaining generalization risks (non-contiguous views, dtypes) are out-of-scope per scope policy. No new claims.",
     "reviewed_claims": [
-      "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unk
-  ...[truncated 80 chars]
+      "c1",
+      "c2"
+    ]
+  }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 (atomic accumulation error) is already confirmed with runtime evidence, but its scope remains unknown \u2014 the artifact fixes no tolerance or input distribution, and the probe's error is at catastrophic-cancellation scale (1.5e-10 relative to partial-sum magnitude) where even a sequential fp32 dot would show large relative error, so it does not expose a new material in-scope failure. c2 (int32 index overflow) was rebutted by direct arithmetic replication at the K\u22482^31 boundary. Coverage math is sound (partitions cover K exactly once), and no new evidence suggests further in-scope defects worth holding the verdict for.",
+    "reason": "Final review: both recorded in-scope claims are confirmed by direct runtime evidence. c1 (non-power-of-two C=3/48 raises Triton CompilationError at tl.arange, kernel.py line 9, while power-of-two C=4 compiles) and c2 (default NCHW-contiguous input yields out == x.reshape(-1)*scale[linear % C] with 48/72 mismatches vs x*scale.view(1,C,1,1)) directly reproduce the predicted failure modes. The probes were scoped exactly to the claims; no new failure surfaces (e.g., NHWC benign-path behavior, contiguity guards) expose a material, testable, in-scope problem not already covered, and remaining generalization risks (non-contiguous views, dtypes) are out-of-scope per scope policy. No new claims.",
     "reviewed_claims": [
-      "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown)",
-      "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)"
+      "c1",
+      "c2"
     ],
-    "reviewed_tool_event_count": 12,
-    "turn": 7
+    "reviewed_tool_event_count": 15,
+    "turn": 9
   }
 
-### Turn 8 - `judge` (13.624464594000074s, in=32580 out=670)
+### Turn 10 - `judge` (15.378701987999875s, in=31965 out=755)
 
 Message:
 
 ```text
-The evidence is complete: the only confirmed claim (c1, atomic-accumulation error on cancellation-heavy inputs) is a crafted catastrophic-cancellation case where the error is only 1.5e-10 relative to the ~5e9 partial-sum magnitude — the same magnitude of error a plain sequential fp32 dot would show — and the contract explicitly permits different summation orders. Its scope is unknown (no test.py fixes tolerance or input distribution), so it cannot support a reject. The c2 overflow claim was rebutted. Coverage math is sound and the Skeptic signed off with no new claims. I'm recording a trust verdict.
+The evidence is decisive on both recorded in-scope claims, and the artifact contains no test.py/get_inputs, so problem.txt is the operative contract. Claim c1 is the strongest basis: the contract requires out[n,c,h,w] = x[n,c,h,w]*scale[c] with no stated constraint on channel count, yet confirmed runtime evidence shows C=3 and C=48 raise a Triton CompilationError at `tl.arange(0, C)` (kernel.py line 9) — the kernel cannot produce the specified scaling for contract-admitted non-power-of-two channel counts. Claim c2 is also confirmed (48/72 mismatches, output exactly matches x*scale[linear%C] on default NCHW input); the contract's layout clause forgives the NHWC convention itself, but the wrapper neither checks nor converts nor errors, silently returning wrong values, which compounds the c1 failure. Skeptic signed off with no new claims, all claims have evidence, and the layout clause does not excuse c1.
 ```
 
 Tool calls:
 
-- `record_verdict -> t14 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.7,
+    "confidence": 0.9,
     "decisive_claims": [
-      "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)",
-      "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown \u2014 not a kernel-specific defect)"
+      "c1",
+      "c2"
     ],
-    "reason": "The kernel implements the required float32 inner product with complete, exact-once element coverage (partition i covers [i*chunk, min((i+1)*chunk, K)), idle programs add 0.0). The contract explicitly permits split-K partitioning and atomic accumulation, requiring only the mathematical result within tolerance, not a fixed summation order. The only confirmed claim, c1, shows large relative error and run-to-run variance only on a deliberately cancellation-heavy crafted input (true dot \u22480.345 while partial su
-  ...[truncated 701 chars]
+    "reason": "problem.txt is the operative contract (no test.py/get_inputs in the artifact). It requires out[n,c,h,w] = x[n,c,h,w]*scale[c] with no constraint on the channel count C. Confirmed runtime evidence (t12) shows C=3 and C=48 raise a Triton CompilationError at tl.arange(0, C) (kernel.py line 9), so the kernel fails to produce the specified scaling for contract-admitted non-power-of-two channel counts \u2014 this is a correctness failure not excused by the contract's layout-convention clause (c1). Additionally, c2 confirmed (t13): on a PyTorch-default NCHW-contiguous input the wrapper silently returns out = x*scale[linear_index % C] (48/72 mismatches, max abs err 5.29) instead of either honoring or enforcing its d
+  ...[truncated 285 chars]
   Output summary:
   {
-    "confidence": 0.7,
+    "confidence": 0.9,
     "decisive_claims": [
-      "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)",
-      "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown \u2014 not a kernel-specific defect)"
+      "c1",
+      "c2"
     ],
-    "reason": "The kernel implements the required float32 inner product with complete, exact-once element coverage (partition i covers [i*chunk, min((i+1)*chunk, K)), idle programs add 0.0). The contract explicitly permits split-K partitioning and atomic accumulation, requiring only the mathematical result within tolerance, not a fixed summation order. The only confirmed claim, c1, shows large relative error and run-to-run variance only on a deliberately cancellation-heavy crafted input (true dot \u22480.345 while partial sums total ~5.3e9 in magnitude); the error is 1.5e-10 relative to partial-sum scale, comparable to what a plain sequential fp32 dot would exhibit, so it reflects inherent float32 catastrophic-cancellation limits, not a defect in the partitioning strategy the contract sanctions. Its scope is also unknown (no test.py, no stated tolerance or input distribution), so it cannot support reject. c2 (int32 i
-  ...[truncated 301 chars]
+    "reason": "problem.txt is the operative contract (no test.py/get_inputs in the artifact). It requires out[n,c,h,w] = x[n,c,h,w]*scale[c] with no constraint on the channel count C. Confirmed runtime evidence (t12) shows C=3 and C=48 raise a Triton CompilationError at tl.arange(0, C) (kernel.py line 9), so the kernel fails to produce the specified scaling for contract-admitted non-power-of-two channel counts \u2014 this is a correctness failure not excused by the contract's layout-convention clause (c1). Additionally, c2 confirmed (t13): on a PyTorch-default NCHW-contiguous input the wrapper silently returns out = x*scale[linear_index % C] (48/72 mismatches, max abs err 5.29) instead of either honoring or enforcing its documented channels-last convention; the layout clause forgives the NHWC choice itself but not silent wrong arithmetic with no guard or conversion. Both claims are in-scope per problem.txt; the contract's layout tolerance does not account for either deviation.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
 {
   "contract_model": [
-    "Compute the mathematical inner product out = sum_k a[k]*b[k] for two float32 vectors.",
-    "Split-K partitioning and atomic accumulation are permitted as performance choices; summation order is not fixed.",
-    "Acceptance is the mathematical result within tolerance, not bitwise agreement with any particular summation order.",
-    "No test code or explicit tolerance is provided in the artifact; the benchmark harness presumably compares against a reference dot product with a numerical tolerance."
+    "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel affine scaling.",
+    "Both NCHW (PyTorch default, channel axis has large stride) and NHWC (channels-last) layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+    "A kernel is correct if, under its layout convention, it produces the specified per-channel scaling for arbitrary N, C, H, W and scale values.",
+    "scale is a 1-D tensor of length C; no constraint in the problem limits dtype, contiguity, or C size.",
+    "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel scaling.",
+    "Both NCHW and NHWC layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+    "No stated constraint on C (any channel count) or on scale dtype/contiguity."
   ],
   "kernel_model": [
-    "Kernel _splitk_dot_kernel launches a grid of `split` programs (default 512); each program handles chunk = cdiv(K, SPLIT) contiguous elements starting at part*chunk.",
-    "Each program loops over its chunk in BLOCK=256 tiles, loads with mask idx < min(start+chunk, K), other=0.0, accumulates tl.sum(a*b), then tl.atomic_add(Out, acc).",
-    "Coverage: partition i covers [i*chunk, min((i+1)*chunk, K)); since SPLIT*chunk >= K, all K elements are covered exactly once, with no overlap; idle programs contribute 0.0.",
-    "Host wrapper allocates a zeros(1) float32 tensor on a.device, launches with grid=(split,), K=a.numel(), and returns the 1-element tensor (not a scalar).",
-    "Assumes a and b are 1D, contiguous, float32, same length, CUDA-resident (raw pointer arithmetic, no strides/handling of other dtypes)."
-  ],
-  "open_questions": [
-    "What tolerance and input distributions does the hidden benchmark use (randn vs. cancellation-prone magnitudes)?",
-    "Does the harness pass contiguous 1D float32 tensors and expect a (1,) tensor or scalar?",
-    "Is split ever passed as a non-default value (e.g., 0, 1, > K) by the tests?",
-    "Does the Triton version in the environment support fp32 atomic_add without fallback?"
-  ],
-  "risk_map": [
-    "Non-deterministic float32 atomic accumulation across up to 512 partial sums: rounding error differs per run and vs. sequential reference; correctness depends on the benchmark toler
-...[truncated 1331 chars]
+    "Kernel _scale_channels_kernel (kernel.py lines 7-12) assumes a flat memory layout where C channels are contiguous per pixel: it computes address pix * C + offs for X and Out, i.e., NHWC / channels-last convention.",
+    "scale_channels (lines 15-20) launches n_pixels = x.numel() // channels programs, one per pixel position, with C as a constexpr block size (tl.arange(0, C) requires C to be a power of 2 in Triton).",
+    "No stride information, no contiguity check, and no transpose handling: the wrapper passes raw data pointers of x and torch.empty_like(x), which preserves x's strides. If x is NCHW-contiguous, addresses pix*C+offs address elements linearly across (n, c, h, w) flattened, pairing each element with scale[(linear index) % C] which is NOT scale[c] under NCHW.",
+    "No masking in the kernel; it assumes numel is exactly divisible by C (true by construction) and that a single arange(0, C) covers C with no power-of-two constraint issue.",
+    "Comment on line 16 explicitly documents the NHWC assumption ('channels contiguous in memory').",
+    "Kernel hardcodes NHWC flat addressing: X + 
+...[truncated 3409 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_22: split-K float32 dot product with per-partition local accumulation and a single atomic_add into a 1-element output; coverage math appears complete, primary risks are atomic-order FP error vs. tolerance and input assumptions (1D contiguous float32, degenerate split values).
+- `du1` tasks=`initial`: Kernel implements per-channel scaling with a hardcoded NHWC (channels-last, C contiguous per pixel) memory convention; contract allows either layout as long as the kernel's convention is honored. Key risk is behavior on PyTorch-default NCHW inputs and unspecified scale layout.
+- `du2` tasks=`initial`: No new source context beyond what's recorded; update refines evidence conditions and open questions for claims c1 (non-power-of-two C compile failure) and c2 (NCHW misaddressing).
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., relative error growing well beyond 1e-5), with run-to-run variance across repeated calls on identical inputs.
+Statement: For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requirement of correct scaling for arbitrary C.
 
-Scope: `unknown`
+Scope: `in_scope`
 
-Rationale: The kernel adds up to 512 float32 partial sums in arbitrary atomic order; with inputs where large-magnitude partial sums cancel to a small total, the relative error of the fp32 atomic combination can be orders of magnitude larger than a fused/sequential reference, and the artifact provides no stated tolerance to bound it.
+Scope rationale: The contract requires correct per-channel scaling for the operation as stated in problem.txt (out[n,c,h,w] = x[n,c,h,w] * scale[c]) and places no constraint on C; a call with a contract-admitted non-power-of-two C must still produce the specified scaling.
 
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Cancellation-heavy fp32 input (K=8M, a scaled by 1e3, b orthogonalized so true dot ≈ 0.345) with 512-way split-K atomic accumulation: 50 repeated calls on identical inputs produced results in [-0.42, 1.17], run-to-run spread 1.59, max abs error 0.83 vs fp64 reference, relative error vs the mathematical inner product ≈ 2.4 (far beyond a 1e-5 tolerance). Confirms the claim's factual content: non-deterministic run-to-run variance and relative error far exceeding typical tolerance on cancellation-heavy inputs. Caveat for Judge: the error is only 1.5e-10 relative to the ~5.3e9 sum of |a*b| magnitudes (catastrophic cancellation scale), and a plain fp32 sequential dot would also show large relative error here; benchmark tolerance semantics and input distribution are unknown (no test code in artifact), so scope of this failure for the verdict is uncertain.
+Scope evidence:
+- `problem.txt`: The contract asks whether scale_channels() produces the specified per-channel scaling out[n,c,h,w] = x[n,c,h,w]*scale[c] for the operation generally; the contract imposes no constraint on the channel count C, so any C the contract admits (e.g., 3 or 48) must still produce correct scaling.
 
-### c2 - `rebutted`
-
-Statement: For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.
-
-Scope: `unknown`
-
-Rationale: Triton typically specializes scalar int args as int32 and program_id is int32; start = part*chunk can reach K, and idx = start+off+arange can reach beyond K when masked loads compute addresses before masking only via `other`, so for K approaching or exceeding 2^31 the index arithmetic overflows, causing wrong or masked-out loads and a wrong sum.
+Rationale: The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t11: Arithmetic-only replication of the kernel's index computation (grid of 512 programs, chunk = cdiv(K,512), start = part*chunk, idx = start+off+arange, mask vs min(start+chunk,K)) with int64 stores, run at K = 2^31+100 and K = 2^31-100000 on Triton 3.4.0. All 512 partition starts exactly matched the expected mathematical values, negative_start_count = 0 in both cases, max observed index stayed within int32 range even for K > 2^31, and sample masked-index maxima were correct. No int32 wraparound in start/idx arithmetic was observed at the K≈2^31 boundary, rebutting the claim's stated overflow mechanism in this environment. Caveats for Judge: (1) this replicates the index arithmetic only — an actual 2^31-element (2x8GB) tensor load test was infeasible (15.6GB VRAM); (2) no coverage/load test at K > 2^31 was run; (3) the claim is far outside the benchmark's plausible input domain anyway (no test code in the artifact fixes any size, but nothing suggests 2-billion-element vectors). Scope: generalization/stress case, not a decisive in-scope failure.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: On CUDA, C=3 and C=48 both raise a Triton CompilationError pointing at tl.arange(0, C) in _scale_channels_kernel (kernel.py line 9), while power-of-two C=4 runs (its large error vs the NCHW reference is the separate c2 layout issue, not a compile failure). This confirms c1: non-power-of-two channel counts fail to compile instead of producing output.
+
+### c2 - `confirmed`
+
+Statement: When called on a PyTorch-default NCHW-contiguous 4-D tensor x of shape (N, C, H, W) without any channels-last conversion, scale_channels(x, scale, C) returns out[n,c,h,w] = x[n,c,h,w] * scale[(n*C*H*W + c*H*W + h*W + w) % C] instead of x[n,c,h,w] * scale[c], i.e., each element is scaled by a wrong per-channel factor (elementwise comparison against x * scale.view(1,C,1,1) fails for generic non-uniform scale).
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt names NCHW as the PyTorch-default production layout and asks whether scale_channels() satisfies the contract for this operation; the wrapper silently returns wrong values for a default-contiguous NCHW input without enforcing or converting to its documented channels-last convention, so the contract's out = x * scale[c] is violated on this contract-admitted input.
+
+Scope evidence:
+- `problem.txt`: The contract explicitly lists 'NCHW : the channel axis has the larger stride (PyTorch default)' as a common production layout and asks 'Does scale_channels() satisfy this contract?'; the kernel neither documents nor enforces its NHWC convention to the caller, so the PyTorch-default NCHW input is a contract-admitted case that yields wrong scaling.
+
+Rationale: The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: For a default NCHW-contiguous x of shape (2,4,3,3) with scale=[1,2,3,4], 48 of 72 elements mismatch the correct reference x*scale.view(1,C,1,1) (max abs err 5.29), and the output exactly equals x.reshape(-1)*scale[linear_index % C] (matches_scale_of_linear_mod_C=true). This confirms c2: on PyTorch-default NCHW inputs the kernel scales each element by the wrong per-channel factor.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_22"
+  "entry": "case_23"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_22"
+  "entry": "case_23"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_22"
+  "entry": "case_23"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_22"
+  "entry": "case_23"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Compute the mathematical inner product out = sum_k a[k]*b[k] for two float32 vectors.",
-    "Split-K partitioning and atomic accumulation are permitted as performance choices; summation order is not fixed.",
-    "Acceptance is the mathematical result within tolerance, not bitwise agreement with any particular summation order.",
-    "No test code or explicit tolerance is provided in the artifact; the benchmark harness presumably compares against a reference dot product with a numerical tolerance."
+    "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel affine scaling.",
+    "Both NCHW (PyTorch default, channel axis has large stride) and NHWC (channels-last) layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+    "A kernel is correct if, under its layout convention, it produces the specified per-channel scaling for arbitrary N, C, H, W and scale values.",
+    "scale is a 1-D tensor of length C; no constraint in the problem limits dtype, contiguity, or C size."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Kernel _splitk_dot_kernel launches a grid of `split` programs (default 512); each program handles chunk = cdiv(K, SPLIT) contiguous elements starting at part*chunk.",
-    "Each program loops over its chunk in BLOCK=256 tiles, loads with mask idx < min(start+chunk, K), other=0.0, accumulates tl.sum(a*b), then tl.atomic_add(Out, acc).",
-    "Coverage: partition i covers [i*chunk, min((i+1)*chunk, K)); since SPLIT*chunk >= K, all K elements are covered exactly once, with no overlap; idle programs contribute 0.0.",
-    "Host wrapper allocates a zeros(1) float32 tensor on a.device, launches with grid=(split,), K=a.numel(), and returns the 1-element tensor (not a scalar).",
-    "Assumes a and b are 1D, contiguous, float32, same length, CUDA-resident (raw pointer arithmetic, no strides/handling of other dtypes)."
+    "Kernel _scale_channels_kernel (kernel.py lines 7-12) assumes a flat memory layout where C channels are contiguous per pixel: it computes address pix * C + offs for X and Out, i.e., NHWC / channels-last convention.",
+    "scale_channels (lines 15-20) launches n_pixels = x.numel() // channels programs, one per pixel position, with C as a constexpr block size (tl.arange(0, C) requires C to be a power of 2 in Triton).",
+    "No stride information, no contiguity check, and no transpose handling: the wrapper passes raw data pointers of x and torch.empty_like(x), which preserves x's strides. If x is NCHW-contiguous, addresses pix*C+offs address elements linearly across (n, c, h, w) flattened, pairing each element with scale[(linear index) % C] which is NOT scale[c] under NCHW.",
+    "No masking in the kernel; it assumes numel is exactly divisible by C (true by construction) and that a single arange(0, C) covers C with no power-of-two constraint issue.",
+    "Comment on line 16 explicitly documents the NHWC assumption ('channels contiguous in memory')."
   ],
-  "open_questions": [
-    "What tolerance and input distributions does the hidden benchmark use (randn vs. cancellation-prone magnitudes)?",
-    "Does the harness pass contiguous 1D float32 tensors and expect a (1,) tensor or scalar?",
-    "Is split ever passed as a non-default value (e.g., 0, 1, > K) by the tests?",
-    "Does the Triton version in the environment support fp32 atomic_add without fallback?"
-  ],
+  "open_questions": [],
   "resolved_tasks": [],
   "risk_map": [
-    "Non-deterministic float32 atomic accumulation across up to 512 partial sums: rounding error differs per run and vs. sequential ref
-...[truncated 1729 chars]
+    "Correctness for a PyTorch-default NCHW-contiguous input: the kernel applies scale[e % C] over the flattened index instead of scale[c], producing wrong values unless the caller first converts to channels-last. Contract may still be satisfied if 
+...[truncated 1658 chars]
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t7 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t8 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel adds up to 512 float32 partial sums in arbitrary atomic order; with inputs where large-magnitude partial sums cancel to a small total, the relative error of the fp32 atomic combination can be orders of magnitude larger than a fused/sequential reference, and the artifact provides no stated tolerance to bound it.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "",
-  "statement": "On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., relative error growing well beyond 1e-5), with run-to-run variance across repeated calls on identical inputs.",
+  "rationale": "The wrapper passes channels as a Triton constexpr block size directly into tl.arange(0, C); Triton block sizes must be powers of two, so C=3 or C=48 should fail to compile rather than produce correct output. The contract states no constraint on C.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "The contract asks whether scale_channels() produces the specified per-channel scaling out[n,c,h,w] = x[n,c,h,w]*scale[c] for the operation generally; the contract imposes no constraint on the channel count C, so any C the contract admits (e.g., 3 or 48) must still produce correct scaling."
+    }
+  ],
+  "scope_rationale": "The contract requires correct per-channel scaling for the operation as stated in problem.txt (out[n,c,h,w] = x[n,c,h,w] * scale[c]) and places no constraint on C; a call with a contract-admitted non-power-of-two C must still produce the specified scaling.",
+  "statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requirement of correct scaling for arbitrary C.",
   "status": "open"
 }
 
-### t7 - record_claim - ok
+### t9 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Triton typically specializes scalar int args as int32 and program_id is int32; start = part*chunk can reach K, and idx = start+off+arange can reach beyond K when masked loads compute addresses before masking only via `other`, so for K approaching or exceeding 2^31 the index arithmetic overflows, causing wrong or masked-out loads and a wrong sum.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "",
-  "statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
+  "rationale": "The wrapper passes raw data pointers of x and torch.empty_like(x), which preserve NCHW strides. Addressing pix*C+offs then spans elements across the n, h, w axes, so under the PyTorch-default NCHW layout each element is paired with scale[linear_index % C] rather than scale[c]. Nothing in the wrapper checks or converts the layout, so a caller passing a default-contiguous tensor gets silently wrong results.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "The contract explicitly lists 'NCHW : the channel axis has the larger stride (PyTorch default)' as a common production layout and asks 'Does scale_channels() satisfy this contract?'; the kernel neither documents nor enforces its NHWC convention to the caller, so the PyTorch-default NCHW input is a contract-admitted case that yields wrong scaling."
+    }
+  ],
+  "scope_rationale": "problem.txt names NCHW as the PyTorch-default production layout and asks whether scale_channels() satisfies the contract for this operation; the wrapper silently returns wrong values for a default-contiguous NCHW input without enforcing or converting to its documented channels-last convention, so the contract's out = x * scale[c] is violated on this contract-admitted input.",
+  "statement": "When called on a PyTorch-default NCHW-contiguous 4-D tensor x of shape (N, C, H, W) without any channels-last conversion, scale_channels(x, scale, C) returns out[n,c,h,w] = x[n,c,h,w] * scale[(n*C*H*W + c*H*W + h*W + w) % C] instead of x[n,c,h,w] * scale[c], i.e., each element is scaled by a wrong per-channel factor (elementwise comparison against x * scale.view(1,C,1,1) fails for generic non-uniform scale).",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t10 - record_description_update - ok
+
+{
+  "contract_model": [
+    "Contract: out[n,c,h,w] = x[n,c,h,w] * scale[c], elementwise per-channel scaling.",
+    "Both NCHW and NHWC layouts are legitimate; correctness is judged once the kernel's own layout convention is honored.",
+    "No stated constraint on C (any channel count) or on scale dtype/contiguity."
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "Kernel hardcodes NHWC flat addressing: X + pix*C + offs with C as a tl.arange(0, C) constexpr block size, one program per pixel, no masking.",
+    "Wrapper does no contiguity or layout conversion; empty_like(x) preserves x's memory format.",
+    "The wrapper's only statement of its convention is the line-16 comment 'channels contiguous in memory'."
+  ],
+  "open_questions": [
+    "Does the benchmark harness feed NHWC (channels-last) or PyTorch-default NCHW tensors to scale_channels? This determines whether claim c2's failure mode is contract-decisive or masked; test_code is empty so it is unknown.",
+    "Does the installed Triton version enforce power-of-two tl.arange bounds, and does C=3/48 raise at compile time (claim c1)?",
+    "Is non-power-of-two C in scope at all for this case's hidden tests, or do tests only use e.g. C=64?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Claim c1 evidence probe: call scale_channels with C=3 or C=48 (non-power-of-two); expected failure is a Triton compile error on tl.arange(0, C).",
+    "Claim c2 evidence probe: call scale_channels on an NCHW-contiguous x of shape (N,C,H,W) with generic non-uniform scale and compare against x * scale.view(1,C,1,1); mismatch pattern should match scale[linear_index % C].",
+    "A passing benign probe (NHWC, power-of-two C, contiguous x) is not evidence against c1 or c2; claims are scoped to non-power-of-two C and NCHW/default-contiguous inputs respectively.",
+    "Channels-last x plus matching empty_like makes addressing consistent, so NHWC probes are expected to pass and are weak evidence globally."
+  ],
+  "scope_notes": [
+   
+...[truncated 540 chars]
+
+### t11 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The two decisive, testable hypotheses for this kernel are already recorded: c1 (Triton tl.arange(0, C) power-of-two constraint makes non-power-of-two channel counts like C=3/48 fail) and c2 (hardcoded NHWC flat addressing yields scale[linear % C] instead of scale[c] on PyTorch-default NCHW-contiguous inputs). The remaining risks (non-contiguous sliced views, unusual dtypes, numel truncation) are either out-of-scope per the scope policy or subsumed by c2's addressing failure. No new in-scope claims beyond these two.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 10,
+  "turn": 6
+}
+
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "d20c37158c1c11bb5e1df5ca4807b441de68634bd0017c461db527937783d675"
+      "path": "probes/t12_probe.py",
+      "sha256": "ed888df883f0cb01c30aba8148d3f7893674d49e641ef8ba66ffda172e433c7d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "72179edf29af9adbbd604e97b193edca07f2770efb483891707046ee106798c4"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "b963aef52caed34ba4b68bcb5f8ce3db6803e165158dcee6edff8b51f2138e83"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t12_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "632b0ae0605054ecb0b5ab45932ea882ced900e3e4fe11e3338badaeb28670a3"
+      "path": "probes/t12_json_result.json",
+      "sha256": "7d7c7917215ebbed56104c61572352a9ee61f88a2fa88c87224396b85f896721"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "On cancellation-heavy or large-K float32 inputs, splitk_dot's non-deterministic atomic accumulation can produce a result whose error vs. the mathematical inner product exceeds a typical benchmark tolerance (e.g., relative error growing well beyond 1e-5), with run-to-run variance across repeated calls on identical inputs.",
-  "duration_s": 7.693061,
-  "event_id": "t8",
+  "claim_statement": "For a non-power-of-two channel count (e.g., C=3 or C=48), scale_channels fails (tl.arange(0, C) requires a power-of-two block size in Triton) instead of computing out = x * scale, violating the contract's requirement of correct scaling for arbitrary C.",
+  "duration_s": 9.087934,
+  "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -578,119 +731,54 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "d20c37158c1c11bb5e1df5ca4807b441de68634bd0017c461db527937783d675"
+          "path": "probes/t12_probe.py",
+          "sha256": "ed888df883f0cb01c30aba8148d3f7893674d49e641ef8ba66ffda172e433c7d"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "72179edf29af9adbbd604e97b193edca07f2770efb483891707046ee106798c4"
-        },
-        {
-          "description": "Captured stderr from the pro
-...[truncated 2628 chars]
-
-### t9 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "49783c37f9bd9ee491779d701d36b8b642bae03a6d932fd50f24dcd02ce35572"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "89e1f1e2502c4299af5fe7cc2dcc0821791e15c934324d66debaf5fb538bba3d"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
-  "duration_s": 6.064993,
-  "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "49783c37f9bd9ee491779d701d36b8b642bae03a6d932fd50f24dcd02ce35572"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "path": "probes/t12_stdout.txt",
+          "sha256": "b963aef52caed34ba4b68bcb5f8ce3db6803e165158dcee6edff8b51f2138e83"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t9_stderr.txt",
-          "sha256": "89e1f1e2502c4299af5fe7cc2dcc0821791e15c934324d66debaf5fb538bba3d"
-        }
-      ],
-      "duration_s": 6.064993,
-      "exit_code": 1,
-      "expected_signal": "whether scalar K / program_id arithmetic uses int32, implying overflow for K >= 2^31; plus feasibility notes",
-     
-...[truncated 1324 chars]
+          "path": "pr
+...[truncated 3596 chars]
 
-### t10 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Cancellation-heavy fp32 input (K=8M, a scaled by 1e3, b orthogonalized so true dot \u2248 0.345) with 512-way split-K atomic accumulation: 50 repeated calls on identical inputs produced results in [-0.42, 1.17], run-to-run spread 1.59, max abs error 0.83 vs fp64 reference, relative error vs the mathematical inner product \u2248 2.4 (far beyond a 1e-5 tolerance). Confirms the claim's factual content: non-deterministic run-to-run variance and relative error far exceeding typical tolerance on cancellation-heavy inputs. Caveat for Judge: the error is only 1.5e-10 relative to the ~5.3e9 sum of |a*b| magnitudes (catastrophic cancellation scale), and a plain fp32 sequential dot would also show large relative error here; benchmark tolerance semantics and input distribution are unknown (no test code in artifact), so scope of this failure for the verdict is uncertain.",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - run_claim_probe - ok
+### t13 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "8f020897b67594a1ddd8dd21f1974d5269035fd7eff1ed71b3e3422f9cc40099"
+      "path": "probes/t13_probe.py",
+      "sha256": "26179e344c168d99d0f22326ec643bd82dc0fe58fa7807bba9d4f525e7631a71"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "48004ef7fa1f8780c31a6657c169eaf004178534060da15fb00b7cefa82cde8f"
+      "path": "probes/t13_stdout.txt",
+      "sha256": "83bd1b7c2cd04c33817751e48dd0ab9d1c71eccd249908bf239b5bf4a6dee914"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
+      "path": "probes/t13_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "2ba59fb063a432bdc53bef764eb653a8e47d596fb131681a5b13a627694e3ce7"
+      "path": "probes/t13_json_result.json",
+      "sha256": "7e184fc953e5defe28b98751f309870e837a1eb28e4b46f9038eef646bcf13e3"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For very large vectors (K > ~2^31 elements), the index computation start = part*chunk with int32 Triton scalars overflows, producing wrong element coverage and an incorrect inner product.",
-  "duration_s": 7.238095,
-  "event_id": "t11",
+  "claim_statement": "When called on a PyTorch-default NCHW-contiguous 4-D tensor x of shape (N, C, H, W) without any channels-last conversion, scale_channels(x, scale, C) returns out[n,c,h,w] = x[n,c,h,w] * scale[(n*C*H*W + c*H*W + h*W + w) % C] instead of x[n,c,h,w] * scale[c], i.e., each element is scaled by a wrong per-channel factor (elementwise comparison against x * scale.view(1,C,1,1) fails for generic non-uniform scale).",
+  "duration_s": 7.043535,
+  "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -698,67 +786,72 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "8f020897b67594a1ddd8dd21f1974d5269035fd7eff1ed71b3e3422f9cc40099"
+          "path": "probes/t13_probe.py",
+          "sha256": "26179e344c168d99d0f22326ec643bd82dc0fe58fa7807bba9d4f525e7631a71"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "48004ef7fa1f8780c31a6657c169eaf004178534060da15fb00b7cefa82cde8f"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t11_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4
-...[truncated 4324 chars]
+          "path": "probes/t13_stdout.txt",
+          "sha256": "83bd1b7c2cd04c33817751e48dd0ab9d1c71eccd24990
+...[truncated 2111 chars]
 
-### t12 - finalize_probe_evidence - ok
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "On CUDA, C=3 and C=48 both raise a Triton CompilationError pointing at tl.arange(0, C) in _scale_channels_kernel (kernel.py line 9), while power-of-two C=4 runs (its large error vs the NCHW reference is the separate c2 layout issue, not a compile failure). This confirms c1: non-power-of-two channel counts fail to compile instead of producing output.",
+  "supports": "confirmed",
+  "tool_event_id": "t12"
+}
+
+### t15 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Arithmetic-only replication of the kernel's index computation (grid of 512 programs, chunk = cdiv(K,512), start = part*chunk, idx = start+off+arange, mask vs min(start+chunk,K)) with int64 stores, run at K = 2^31+100 and K = 2^31-100000 on Triton 3.4.0. All 512 partition starts exactly matched the expected mathematical values, negative_start_count = 0 in both cases, max observed index stayed within int32 range even for K > 2^31, and sample masked-index maxima were correct. No int32 wraparound in start/idx arithmetic was observed at the K\u22482^31 boundary, rebutting the claim's stated overflow mechanism in this environment. Caveats for Judge: (1) this replicates the index arithmetic only \u2014 an actual 2^31-element (2x8GB) tensor load test was infeasible (15.6GB VRAM); (2) no coverage/load test at K > 2^31 was run; (3) the claim is far outside the benchmark's plausible input domain anyway (no test code in the artifact fixes any size, but nothing suggests 2-billion-element vectors). Scope: generalization/stress case, not a decisive in-scope failure.",
-  "supports": "rebutted",
-  "tool_event_id": "t11"
+  "summary": "For a default NCHW-contiguous x of shape (2,4,3,3) with scale=[1,2,3,4], 48 of 72 elements mismatch the correct reference x*scale.view(1,C,1,1) (max abs err 5.29), and the output exactly equals x.reshape(-1)*scale[linear_index % C] (matches_scale_of_linear_mod_C=true). This confirms c2: on PyTorch-default NCHW inputs the kernel scales each element by the wrong per-channel factor.",
+  "supports": "confirmed",
+  "tool_event_id": "t13"
 }
 
-### t13 - record_no_new_claims - ok
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 (atomic accumulation error) is already confirmed with runtime evidence, but its scope remains unknown \u2014 the artifact fixes no tolerance or input distribution, and the probe's error is at catastrophic-cancellation scale (1.5e-10 relative to partial-sum magnitude) where even a sequential fp32 dot would show large relative error, so it does not expose a new material in-scope failure. c2 (int32 index overflow) was rebutted by direct arithmetic replication at the K\u22482^31 boundary. Coverage math is sound (partitions cover K exactly once), and no new evidence suggests further in-scope defects worth holding the verdict for.",
+  "reason": "Final review: both recorded in-scope claims are confirmed by direct runtime evidence. c1 (non-power-of-two C=3/48 raises Triton CompilationError at tl.arange, kernel.py line 9, while power-of-two C=4 compiles) and c2 (default NCHW-contiguous input yields out == x.reshape(-1)*scale[linear % C] with 48/72 mismatches vs x*scale.view(1,C,1,1)) directly reproduce the predicted failure modes. The probes were scoped exactly to the claims; no new failure surfaces (e.g., NHWC benign-path behavior, contiguity guards) expose a material, testable, in-scope problem not already covered, and remaining generalization risks (non-contiguous views, dtypes) are out-of-scope per scope policy. No new claims.",
   "reviewed_claims": [
-    "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown)",
-    "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)"
+    "c1",
+    "c2"
   ],
-  "reviewed_tool_event_count": 12,
-  "turn": 7
+  "reviewed_tool_event_count": 15,
+  "turn": 9
 }
 
-### t14 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.7,
+  "confidence": 0.9,
   "decisive_claims": [
-    "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)",
-    "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown \u2014 not a kernel-specific defect)"
+    "c1",
+    "c2"
   ],
-  "reason": "The kernel implements the required float32 inner product with complete, exact-once element coverage (partition i covers [i*chunk, min((i+1)*chunk, K)), idle programs add 0.0). The contract explicitly permits split-K partitioning and atomic accumulation, requiring only the mathematical result within tolerance, not a fixed summation order. The only confirmed claim, c1, shows large relative error and run-to-run variance only on a deliberately cancellation-heavy crafted input (true dot \u22480.345 while partial sums total ~5.3e9 in magnitude); the error is 1.5e-10 relative to partial-sum scale, comparable to what a plain sequential fp32 dot would exhibit, so it reflects inherent float32 catastrophic-cancellation limits, not a defect in the partitioning strategy the contract sanctions. Its scope is also unknown (no test.py, no stated tolerance or input distribution), so it cannot support reject. c2 (int32 index overflow at K\u22482^31) was directly rebutted by arithmetic replication on Triton 3.4.0 and is far outside any plausible benchmark domain. No in-scope confirmed failure remains; verdict is trust, with c1 noted as a generalization caveat for cancellation-prone workloads.",
-  "verdict": "trust"
+  "reason": "problem.txt is the operative contract (no test.py/get_inputs in the artifact). It requires out[n,c,h,w] = x[n,c,h,w]*scale[c] with no constraint on the channel count C. Confirmed runtime evidence (t12) shows C=3 and C=48 raise a Triton CompilationError at tl.arange(0, C) (kernel.py line 9), so the kernel fails to produce the specified scaling for contract-admitted non-power-of-two channel counts \u2014 this is a correctness failure not excused by the contract's layout-convention clause (c1). Additionally, c2 confirmed (t13): on a PyTorch-default NCHW-contiguous input the wrapper silently returns out = x*scale[linear_index % C] (48/72 mismatches, max abs err 5.29) instead of either honoring or enforcing its documented channels-last convention; the layout clause forgives the NHWC choice itself but not silent wrong arithmetic with no guard or conversion. Both claims are in-scope per problem.txt; the contract's layout tolerance does not account for either deviation.",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.7,
-  "created_at": "2026-09-30T08:32:53Z",
+  "confidence": 0.9,
+  "created_at": "2026-09-30T08:33:17Z",
   "decisive_claims": [
-    "c2: int32 overflow in start=part*chunk for K>2^31 (rebutted)",
-    "c1: atomic fp32 accumulation error exceeding tolerance on cancellation-heavy inputs (confirmed, scope unknown \u2014 not a kernel-specific defect)"
+    "c1",
+    "c2"
   ],
-  "reason": "The kernel implements the required float32 inner product with complete, exact-once element coverage (partition i covers [i*chunk, min((i+1)*chunk, K)), idle programs add 0.0). The contract explicitly permits split-K partitioning and atomic accumulation, requiring only the mathematical result within tolerance, not a fixed summation order. The only confirmed claim, c1, shows large relative error and run-to-run variance only on a deliberately cancellation-heavy crafted input (true dot \u22480.345 while partial sums total ~5.3e9 in magnitude); the error is 1.5e-10 relative to partial-sum scale, comparable to what a plain sequential fp32 dot would exhibit, so it reflects inherent float32 catastrophic-cancellation limits, not a defect in the partitioning strategy the contract sanctions. Its scope is also unknown (no test.py, no stated tolerance or input distribution), so it cannot support reject. c2 (int32 index overflow at K\u22482^31) was directly rebutted by arithmetic replication on Triton 3.4.0 and is far outside any plausible benchmark domain. No in-scope confirmed failure remains; verdict is trust, with c1 noted as a generalization caveat for cancellation-prone workloads.",
-  "verdict": "trust"
+  "reason": "problem.txt is the operative contract (no test.py/get_inputs in the artifact). It requires out[n,c,h,w] = x[n,c,h,w]*scale[c] with no constraint on the channel count C. Confirmed runtime evidence (t12) shows C=3 and C=48 raise a Triton CompilationError at tl.arange(0, C) (kernel.py line 9), so the kernel fails to produce the specified scaling for contract-admitted non-power-of-two channel counts \u2014 this is a correctness failure not excused by the contract's layout-convention clause (c1). Additionally, c2 confirmed (t13): on a PyTorch-default NCHW-contiguous input the wrapper silently returns out = x*scale[linear_index % C] (48/72 mismatches, max abs err 5.29) instead of either honoring or enforcing its documented channels-last convention; the layout clause forgives the NHWC choice itself but not silent wrong arithmetic with no guard or conversion. Both claims are in-scope per problem.txt; the contract's layout tolerance does not account for either deviation.",
+  "verdict": "reject"
 }

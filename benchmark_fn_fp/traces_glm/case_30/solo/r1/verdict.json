@@ -1,9 +1,9 @@
 {
   "confidence": 0.95,
-  "created_at": "2026-09-10T05:23:13Z",
+  "created_at": "2026-09-30T08:45:32Z",
   "decisive_claims": [
-    "c2"
+    "c1"
   ],
-  "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+  "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final blocks must not attend past the sequence end, so this is a confirmed in-scope violation.",
   "verdict": "reject"
 }

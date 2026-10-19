@@ -1,22 +1,22 @@
 {
-  "name": "fn6_mamba_state_passing_lowbit_drift",
+  "name": "fp4_gptq_int4_quant_tolerance",
   "benchmark_version": "fn_fp_triton_v1",
-  "group": "FN",
-  "seed_class": "FN6",
-  "kernel_family": "Mamba2/SSD chunked state-passing recurrence",
-  "reference": "state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel",
-  "failure_mode": "false_negative",
-  "mechanism": "The real kernel's recurrence is `states = scale * states + new_states` across chunks (scale = exp(cumulative log-decay)). The bug rounds `states` to a coarse grid after every chunk (simulating a low-bit KV-cache-style compression of the recurrent state). The per-step rounding error is tiny; over a short rollout it stays inside tolerance, but it compounds across many chunks.",
+  "group": "FP",
+  "seed_class": "FP4",
+  "kernel_family": "AutoGPTQ INT4 dequant+matmul",
+  "reference": "AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel",
+  "failure_mode": "false_positive",
+  "mechanism": "The real INT4 dequant-matmul kernel is correct; INT4 quantization intentionally introduces rounding noise as the cost of 4-bit weights. A tolerance calibrated for FP32 GEMM (rtol=1e-2, atol=1e-2) can still be exceeded by ordinary, expected INT4 quantization error at larger K, even though the kernel has no defect.",
   "default_tolerance": {
     "rtol": 0.01,
     "atol": 0.01
   },
   "expected": {
-    "ground_truth": "kernel.py rounds the real recurrence's state to a coarse grid every chunk",
-    "naive_allclose_verdict": "PASS at nchunks=5, FAIL at nchunks=2000",
-    "correct_verdict": "BUGGY"
+    "ground_truth": "kernel.py is the real, unmodified INT4 kernel; its error is the expected cost of 4-bit quantization",
+    "naive_allclose_verdict": "FAIL under a fixed FP32-calibrated tolerance at larger K",
+    "correct_verdict": "CORRECT (error matches the expected INT4 quantization noise model)"
   },
-  "note": "kernel.py is the real mamba state-passing recurrence with one added rounding line. Runs on GPU.",
+  "note": "No mutation: kernel.py is the literal real AutoGPTQ kernel (identical to fn3_gptq_dequant_group_div_coverage's kernel.py). This case demonstrates FP4, not FN3. Runs on GPU.",
   "status": "seed_v1",
   "source": "real_triton_kernel_adapted",
   "requires_gpu": true,

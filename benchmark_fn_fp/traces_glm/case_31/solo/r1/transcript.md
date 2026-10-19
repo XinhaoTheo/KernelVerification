@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_31`
-- Turns: 6
-- Tool events: 9
+- Entry: `case_32`
+- Turns: 7
+- Tool events: 10
 - Claims: 1
 - Description updates: 0
-- LLM time: 554.624s across 5 calls | tokens: in=96516 out=3935 total=100451
+- LLM time: 465.263s across 6 calls | tokens: in=91586 out=3909 total=95495
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,140 +25,114 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_31",
+    "entry": "case_32",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 
-### Turn 2 - `solo` (24.09758048399999s, in=12435 out=1262)
+### Turn 2 - `solo` (417.6798612560001s, in=7944 out=1341)
 
 Message:
 
 ```text
-I'll analyze the kernel source for the highest-risk contract failure. The `EVEN_SEQ_KBLOCK` flag at line 226 is computed from `(cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0` — i.e., the *total* key length — rather than per-batch lengths like `EVEN_SEQ_QBLOCK` at line 227. If total is divisible by block size but individual sequence lengths are not (e.g. lengths 5 and 3 with block 4), the flag is wrongly True, so partial k blocks load keys past the sequence end (which belong to the next sequence) without masking, violating the "positions past its end must not contribute to the softmax" clause. Let me record and test this.
+I've reviewed the kernel: a bitonic sort with in-place global-memory compare-exchange, tie-broken by carried original index (a total order, which suggests stability may work). The empirical behavior needs testing, especially for non-power-of-2 W, duplicates, and INT64 extreme values. Let me record a claim and probe.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+    "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier synchronization and per-compare tie-breaking on the carried original index; bitonic networks with masking for W<BLOCK_W and extreme sentinel values (INT64_MAX used for padding, which is also a legal input) could produce wrong sorted order or unstable permutations.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
-      },
+        "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicates within a row are expected."
+      }
+    ],
+    "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted orde
+  ...[truncated 161 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (5.839614928000174s, in=8700 out=302)
+
+Message:
+
+```text
+I'll record the claim properly this time with a scope_rationale, then run a probe.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
+    "scope": "in_scope",
+    "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a sel
-  ...[truncated 481 chars]
+        "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
+      }
+    ],
+    "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible inp
+  ...[truncated 401 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+    "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
-      },
-      {
-        "source": "problem.txt",
-        "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block."
+        "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
       }
     ],
-    "scope_rationale": "Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.",
-    "statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to b
-  ...[truncated 115 chars]
+    "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+    "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT
+  ...[truncated 35 chars]
 
-### Turn 3 - `solo` (497.09427792199995s, in=14047 out=949)
+### Turn 4 - `solo` (11.412853527999914s, in=10036 out=693)
 
 Message:
 
 ```text
-I'll run a probe for claim c1 with a concrete partial-block case (q/k lengths 5+3, block size 4, total 8 divisible by 4) compared against a dense per-sequence reference.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t6 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,causal,scale,hd,nhq,nhk):\n    out=torch.empty_like(q)\n    for b in range(len(cuq)-1):\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\n        for i in range((qe-qs+qbs-1)//qbs):\n            mi_s,mi_e=qs+i*qbs,min(qs+(i+1)*qbs,qe)\n            for j in range((ke-ks+kbs-1)//kbs):\n                if not mask[:, i, j].all(): continue\n                mj_s,mj_e=ks+j*kbs,min(ks+(j+1)*kbs,ke)\n                if causal and (mi_s-qs) + (ke-ks)-(qe-qs) >= mj_s-ks + kbs: p
-  ...[truncated 1720 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
-        "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
-    "duration_s": 6.481873,
-    "event_id": "t6",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by loc
-  ...[truncated 6487 chars]
-
-### Turn 4 - `solo` (13.342236890000095s, in=18988 out=785)
-
-Message:
-
-```text
-The first probe failed only because block size 4 violates Triton's min dot dimension (≥16), not for any contract reason. I'll rerun with block size 32 and per-sequence lengths whose total is divisible (e.g. 40+24=64) so the buggy EVEN_SEQ_KBLOCK flag is triggered.
+I'll run a probe covering varied W (power-of-2 and not), duplicate-heavy rows, and extreme int64 values, checking sortedness and stability.
 ```
 
 Tool calls:
@@ -167,8 +141,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nBS=32  # >= 16, power of 2\n\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,scale):\n    # dense per-sequence reference, non-causal\n    out=torch.zeros_like(q)\n    for b in range(len(cuq)-1):\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\n        qb=q[qs:qe]; kb=k[ks:ke]; vb=v[ks:ke]\n        s=(qb@kb.transpose(-1,-2))*scale\n        p=torch.softmax(s,dim=-1)\n        out[qs:qe]=p@vb\n    return out\n\nresults={}\ncases=[([40,24],[40,24]), ([50,14],[50,14]), ([33,31],[33,31])]\nfor lens_q, lens_k in cases:\n 
-  ...[truncated 1121 chars]
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(keys.cpu(), 1, p)))\n    # stability: reference stable argsort\n    ref = torch.argsort(keys.cpu(), dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\n# 1: power-of-2 W, duplicates\nk = torch.randint(0, 5, (64, 16), dtype=torch.int64)\nresults['W16_dup'] = check(k)\n# 2: non-power-of-2 W\nk = torch.randint(0, 7, (64, 13), dtype=torch.int64)\nresul
+  ...[truncated 1098 chars]
   Output summary:
   {
     "artifacts": [
@@ -176,114 +150,142 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+        "sha256": "124fc62c93c4daa80bf488b370df98917347b441a91f917fcfcfc4eeebda47c9"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
+        "sha256": "ab4e28756b467c5220f58cce6031e93bdfe3459d64abfb410a8bb6d5fb758ef1"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+    "duration_s": 10.030273,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+          
+  ...[truncated 2060 chars]
+
+### Turn 5 - `solo` (10.833456354999953s, in=12758 out=665)
+
+Message:
+
+```text
+The probe crashed on a shape mismatch in my own test code (row of 6 values assigned to an 11-wide row), so nothing was tested yet. I'll fix the probe and rerun.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_32')\nfrom kernel import triton_argsort\n\ndef check(keys):\n    N, W = keys.shape\n    s, p = triton_argsort(keys.cuda())\n    s = s.cpu(); p = p.cpu()\n    kc = keys.cpu()\n    sorted_ok = bool(torch.all(s[:, :-1] <= s[:, 1:]))\n    gather_ok = bool(torch.all(s == torch.gather(kc, 1, p)))\n    ref = torch.argsort(kc, dim=1, stable=True)\n    stable_ok = bool(torch.all(p == ref))\n    return sorted_ok, gather_ok, stable_ok\n\nresults = {}\ntorch.manual_seed(0)\n\nresults['W16_dup'] = check(torch.randint(0, 5, (64, 16), dtype=torch.int64))\nresults['W13_dup'] = check(torch.randint(0, 7, (64, 13), dtype=torch.int64))\nresults['W9_rand'] = check(torch.randint(-100, 100, (32, 9), dtype=torch.int64))
+  ...[truncated 928 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "71494e03e72e5d404a8e9b1befb98ef8f511fd26c162e18c6b0066a57b0e5c73"
+        "path": "probes/t8_json_result.json",
+        "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting key
-  ...[truncated 4533 chars]
+    "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows,
+  ...[truncated 27805 chars]
 
-### Turn 5 - `solo` (11.269884662000095s, in=22830 out=554)
+### Turn 6 - `solo` (11.479240459000039s, in=20516 out=531)
 
 Message:
 
 ```text
-The probe (t7) confirms the hypothesis decisively: in all three cases with per-sequence key lengths not divisible by the block size but a divisible total (40+24, 50+14, 33+31 with block 32), the kernel diverges from the per-sequence dense reference with max absolute errors of ~3.0–3.9 — far beyond any floating-point tolerance and affecting rows throughout both sequences, exactly as expected when keys from the neighboring sequence leak into the softmax. I'll finalize this evidence and issue the verdict.
+The t8 probe results are decisive: sortedness fails for non-power-of-2 W (e.g. W=3,5,6,7,9,12,13,17,33 all show sorted_ok=false while gather_ok=true, meaning rows are permuted wrongly), and even for power-of-2 W the stability requirement fails (W16_dup shows stable_ok=false, and W=2 rows with duplicates fail stability). I'll record this evidence and resolve the claim.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
     "data": {
-      "cases": {
-        "lens=[33,31]": {
-          "max_abs_err": 3.8825,
-          "per_seq_div": [
-            false,
-            false
-          ],
-          "total_div_by_32": true
-        },
-        "lens=[40,24]": {
-          "max_abs_err": 3.5407,
-          "per_seq_div": [
-            false,
-            false
-          ],
-          "total_div_by_32": true
-        },
-        "lens=[50,14]": {
-          "max_abs_err": 3.0143,
-          "per_seq_div": [
-            false,
-            false
-          ],
-          "total_div_by_32": true
-        }
-      },
-      "metric": "max absolute error vs dense per-sequence non-causal reference (block_mask all True)"
+      "gather_ok": "true everywhere (perm is a valid permutation of row)",
+      "sorted_ok": "false for all non-power-of-2 W (3,5,6,7,9,12,13,17,33); true for power-of-2 W (1,2,4,8,16,32)",
+      "stable_ok": "false for every W with duplicates except W=1; e.g. W16_dup [true,true,false], W4 duplicates false, W10 all-equal row false, W11 with INT64_MAX/INT64_MIN keys false"
     },
-    "event_id": "t7",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisi
-  ...[truncated 387 chars]
+    "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (
+  ...[truncated 122 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences \u2014 keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.",
+    "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t8"
   }
 
-### Turn 6 - `solo` (8.820226102000106s, in=28216 out=385)
+### Turn 7 - `solo` (8.018270814000061s, in=31632 out=377)
 
 Message:
 
 ```text
-The single decisive claim c1 is confirmed, in-scope, and backed by runtime evidence from probe t7. No further inquiry would change the outcome. Recording the verdict.
+The investigation is complete: claim c1 is confirmed in-scope with decisive runtime evidence (t8) — the kernel fails both sortedness (non-power-of-2 W) and the required stable tie rule (duplicates, all-equal rows, INT64 extremes). I'll record the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t10 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a den
-  ...[truncated 509 chars]
+    "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplica
+  ...[truncated 315 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final block
-  ...[truncated 109 chars]
+    "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
@@ -293,123 +295,69 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.
+Statement: triton_argsort fails the contract for some admissible input — wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.
 
 Scope: `in_scope`
 
-Scope rationale: Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.
+Scope rationale: The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.
 
 Scope evidence:
-- `problem.txt`: A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'
-- `problem.txt`: out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block.
+- `problem.txt`: Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected.
 
-Rationale: The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.
+Rationale: The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences — keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+  "rationale": "The kernel uses an unusual bitonic compare-exchange through global memory with debug_barrier sync, masked padding using INT64_MAX (which is also a legal key value), and per-compare tie-breaking on carried original index; any of these could produce wrong sorted order or unstable permutations for admissible inputs.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
-    },
-    {
-      "source": "problem.txt",
-      "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block."
+      "summary": "Tie rule: the sort must be STABLE; when two entries hold the same key the one with the LOWER original index must come first. Input domain: keys are arbitrary int64 values; duplicate keys within a row are expected."
     }
   ],
-  "scope_rationale": "Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.",
-  "statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
+  "scope_rationale": "The contract requires per-row ascending stable argsort of arbitrary int64 keys with duplicates, so any admissible input producing non-sorted rows or a permutation that does not order tied keys by lower original index first directly violates the contract.",
+  "statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
   "status": "open"
 }
-
-### t6 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
-      "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
-  "duration_s": 6.481873,
-  "event_id": "t6",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
-        }
-      ],
-      "duration_s": 6.481873,
-      "exit_code": 1,
-      "expected_signal": null,
-      "json_parse_error": "stdout
-...[truncated 5687 chars]
 
 ### t7 - run_claim_probe - ok
 
@@ -419,30 +367,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+      "sha256": "124fc62c93c4daa80bf488b370df98917347b441a91f917fcfcfc4eeebda47c9"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "71494e03e72e5d404a8e9b1befb98ef8f511fd26c162e18c6b0066a57b0e5c73"
+      "sha256": "ab4e28756b467c5220f58cce6031e93bdfe3459d64abfb410a8bb6d5fb758ef1"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
-  "duration_s": 8.908524,
+  "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+  "duration_s": 10.030273,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -452,50 +394,112 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+          "sha256": "124fc62c93c4daa80bf488b370df98917347b441a91f917fcfcfc4eeebda47c9"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path
-...[truncated 3733 chars]
+          "path": "probes/t7_stderr.txt",
+          "sha256": "ab4e28756b467c5220f58cce6031e93bdfe3459d64abfb410a8bb6d5fb758ef1"
+        }
+      ],
+      "duration_s": 10.030273,
+      "exit_code": 1,
+      "expected_signal": null,
+      "json_parse_error": "stdout has no non-empty lin
+...[truncated 1260 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "d2c7a11e50b9efe6638ad46cd0a58eb849fc2af7f9242dbb474bb8e6ffba0646"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "triton_argsort fails the contract for some admissible input \u2014 wrong sorted order or unstable permutation (equal keys not ordered by lower original index first), e.g. on non-power-of-2 W, heavy duplicate rows, or INT64_MAX/INT64_MIN keys.",
+  "duration_s": 9.496593,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "2de547b7b6bb52991c18608c1f8d69b2775d262a587965ca7ae9b0d25f6729da"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t8_stdout.txt",
+          "sha256": "30913ccddf404516703ca0126e4284cee6cedf7fd30f0aca9dca57af69cfe973"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.tx
+...[truncated 27005 chars]
+
+### t9 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences \u2014 keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.",
+  "summary": "Kernel fails the contract on admissible inputs: for non-power-of-2 W (3,5,6,7,9,12,13,17,33) rows are not even non-decreasing (sorted_ok=false) though perm is a valid permutation (gather_ok=true); for power-of-2 W with duplicate keys (including an all-equal row of 10s, and rows containing INT64_MAX/INT64_MIN) the permutation is not the stable order (stable_ok=false vs torch stable argsort), violating the lower-original-index-first tie rule.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t8"
 }
 
-### t9 - record_verdict - ok
+### t10 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final blocks must not attend past the sequence end, so this is a confirmed in-scope violation.",
+  "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-30T08:45:32Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-30T08:47:03Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final blocks must not attend past the sequence end, so this is a confirmed in-scope violation.",
+  "reason": "Contract (problem.txt) requires per-row ascending STABLE argsort of arbitrary int64 keys with duplicates expected. Probe t8 (run on real GPU, exit 0) showed: (1) for every non-power-of-2 W tested (3,5,6,7,9,12,13,17,33) sorted_keys rows are not even non-decreasing (sorted_ok=false) while the perm is a valid permutation (gather_ok=true) \u2014 e.g. W9_rand [false,true,false], W13_dup [false,true,false]; (2) even for power-of-2 W the required stable tie rule fails whenever duplicates exist (stable_ok=false vs torch stable argsort), including W16_dup [true,true,false], an all-equal W=10 row [true,true,false], and a W=11 row containing INT64_MAX/INT64_MIN [false,true,false]; a 110-run sweep over W in {2..33} with duplicate keys found 0/10 passes for every W except W=1. These inputs are squarely in the declared domain (arbitrary int64 keys, duplicates expected, any [N,W]). The kernel violates both the non-decreasing requirement and the lower-original-index-first stability tie rule, so it must be rejected.",
   "verdict": "reject"
 }

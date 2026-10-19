@@ -1,26 +1,41 @@
-import torch, sys, json
-sys.path.insert(0, "/root/cases/case_21")
-from kernel import paged_gather
+import torch, json, triton
+import triton.language as tl
 
-torch.manual_seed(0)
-num_seqs, max_blocks, page_size, head_dim = 2, 2, 4, 8
-num_pages = 8
-kv = torch.randn(num_pages, page_size, head_dim, device="cuda")
-block_table = torch.tensor([[3, 1], [0, 2]], dtype=torch.int32, device="cuda")
+@triton.jit
+def _idx_probe(K, SPLIT: tl.constexpr, Start, Idx):
+    part = tl.program_id(0)
+    chunk = tl.cdiv(K, SPLIT)
+    start = part * chunk
+    # emulate the kernel's last tile index arithmetic: off = chunk-256 rounded down
+    off = ((chunk - 256) // 256) * 256
+    idx = start + off + tl.arange(0, 256)
+    mask = idx < tl.minimum(start + chunk, K)
+    tl.store(Start + part, start.to(tl.int64))
+    # store the max index under this mask (0 if none), as int64
+    mx = tl.max(tl.where(mask, idx, -2147483648), axis=0)
+    tl.store(Idx + part, mx.to(tl.int64))
 
-def ref_gather(seq_len):
-    t = torch.arange(seq_len, device="cuda")
-    out = torch.empty(num_seqs, seq_len, head_dim, device="cuda")
-    for s in range(num_seqs):
-        for i in range(seq_len):
-            out[s, i] = kv[int(block_table[s, i // page_size]), i % page_size]
-    return out
+def check(K):
+    starts = torch.zeros(512, device="cuda", dtype=torch.int64)
+    idxs = torch.full((512,), -1, device="cuda", dtype=torch.int64)
+    _idx_probe[(512,)](K, SPLIT=512, Start=starts, Idx=idxs)
+    torch.cuda.synchronize()
+    chunk = -(-K // 512)
+    exp_start = [p * chunk for p in range(512)]
+    got = starts.tolist()
+    start_ok = got == exp_start
+    # any negative start indicates int32 wraparound
+    neg = [v for v in got if v < 0]
+    return {"K": K, "chunk": chunk, "start_matches_expected": start_ok,
+            "negative_start_count": len(neg),
+            "max_start": max(got), "expected_max_start": exp_start[-1],
+            "sample_idx_max": int(idxs.max().item())}
 
-res = {"block_table": block_table.tolist()}
-for seq_len in (page_size, page_size * 2):
-    ref = ref_gather(seq_len)
-    out = paged_gather(kv, block_table, seq_len)
-    res[f"mismatch_elems_seq_len_{seq_len}"] = int((out != ref).sum().item())
-    res[f"total_elems_seq_len_{seq_len}"] = out.numel()
-    res[f"max_abs_err_seq_len_{seq_len}"] = (out.float() - ref.float()).abs().max().item()
+res = {
+    "triton_version": triton.__version__,
+    "vram_gb": torch.cuda.get_device_properties(0).total_memory / 1e9,
+    "case_K_just_over_2p31": check(2**31 + 100),
+    "case_K_just_under_2p31": check(2**31 - 100000),
+    "note": "Arithmetic-only replication of the kernel's start/idx computation (no loads) with int64 stores to detect int32 wraparound at the K~2^31 boundary; actual 2^31-element tensor allocation (2x8GB+) is infeasible in this environment.",
+}
 print(json.dumps(res))

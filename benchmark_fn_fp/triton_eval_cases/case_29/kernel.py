@@ -4,25 +4,26 @@ import triton.language as tl
 
 
 @triton.jit
-def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < N
-    x = tl.load(X + offs, mask=mask, other=0.0)
+def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):
+    tok = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    valid = cols < E
+    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float("inf"))
 
-    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
-    ax = tl.abs(x)
-    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
-    step = tl.exp2(e - 3.0)
-    q = tl.floor(x / step + 0.5) * step
-    q = tl.where(ax == 0.0, 0.0, q)
-    tl.store(OUT + offs, q, mask=mask)
+    best = -float("inf")
+    best_i = 0
+    for e in range(E):
+        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)
+        take = v >= best
+        best = tl.where(take, v, best)
+        best_i = tl.where(take, e, best_i)
+    tl.store(Idx + tok, best_i)
 
 
-def fp8_roundtrip(x):
-    # Round a float32 tensor to the nearest value representable in e4m3.
-    n = x.numel()
-    out = torch.empty_like(x)
-    BLOCK = 1024
-    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
-    return out
+def route_top1(logits):
+    # Pick one expert per token from the router logits.
+    n_tokens, n_experts = logits.shape
+    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)
+    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,
+                               BLOCK=triton.next_power_of_2(n_experts))
+    return idx

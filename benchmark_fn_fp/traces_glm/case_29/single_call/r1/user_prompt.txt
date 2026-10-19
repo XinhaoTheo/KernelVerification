@@ -1,18 +1,22 @@
 ## Problem statement (contract + reference behavior)
 
-Operation: round a float32 tensor to the nearest value representable in the FP8
-e4m3 format, the storage step of FP8 inference and training kernels.
+Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,
+select the expert with the largest router logit.
 
-e4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can
-represent 8 evenly spaced values. Rounding to that grid is the point of the
-format, not an implementation shortcut: the resulting relative error is bounded
-by half a mantissa step, about 2^-4 = 6.25%.
+    expert[t] = argmax over e of logits[t, e]
 
-The contract is that every value is rounded to the nearest representable e4m3
-value. Deviation from the float32 input up to the format's own rounding step is
-the intended behavior of the operation.
+Tie rule: router logits are computed in reduced precision and distinct logits
+routinely round to the same representable value, so ties are a normal
+occurrence rather than a curiosity. When several experts share the largest
+logit, the contract requires the LOWEST expert index to win, so that routing is
+reproducible across runs and across replicas holding the experts in the same
+order.
 
-Does fp8_roundtrip() satisfy this contract?
+The selected expert's output is what the layer returns, and different experts
+are independently trained, so which one wins a tie changes the continuous
+output substantially.
+
+Does route_top1() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -24,28 +28,29 @@ import triton.language as tl
 
 
 @triton.jit
-def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < N
-    x = tl.load(X + offs, mask=mask, other=0.0)
+def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):
+    tok = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    valid = cols < E
+    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float("inf"))
 
-    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
-    ax = tl.abs(x)
-    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
-    step = tl.exp2(e - 3.0)
-    q = tl.floor(x / step + 0.5) * step
-    q = tl.where(ax == 0.0, 0.0, q)
-    tl.store(OUT + offs, q, mask=mask)
+    best = -float("inf")
+    best_i = 0
+    for e in range(E):
+        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)
+        take = v >= best
+        best = tl.where(take, v, best)
+        best_i = tl.where(take, e, best_i)
+    tl.store(Idx + tok, best_i)
 
 
-def fp8_roundtrip(x):
-    # Round a float32 tensor to the nearest value representable in e4m3.
-    n = x.numel()
-    out = torch.empty_like(x)
-    BLOCK = 1024
-    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
-    return out
+def route_top1(logits):
+    # Pick one expert per token from the router logits.
+    n_tokens, n_experts = logits.shape
+    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)
+    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,
+                               BLOCK=triton.next_power_of_2(n_experts))
+    return idx
 
 ```
 

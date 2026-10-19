@@ -21,18 +21,22 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: inner product of two float32 vectors, computed with a split-K
-partitioning and combined with atomic accumulation, the reduction strategy used
-by split-K GEMM and all-reduce kernels.
+Operation: multiply every pixel of a feature map by a per-channel scale, the
+per-channel affine step of a normalization or quantization layer.
 
-    out = sum over k of a[k] * b[k]
+    out[n, c, h, w] = x[n, c, h, w] * scale[c]
 
-The partitioning is a performance choice. Floating-point addition is not
-associative, so partitioning and combining in a different order changes the
-last bits of the result; the contract requires the mathematical inner product,
-not bitwise agreement with any particular summation order.
+Two memory layouts are in common use and both appear in production stacks:
 
-Does splitk_dot() satisfy this contract?
+    NCHW : the channel axis has the larger stride (PyTorch default)
+    NHWC : the channel axis is contiguous (channels-last, which is what most GPU
+           and mobile inference kernels prefer)
+
+Which layout a kernel expects is a property of the pipeline it is compiled into,
+not of the arithmetic. A kernel is correct if, once its own layout convention is
+honored, it produces the specified per-channel scaling.
+
+Does scale_channels() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -44,24 +48,19 @@ import triton.language as tl
 
 
 @triton.jit
-def _splitk_dot_kernel(A, B, Out, K, SPLIT: tl.constexpr, BLOCK: tl.constexpr):
-    part = tl.program_id(0)
-    chunk = tl.cdiv(K, SPLIT)
-    start = part * chunk
-    acc = 0.0
-    for off in range(0, chunk, BLOCK):
-        idx = start + off + tl.arange(0, BLOCK)
-        mask = idx < tl.minimum(start + chunk, K)
-        a = tl.load(A + idx, mask=mask, other=0.0)
-        b = tl.load(B + idx, mask=mask, other=0.0)
-        acc += tl.sum(a * b, axis=0)
-    tl.atomic_add(Out, acc)
+def _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):
+    pix = tl.program_id(0)
+    offs = tl.arange(0, C)
+    x = tl.load(X + pix * C + offs)
+    s = tl.load(Scale + offs)
+    tl.store(Out + pix * C + offs, x * s)
 
 
-def splitk_dot(a: torch.Tensor, b: torch.Tensor, split: int = 512) -> torch.Tensor:
-    """Inner product of two float32 vectors, accumulated across `split` partitions."""
-    out = torch.zeros(1, device=a.device, dtype=torch.float32)
-    _splitk_dot_kernel[(split,)](a, b, out, a.numel(), SPLIT=split, BLOCK=256)
+def scale_channels(x, scale, channels):
+    # Multiply every pixel by a per-channel scale, channels contiguous in memory.
+    out = torch.empty_like(x)
+    n_pixels = x.numel() // channels
+    _scale_channels_kernel[(n_pixels,)](x, scale, out, C=channels)
     return out
 
 ```
@@ -70,18 +69,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Mask: idx < min(start+chunk, K) — correct upper bound. Partitions may overlap? start = part*chunk, each covers chunk elements; last partitions may exceed K fully masked. Correct. atomic_add float32 — nondeterministic order but contract allows. Trust.
+NHWC indexing, correct given channels contiguous. Trust.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.9, "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."}
+{"verdict": "trust", "confidence": 0.9, "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."}
 
 ## Verdict
 
 {
   "verdict": "trust",
   "confidence": 0.9,
-  "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."
+  "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."
 }
 
 ## Usage and stop reason
@@ -92,21 +91,21 @@ Mask: idx < min(start+chunk, K) — correct upper bound. Partitions may overlap?
   "response": {
     "verdict": "trust",
     "confidence": 0.9,
-    "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."
+    "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 675,
-    "output_tokens": 128
+    "input_tokens": 612,
+    "output_tokens": 90
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 2.6928737089037895,
-  "kernel_sha256": "333868b7cfb9b41df7229a1b71cde358a03a477e1cd379652884c5d80551b08d",
-  "problem_sha256": "8d9a317015018c742421a3bc17a484e9cd4ab7106336ad3f1626db994a1cb31d",
+  "elapsed_s": 2.4641427909955382,
+  "kernel_sha256": "0dccc0ba9391e9e04a4979bd6fd6bdaccd6164446e00c89fbc0172d2087e4a1a",
+  "problem_sha256": "483cbcd26f5560b7c9534fd6fb64cc5adb72d7635de92447c192ff6f32df6e07",
   "prompt_variant": "original",
-  "estimated_usd": 0.0015082,
+  "estimated_usd": 0.0012527999999999999,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

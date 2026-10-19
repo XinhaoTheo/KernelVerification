@@ -1,41 +1,40 @@
 import torch
-from kernel import masked_softmax
+from kernel import quant_dequant
+
+
+def rel_error(y, x):
+    return ((y - x).norm(dim=1) / x.norm(dim=1)).max().item()
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    n_rows, n_cols = 8, 64
+    n_cols = 512
 
-    x = torch.randn(n_rows, n_cols, device=device)
-    # Conventional test: a random mask, every row keeps something.
-    mask = (torch.rand(n_rows, n_cols, device=device) > 0.3).to(torch.int32)
-    mask[:, 0] = 1
-    cand = masked_softmax(x, mask)
-    ref = torch.softmax(x.masked_fill(mask == 0, float("-inf")), dim=1)
-    common_pass = torch.allclose(cand, ref, rtol=1e-2, atol=1e-2)
+    # Conventional test data: IID Gaussian, no outlier channels.
+    x_iid = torch.randn(8, n_cols, device=device)
+    y_iid = quant_dequant(x_iid)
+    iid_rel = rel_error(y_iid, x_iid)
+    iid_pass = iid_rel <= 0.05
 
-    # Contract-permitted rare input: one row keeps nothing.
-    mask2 = mask.clone()
-    mask2[3, :] = 0
-    cand2 = masked_softmax(x, mask2)
-    row = cand2[3]
-    all_finite = bool(torch.isfinite(cand2).all().item())
-    zero_row = bool((row.abs() < 1e-6).all().item())
+    # Realistic activations: a few channels an order of magnitude larger, the
+    # outlier structure documented by LLM.int8() and SmoothQuant.
+    x_out = torch.randn(8, n_cols, device=device)
+    x_out[:, 7] *= 40.0
+    x_out[:, 200] *= 25.0
+    y_out = quant_dequant(x_out)
+    out_rel = rel_error(y_out, x_out)
+    outlier_pass = out_rel <= 0.05
+    worst = (y_out - x_out).abs().max().item()
 
-    # Downstream: the row is used to average a value matrix.
-    v = torch.randn(n_cols, 16, device=device)
-    out = cand2 @ v
-    downstream_finite = bool(torch.isfinite(out).all().item())
-
-    print(f"random mask, every row keeps something: allclose={common_pass}")
-    print(f"fully masked row: all finite={all_finite}, all-zero as specified={zero_row}, "
-          f"row[0]={row[0].item()}")
-    print(f"downstream value average finite={downstream_finite}")
-    # What a conventional CI test would conclude: its random mask never empties a row.
-    print(f"NAIVE_ALLCLOSE_VERDICT: {common_pass}")
-    return common_pass and not (all_finite and zero_row)
+    print(f"IID Gaussian rows: relative reconstruction error = {iid_rel:.4f}, within 5% = {iid_pass}")
+    print(f"rows with outlier channels: relative reconstruction error = {out_rel:.4f}, "
+          f"within 5% = {outlier_pass}, worst single-entry error = {worst:.2f}")
+    # What a conventional CI test would conclude: it calibrates on randn, whose
+    # bulk and maximum are close together.
+    print(f"NAIVE_ALLCLOSE_VERDICT: {iid_pass}")
+    return iid_pass and not outlier_pass
 
 
 if __name__ == "__main__":

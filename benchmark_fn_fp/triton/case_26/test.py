@@ -1,44 +1,41 @@
 import torch
-from kernel import topk_mask
+from kernel import masked_softmax
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    n_cols, k = 64, 8
+    n_rows, n_cols = 8, 64
 
-    # A row where the value at the cutoff is shared by several entries.
-    scores = torch.randn(4, n_cols, device=device)
-    scores[:, :12] = 2.0                      # 12 entries tied above the cutoff
-    cand = topk_mask(scores, k)
+    x = torch.randn(n_rows, n_cols, device=device)
+    # Conventional test: a random mask, every row keeps something.
+    mask = (torch.rand(n_rows, n_cols, device=device) > 0.3).to(torch.int32)
+    mask[:, 0] = 1
+    cand = masked_softmax(x, mask)
+    ref = torch.softmax(x.masked_fill(mask == 0, float("-inf")), dim=1)
+    common_pass = torch.allclose(cand, ref, rtol=1e-2, atol=1e-2)
 
-    # Reference reading: admit exactly k, breaking the tie by lowest index.
-    ref = torch.zeros_like(scores)
-    order = torch.argsort(scores, dim=1, descending=True, stable=True)[:, :k]
-    ref.scatter_(1, order, scores.gather(1, order))
+    # Contract-permitted rare input: one row keeps nothing.
+    mask2 = mask.clone()
+    mask2[3, :] = 0
+    cand2 = masked_softmax(x, mask2)
+    row = cand2[3]
+    all_finite = bool(torch.isfinite(cand2).all().item())
+    zero_row = bool((row.abs() < 1e-6).all().item())
 
-    raw_pass = torch.allclose(cand, ref, rtol=1e-2, atol=1e-2)
+    # Downstream: the row is used to average a value matrix.
+    v = torch.randn(n_cols, 16, device=device)
+    out = cand2 @ v
+    downstream_finite = bool(torch.isfinite(out).all().item())
 
-    # The contract's actual requirement: no dropped entry exceeds a kept one.
-    kept = cand != 0
-    min_kept = torch.where(kept, cand, torch.full_like(cand, float("inf"))).min(dim=1).values
-    max_dropped = torch.where(kept, torch.full_like(cand, -float("inf")), scores).max(dim=1).values
-    ordering_ok = bool((min_kept >= max_dropped - 1e-6).all().item())
-
-    plain = torch.tensor([[5., 4., 3., 2., 1., 0., -1., -2.]], device=device)
-    kept_no_tie = {kk: int((topk_mask(plain, kk) != 0).sum().item()) for kk in (1, 2, 3)}
-    exact_without_ties = all(kept_no_tie[kk] == kk for kk in kept_no_tie)
-    print(f"no ties at all, kept counts by k = {kept_no_tie}, exactly k = {exact_without_ties}")
-
-    n_kept = int(kept[0].sum().item())
-    print(f"reference admits exactly k={k}; kernel kept {n_kept} entries")
-    print(f"elementwise allclose against that one reference = {raw_pass} (expected False)")
-    print(f"contract requirement (no dropped entry exceeds a kept one) = {ordering_ok} (expected True)")
-    # What a conventional CI test would conclude: it compares elementwise against
-    # one implementation's private tie convention.
-    print(f"NAIVE_ALLCLOSE_VERDICT: {raw_pass}")
-    return (not raw_pass) and ordering_ok and exact_without_ties
+    print(f"random mask, every row keeps something: allclose={common_pass}")
+    print(f"fully masked row: all finite={all_finite}, all-zero as specified={zero_row}, "
+          f"row[0]={row[0].item()}")
+    print(f"downstream value average finite={downstream_finite}")
+    # What a conventional CI test would conclude: its random mask never empties a row.
+    print(f"NAIVE_ALLCLOSE_VERDICT: {common_pass}")
+    return common_pass and not (all_finite and zero_row)
 
 
 if __name__ == "__main__":

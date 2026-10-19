@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_18`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_19`
+- Turns: 6
+- Tool events: 10
 - Claims: 1
 - Description updates: 0
-- LLM time: 33.742s across 4 calls | tokens: in=34198 out=2511 total=36709
-- Cache tokens: created=0 read=27640
+- LLM time: 57.369s across 5 calls | tokens: in=101461 out=3851 total=105312
+- Cache tokens: created=0 read=34550
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.95
 
 ## Timeline
 
@@ -26,218 +26,248 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_18",
+    "entry": "case_19",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 
-### Turn 2 - `solo` (8.37157358200011s, in=3844 out=606)
+### Turn 2 - `solo` (9.791489942999988s, in=10122 out=730)
 
 Message:
 
 ```text
-The denominator loop uses `n_full = n_cols // BLOCK` while the max and store loops use `cdiv`, so the trailing partial block is excluded from the sum. The contract explicitly requires the partial block to be normalized with the rest of the row.
+I see the suspicious `block_max >= m` update in the cross-block argmax. Let me read the rest of the source (wrapper) and record the claim.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `inspect_kernel_source -> t5 ok`
   Args:
   {
-    "rationale": "Lines 20-23 loop over n_full full blocks only, while the max (line 14) and store (line 25) loops use tl.cdiv. The tail elements are exponentiated and stored but never added to denom.",
+    "end_line": 420,
+    "entry": "case_19",
+    "start_line": 240
+  }
+  Output summary:
+  {
+    "entry": "case_19"
+  }
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer, NOT required to be a multiple of block_size; trailing partial block must be normalized with the rest of the row; every output row must sum to 1."
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
       }
     ],
-    "scope_rationale": "problem.txt explicitly declares n_cols may be any positive integer and states the trailing partial block \"must be normalized with the rest of it\", and requires each output row to sum to 1.",
-    "statement": "When n_cols is not a multiple of block_size, the denominato
-  ...[truncated 178 chars]
+    "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
+    "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later
+  ...[truncated 183 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Lines 20-23 loop over n_full full blocks only, while the max (line 14) and store (line 25) loops use tl.cdiv. The tail elements are exponentiated and stored but never added to denom.",
+    "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer, NOT required to be a multiple of block_size; trailing partial block must be normalized with the rest of the row; every output row must sum to 1."
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
       }
     ],
-    "scope_rationale": "problem.txt explicitly declares n_cols may be any positive integer and states the trailing partial block \"must be normalized with the rest of it\", and requires each output row to sum to 1.",
-    "statement": "When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.",
+    "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
+    "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (7.060818602999916s, in=5653 out=525)
+### Turn 3 - `solo` (3.899976510999977s, in=16391 out=156)
 
 Message:
 
 ```text
-I'll run a probe testing a non-multiple n_cols (e.g. 300 with block 128) versus torch.softmax, and a multiple case as control.
+I need to see the wrapper (lines 300-353) to know the public entry point and BLOCK_SIZE, then run a probe with a tie spanning two blocks.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `inspect_kernel_source -> t7 ok`
+  Args:
+  {
+    "end_line": 353,
+    "entry": "case_19",
+    "start_line": 300
+  }
+  Output summary:
+  {
+    "entry": "case_19"
+  }
+
+### Turn 4 - `solo` (16.695297810999932s, in=20401 out=1351)
+
+Message:
+
+```text
+Wrapper confirmed: BLOCK_SIZE = min(32768, next_pow2(n_cols)), so n_cols > 32768 spans multiple blocks. I'll probe a cross-block tie (and also record the loss values for reference).
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nres = {}\ntorch.manual_seed(0)\nfor n_cols in [256, 300, 129, 100]:\n    x = torch.randn(4, n_cols, device='cuda', dtype=torch.float32)\n    y = m.softmax(x, 128)\n    ref = torch.softmax(x, dim=1)\n    res[str(n_cols)] = dict(\n        row_sums=y.sum(1).tolist(),\n        max_abs_err=float((y-ref).abs().max()),\n        max_rel_err=float(((y-ref).abs()/ref.abs().clamp_min(1e-30)).max()),\n    )\nprint(json.dumps({\"metric\":\"row sum == 1 and elementwise vs torch.softmax\",\"results\":res}, indent=1))\n",
-    "expected_signal": "If claim true: n_cols=300,129,100 r
-  ...[truncated 43 chars]
+    "code": "\nimport torch, sys, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_19/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nn_rows, n_cols = 4, 40000   # > 32768 -> multiple blocks\nlogits = torch.randn(n_rows, n_cols, device=\"cuda\", dtype=torch.float32) * 0.1\n# place exact ties at a low index (block 0) and a high index (block 1)\nlow_idx, high_idx = 100, 35000\nlogits[:, low_idx] = 5.0\nlogits[:, high_idx] = 5.0\ntarget = torch.tensor([0,1,2,3], device=\"cuda\", dtype=torch.int64)\n\nlg = logits.clone()\nloss, pred = k.cross_entropy_with_predictions(lg, target)\nref_loss = torch.nn.functional.cross_entropy(logits, target, reduction=\"none\")\n# referen
+  ...[truncated 881 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "3c1f49e22d12233eedec514fa7e50eb5494b19ca28df5562e8fa9af734a94ef3"
+        "path": "probes/t8_probe.py",
+        "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "46da33df9794341689c3602e760b8eefe67f07bdf757809774eec78ff57e9081"
+        "path": "probes/t8_stdout.txt",
+        "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.",
-    "duration_s": 6.678014,
-    "event_id": "t6",
+    "claim_statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
+    "duration_s": 8.001807,
+    "event_id": "t8",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
-            "description": "Python probe code executed by local runtime.",
-            "kind":
-  ...[truncated 2940 chars]
+            "description": "Py
+  ...[truncated 2707 chars]
 
-### Turn 4 - `solo` (9.583099893000053s, in=9017 out=776)
+### Turn 5 - `solo` (12.25565308399996s, in=24420 out=911)
 
 Message:
 
 ```text
-The probe decisively confirms the claim: n_cols=300 rows sum to ~1.16, n_cols=129 to ~1.009, and n_cols=100 (< block_size, so n_full=0, denom=0) yields Infinity everywhere, while the multiple-of-128 control is exact.
+Probe t8 confirms the hypothesis: with n_cols=40000 (BLOCK_SIZE=32768) and exact ties at index 100 and 35000, the kernel reports 35000 while the lowest tied index is 100; the single-block control correctly returns 10. Recording evidence and the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
     "data": {
-      "exit_code": 0,
-      "metric": "row sum == 1 and elementwise error vs torch.softmax",
-      "n_cols_100_rowsums": [
-        "inf",
-        "inf",
-        "inf",
-        "inf"
+      "BLOCK_SIZE": 32768,
+      "loss_ratio_kernel_over_ref": [
+        0.25,
+        0.25,
+        0.25,
+        0.25
       ],
-      "n_cols_129_rowsums": [
-        1.0091278553009033,
-        1.0028636455535889,
-        1.0025970935821533,
-        1.0018126964569092
+      "n_cols": 40000,
+      "pred_kernel": [
+        35000,
+        35000,
+        35000,
+        35000
       ],
-      "n_cols_256_max_abs_err": 3.725290298461914e-09,
-      "n_cols_256_rowsums": [
-        1.0,
-        0.9999998807907104,
-        1.0,
-        1.0
+      "pred_required_lowest": [
+        100,
+        100,
+        100,
+        100
       ],
-      "n_cols_300_max_abs_err": 0.010500840842723846,
-      "n_cols_300_rowsums": [
-        1.1586923599243164,
-        1.1528706550598145,
-        1.178299069404602,
-        1.1701909303665161
+      "pred_single_block_control": [
+        10,
+        10
+      ],
+      "tie_indices": [
+        100,
+        35000
       ]
     },
-    "event_id": "t6",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "Probe t6 ran kernel.softmax(x, 128) on 4-row float32 CUDA inputs. Control n
-  ...[truncated 378 chars]
+    "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-bloc
+  ...[truncated 271 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Probe t6 ran kernel.softmax(x, 128) on 4-row float32 CUDA inputs. Control n_cols=256 (multiple of BLOCK): row sums 1.0, max_abs_err 3.7e-09. n_cols=300: row sums 1.1587/1.1529/1.1783/1.1702, max_abs_err 1.05e-2 vs torch.softmax. n_cols=129: row sums 1.0091/1.0029/1.0026/1.0018. n_cols=100 (< BLOCK, so n_full=0 and denom=0): all outputs Infinity. Tail block is excluded from the denominator exactly as the source suggests.",
+    "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction=\"mean\" with n_non_ignore=4 instead of the contract's per-row -log softmax.",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t8"
   }
 
-### Turn 5 - `solo` (8.726784916000042s, in=15684 out=604)
+### Turn 6 - `solo` (14.726826319999986s, in=30127 out=703)
 
 Message:
 
 ```text
-The claim is confirmed with decisive runtime numbers and is in-scope per the explicit contract clause on non-multiple `n_cols`. Recording the verdict.
+Claim c1 is confirmed with in-scope evidence; the cross-block tie rule is violated. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t10 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and that the trailing partial block \\\"must be normalized with the rest of it\\\", with every output row summing to 1. In kernel.py the max pass (line 14) and store pass (line 25) iterate tl.cdiv(n_cols, BLOCK) blocks, but the denominator pass (line 20) iterates only n_full = n_cols // BLOCK blocks, so the tail block's exp contributions are never added to denom. Probe t6 (finalized as c1.e1) ran kernel.softmax(x, 128) on float32 CUDA inputs: control n_cols=256 gave row sums 1.0 and max_abs_err 3.7e-09 vs torch.softmax; n_cols=300 gave row sums 1.1587/1.1529/1.1783/1.1702 with max_abs_err 1.05e-2; n_c
-  ...[truncated 294 chars]
+    "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tie
+  ...[truncated 618 chars]
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and that the trailing partial block \\\"must be normalized with the rest of it\\\", with every output row summing to 1. In kernel.py the max pass (line 14) and store pass (line 25) iterate tl.cdiv(n_cols, BLOCK) blocks, but the denominator pass (line 20) iterates only n_full = n_cols // BLOCK blocks, so the tail block's exp contributions are never added to denom. Probe t6 (finalized as c1.e1) ran kernel.softmax(x, 128) on float32 CUDA inputs: control n_cols=256 gave row sums 1.0 and max_abs_err 3.7e-09 vs torch.softmax; n_cols=300 gave row sums 1.1587/1.1529/1.1783/1.1702 with max_abs_err 1.05e-2; n_cols=129 gave row sums 1.0091/1.0029/1.0026/1.0018; n_cols=100 (< BLOCK, so n_full=0, denom=0) produced Infinity everywhere. This is a direct violation of an explicitly required behaviour on an explicitly admitted input domain, not a precision or convention difference.",
-    "verdict": "reject"
-  }
+    "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrappe
+  ...[truncated 218 chars]
 
 ## Description Model
 
@@ -247,90 +277,102 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.
+Statement: In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's "lowest index wins" tie rule for rows spanning multiple blocks.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly declares n_cols may be any positive integer and states the trailing partial block "must be normalized with the rest of it", and requires each output row to sum to 1.
+Scope rationale: problem.txt explicitly states the tie rule ("predicted must be the LOWEST such index") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.
 
 Scope evidence:
-- `problem.txt`: Input domain: n_cols may be any positive integer, NOT required to be a multiple of block_size; trailing partial block must be normalized with the rest of the row; every output row must sum to 1.
+- `problem.txt`: Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks.
 
-Rationale: Lines 20-23 loop over n_full full blocks only, while the max (line 14) and store (line 25) loops use tl.cdiv. The tail elements are exponentiated and stored but never added to denom.
+Rationale: Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6 ran kernel.softmax(x, 128) on 4-row float32 CUDA inputs. Control n_cols=256 (multiple of BLOCK): row sums 1.0, max_abs_err 3.7e-09. n_cols=300: row sums 1.1587/1.1529/1.1783/1.1702, max_abs_err 1.05e-2 vs torch.softmax. n_cols=129: row sums 1.0091/1.0029/1.0026/1.0018. n_cols=100 (< BLOCK, so n_full=0 and denom=0): all outputs Infinity. Tail block is excluded from the denominator exactly as the source suggests.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction="mean" with n_non_ignore=4 instead of the contract's per-row -log softmax.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
-### t5 - record_claim - ok
+### t5 - inspect_kernel_source - ok
+
+{
+  "entry": "case_19"
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Lines 20-23 loop over n_full full blocks only, while the max (line 14) and store (line 25) loops use tl.cdiv. The tail elements are exponentiated and stored but never added to denom.",
+  "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Input domain: n_cols may be any positive integer, NOT required to be a multiple of block_size; trailing partial block must be normalized with the rest of the row; every output row must sum to 1."
+      "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
     }
   ],
-  "scope_rationale": "problem.txt explicitly declares n_cols may be any positive integer and states the trailing partial block \"must be normalized with the rest of it\", and requires each output row to sum to 1.",
-  "statement": "When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.",
+  "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
+  "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - inspect_kernel_source - ok
+
+{
+  "entry": "case_19"
+}
+
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "3c1f49e22d12233eedec514fa7e50eb5494b19ca28df5562e8fa9af734a94ef3"
+      "path": "probes/t8_probe.py",
+      "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "46da33df9794341689c3602e760b8eefe67f07bdf757809774eec78ff57e9081"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t8_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When n_cols is not a multiple of block_size, the denominator loop (range(n_full), n_full = n_cols // BLOCK) omits the trailing partial block's exp contributions, so output rows sum to more than 1, violating the required normalization.",
-  "duration_s": 6.678014,
-  "event_id": "t6",
+  "claim_statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
+  "duration_s": 8.001807,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -338,57 +380,57 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "3c1f49e22d12233eedec514fa7e50eb5494b19ca28df5562e8fa9af734a94ef3"
+          "path": "probes/t8_probe.py",
+          "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "46da33df9794341689c3602e760b8eefe67f07bdf757809774eec78ff57e9081"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
+          "path": "probes/t8_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 6.678014,
+      "duration_s": 8.001807,
       "exit_code": 0,
-      "expected_signal": "If claim true: n_cols=300,129,100 rows sum >1 (or !=1); n_cols=256 su
-...[truncated 2140 chars]
+      "expected_signal": "If clai
+...[truncated 1907 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t9 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Probe t6 ran kernel.softmax(x, 128) on 4-row float32 CUDA inputs. Control n_cols=256 (multiple of BLOCK): row sums 1.0, max_abs_err 3.7e-09. n_cols=300: row sums 1.1587/1.1529/1.1783/1.1702, max_abs_err 1.05e-2 vs torch.softmax. n_cols=129: row sums 1.0091/1.0029/1.0026/1.0018. n_cols=100 (< BLOCK, so n_full=0 and denom=0): all outputs Infinity. Tail block is excluded from the denominator exactly as the source suggests.",
+  "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction=\"mean\" with n_non_ignore=4 instead of the contract's per-row -log softmax.",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t8"
 }
 
-### t8 - record_verdict - ok
+### t10 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and that the trailing partial block \\\"must be normalized with the rest of it\\\", with every output row summing to 1. In kernel.py the max pass (line 14) and store pass (line 25) iterate tl.cdiv(n_cols, BLOCK) blocks, but the denominator pass (line 20) iterates only n_full = n_cols // BLOCK blocks, so the tail block's exp contributions are never added to denom. Probe t6 (finalized as c1.e1) ran kernel.softmax(x, 128) on float32 CUDA inputs: control n_cols=256 gave row sums 1.0 and max_abs_err 3.7e-09 vs torch.softmax; n_cols=300 gave row sums 1.1587/1.1529/1.1783/1.1702 with max_abs_err 1.05e-2; n_cols=129 gave row sums 1.0091/1.0029/1.0026/1.0018; n_cols=100 (< BLOCK, so n_full=0, denom=0) produced Infinity everywhere. This is a direct violation of an explicitly required behaviour on an explicitly admitted input domain, not a precision or convention difference.",
+  "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrapper passes reduction=\"mean\" with n_non_ignore=4, deviating from the contract's per-row loss[i] = -log softmax(logits[i])[target[i]]; this was not the decisive claim but reinforces the reject.)",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-08T14:49:50Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-08T14:50:44Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and that the trailing partial block \\\"must be normalized with the rest of it\\\", with every output row summing to 1. In kernel.py the max pass (line 14) and store pass (line 25) iterate tl.cdiv(n_cols, BLOCK) blocks, but the denominator pass (line 20) iterates only n_full = n_cols // BLOCK blocks, so the tail block's exp contributions are never added to denom. Probe t6 (finalized as c1.e1) ran kernel.softmax(x, 128) on float32 CUDA inputs: control n_cols=256 gave row sums 1.0 and max_abs_err 3.7e-09 vs torch.softmax; n_cols=300 gave row sums 1.1587/1.1529/1.1783/1.1702 with max_abs_err 1.05e-2; n_cols=129 gave row sums 1.0091/1.0029/1.0026/1.0018; n_cols=100 (< BLOCK, so n_full=0, denom=0) produced Infinity everywhere. This is a direct violation of an explicitly required behaviour on an explicitly admitted input domain, not a precision or convention difference.",
+  "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrapper passes reduction=\"mean\" with n_non_ignore=4, deviating from the contract's per-row loss[i] = -log softmax(logits[i])[target[i]]; this was not the decisive claim but reinforces the reject.)",
   "verdict": "reject"
 }

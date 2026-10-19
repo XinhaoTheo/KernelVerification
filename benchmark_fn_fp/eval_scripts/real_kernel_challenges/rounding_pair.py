@@ -1,4 +1,4 @@
-"""Directed, correctly-rounded binary16 sigmoid oracle for case_148/149.
+"""Directed, correctly-rounded binary16 sigmoid oracle for case_75/149.
 
 Every finite input encoding is covered. MPFR directed exp/reciprocal bounds
 are rounded to binary16 by integer arithmetic, without a binary32/binary64
@@ -22,7 +22,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_148": "trust", "case_149": "reject"}
+EXPECTED = {"case_75": "trust", "case_76": "reject"}
 TAIL_CUTOFF = 32
 
 
@@ -172,7 +172,7 @@ def arrays(plan):
 def cpu_screen():
     bits = core.finite_bit_patterns()
     results = []
-    for name, dtype in [("case_148", np.float64), ("case_149", np.float32)]:
+    for name, dtype in [("case_75", np.float64), ("case_76", np.float32)]:
         x = bits.view(np.float16).astype(dtype)
         z = np.exp(-np.abs(x))
         denominator = dtype(1) + z

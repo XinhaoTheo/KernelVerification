@@ -21,113 +21,99 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: grouped INT4 dequantization fused with a matrix multiply
-(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).
+Verify a CUDA sliding-window state-update implementation over the complete
+input domain below, not only the example returned by make_inputs().
 
-Weights are stored as 4-bit values packed into int32 words. Columns along the
-reduction dimension K are split into consecutive groups of `group_size`, and
-each group carries its own scale and zero-point row in `scales` / `zeros`.
+Inputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:
+- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,
+  and 1 <= D <= 1024.
+- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).
+- The two input tensors have disjoint storage. Their values may be any finite
+  FP32 values, including zeros and signed zeros.
 
-Contract: every column must be dequantized with the scale and zero-point of the
-group it actually belongs to, for any K -- including a K that is not an exact
-multiple of group_size. In that case the trailing columns form a shorter final
-group which is still a group of its own, with its own row in `scales`/`zeros`;
-`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.
+Let old_state be the contents of state before this call. After run() completes,
+for every legal batch b, row r, and feature d:
+  state[b,r,d] = old_state[b,r+K,d]  if r < L-K
+                 new_events[b,r-(L-K),d] otherwise.
+Each result must preserve the exact FP32 bit pattern of its source element.
+This is a copy operation; no numerical approximation is permitted.
 
-The kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =
-(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],
-where group_of(k) is the index of the group column k belongs to.
+run() must update state in place and return that same tensor (same storage),
+while preserving new_events. Calls may be repeated on the state resulting from
+previous calls, with any legal new_events. All calls are on the same CUDA stream,
+with no concurrent external access to either tensor. CUDA's usual asynchronous
+return is allowed; correctness is observed after stream synchronization.
+
+The full wrapper, including its allocation decisions and launch arguments, is
+part of the implementation to verify. Do not assume distinct pointer names in
+the Triton function imply distinct storage: inspect the arguments passed by run.
+The public reference() in kernel.py computes the required new contents without
+mutating either input and can also execute on CPU. Evaluate it BEFORE run() or
+on a saved pre-call state. You may construct any legal inputs and repeat calls.
+The frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.
 
 
 ## Kernel implementation under test (kernel.py)
 
 ```python
+"""Standalone CUDA sliding-window state update.
+
+The public contract and independent reference are in this file and problem.txt.
+"""
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def quant_matmul_248_kernel(
-    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,
-    M, N, K, bits, maxq,
-    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-    stride_scales, stride_zeros,
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
-):
-    infearure_per_bits = 32 // bits
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
-
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    a_mask = offs_am[:, None] < M
-    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)
-    g_ptrs = g_ptr + offs_k
-    scales_ptrs = scales_ptr + offs_bn[None, :]
-    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)
-
-    shifter = (offs_k % infearure_per_bits) * bits
-    zeros_shifter = (offs_bn % infearure_per_bits) * bits
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-    for k in range(0, num_pid_k):
-        g_idx = tl.load(g_ptrs)
-        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)
-        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)
-        zeros = (zeros >> zeros_shifter[None, :]) & maxq
-        zeros = zeros + 1
-        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-        b = tl.load(b_ptrs)
-        b = (b >> shifter[:, None]) & maxq
-        b = (b - zeros) * scales
-        accumulator += tl.dot(a, b)
-        a_ptrs += BLOCK_SIZE_K
-        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk
-        g_ptrs += BLOCK_SIZE_K
-
-    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
-    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
+def _slide(STATE, EVENTS, OUT, L: tl.constexpr, D: tl.constexpr,
+           K: tl.constexpr, TOTAL: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
+    valid = index < TOTAL
+    batch = index // (L * D)
+    row = (index // D) % L
+    col = index % D
+    from_state = row < L - K
+    old_value = tl.load(STATE + batch * L * D + (row + K) * D + col,
+                        mask=valid & from_state, other=0.0)
+    new_value = tl.load(EVENTS + batch * K * D + (row - (L - K)) * D + col,
+                        mask=valid & ~from_state, other=0.0)
+    value = tl.where(from_state, old_value, new_value)
+    tl.store(OUT + index, value, mask=valid)
 
 
-def gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):
-    """Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.
-    scales/zeros: (num_groups, N), one row per group of `group_size` columns
-    along K. The per-column group table is derived here from group_size."""
-    M, K = a.shape
-    N = b_packed.shape[1]
-    maxq = 2 ** bits - 1
-
-    num_groups = K // group_size
-    g_idx = torch.clamp(
-        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,
-        max=num_groups - 1,
+def run(state, new_events):
+    """Update state in place, return that same tensor, preserve new_events."""
+    assert state.is_cuda and new_events.is_cuda
+    assert state.device == new_events.device
+    assert state.dtype == new_events.dtype == torch.float32
+    assert state.is_contiguous() and new_events.is_contiguous()
+    assert state.ndim == new_events.ndim == 3
+    batch, length, width = state.shape
+    assert new_events.shape[0] == batch and new_events.shape[2] == width
+    steps = new_events.shape[1]
+    assert 1 <= batch <= 4 and 2 <= length <= 4096 and 1 <= width <= 1024
+    assert 1 <= steps <= min(length, 128)
+    output = state
+    _slide[(triton.cdiv(state.numel(), 1024),)](
+        state, new_events, output, length, width, steps, state.numel(),
+        BLOCK=1024, num_warps=4,
     )
+    return state
 
-    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
-    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1
-    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)
-    quant_matmul_248_kernel[grid](
-        a, b_packed, c, scales, zeros, g_idx,
-        M, N, K, bits, maxq,
-        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),
-        scales.stride(0), zeros.stride(0),
-        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
-        GROUP_SIZE_M=GROUP_SIZE_M,
-    )
-    return c
+
+def reference(state, new_events):
+    """Independent result computed from the pre-call state, without mutation."""
+    return torch.cat((state[:, new_events.shape[1]:, :], new_events), dim=1)
+
+
+def make_inputs(device="cuda", batch=4, length=2048, width=1024,
+                steps=2, seed=0):
+    """One convenient example; any legal input may be tested."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    state = torch.randn((batch, length, width), generator=generator)
+    new_events = torch.randn((batch, steps, width), generator=generator)
+    return state.to(device), new_events.to(device)
 
 ```
 
@@ -135,20 +121,20 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-The wrapper computes num_groups = K // group_size, clamping g_idx to num_groups-1. Contract says ceil(K/group_size) groups. For K not multiple, trailing group is its own group with its own row. Wrapper clamps trailing columns to last full group — wrong. Also b_packed indexing: b_ptrs use offs_k // infearure_per_bits, but offs_k within block plus BLOCK_SIZE_K increments — b_ptrs advances by BLOCK_SIZE_K//4 words; BLOCK_SIZE_K=16 → 4 words. OK. Also b load has no mask, but K assumed... Actually if K not multiple of 4? b indexing fine for K multiple of infearure_per_bits. Main defect: g_idx clamp misassigns trailing columns.
+The kernel reads STATE and writes OUT, which is the same tensor. Race: elements read from state[r+K] may be overwritten before read? Since output writes to index (b,r,c) and reads from (b,r+K,c), with r+K > r in linear index, a block could overwrite a location another block still needs to read. Writes go to lower indices than reads (read index = write index + K*D > write). But blocks execute in arbitrary order; block writing index i may run before block reading index i (reading from i+K*D). So race — a block writes OUT[i] while another block later reads STATE[i] expecting old value. Yes, in-place with overlapping copy is unsafe. Out-of-order block execution: block covering write range may execute before block covering the read source. So incorrect.
 
-But wait—maybe num_groups should be ceil? Given K, group_size: if K=10, group_size=4, groups ceil=3. num_groups = 2, clamp assigns k=8,9 to group 1 instead of group 2. Violates contract. Reject.
+Wait, actually reads are at higher addresses than writes. Block X writes indices [x0, x0+1024). Block Y reads indices [y0+K*D...]. If block X executes before block Y reads location in X's write range, stale read wrong. So reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.9, "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."}
+{"verdict": "reject", "confidence": 0.9, "reason": "The kernel reads from STATE and writes to OUT, but run() passes the same tensor (output = state), making this an in-place overlapping copy. A block writing low rows may execute before another block reads those same locations as source rows (source index = destination index + K*D), so old values can be overwritten before being read; there is no guarantee of block execution order on the GPU."}
 
 ## Verdict
 
 {
   "verdict": "reject",
   "confidence": 0.9,
-  "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."
+  "reason": "The kernel reads from STATE and writes to OUT, but run() passes the same tensor (output = state), making this an in-place overlapping copy. A block writing low rows may execute before another block reads those same locations as source rows (source index = destination index + K*D), so old values can be overwritten before being read; there is no guarantee of block execution order on the GPU."
 }
 
 ## Usage and stop reason
@@ -159,28 +145,28 @@ But wait—maybe num_groups should be ceil? Given K, group_size: if K=10, group_
   "response": {
     "verdict": "reject",
     "confidence": 0.9,
-    "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."
+    "reason": "The kernel reads from STATE and writes to OUT, but run() passes the same tensor (output = state), making this an in-place overlapping copy. A block writing low rows may execute before another block reads those same locations as source rows (source index = destination index + K*D), so old values can be overwritten before being read; there is no guarantee of block execution order on the GPU."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1646,
-    "output_tokens": 312
+    "input_tokens": 1334,
+    "output_tokens": 331
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 7.090053332969546,
-  "kernel_sha256": "cd19f73291eaefb2445e102b11c8cc30d67a4eb7c1eab394946eb803ec093883",
-  "problem_sha256": "fbd66d7943268d1c396b03edb179f9f2398b6c883d0b62d9ba7f476a11969896",
+  "elapsed_s": 6.505245291162282,
+  "kernel_sha256": "32f0d83a90b96d5ce27d5246e80f4d320fa89835cdbbf89ae7db1282030b372f",
+  "problem_sha256": "796219b618572fe1749cd02af33d89b699dea3413ed3fd8d2ba1fdb2c3797496",
   "prompt_variant": "original",
-  "estimated_usd": 0.0036772,
+  "estimated_usd": 0.003324,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,
     "cache_write_multiplier": 1.0,
     "cache_read_multiplier": 1.0,
     "basis": "published list price; cached input conservatively billed as uncached; excludes GPU",
-    "checked_at": "2026-09-30",
+    "checked_at": "2026-10-03",
     "source": "https://fireworks.ai/models/fireworks/glm-5p3"
   },
   "pricing": "dated list-price estimate; not invoice; excludes GPU and unreported HTTP usage"

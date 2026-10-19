@@ -1,18 +1,30 @@
 
-import json, sys, torch, traceback
-sys.path.insert(0, "/root/cases/case_13")
-from kernel import gqa_gather
+import json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_14/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-res = {}
-for dim in [64, 80, 96, 128, 192, 256]:
-    kv = torch.randn(4, dim, device="cuda", dtype=torch.float32)
-    try:
-        out = gqa_gather(kv, 8)
-        torch.cuda.synchronize()
-        res[str(dim)] = {"raised": False, "shape": list(out.shape),
-                         "power_of_two": dim & (dim-1) == 0}
-    except Exception as e:
-        res[str(dim)] = {"raised": True, "err_type": type(e).__name__,
-                         "err_msg": str(e)[:300],
-                         "power_of_two": dim & (dim-1) == 0}
+def ref(x):
+    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)
+    scale = absmax / 127
+    q = torch.clamp(torch.round(x / scale), -127, 127)
+    return q * scale
+
+torch.manual_seed(0)
+x = (torch.randn(4, 256, device="cuda") * 10).contiguous()
+out = k.quant_dequant_int8(x)
+r = ref(x)
+err = (out - r).abs()
+row_absmax = x.abs().amax(dim=1)
+res = {
+  "shape": list(x.shape),
+  "row_absmax": [round(v,4) for v in row_absmax.tolist()],
+  "kernel_out_absmax_per_row": [round(v,4) for v in out.abs().amax(dim=1).tolist()],
+  "ref_out_absmax_per_row": [round(v,4) for v in r.abs().amax(dim=1).tolist()],
+  "max_abs_err": float(err.max()),
+  "allowed_step_half_per_row": [round(v/254,6) for v in row_absmax.tolist()],
+  "n_clipped_at_4": int((out.abs() >= 4.0 - 1e-6).sum()),
+  "n_input_gt_4": int((x.abs() > 4.0).sum()),
+  "allclose_rtol1e-2_atol1e-2": bool(torch.allclose(out, r, rtol=1e-2, atol=1e-2)),
+  "metric": "max abs err vs contract reference; clipping count",
+}
 print(json.dumps(res))

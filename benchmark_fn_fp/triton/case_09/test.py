@@ -4,8 +4,10 @@ import sys
 import torch
 
 sys.path.insert(0, os.path.dirname(__file__))
-from kernel import sorted_topk_indices as route_buggy  # real, unmodified fla-org comparator
+from kernel import sorted_topk_indices as select_topk_buggy  # real, unmodified fla-org comparator
 
+# Reference: the UNMODIFIED real NSA sort kernel, defined inline so this file
+# doesn't depend on kernel.py's mutation.
 import triton
 import triton.language as tl
 
@@ -61,7 +63,7 @@ def _row_argsort_kernel_ref(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS:
     tl.store(IDS_ptr + row * stride_row + offs, ids)
 
 
-def route_reference(scores, k):
+def select_topk_reference(scores, k):
     import math
     B, N = scores.shape
     n_dims = int(math.log2(N))
@@ -71,34 +73,57 @@ def route_reference(scores, k):
     return ids[:, :k].long()
 
 
+def run_downstream(scores, values, k, select_fn):
+    idx = select_fn(scores, k)
+    gathered = torch.gather(
+        values.unsqueeze(0).expand(scores.shape[0], -1, -1),
+        1,
+        idx.unsqueeze(-1).expand(-1, -1, values.shape[-1]),
+    )
+    return gathered.mean(dim=1)
+
+
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     device = "cuda"
     torch.manual_seed(0)
-    n_tokens, n_experts = 256, 4
-    logits = torch.randn(n_tokens, n_experts, device=device)
-    logits[10, 0] = 5.0
-    logits[10, 2] = 5.0  # exact tie for token 10's top expert (this pair is verified to produce disagreement)
+    n, k, d = 32, 8, 16
+    # Deterministic construction: 7 indices with strictly distinct, clearly
+    # higher scores fill ranks 0-6; indices 7 and 20 are tied for the 8th
+    # (last) slot; every other index is clearly lower. This avoids any
+    # accidental extra tie that random scores + a copied boundary value could
+    # create.
+    scores = torch.full((1, n), -100.0, device=device)
+    higher_idxs = [0, 1, 2, 3, 4, 5, 6]
+    for rank, idx in enumerate(higher_idxs):
+        scores[0, idx] = 100.0 - rank
+    scores[0, 7] = 50.0
+    scores[0, 20] = 50.0  # exact tie at the k-th boundary between idx 7 and idx 20
 
-    expert_weight = torch.randn(n_experts, 8, device=device)
+    values = torch.randn(n, d, device=device) * 0.3
+    values[20] = values[7] + torch.randn(d, device=device) * 0.03  # diluted swap
 
-    ref_idx = route_reference(logits, k=1).squeeze(-1)
-    cand_idx = route_buggy(logits, k=1).squeeze(-1)
-    assert ref_idx[10].item() in (0, 2) and cand_idx[10].item() in (0, 2), "token 10's winner must come from the tied pair"
-    assert ref_idx[10].item() != cand_idx[10].item(), "reference and real kernel should disagree on the tie"
+    ref_idx = select_topk_reference(scores, k)
+    cand_idx = select_topk_buggy(scores, k)
+    ref_tie_pick = ({7, 20} & set(ref_idx[0].tolist()))
+    cand_tie_pick = ({7, 20} & set(cand_idx[0].tolist()))
+    # Bitonic-network tie-break direction depends on the bit patterns of the
+    # specific tied positions, not simply "lower index" in the abstract -- so
+    # we verify empirically that the contract-enforcing reference and the
+    # real kernel's default actually disagree on this tie, rather than
+    # presupposing which physical index each one keeps.
+    assert len(ref_tie_pick) == 1 and len(cand_tie_pick) == 1, "each should keep exactly one of the tied pair"
+    assert ref_tie_pick != cand_tie_pick, "reference and real kernel should disagree on the tie"
 
-    ref_out = expert_weight[ref_idx]
-    cand_out = expert_weight[cand_idx]
-    pooled_ref = ref_out.mean(dim=0)
-    pooled_cand = cand_out.mean(dim=0)
+    ref_out = run_downstream(scores, values, k, select_topk_reference)
+    cand_out = run_downstream(scores, values, k, select_topk_buggy)
 
-    naive_pass = torch.allclose(pooled_cand, pooled_ref, rtol=1e-2, atol=1e-2)
-    per_token_pass = torch.allclose(cand_out, ref_out, rtol=1e-2, atol=1e-2)
-    print(f"token 10 tie: reference picked expert {ref_idx[10].item()}, real kernel picked expert {cand_idx[10].item()}")
-    print(f"pooled diff = {(pooled_cand - pooled_ref).abs().max().item():.6f}, naive allclose on pooled mean = {naive_pass}")
-    print(f"per-token allclose (would catch it) = {per_token_pass}")
-    print("FN DEMONSTRATED" if naive_pass and not per_token_pass else "tune constants")
-    # What a conventional CI test would conclude: pooled-mean allclose，随机分数几乎不产生 tie
+    naive_pass = torch.allclose(cand_out, ref_out, rtol=1e-2, atol=1e-2)
+    max_abs = (cand_out - ref_out).abs().max().item()
+    print(f"real NSA kernel (GPU): contract-enforcing reference keeps idx {list(ref_tie_pick)[0]}, real unmodified kernel keeps idx {list(cand_tie_pick)[0]} on the tie")
+    print(f"downstream max abs diff = {max_abs:.6f}, naive allclose = {naive_pass}")
+    print("FN DEMONSTRATED" if naive_pass else "tune constants")
+    # What a conventional CI test would conclude: 下游 allclose，同上
     print(f"NAIVE_ALLCLOSE_VERDICT: {naive_pass}")
     return naive_pass
 

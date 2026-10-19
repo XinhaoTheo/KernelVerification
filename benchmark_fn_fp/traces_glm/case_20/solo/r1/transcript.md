@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_20`
+- Entry: `case_21`
 - Turns: 6
 - Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 44.631s across 5 calls | tokens: in=53714 out=1934 total=55648
+- LLM time: 30.508s across 5 calls | tokens: in=47866 out=1529 total=49395
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.99
 
 ## Timeline
 
@@ -25,47 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_20",
+    "entry": "case_21",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 
-### Turn 2 - `solo` (10.709755666999968s, in=7336 out=604)
+### Turn 2 - `solo` (6.133796773999961s, in=6948 out=290)
 
 Message:
 
 ```text
-The kernel looks structurally correct, but line 26 computes `rstd = 1/(sqrt(var)+eps)` while the contract states `rstd = 1/sqrt(var+eps)`. That's a formula deviation. I'll record a claim and probe it numerically, including a small-variance row where the difference is amplified.
+The kernel never reads `block_table` — it computes `physical = seq * max_blocks + logical_block` instead of loading `block_table[seq, logical_block]`. That violates the contract's indirection. I'll record the claim and confirm with a runtime probe.
 ```
 
 Tool calls:
@@ -73,15 +73,15 @@ Tool calls:
 - `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+    "rationale": "Source line 15 computes the physical page index arithmetically as seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the paged indirection the contract requires.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states: var = sum((x - mean)^2) / N; rstd = 1 / sqrt(var + eps). Kernel line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps)."
+        "summary": "block_table[s, b] is the PHYSICAL page holding logical block b; result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size]; block table may map any sequence to any physical page (non-contiguous, interleaved)."
       }
     ],
-    "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance."
+    "statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping."
   }
   Output summary:
   {
@@ -89,12 +89,12 @@ Tool calls:
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (4.134340259000055s, in=8038 out=255)
+### Turn 3 - `solo` (4.357958780999979s, in=7628 out=272)
 
 Message:
 
 ```text
-I'll re-record the claim with the missing scope_rationale, then run a numeric probe on the rstd formula deviation.
+The prior record_claim failed for missing scope_rationale; I'll re-record it correctly, then run a runtime probe to confirm.
 ```
 
 Tool calls:
@@ -102,39 +102,39 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+    "rationale": "Source line 15 computes physical = seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the required paged indirection.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+        "summary": "result[s,t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; block_table[s,b] is the PHYSICAL page holding logical block b, and the block table may map any sequence to any physical page (non-contiguous, interleaved)."
       }
     ],
-    "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
-    "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numeric
-  ...[truncated 60 chars]
+    "scope_rationale": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size] with arbitrary (non-identity) block mappings allowed, so computing the physical page arithmetically without loading block_table violates the required indirection.",
+    "statement": "pa
+  ...[truncated 205 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+    "rationale": "Source line 15 computes physical = seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the required paged indirection.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+        "summary": "result[s,t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; block_table[s,b] is the PHYSICAL page holding logical block b, and the block table may map any sequence to any physical page (non-contiguous, interleaved)."
       }
     ],
-    "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
-    "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+    "scope_rationale": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size] with arbitrary (non-identity) block mappings allowed, so computing the physical page arithmetically without loading block_table violates the required indirection.",
+    "statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (13.951105853000058s, in=9204 out=501)
+### Turn 4 - `solo` (8.590652159000001s, in=8867 out=491)
 
 Message:
 
 ```text
-I'll run a numeric probe comparing the kernel's output to the contract formula, including a small-variance row where the eps placement matters most.
+I'll run a runtime probe with a scrambled (non-identity) block table to confirm the kernel produces wrong output versus the contract's reference gather.
 ```
 
 Tool calls:
@@ -143,8 +143,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_20\")\nfrom kernel import layer_norm\n\ntorch.manual_seed(0)\ndev = 'cuda'\nN = 512\n# row 0: standard random; row 1: small variance; row 2: constant row\nx = torch.randn(2, N, device=dev)\nx_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)\nx = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)\nw = torch.randn(N, device=dev)\nb = torch.randn(N, device=dev)\neps = 1e-5\n\ny = layer_norm(x.float(), w.float(), b.float(), eps)\n\ndef ref(xr):\n    mean = xr.mean(-1, keepdim=True)\n    var = ((xr - mean) ** 2).mean(-1, keepdim=True)\n    rstd = 1.0 / torch.sqrt(var + eps)\n    return (xr - mean) * rstd * w + b\n\nyr = ref(x.float())\ndi
-  ...[truncated 665 chars]
+    "code": "import torch, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nnum_pages, page_size, head_dim = 16, 4, 8\nnum_seqs, max_blocks = 3, 5\nkv = torch.randn(num_pages, page_size, head_dim, device=\"cuda\")\n# permuted (non-identity) block table, distinct pages\nperm = torch.randperm(num_pages)[:num_seqs*max_blocks] if num_pages >= num_seqs*max_blocks else torch.randperm(num_pages).repeat(2)\nbt = perm[:num_seqs*max_blocks].reshape(num_seqs, max_blocks).to(torch.int32).cuda()\nseq_len = 13  # fits within max_blocks pages\n\nout = m.paged_gather(kv, bt, seq_len)\n\n# contract reference\nt = torch.arange(se
+  ...[truncated 790 chars]
   Output summary:
   {
     "artifacts": [
@@ -152,39 +152,41 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+        "sha256": "71098014120f5cca3e2339da2f60f4b372d1b5821457e2984b2fa9d68b689ea9"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+        "sha256": "b74a8ca9f04ae3ded50e7cf15eba8b6b6948a9fe478e31535a33d2f5bc99d871"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
-    "duration_s": 5.743466,
-    "event_id": "
-  ...[truncated 3727 chars]
+    "claim_statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.",
+    "duration_s": 7.327347,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path
+  ...[truncated 1572 chars]
 
-### Turn 5 - `solo` (6.039114353999935s, in=12373 out=319)
+### Turn 5 - `solo` (6.527892737000002s, in=10956 out=222)
 
 Message:
 
 ```text
-The probe decisively confirmed the claim: the small-variance row (var ≈ 9.6e-9) shows a max absolute error of 7.36 versus the contract formula, and the kernel's rstd is ~29× the correct one. I'll finalize the evidence, resolve the claim, and record the verdict.
+The probe confirmed the claim: under a scrambled block table every output token mismatches (mismatch_frac 1.0), while an identity mapping matches exactly — proving the kernel computes pages arithmetically instead of reading block_table. Finalizing evidence and verdict.
 ```
 
 Tool calls:
@@ -193,20 +195,13 @@ Tool calls:
   Args:
   {
     "data": {
-      "constant_row_out_match_ref": true,
-      "max_abs_err": 7.364343643188477,
-      "rowwise_max_abs_err": [
-        2.29e-05,
-        2.96e-05,
-        7.364343643188477,
-        0.0
-      ],
-      "small_var_row_var": 9.62e-09,
-      "small_var_rstd_ratio_kernel_over_ref": 29.27
+      "identity_mapping_correct": true,
+      "max_abs_err": 4.337462425231934,
+      "mismatch_frac_non_identity": 1.0
     },
     "event_id": "t7",
     "status": "confirmed",
-    "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+    "summary": "With a permuted (non-identity) block table over kv_cache[16,4,8], seq_len=13, the kernel output mismatches the contract reference on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matches exactly \u2014 confirming the kernel ignores block_table indirection.",
     "supports": "confirmed"
   }
   Output summary:
@@ -214,17 +209,17 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+    "summary": "With a permuted (non-identity) block table over kv_cache[16,4,8], seq_len=13, the kernel output mismatches the contract reference on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matches exactly \u2014 confirming the kernel ignores block_table indirection.",
     "supports": "confirmed",
     "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (9.79653469799996s, in=16763 out=255)
+### Turn 6 - `solo` (4.89728927200008s, in=13467 out=254)
 
 Message:
 
 ```text
-The claim is confirmed and scoped: the kernel violates the contract's rstd formula. Recording the verdict.
+The confirmed claim c1 shows the kernel never reads `block_table`, computing the physical page as `seq*max_blocks+logical_block` instead — a direct violation of the contract's required indirection (probe t7: 100% mismatch under non-identity mapping, exact match under identity). Recording the verdict.
 ```
 
 Tool calls:
@@ -232,20 +227,20 @@ Tool calls:
 - `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+    "reason": "Source inspection (kernel.py line 15) shows the Triton kernel computes physical = seq*max_blocks+logical_block and never loads BlockTable, violating the contract result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size]. Runtime probe t7 on kv_cache[16,4,8], num_seqs=3, max_blocks=5, seq_len=13 with a permuted block table showed mismatch on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matched exactly \u2014 proving the kernel ignores block_table indirection for any non-identity mapping the contract explicitly permits.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+    "reason": "Source inspection (kernel.py line 15) shows the Triton kernel computes physical = seq*max_blocks+logical_block and never loads BlockTable, violating the contract result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size]. Runtime probe t7 on kv_cache[16,4,8], num_seqs=3, max_blocks=5, seq_len=13 with a permuted block table showed mismatch on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matched exactly \u2014 proving the kernel ignores block_table indirection for any non-identity mapping the contract explicitly permits.",
     "verdict": "reject"
   }
 
@@ -257,44 +252,44 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.
+Statement: paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.
 
 Scope: `in_scope`
 
-Scope rationale: The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.
+Scope rationale: The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size] with arbitrary (non-identity) block mappings allowed, so computing the physical page arithmetically without loading block_table violates the required indirection.
 
 Scope evidence:
-- `problem.txt`: Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero.
+- `problem.txt`: result[s,t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; block_table[s,b] is the PHYSICAL page holding logical block b, and the block table may map any sequence to any physical page (non-contiguous, interleaved).
 
-Rationale: Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.
+Rationale: Source line 15 computes physical = seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the required paged indirection.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: With a permuted (non-identity) block table over kv_cache[16,4,8], seq_len=13, the kernel output mismatches the contract reference on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matches exactly — confirming the kernel ignores block_table indirection.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t5 - record_claim - error
@@ -308,16 +303,16 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "Placing eps outside the sqrt yields a different normalizer than the contract's rstd = 1/sqrt(var+eps); for small positive row variance the relative error can be ~eps/2 or larger, a direct violation of the stated formula.",
+  "rationale": "Source line 15 computes physical = seq*max_blocks+logical_block and never loads BlockTable, so the gather ignores the required paged indirection.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract states: rstd = 1 / sqrt(var + eps); epsilon must keep the normalizer finite as row variance approaches zero."
+      "summary": "result[s,t] = kv_cache[ block_table[s, t // page_size], t % page_size ]; block_table[s,b] is the PHYSICAL page holding logical block b, and the block table may map any sequence to any physical page (non-contiguous, interleaved)."
     }
   ],
-  "scope_rationale": "The contract explicitly requires rstd = 1/sqrt(var+eps) with eps inside the sqrt; kernel line 26 computes 1/(sqrt(var)+eps) instead, violating the stated formula for any eps>0.",
-  "statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
+  "scope_rationale": "The contract requires result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size] with arbitrary (non-identity) block mappings allowed, so computing the physical page arithmetically without loading block_table violates the required indirection.",
+  "statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.",
   "status": "open"
 }
 
@@ -329,30 +324,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+      "sha256": "71098014120f5cca3e2339da2f60f4b372d1b5821457e2984b2fa9d68b689ea9"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+      "sha256": "b74a8ca9f04ae3ded50e7cf15eba8b6b6948a9fe478e31535a33d2f5bc99d871"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "290ceb2cce00d194604119f79029852384d30d0e2e47936fd916cc1d15d36ac8"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps), producing numerically wrong outputs for rows with small non-zero variance.",
-  "duration_s": 5.743466,
+  "claim_statement": "paged_gather ignores block_table: the physical page index is computed as seq*max_blocks+logical_block instead of block_table[seq, logical_block], producing wrong output for any non-identity block mapping.",
+  "duration_s": 7.327347,
   "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
@@ -362,20 +351,26 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t7_probe.py",
-          "sha256": "1dc54b79407d841517f551aca665c009c06f7d53506b231b526b9fbf97c39a83"
+          "sha256": "71098014120f5cca3e2339da2f60f4b372d1b5821457e2984b2fa9d68b689ea9"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t7_stdout.txt",
-          "sha256": "d2f2253fc4559d112c55bb6df7687e1eb1e932200122b8ec132de547904e2dba"
+          "sha256": "b74a8ca9f04ae3ded50e7cf15eba8b6b6948a9fe478e31535a33d2f5bc99d871"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c
-...[truncated 2927 chars]
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "duration_s": 7.327347,
+      "exit_code": 0,
+      "expected_signal": "kernel output mismatches reference under non-identity block mapping",
+      "json_parse_error": "la
+...[truncated 772 chars]
 
 ### t8 - finalize_probe_evidence - ok
 
@@ -383,7 +378,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel computes rstd=1/(sqrt(var)+eps) instead of 1/sqrt(var+eps). On a row with variance 9.6e-9 the kernel's rstd is 29.3x the contract value, producing max abs output error 7.36 on that row (vs ~3e-5 on normal-variance rows and exact match on the constant row).",
+  "summary": "With a permuted (non-identity) block table over kv_cache[16,4,8], seq_len=13, the kernel output mismatches the contract reference on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matches exactly \u2014 confirming the kernel ignores block_table indirection.",
   "supports": "confirmed",
   "tool_event_id": "t7"
 }
@@ -391,22 +386,22 @@ Evidence:
 ### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.99,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+  "reason": "Source inspection (kernel.py line 15) shows the Triton kernel computes physical = seq*max_blocks+logical_block and never loads BlockTable, violating the contract result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size]. Runtime probe t7 on kv_cache[16,4,8], num_seqs=3, max_blocks=5, seq_len=13 with a permuted block table showed mismatch on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matched exactly \u2014 proving the kernel ignores block_table indirection for any non-identity mapping the contract explicitly permits.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:28:35Z",
+  "confidence": 0.99,
+  "created_at": "2026-09-30T08:29:30Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t7 on a 4-row input (N=512, eps=1e-5, fp32, random/weight/bias drawn from torch.randn) showed kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's rstd = 1/sqrt(var+eps). On a small-variance row (var \u2248 9.62e-9) the kernel's rstd is 29.3x the contract value, giving max abs output error 7.36 on that row, while normal-variance rows show only ~3e-5 error and the constant row matches exactly \u2014 isolating the deviation to the eps placement, exactly where the contract says the stabilizer must live (\"rstd = 1 / sqrt(var + eps)\"). This is an in-scope violation of the explicit formula; verdict: reject.",
+  "reason": "Source inspection (kernel.py line 15) shows the Triton kernel computes physical = seq*max_blocks+logical_block and never loads BlockTable, violating the contract result[s,t] = kv_cache[block_table[s, t//page_size], t%page_size]. Runtime probe t7 on kv_cache[16,4,8], num_seqs=3, max_blocks=5, seq_len=13 with a permuted block table showed mismatch on 100% of (seq,token) slots (max abs err 4.34), while an identity block mapping matched exactly \u2014 proving the kernel ignores block_table indirection for any non-identity mapping the contract explicitly permits.",
   "verdict": "reject"
 }

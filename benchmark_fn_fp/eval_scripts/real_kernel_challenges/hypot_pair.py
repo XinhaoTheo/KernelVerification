@@ -17,7 +17,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_134": "trust", "case_135": "reject"}
+EXPECTED = {"case_61": "trust", "case_62": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 

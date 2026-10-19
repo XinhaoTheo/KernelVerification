@@ -10,7 +10,7 @@ import json
 import math
 import numpy as np
 
-CASES = ("case_42", "case_43")
+CASES = ("case_99", "case_100")
 TOLERANCE = 0.1
 SEED = 730119
 
@@ -109,8 +109,8 @@ def build(output_root):
     # receives its literal indices, never this selection recipe or its label.
     pairing = np.random.Generator(np.random.PCG64(SEED + 1)).permutation(32)
     ordered = np.array([j for i in pairing for j in (i, i + 32)] + list(range(64, 128)))
-    selected = {"case_42": np.random.Generator(np.random.PCG64(SEED + 2)).permutation(128),
-                "case_43": inverse[ordered]}
+    selected = {"case_99": np.random.Generator(np.random.PCG64(SEED + 2)).permutation(128),
+                "case_100": inverse[ordered]}
     key = {"family": "reduction", "budget": TOLERANCE, "cases": {}}
     attempts = []
     for name, permutation in selected.items():

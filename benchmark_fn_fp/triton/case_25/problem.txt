@@ -1,13 +1,16 @@
-Operation: one symmetric INT8 quantize-dequantize round trip, the storage step
-used by low-precision optimizer state and KV-cache compression.
+Operation: keep the top-k scores of every row and zero the rest, the candidate
+selection step of top-k sampling.
 
-    scale = max(|x|) / 127        per block
-    q     = round(x / scale)      to the nearest representable level
-    y     = q * scale
+    out[j] = scores[j]  if scores[j] is among the k largest of the row
+    out[j] = 0          otherwise
 
-The rounding must be to nearest, so the round trip is unbiased: repeated
-application must not push the tensor systematically toward zero or away from it.
-This matters because the operation is applied once per optimizer step, so any
-per-step bias compounds over a training run.
+Specification of ties: when several entries share the value at the k-th
+position, the specification does not say which of them to keep. Admitting all
+tied entries and admitting only enough to reach exactly k are both accepted
+readings; the requirement is that every kept entry is at least as large as every
+dropped one.
 
-Does requantize() satisfy this contract?
+Downstream the kept entries are renormalized and used as sampling weights, so
+the two readings produce different continuous outputs.
+
+Does topk_mask() satisfy this contract?

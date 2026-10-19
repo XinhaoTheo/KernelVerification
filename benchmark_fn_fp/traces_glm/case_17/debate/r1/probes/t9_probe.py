@@ -1,18 +1,16 @@
-import torch, sys, json
-sys.path.insert(0, "/root/cases/case_17")
-from kernel import chunked_cumsum
-
-torch.manual_seed(1)
-x = torch.randn(2, 32, device="cuda", dtype=torch.float32)
-out = chunked_cumsum(x, chunk=64)
-ref = torch.cumsum(x, dim=1)
+import torch, json
+import importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_18/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+torch.manual_seed(0)
+x = torch.randn(4, 64, device="cuda", dtype=torch.float32)
+out = k.softmax(x)
+ref = torch.softmax(x, dim=1)
+row_sums = out.sum(dim=1)
 print(json.dumps({
-    "seqlen": 32, "chunk": 64, "shape": list(out.shape),
-    "max_abs_err": float((out - ref).abs().max()),
-    "out_is_all_zero": bool((out == 0).all()),
-    "ref_nonzero_count": int((ref != 0).sum()),
-    "out_nonzero_count": int((out != 0).sum()),
-    "allclose": bool(torch.allclose(out, ref, atol=1e-6)),
-    "sample_out": out[0, :4].tolist(),
-    "sample_ref": ref[0, :4].tolist(),
+  "shape": list(x.shape),
+  "row_sums": row_sums.tolist(),
+  "has_nan": bool(torch.isnan(out).any()),
+  "has_inf": bool(torch.isinf(out).any()),
+  "max_abs_err_vs_torch_softmax": (out - ref).abs().max().item()
 }))

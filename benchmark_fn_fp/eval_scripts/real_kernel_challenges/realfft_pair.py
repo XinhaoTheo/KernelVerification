@@ -13,7 +13,7 @@ import gmpy2
 import numpy as np
 import torch
 
-EXPECTED = {"case_162": "trust", "case_163": "reject"}
+EXPECTED = {"case_89": "trust", "case_90": "reject"}
 WIDTHS = (64, 128, 256)
 ATOL, RTOL = 1e-4, 1e-6
 
@@ -220,16 +220,16 @@ def _source_binding(case_root):
         tree = ast.parse(path.read_text())
         kernel = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_realfft")
         assignments = {n.targets[0].id: ast.unparse(n.value) for n in kernel.body if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)}
-        expected = "_reverse(-k & M - 1, LOG_M)" if case == "case_162" else "-address & M - 1"
+        expected = "_reverse(-k & M - 1, LOG_M)" if case == "case_89" else "-address & M - 1"
         assert assignments["partner"] == expected, assignments["partner"]
         source = path.read_text()
         assert "enable_fp_fusion=False" in source
         assert source.count(".to(tl.float64)") == 2
         result[case] = {"kernel_sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "partner_address": assignments["partner"], "implicit_fma_disabled": True}
-    control = (Path(case_root) / "case_162" / "kernel.py").read_text()
-    defect = (Path(case_root) / "case_163" / "kernel.py").read_text()
+    control = (Path(case_root) / "case_89" / "kernel.py").read_text()
+    defect = (Path(case_root) / "case_90" / "kernel.py").read_text()
     assert control.replace("_reverse((-k) & (M - 1), LOG_M)", "(-address) & (M - 1)") == defect
-    assert (Path(case_root) / "case_162" / "problem.txt").read_bytes() == (Path(case_root) / "case_163" / "problem.txt").read_bytes()
+    assert (Path(case_root) / "case_89" / "problem.txt").read_bytes() == (Path(case_root) / "case_90" / "problem.txt").read_bytes()
     return result
 
 

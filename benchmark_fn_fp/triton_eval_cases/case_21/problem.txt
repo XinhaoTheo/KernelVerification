@@ -1,17 +1,12 @@
-Operation: gather cached key/value tokens for a batch of sequences out of a
-paged KV cache, the block-table indirection used by paged-attention inference
-engines.
+Operation: inner product of two float32 vectors, computed with a split-K
+partitioning and combined with atomic accumulation, the reduction strategy used
+by split-K GEMM and all-reduce kernels.
 
-    kv_cache     : [num_pages, page_size, head_dim]
-    block_table  : [num_seqs, max_blocks], int32
-                   block_table[s, b] is the PHYSICAL page holding logical block b
-                   of sequence s
-    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]
+    out = sum over k of a[k] * b[k]
 
-Pages are allocated on demand, so the physical pages of one sequence are not
-contiguous and are generally interleaved with those of other sequences.
+The partitioning is a performance choice. Floating-point addition is not
+associative, so partitioning and combining in a different order changes the
+last bits of the result; the contract requires the mathematical inner product,
+not bitwise agreement with any particular summation order.
 
-Input domain: `seq_len` may be any length that fits within `max_blocks` pages,
-and the block table may map any sequence to any physical page.
-
-Does paged_gather() satisfy this contract?
+Does splitk_dot() satisfy this contract?

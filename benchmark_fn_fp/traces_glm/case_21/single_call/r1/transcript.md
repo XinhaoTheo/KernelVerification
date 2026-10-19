@@ -21,23 +21,18 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: gather cached key/value tokens for a batch of sequences out of a
-paged KV cache, the block-table indirection used by paged-attention inference
-engines.
+Operation: inner product of two float32 vectors, computed with a split-K
+partitioning and combined with atomic accumulation, the reduction strategy used
+by split-K GEMM and all-reduce kernels.
 
-    kv_cache     : [num_pages, page_size, head_dim]
-    block_table  : [num_seqs, max_blocks], int32
-                   block_table[s, b] is the PHYSICAL page holding logical block b
-                   of sequence s
-    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]
+    out = sum over k of a[k] * b[k]
 
-Pages are allocated on demand, so the physical pages of one sequence are not
-contiguous and are generally interleaved with those of other sequences.
+The partitioning is a performance choice. Floating-point addition is not
+associative, so partitioning and combining in a different order changes the
+last bits of the result; the contract requires the mathematical inner product,
+not bitwise agreement with any particular summation order.
 
-Input domain: `seq_len` may be any length that fits within `max_blocks` pages,
-and the block table may map any sequence to any physical page.
-
-Does paged_gather() satisfy this contract?
+Does splitk_dot() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -49,31 +44,24 @@ import triton.language as tl
 
 
 @triton.jit
-def _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,
-                         stride_kv_page, stride_out_seq,
-                         HEAD_DIM: tl.constexpr):
-    seq = tl.program_id(0)
-    slot = tl.program_id(1)
-    logical_block = slot // page_size
-    within = slot % page_size
+def _splitk_dot_kernel(A, B, Out, K, SPLIT: tl.constexpr, BLOCK: tl.constexpr):
+    part = tl.program_id(0)
+    chunk = tl.cdiv(K, SPLIT)
+    start = part * chunk
+    acc = 0.0
+    for off in range(0, chunk, BLOCK):
+        idx = start + off + tl.arange(0, BLOCK)
+        mask = idx < tl.minimum(start + chunk, K)
+        a = tl.load(A + idx, mask=mask, other=0.0)
+        b = tl.load(B + idx, mask=mask, other=0.0)
+        acc += tl.sum(a * b, axis=0)
+    tl.atomic_add(Out, acc)
 
-    physical = seq * max_blocks + logical_block
-    offs = tl.arange(0, HEAD_DIM)
-    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs
-    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs
-    tl.store(dst, tl.load(src))
 
-
-def paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,
-                 seq_len: int) -> torch.Tensor:
-    """Gather `seq_len` cached tokens for each sequence through its block table."""
-    num_pages, page_size, head_dim = kv_cache.shape
-    num_seqs, max_blocks = block_table.shape
-    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,
-                      dtype=kv_cache.dtype)
-    _paged_gather_kernel[(num_seqs, seq_len)](
-        kv_cache, block_table, out, max_blocks, page_size,
-        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)
+def splitk_dot(a: torch.Tensor, b: torch.Tensor, split: int = 512) -> torch.Tensor:
+    """Inner product of two float32 vectors, accumulated across `split` partitions."""
+    out = torch.zeros(1, device=a.device, dtype=torch.float32)
+    _splitk_dot_kernel[(split,)](a, b, out, a.numel(), SPLIT=split, BLOCK=256)
     return out
 
 ```
@@ -82,18 +70,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-(not supplied)
+Mask: idx < min(start+chunk, K) — correct upper bound. Partitions may overlap? start = part*chunk, each covers chunk elements; last partitions may exceed K fully masked. Correct. atomic_add float32 — nondeterministic order but contract allows. Trust.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.98, "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."}
+{"verdict": "trust", "confidence": 0.9, "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."}
 
 ## Verdict
 
 {
-  "verdict": "reject",
-  "confidence": 0.98,
-  "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."
+  "verdict": "trust",
+  "confidence": 0.9,
+  "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."
 }
 
 ## Usage and stop reason
@@ -102,23 +90,23 @@ Is this implementation correct?
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "reject",
-    "confidence": 0.98,
-    "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."
+    "verdict": "trust",
+    "confidence": 0.9,
+    "reason": "The masking (idx < min(start+chunk, K)) correctly bounds each partition, out-of-range partitions contribute zero, and atomic float32 accumulation only changes summation order, which the contract explicitly permits. The mathematical inner product is computed correctly."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 775,
-    "output_tokens": 80
+    "input_tokens": 675,
+    "output_tokens": 128
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 2.1992775830440223,
-  "kernel_sha256": "7555884853e6219ba8f534238d23c127df7576bdb5ec6c79d824bb953ae5f27a",
-  "problem_sha256": "878eecd616332b65a3c12263b238b8116e028ad04907c614d52d807b39c76c59",
+  "elapsed_s": 2.6928737089037895,
+  "kernel_sha256": "333868b7cfb9b41df7229a1b71cde358a03a477e1cd379652884c5d80551b08d",
+  "problem_sha256": "8d9a317015018c742421a3bc17a484e9cd4ab7106336ad3f1626db994a1cb31d",
   "prompt_variant": "original",
-  "estimated_usd": 0.001437,
+  "estimated_usd": 0.0015082,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

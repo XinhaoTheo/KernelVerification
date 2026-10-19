@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_08`
-- Turns: 10
-- Tool events: 21
-- Claims: 4
+- Entry: `case_09`
+- Turns: 9
+- Tool events: 16
+- Claims: 2
 - Description updates: 0
-- LLM time: 82.302s across 9 calls | tokens: in=139747 out=4283 total=144030
+- LLM time: 91.475s across 8 calls | tokens: in=167454 out=4146 total=171600
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.9
+- Verdict: `reject`
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,121 +25,94 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_08",
+    "entry": "case_09",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_08"
+    "entry": "case_09"
   }
 
-### Turn 2 - `solo` (15.829759486s, in=6424 out=645)
+### Turn 2 - `solo` (11.301627550000006s, in=8349 out=475)
 
 Message:
 
 ```text
-Analyze: kernel looks correct. Potential issues: tl.rand(seed, offs) with seed as int passed directly — fine. p_up could exceed 1 or be negative due to floating point (e.g., x negative, floor issues; x exactly on grid: p_up=0 or ~1, could round up with prob ~1 producing upper=lower+STEP, which is a neighboring multiple still valid). Negative x: floor handles correctly. Edge: x very large? Contract doesn't specify. Output on grid: lower+STEP is multiple of STEP. Test determinism/seed: randomness from seed — deterministic per seed.
-
-Potential real bug: tl.rand returns values in [0,1); when p_up computed as exactly 1.0 due to rounding (x/STEP floor up), fine. When x slightly below a multiple, p_up ~1e-16 fine.
-
-Another: seed must be int; passing works. One issue: tl.rand(seed, offs) — Philox counter-based; each element gets different value. Fine.
-
-Probe: empirical check that mean output ≈ x over many seeds, and output values are on grid, determinism with same seed. Record claim and probe.The kernel looks structurally correct: lower/upper neighbors via floor, p_up as fractional distance, Philox tl.rand draw, and threshold comparison. My main hypotheses: (1) E[out] ≠ x due to a bias in 
-...[truncated 204 chars]
+The kernel is a bitonic sort with a strict `>` comparator and no index-based tie-break; the contract explicitly requires that on equal scores the LOWER index wins. That's the key risk. Let me record the claim and run a probe with tied scores.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The contract defines correctness via the rounding probabilities; p_up computed in fp32 could be biased, tl.rand could be misused (e.g., same counter per element), producing a biased estimator of x. Test: mean output over many seeds vs x on representative in-domain inputs (power-of-two length, single block).",
+    "rationale": "The comparator `cond = (left > right) != flip` uses only value comparisons; bitonic sort is not stable, so when scores are equal the element that ends up first (and thus selected as top-1) is an arbitrary function of the network, not the lower index.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
+        "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
       }
     ],
-    "statement": "stochastic_round_to_grid violates E[out] == x: the empirical mean of outputs over many seeds is biased relative to x (wrong probability p_up, wrong RNG usage, or wrong rounding rule)."
+    "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
   }
   Output summary:
   {
-    "id": "c1",
-    "rationale": "The contract defines correctness via the rounding probabilities; p_up computed in fp32 could be biased, tl.rand could be misused (e.g., same counter per element), producing a biased estimator of x. Test: mean output over many seeds vs x on representative in-domain inputs (power-of-two length, single block).",
-    "scope": "unknown",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
-      }
-    ],
-    "scope_rationale": "",
-    "statement": "stochastic_round_to_grid violates E[out] == x: the empirical mean of outputs over many seeds is biased relative to x (wrong probability p_up, wrong RNG usage, or wrong rounding rule).",
-    "status": "open"
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "fp error in lower/upper computation or negative-x handling could produce values not equal to a multiple of STEP, violating the requirement to round onto the grid. Test: check every output equals a multiple of STEP within fp tolerance, including negative x and grid-aligned x.",
+    "rationale": "Need to confirm the sorted output ordering and correctness of returned indices against torch argsort on random inputs across power-of-two N values.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "must round each element to one of the two neighbouring multiples of STEP"
+        "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
       }
     ],
-    "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbor for negative / grid-aligned inputs)."
+    "statement": "For random (tie-free) inputs with power-of-two N, the kernel returns indices matching a descending-stable reference sort (highest score first)."
   }
   Output summary:
   {
-    "id": "c2",
-    "rationale": "fp error in lower/upper computation or negative-x handling could produce values not equal to a multiple of STEP, violating the requirement to round onto the grid. Test: check every output equals a multiple of STEP within fp tolerance, including negative x and grid-aligned x.",
-    "scope": "unknown",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "must round each element to one of the two neighbouring multiples of STEP"
-      }
-    ],
-    "scope_rationale": "",
-    "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbor for negative / grid-aligned inputs).",
-    "status": "open"
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (4.288339787000002s, in=8566 out=475)
+### Turn 3 - `solo` (6.92007313900001s, in=9467 out=387)
 
 Message:
 
 ```text
-Need to scope claims properly and run probes. First update scope of c1 and c2 to in_scope with scope_rationale. record_claim doesn't update scope... I can't edit scope via tool except record_claim again? There's no update claim scope tool. Maybe re-record claims with scope filled. Let me record refined claims with scope and then run probes.
-
-Plan: re-record c1/c2 with in_scope scope, then run one probe testing both.I'll re-scope the two claims as in-scope (they test the contract's stated invariant E[out]==x and grid-membership, both from problem.txt) and then run a single decisive probe covering both.
+The two claims failed to record due to missing scope_rationale; I'll re-send them with that field filled.
 ```
 
 Tool calls:
@@ -147,68 +120,68 @@ Tool calls:
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "p_up computed in fp32, tl.rand misuse, or wrong rounding could bias the estimator. Test: mean output over many seeds vs x on representative in-domain inputs.",
+    "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
+        "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
       }
     ],
-    "scope_rationale": "Contract explicitly defines correctness by the rounding probability rule guaranteeing E[out]==x on in-domain inputs (1-D power-of-two length, single block).",
-    "statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs."
+    "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+    "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule."
   }
   Output summary:
   {
-    "id": "c3",
-    "rationale": "p_up computed in fp32, tl.rand misuse, or wrong rounding could bias the estimator. Test: mean output over many seeds vs x on representative in-domain inputs.",
+    "id": "c1",
+    "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
+        "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
       }
     ],
-    "scope_rationale": "Contract explicitly defines correctness by the rounding probability rule guaranteeing E[out]==x on in-domain inputs (1-D power-of-two length, single block).",
-    "statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
+    "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+    "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
     "status": "open"
   }
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "fp error in lower/upper or negative-x handling could yield off-grid values. Test: every output equals a multiple of STEP within fp tolerance, including negative and grid-aligned x.",
+    "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "must round each element to one of the two neighbouring multiples of STEP"
+        "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
       }
     ],
-    "scope_rationale": "Contract requires each output be one of the two neighbouring multiples of STEP; negative x and grid-aligned x are admissible in-domain values of the 1-D power-of-two tensor.",
-    "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbour for negative / grid-aligned inputs)."
+    "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+    "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort."
   }
   Output summary:
   {
-    "id": "c4",
-    "rationale": "fp error in lower/upper or negative-x handling could yield off-grid values. Test: every output equals a multiple of STEP within fp tolerance, including negative and grid-aligned x.",
+    "id": "c2",
+    "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "must round each element to one of the two neighbouring multiples of STEP"
+        "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
       }
     ],
-    "scope_rationale": "Contract requires each output be one of the two neighbouring multiples of STEP; negative x and grid-aligned x are admissible in-domain values of the 1-D power-of-two tensor.",
-    "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbour for negative / grid-aligned inputs).",
+    "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+    "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (7.288549637999999s, in=10570 out=740)
+### Turn 4 - `solo` (12.262519599s, in=11416 out=705)
 
 Message:
 
 ```text
-Run probe for c3 and c4. One probe testing both: many seeds, mean vs x, grid membership, determinism.I'll run a single decisive probe covering both in-scope claims (c3: unbiased mean, c4: grid membership) using in-domain inputs including negative and grid-aligned values.
+I'll run both probes: the tie-break case and the random baseline.
 ```
 
 Tool calls:
@@ -216,9 +189,9 @@ Tool calls:
 - `run_claim_probe -> t9 ok`
   Args:
   {
-    "claim_id": "c3",
-    "code": "import torch, statistics\ntorch.manual_seed(0)\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nN = 1024  # power of two, single block\n# representative in-domain values: random, negatives, grid-aligned\nx = torch.cat([\n    torch.randn(N//2)*0.7,\n    -torch.rand(N//8)*3,\n    (torch.rand(N//8)*10).round()*0.05,\n    torch.linspace(-2, 2, N - N//2 - N//8 - N//8, device='cuda')\n]).cuda().float()\nx = x[:N]\n\nSTEP = 0.05\nS = 4000\nacc = torch.zeros(N, device='cuda')\non_grid_viol = 0\nwrong_dir = 0\nfor s in range(S):\n    out = k.stochastic_round_to_grid(x, s)\n    acc += out\n    # grid membership: nearest multiple mus
-  ...[truncated 1427 chars]
+    "claim_id": "c1",
+    "code": "\nimport torch, json, sys, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\ndef ref_lowest_tied(row):\n    return int(torch.arange(row.numel())[row == row.max()].min())\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    bad = 0; ex = None\n    # random rows, then set the max value at multiple random positions to create ties\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        idxs = torch.randperm(N)[:2 + (b % (N-1))][:2].cuda()  # pick 2 tied positions\n        scores[b, idxs[0]] = 5.0; scores[b, idxs[1]] = 5.0\n        # sometimes leave another position as uni
+  ...[truncated 583 chars]
   Output summary:
   {
     "artifacts": [
@@ -226,7 +199,7 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "1468466eb0734296511f836c0629b93f383c4a229d3d23df467b1b4f1b175683"
+        "sha256": "ccf15749dbcecca28d515bedd484de464f2b1decb0399ac33108a68ab74716f0"
       },
       {
         "description": "Captured stdout from the probe process.",
@@ -238,40 +211,29 @@ Tool calls:
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t9_stderr.txt",
-        "sha256": "bba6037747cbc507702f5ff5a33211a8403743d46b89b72204378fa9557702db"
+        "sha256": "415ad4d4565eb14a00de80fadee2d686263d67fbdcab4af7466f003ec91efad4"
       }
     ],
-    "claim_id": "c3",
-    "claim_statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
-    "duration_s": 7.51254,
+    "claim_id": "c1",
+    "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+    "duration_s": 5.454502,
     "event_id": "t9",
     "evidence_draft": {
-      "claim_id": "c3",
+      "claim_id": "c1",
       "data": {
         "artifacts": [
           {
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t9_probe.py",
-            "sha256": "1468466eb0734296511f836c06
-  ...[truncated 1851 chars]
-
-### Turn 5 - `solo` (15.557758526999997s, in=13213 out=707)
-
-Message:
-
-```text
-The previous probe failed on a device mismatch (tensors created on CPU, concatenated with CUDA tensors). I'll rerun with all tensors created on GPU.
-```
-
-Tool calls:
-
+            "sha256": "cc
+  ...[truncated 2300 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
-    "claim_id": "c3",
-    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_08/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndev = 'cuda'\nN = 1024  # power of two, single block\nx = torch.cat([\n    torch.randn(N//2, device=dev)*0.7,\n    -torch.rand(N//8, device=dev)*3,\n    (torch.rand(N//8, device=dev)*10).round()*0.05,\n    torch.linspace(-2, 2, N - N//2 - N//8 - N//8, device=dev)\n]).float()[:N]\n\nSTEP = 0.05\nS = 4000\nacc = torch.zeros(N, device=dev)\non_grid_viol = 0\nneighbour_viol = 0\nfl = torch.floor(x/STEP)\nfor s in range(S):\n    out = k.stochastic_round_to_grid(x, s)\n    acc += out\n    q = out / STEP\n    on_grid_viol += int((torch.abs(q - q.round()) > 1e-3).
-  ...[truncated 1305 chars]
+    "claim_id": "c2",
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev=\"cuda\"\nres={}\nfor N in [2,4,8,16,32,64,128]:\n    torch.manual_seed(1)\n    scores = torch.randn(512, N, device=dev)\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)\n    res[f\"N{N}\"] = {\"mismatch\": int((out!=ref).sum().item()), \"total\": 512}\n# also check k>1 ordering matches descending sort on tie-free input\ntorch.manual_seed(2)\ns = torch.randn(64, 16, device=dev)\nout = k.sorted_topk_indices(s, 5)\nref = torch.argsort(s, dim=1, descending=True, stable=True)[:, :5]\nres[\"k5_exact_match\"] = bool(torch.equa
+  ...[truncated 41 chars]
   Output summary:
   {
     "artifacts": [
@@ -279,13 +241,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "92651e3d580a1b884cda1e8786965e91e4a1a08cc13ab52c47fae97688648be6"
+        "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "18b37858bfec96c97af4bca310af9a311a79728008b03f85ca96ccaee5e9b9a8"
+        "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -297,23 +259,23 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "312f66b8415a3a015819fcc26ddc4bbc73404d0941c390e718bee2925933c15d"
+        "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
       }
     ],
-    "claim_id": "c3",
-    "claim_statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
-    "duration_s": 14.173982,
+    "claim_id": "c2",
+    "claim_statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+    "duration_s": 9.466785,
     "event_id": "t10",
     "evidence_draft": {
-     
-  ...[truncated 3510 chars]
+      "claim_id": 
+  ...[truncated 3290 chars]
 
-### Turn 6 - `solo` (19.105297928s, in=16506 out=667)
+### Turn 5 - `solo` (8.145506193999978s, in=15934 out=335)
 
 Message:
 
 ```text
-Probe t10 succeeded: grid violations 0, neighbour violations 0, mean err ~0.0012 (consistent with sampling noise: std of single-draw rounding ≤0.025, /sqrt(4000) ≈ 0.0004 per element, max 0.0012 plausible). Prob err 0.075 over 400 seeds consistent with binomial noise (sqrt(p(1-p)/400)~0.025... max 0.075 slightly high but fine given per-element variation). Deterministic same seed, different seed differs. So c3, c4 rebutted. Finalize evidence and update c3, c4; c1, c2 are duplicates—mark inconclusive/rebutted too? They have no evidence; better mark them rebutted with the same evidence via append_evidence. Then verdict trust.The probe (t10) succeeded and the numbers decide both claims: zero grid/neighbour violations over 4400 draws, mean error ≈2.3e-4 (max 1.2e-3) consistent with binomial sampling noise for N=1024 over 4000 seeds, empirical P(up) error ≈ binomial noise over 400 seeds, deterministic per seed and different across seeds. I'll finalize evidence for the scoped claims and close the unscoped duplicates with the same evidence.
+The c2 probe passed cleanly; the c1 tie probe crashed on a device mismatch in my reference computation. I'll record both results and rerun a fixed tie-break probe.
 ```
 
 Tool calls:
@@ -322,227 +284,197 @@ Tool calls:
   Args:
   {
     "data": {
-      "grid_violations_total": 0,
-      "max_mean_err": 0.0011812,
-      "max_prob_err_400seeds": 0.07495,
-      "mean_mean_err": 0.000232,
-      "mean_prob_err": 0.01253,
-      "neighbour_violations_total": 0,
-      "seeds": 4000
+      "N128": {
+        "mismatch": 0
+      },
+      "N16": {
+        "mismatch": 0
+      },
+      "N2": {
+        "mismatch": 0
+      },
+      "N32": {
+        "mismatch": 0
+      },
+      "N4": {
+        "mismatch": 0
+      },
+      "N64": {
+        "mismatch": 0
+      },
+      "N8": {
+        "mismatch": 0
+      },
+      "k5_exact_match": true
     },
     "event_id": "t10",
-    "status": "rebutted",
-    "summary": "Over 4000 seeds on N=1024 in-domain inputs (random, negative, grid-aligned), max |mean(out)-x| = 1.18e-3 (mean 2.3e-4), consistent with binomial sampling noise (single-draw rounding std <= STEP/2, /sqrt(4000) ~ 4e-4), so E[out]==x holds; empirical P(up) error over 400 seeds (mean 0.0125, max 0.075) also matches binomial noise; no systematic bias.",
-    "supports": "rebutted"
+    "status": "confirmed",
+    "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+    "supports": "confirmed"
   }
   Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "rebutted",
-    "evidence_id": "c3.e1",
-    "summary": "Over 4000 seeds on N=1024 in-domain inputs (random, negative, grid-aligned), max |mean(out)-x| = 1.18e-3 (mean 2.3e-4), consistent with binomial sampling noise (single-draw rounding std <= STEP/2, /sqrt(4000) ~ 4e-4), so E[out]==x holds; empirical P(up) error over 400 seeds (mean 0.0125, max 0.075) also matches binomial noise; no systematic bias.",
-    "supports": "rebutted",
-    "tool_event_id": "t10"
-  }
-- `finalize_probe_evidence -> t12 error`
-  Args:
-  {
-    "data": {
-      "deterministic_same_seed": true,
-      "grid_violations_total": 0,
-      "neighbour_violations_total": 0
-    },
-    "event_id": "t10",
-    "status": "rebutted",
-    "summary": "Same probe: across 4000 kernel invocations (including negative x and grid-aligned x), zero off-grid values (|out/STEP - round| <= 1e-3) and zero cases where output/STEP is not one of floor(x/STEP) or floor(x/STEP)+1. Every output is one of the two neighbouring multiples of STEP.",
-    "supports": "rebutted"
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "probe event t10 already has evidence"
-  }
-
-### Turn 7 - `solo` (5.1253867009999965s, in=21098 out=288)
-
-Message:
-
-```text
-Need to attach evidence to c4 (finalize failed because event reuse) via append_evidence to c4, and close c1/c2. Then verdict trust.The t10 probe decided both in-scope claims. I need to attach that evidence to c4 (finalize failed due to event reuse) and close the unscoped duplicates c1/c2, then record the verdict.
-```
-
-Tool calls:
-
-- `append_evidence -> t13 ok`
-  Args:
-  {
-    "claim_id": "c4",
-    "data": {
-      "deterministic_same_seed": true,
-      "grid_violations_total": 0,
-      "neighbour_violations_total": 0,
-      "seeds": 4000
-    },
-    "kind": "runtime_probe",
-    "summary": "Probe t10: across 4000 kernel invocations on N=1024 in-domain inputs (random, negative, grid-aligned), zero off-grid values (|out/STEP - round| <= 1e-3) and zero cases where out/STEP is not one of floor(x/STEP) or floor(x/STEP)+1. Every output is one of the two neighbouring multiples of STEP.",
-    "supports": "rebutted",
-    "tool_event_id": "t10"
-  }
-  Output summary:
-  {
-    "id": "c4.e1",
-    "summary": "Probe t10: across 4000 kernel invocations on N=1024 in-domain inputs (random, negative, grid-aligned), zero off-grid values (|out/STEP - round| <= 1e-3) and zero cases where out/STEP is not one of floor(x/STEP) or floor(x/STEP)+1. Every output is one of the two neighbouring multiples of STEP.",
-    "supports": "rebutted"
-  }
-- `update_claim_status -> t14 error`
-  Args:
-  {
-    "claim_id": "c1",
-    "status": "rebutted"
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "claim c1 needs evidence supporting rebutted before status update"
-  }
-- `update_claim_status -> t15 error`
-  Args:
   {
     "claim_id": "c2",
-    "status": "rebutted"
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+    "supports": "confirmed",
+    "tool_event_id": "t10"
   }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "claim c2 needs evidence supporting rebutted before status update"
-  }
-
-### Turn 8 - `solo` (5.826618456000006s, in=21251 out=340)
-
-Message:
-
-```text
-Need to close c1/c2: they need evidence attached before status update. Append evidence (agent_analysis referencing t10) to c1 and c2, then update statuses, then verdict.I'll attach the probe t10 evidence to the duplicate claims c1/c2, close them, and record the verdict.
-```
-
-Tool calls:
-
-- `append_evidence -> t16 ok`
+- `append_evidence -> t12 ok`
   Args:
   {
     "claim_id": "c1",
-    "data": {
-      "grid_violations_total": 0,
-      "max_mean_err": 0.0011812,
-      "mean_mean_err": 0.000232,
-      "seeds": 4000
-    },
-    "kind": "runtime_probe",
-    "summary": "Same evidence as c3 (probe t10): over 4000 seeds on N=1024 in-domain inputs, max |mean(out)-x| = 1.18e-3, mean 2.3e-4, consistent with binomial sampling noise; no systematic bias, so E[out]==x holds.",
-    "supports": "rebutted",
-    "tool_event_id": "t10"
+    "kind": "tool_error",
+    "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+    "supports": "inconclusive"
   }
   Output summary:
   {
     "id": "c1.e1",
-    "summary": "Same evidence as c3 (probe t10): over 4000 seeds on N=1024 in-domain inputs, max |mean(out)-x| = 1.18e-3, mean 2.3e-4, consistent with binomial sampling noise; no systematic bias, so E[out]==x holds.",
-    "supports": "rebutted"
-  }
-- `append_evidence -> t17 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "data": {
-      "grid_violations_total": 0,
-      "neighbour_violations_total": 0,
-      "seeds": 4000
-    },
-    "kind": "runtime_probe",
-    "summary": "Same evidence as c4 (probe t10): zero off-grid values and zero neighbour violations across 4000 invocations including negative and grid-aligned x; every output is one of the two neighbouring multiples of STEP.",
-    "supports": "rebutted",
-    "tool_event_id": "t10"
-  }
-  Output summary:
-  {
-    "id": "c2.e1",
-    "summary": "Same evidence as c4 (probe t10): zero off-grid values and zero neighbour violations across 4000 invocations including negative and grid-aligned x; every output is one of the two neighbouring multiples of STEP.",
-    "supports": "rebutted"
+    "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+    "supports": "inconclusive"
   }
 
-### Turn 9 - `solo` (2.7606585040000056s, in=21358 out=101)
+### Turn 6 - `solo` (8.756692012999991s, in=20118 out=454)
 
 Message:
 
 ```text
-Evidence attached to c1/c2; now update statuses and record verdict.The evidence is attached to c1/c2 now; I'll close those claims and record the verdict.
+The c2 baseline is confirmed; c1 (tie-break rule) still needs its probe. Rerunning with a device-fixed reference.
 ```
 
 Tool calls:
 
-- `update_claim_status -> t18 ok`
+- `run_claim_probe -> t13 ok`
   Args:
   {
     "claim_id": "c1",
-    "status": "rebutted"
-  }
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    ar = torch.arange(N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    # reference: lowest index among tied max\n    lo = (scores == scores.max(dim=1, keepdim=True).values).float() * ar[None, :]\n    lo[lo == 0] = N\n    lo = lo.argmin(dim=1)\n    bad = int((out != lo).sum().item())\n    ex = None\n    if ba
+  ...[truncated 506 chars]
   Output summary:
   {
-    "id": "c1",
-    "status": "rebutted"
-  }
-- `update_claim_status -> t19 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "status": "rebutted"
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "status": "rebutted"
-  }
-- `update_claim_status -> t20 ok`
-  Args:
-  {
-    "claim_id": "c4",
-    "status": "rebutted"
-  }
-  Output summary:
-  {
-    "id": "c4",
-    "status": "rebutted"
-  }
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+    "duration_s": 5.44454,
+    "event_id": "t13",
+    "e
+  ...[truncated 15991 chars]
 
-### Turn 10 - `solo` (6.5199549850000125s, in=20761 out=320)
+### Turn 7 - `solo` (16.987372856000036s, in=28700 out=846)
 
 Message:
 
 ```text
-All claims resolved, evidence in place. Record verdict: trust.All claims (c1–c4) are resolved as rebutted with runtime evidence from probe t10: zero off-grid/neighbour violations across 4000 in-domain invocations, mean error ~2.3e-4 consistent with binomial sampling noise (so E[out]==x holds), deterministic per seed. Nothing further to test; recording the verdict.
+The t13 probe shows violations, but my reference computation had a bug (the `lo[lo==0]=N` trick also zeroes a legitimately-tied index 0, so the shown examples are unreliable). The all-equal-rows signal (100/100 rows returning nonzero) is suspicious but I need a clean reference. I'll rerun with `argmax` (which returns the first/lowest tied index) as reference.
 ```
 
 Tool calls:
 
-- `record_verdict -> t21 ok`
+- `run_claim_probe -> t14 error`
   Args:
   {
-    "confidence": 0.9,
-    "decisive_claims": [
-      "c3",
-      "c4"
-    ],
-    "reason": "Source inspection shows the kernel implements exactly the contract rule: lower=floor(x/STEP)*STEP, P(up)=(x-lower)/STEP via tl.rand Philox RNG. Runtime probe t10 (in-domain N=1024 inputs: random, negative, grid-aligned, 4000 seeds) showed 0 off-grid values, 0 neighbour violations, deterministic per seed, and max |mean(out)-x| = 1.18e-3 (mean 2.3e-4) consistent with binomial sampling noise (per-draw std <= STEP/2, /sqrt(4000) ~ 4e-4); empirical P(up) error over 400 seeds (mean 0.013, max 0.075) also matches binomial noise. Claims c3/c4 (in_scope, evidence t10) and duplicates c1/c2 are all rebutted. Kernel satisfies the contract.",
-    "verdict": "trust"
-  }
+    "claim_id": "c1",
+    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_09/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev = \"cuda\"\nres = {}\nfor N in [2,4,8,16,32,64]:\n    B = 2000\n    torch.manual_seed(0)\n    scores = torch.randn(B, N, device=dev)\n    for b in range(B):\n        p = torch.randperm(N)[:2].to(dev)\n        scores[b, p] = 5.0\n    out = k.sorted_topk_indices(scores, 1).squeeze(-1)\n    ref = scores.argmax(dim=1)  # torch argmax returns the FIRST (lowest) max index\n    bad = int((out != ref).sum().item())\n    ex = None\n    if bad:\n        m = (out != ref).nonzero()[0]; b = int(m[0])\n        ex = {\"b\": b, \"scores\": scores[b].tolist(), \"kernel\": int(o
+  ...[truncated 482 chars]
   Output summary:
   {
-    "confidence": 0.9,
+    "error_type": "LedgerError",
+    "message": "claim c1 already has a successful probe you have not interpreted: event t13. Call finalize_probe_evidence(event_id='t13', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t13 first and then probe again."
+  }
+
+### Turn 8 - `solo` (17.938688127999967s, in=29507 out=654)
+
+Message:
+
+```text
+The t13 probe already contains decisive, reference-bug-free evidence: the all-equal-rows check (`out_eq != 0`) doesn't use my buggy mask trick, and it shows 100/100 all-equal rows return a nonzero index instead of the contractually required index 0. Also the N16 example (tied 5.0 at positions 10 and 12, kernel returned 12, correct lowest is 10) is valid independent of the buggy reference. I'll finalize t13 as confirming c1 and record the verdict.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t15 ok`
+  Args:
+  {
+    "data": {
+      "all_equal_rows": "100/100 all-equal rows returned nonzero index instead of contractually required 0 (this check does not depend on the buggy mask reference)",
+      "example_N16": {
+        "correct_lowest_tied_index": 10,
+        "kernel_returned": 12,
+        "tied_max_positions": [
+          10,
+          12
+        ],
+        "tied_value": 5.0
+      }
+    },
+    "event_id": "t13",
+    "status": "confirmed",
+    "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tie
+  ...[truncated 173 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e2",
+    "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+    "supports": "confirmed",
+    "tool_event_id": "t13"
+  }
+
+### Turn 9 - `solo` (9.162178153000013s, in=43963 out=290)
+
+Message:
+
+```text
+Both claims are resolved: c2 confirms tie-free correctness, c1 confirms the tie-break violation (in-scope, backed by the contract's explicit lower-index rule). Recording the verdict.
+```
+
+Tool calls:
+
+- `record_verdict -> t16 ok`
+  Args:
+  {
+    "confidence": 0.95,
     "decisive_claims": [
-      "c3",
-      "c4"
+      "c1"
     ],
-    "reason": "Source inspection shows the kernel implements exactly the contract rule: lower=floor(x/STEP)*STEP, P(up)=(x-lower)/STEP via tl.rand Philox RNG. Runtime probe t10 (in-domain N=1024 inputs: random, negative, grid-aligned, 4000 seeds) showed 0 off-grid values, 0 neighbour violations, deterministic per seed, and max |mean(out)-x| = 1.18e-3 (mean 2.3e-4) consistent with binomial sampling noise (per-draw std <= STEP/2, /sqrt(4000) ~ 4e-4); empirical P(up) error over 400 seeds (mean 0.013, max 0.075) also matches binomial noise. Claims c3/c4 (in_scope, evidence t10) and duplicates c1/c2 are all rebutted. Kernel satisfies the contract.",
-    "verdict": "trust"
+    "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract viol
+  ...[truncated 99 chars]
+  Output summary:
+  {
+    "confidence": 0.95,
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+    "verdict": "reject"
   }
 
 ## Description Model
@@ -551,157 +483,110 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: stochastic_round_to_grid violates E[out] == x: the empirical mean of outputs over many seeds is biased relative to x (wrong probability p_up, wrong RNG usage, or wrong rounding rule).
-
-Scope: `unknown`
-
-Scope evidence:
-- `problem.txt`: P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block
-
-Rationale: The contract defines correctness via the rounding probabilities; p_up computed in fp32 could be biased, tl.rand could be misused (e.g., same counter per element), producing a biased estimator of x. Test: mean output over many seeds vs x on representative in-domain inputs (power-of-two length, single block).
-
-Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Same evidence as c3 (probe t10): over 4000 seeds on N=1024 in-domain inputs, max |mean(out)-x| = 1.18e-3, mean 2.3e-4, consistent with binomial sampling noise; no systematic bias, so E[out]==x holds.
-
-### c2 - `rebutted`
-
-Statement: Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbor for negative / grid-aligned inputs).
-
-Scope: `unknown`
-
-Scope evidence:
-- `problem.txt`: must round each element to one of the two neighbouring multiples of STEP
-
-Rationale: fp error in lower/upper computation or negative-x handling could produce values not equal to a multiple of STEP, violating the requirement to round onto the grid. Test: check every output equals a multiple of STEP within fp tolerance, including negative x and grid-aligned x.
-
-Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Same evidence as c4 (probe t10): zero off-grid values and zero neighbour violations across 4000 invocations including negative and grid-aligned x; every output is one of the two neighbouring multiples of STEP.
-
-### c3 - `rebutted`
-
-Statement: stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.
+Statement: On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.
 
 Scope: `in_scope`
 
-Scope rationale: Contract explicitly defines correctness by the rounding probability rule guaranteeing E[out]==x on in-domain inputs (1-D power-of-two length, single block).
+Scope rationale: problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.
 
 Scope evidence:
-- `problem.txt`: P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block
+- `problem.txt`: Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.
 
-Rationale: p_up computed in fp32, tl.rand misuse, or wrong rounding could bias the estimator. Test: mean output over many seeds vs x on representative in-domain inputs.
+Rationale: The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.
 
 Evidence:
-- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Over 4000 seeds on N=1024 in-domain inputs (random, negative, grid-aligned), max |mean(out)-x| = 1.18e-3 (mean 2.3e-4), consistent with binomial sampling noise (single-draw rounding std <= STEP/2, /sqrt(4000) ~ 4e-4), so E[out]==x holds; empirical P(up) error over 400 seeds (mean 0.0125, max 0.075) also matches binomial noise; no systematic bias.
+- `c1.e1` tool_error supports `inconclusive`: First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.
+- `c1.e2` runtime_probe supports `confirmed`, tool_event_id=t13: Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.
 
-### c4 - `rebutted`
+### c2 - `confirmed`
 
-Statement: Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbour for negative / grid-aligned inputs).
+Statement: For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.
 
 Scope: `in_scope`
 
-Scope rationale: Contract requires each output be one of the two neighbouring multiples of STEP; negative x and grid-aligned x are admissible in-domain values of the 1-D power-of-two tensor.
+Scope rationale: problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.
 
 Scope evidence:
-- `problem.txt`: must round each element to one of the two neighbouring multiples of STEP
+- `problem.txt`: sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns.
 
-Rationale: fp error in lower/upper or negative-x handling could yield off-grid values. Test: every output equals a multiple of STEP within fp tolerance, including negative and grid-aligned x.
+Rationale: Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.
 
 Evidence:
-- `c4.e1` runtime_probe supports `rebutted`, tool_event_id=t10: Probe t10: across 4000 kernel invocations on N=1024 in-domain inputs (random, negative, grid-aligned), zero off-grid values (|out/STEP - round| <= 1e-3) and zero cases where out/STEP is not one of floor(x/STEP) or floor(x/STEP)+1. Every output is one of the two neighbouring multiples of STEP.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_08"
+  "entry": "case_09"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "The contract defines correctness via the rounding probabilities; p_up computed in fp32 could be biased, tl.rand could be misused (e.g., same counter per element), producing a biased estimator of x. Test: mean output over many seeds vs x on representative in-domain inputs (power-of-two length, single block).",
-  "scope": "unknown",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
-    }
-  ],
-  "scope_rationale": "",
-  "statement": "stochastic_round_to_grid violates E[out] == x: the empirical mean of outputs over many seeds is biased relative to x (wrong probability p_up, wrong RNG usage, or wrong rounding rule).",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c2",
-  "rationale": "fp error in lower/upper computation or negative-x handling could produce values not equal to a multiple of STEP, violating the requirement to round onto the grid. Test: check every output equals a multiple of STEP within fp tolerance, including negative x and grid-aligned x.",
-  "scope": "unknown",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "must round each element to one of the two neighbouring multiples of STEP"
-    }
-  ],
-  "scope_rationale": "",
-  "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbor for negative / grid-aligned inputs).",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c3",
-  "rationale": "p_up computed in fp32, tl.rand misuse, or wrong rounding could bias the estimator. Test: mean output over many seeds vs x on representative in-domain inputs.",
+  "id": "c1",
+  "rationale": "The comparator `cond = (left > right) != flip` compares only values; bitonic sort is unstable, so with equal top scores the winner is determined by network wiring, not by lower index.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "P(out=lower+STEP)=(x-lower)/STEP so that E[out]==x; x is 1-D power-of-two length fitting a single block"
+      "summary": "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
     }
   ],
-  "scope_rationale": "Contract explicitly defines correctness by the rounding probability rule guaranteeing E[out]==x on in-domain inputs (1-D power-of-two length, single block).",
-  "statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
+  "scope_rationale": "problem.txt explicitly requires the lower index to be kept on tied top scores; if the kernel returns a higher tied index on tied inputs, it violates this stated tie-break rule.",
+  "statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
   "status": "open"
 }
 
 ### t8 - record_claim - ok
 
 {
-  "id": "c4",
-  "rationale": "fp error in lower/upper or negative-x handling could yield off-grid values. Test: every output equals a multiple of STEP within fp tolerance, including negative and grid-aligned x.",
+  "id": "c2",
+  "rationale": "Need to confirm baseline correctness on the declared domain (power-of-two N) with tie-free random inputs, comparing against a descending stable reference.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "must round each element to one of the two neighbouring multiples of STEP"
+      "summary": "sorted_topk_indices(scores, k=1) must return, for each token, the index of the highest-scoring expert; scores has a power-of-two number of columns."
     }
   ],
-  "scope_rationale": "Contract requires each output be one of the two neighbouring multiples of STEP; negative x and grid-aligned x are admissible in-domain values of the 1-D power-of-two tensor.",
-  "statement": "Outputs are not always one of the two neighbouring multiples of STEP (off-grid values or wrong neighbour for negative / grid-aligned inputs).",
+  "scope_rationale": "problem.txt requires returning the index of the highest-scoring expert for power-of-two N; random tie-free inputs are in the declared domain and a mismatch here would be a direct violation.",
+  "statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
   "status": "open"
 }
 
@@ -713,7 +598,7 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "1468466eb0734296511f836c0629b93f383c4a229d3d23df467b1b4f1b175683"
+      "sha256": "ccf15749dbcecca28d515bedd484de464f2b1decb0399ac33108a68ab74716f0"
     },
     {
       "description": "Captured stdout from the probe process.",
@@ -725,22 +610,22 @@ Evidence:
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t9_stderr.txt",
-      "sha256": "bba6037747cbc507702f5ff5a33211a8403743d46b89b72204378fa9557702db"
+      "sha256": "415ad4d4565eb14a00de80fadee2d686263d67fbdcab4af7466f003ec91efad4"
     }
   ],
-  "claim_id": "c3",
-  "claim_statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
-  "duration_s": 7.51254,
+  "claim_id": "c1",
+  "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+  "duration_s": 5.454502,
   "event_id": "t9",
   "evidence_draft": {
-    "claim_id": "c3",
+    "claim_id": "c1",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "1468466eb0734296511f836c0629b93f383c4a229d3d23df467b1b4f1b175683"
+          "sha256": "ccf15749dbcecca28d515bedd484de464f2b1decb0399ac33108a68ab74716f0"
         },
         {
           "description": "Captured stdout from the probe process.",
@@ -752,16 +637,16 @@ Evidence:
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t9_stderr.txt",
-          "sha256": "bba6037747cbc507702f5ff5a33211a8403743d46b89b72204378fa9557702db"
+          "sha256": "415ad4d4565eb14a00de80fadee2d686263d67fbdcab4af7466f003ec91efad4"
         }
       ],
-      "duration_s": 7.51254,
+      "duration_s": 5.454502,
       "exit_code": 1,
       "expected_signal": null,
       "json_parse_error": "stdout has no non-empty lines",
       "json_result": null,
-      "stderr": "Traceback (most recent call last):\n  File \"/root/cases/case_08
-...[truncated 1051 chars]
+      "stderr": "Traceback (most recent call last):\n  F
+...[truncated 1500 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -771,13 +656,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "92651e3d580a1b884cda1e8786965e91e4a1a08cc13ab52c47fae97688648be6"
+      "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "18b37858bfec96c97af4bca310af9a311a79728008b03f85ca96ccaee5e9b9a8"
+      "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -789,135 +674,151 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "312f66b8415a3a015819fcc26ddc4bbc73404d0941c390e718bee2925933c15d"
+      "sha256": "126eb0919e15e284832cf135af8afb1defca48f0b1fec9e40093127c04b6a84a"
     }
   ],
-  "claim_id": "c3",
-  "claim_statement": "stochastic_round_to_grid violates E[out] == x: empirical mean of outputs over many seeds is biased relative to x on in-domain inputs.",
-  "duration_s": 14.173982,
+  "claim_id": "c2",
+  "claim_statement": "For random tie-free inputs with power-of-two N, the kernel returns the argmax index matching a descending reference sort.",
+  "duration_s": 9.466785,
   "event_id": "t10",
   "evidence_draft": {
-    "claim_id": "c3",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "92651e3d580a1b884cda1e8786965e91e4a1a08cc13ab52c47fae97688648be6"
+          "sha256": "baa52494d63c4693f9d268f9015c12255b631a0b3b624b20d7ac2f365ee5aefa"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "18b37858bfec96c97af4bca310af9a311a79728008b03f85ca96ccaee5e9b9a8"
+          "sha256": "3decec7641c9da587b630a8402c3ab2ac1d5ffa5f190be9df4c2f0d2649d4aa7"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t10_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-...[truncated 2710 chars]
+        },
+        {
+ 
+...[truncated 2490 chars]
 
 ### t11 - finalize_probe_evidence - ok
 
 {
-  "claim_id": "c3",
-  "claim_status": "rebutted",
-  "evidence_id": "c3.e1",
-  "summary": "Over 4000 seeds on N=1024 in-domain inputs (random, negative, grid-aligned), max |mean(out)-x| = 1.18e-3 (mean 2.3e-4), consistent with binomial sampling noise (single-draw rounding std <= STEP/2, /sqrt(4000) ~ 4e-4), so E[out]==x holds; empirical P(up) error over 400 seeds (mean 0.0125, max 0.075) also matches binomial noise; no systematic bias.",
-  "supports": "rebutted",
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "For N in {2,4,8,16,32,64,128} with 512 random tie-free rows each, top-1 indices matched torch argmax exactly (0 mismatches), and k=5 ordering matched stable descending argsort exactly.",
+  "supports": "confirmed",
   "tool_event_id": "t10"
 }
 
-### t12 - finalize_probe_evidence - error
-
-{
-  "error_type": "LedgerError",
-  "message": "probe event t10 already has evidence"
-}
-
-### t13 - append_evidence - ok
-
-{
-  "id": "c4.e1",
-  "summary": "Probe t10: across 4000 kernel invocations on N=1024 in-domain inputs (random, negative, grid-aligned), zero off-grid values (|out/STEP - round| <= 1e-3) and zero cases where out/STEP is not one of floor(x/STEP) or floor(x/STEP)+1. Every output is one of the two neighbouring multiples of STEP.",
-  "supports": "rebutted"
-}
-
-### t14 - update_claim_status - error
-
-{
-  "error_type": "LedgerError",
-  "message": "claim c1 needs evidence supporting rebutted before status update"
-}
-
-### t15 - update_claim_status - error
-
-{
-  "error_type": "LedgerError",
-  "message": "claim c2 needs evidence supporting rebutted before status update"
-}
-
-### t16 - append_evidence - ok
+### t12 - append_evidence - ok
 
 {
   "id": "c1.e1",
-  "summary": "Same evidence as c3 (probe t10): over 4000 seeds on N=1024 in-domain inputs, max |mean(out)-x| = 1.18e-3, mean 2.3e-4, consistent with binomial sampling noise; no systematic bias, so E[out]==x holds.",
-  "supports": "rebutted"
+  "summary": "First tie-break probe (t9) crashed in my reference code (torch.arange on CPU indexing a CUDA tensor), so it produced no evidence about the kernel; rerunning with a fixed reference.",
+  "supports": "inconclusive"
 }
 
-### t17 - append_evidence - ok
+### t13 - run_claim_probe - ok
 
 {
-  "id": "c2.e1",
-  "summary": "Same evidence as c4 (probe t10): zero off-grid values and zero neighbour violations across 4000 invocations including negative and grid-aligned x; every output is one of the two neighbouring multiples of STEP.",
-  "supports": "rebutted"
-}
-
-### t18 - update_claim_status - ok
-
-{
-  "id": "c1",
-  "status": "rebutted"
-}
-
-### t19 - update_claim_status - ok
-
-{
-  "id": "c2",
-  "status": "rebutted"
-}
-
-### t20 - update_claim_status - ok
-
-{
-  "id": "c4",
-  "status": "rebutted"
-}
-
-### t21 - record_verdict - ok
-
-{
-  "confidence": 0.9,
-  "decisive_claims": [
-    "c3",
-    "c4"
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t13_probe.py",
+      "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t13_stdout.txt",
+      "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t13_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t13_json_result.json",
+      "sha256": "9fd13ee53143a298e49fd5157a7b7bd6c2831e144e1198593614e1fa12511f7c"
+    }
   ],
-  "reason": "Source inspection shows the kernel implements exactly the contract rule: lower=floor(x/STEP)*STEP, P(up)=(x-lower)/STEP via tl.rand Philox RNG. Runtime probe t10 (in-domain N=1024 inputs: random, negative, grid-aligned, 4000 seeds) showed 0 off-grid values, 0 neighbour violations, deterministic per seed, and max |mean(out)-x| = 1.18e-3 (mean 2.3e-4) consistent with binomial sampling noise (per-draw std <= STEP/2, /sqrt(4000) ~ 4e-4); empirical P(up) error over 400 seeds (mean 0.013, max 0.075) also matches binomial noise. Claims c3/c4 (in_scope, evidence t10) and duplicates c1/c2 are all rebutted. Kernel satisfies the contract.",
-  "verdict": "trust"
+  "claim_id": "c1",
+  "claim_statement": "On rows with tied top scores, sorted_topk_indices can return a higher index than the lowest tied index, violating the contract's lower-index tie-break rule.",
+  "duration_s": 5.44454,
+  "event_id": "t13",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t13_probe.py",
+          "sha256": "e40cc09432004120756208134b3d121882781b476e29e2addc44098c0764a3ed"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t13_stdout.txt",
+          "sha256": "b6a1191672f051e82580c4a4e496ea02ed9a91b7bd6405f4f64836c80b816dbd"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t13_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
+...[truncated 15191 chars]
+
+### t14 - run_claim_probe - error
+
+{
+  "error_type": "LedgerError",
+  "message": "claim c1 already has a successful probe you have not interpreted: event t13. Call finalize_probe_evidence(event_id='t13', supports=..., summary=...) first. Re-running the same experiment cannot tell you anything its result does not already say. If you need a genuinely different experiment, finalize t13 first and then probe again."
+}
+
+### t15 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e2",
+  "summary": "Tie-break probe: on rows with two tied maximum scores, the kernel frequently returns a higher index than the lowest tied index (e.g. N16 row 0: tied 5.0 at positions 10 and 12, kernel returned 12, lowest tied is 10). The all-equal-rows check (independent of the buggy mask reference) shows 100/100 all-equal rows return a nonzero index instead of the required index 0. The tied-row mismatch counts from the buggy reference are not relied on, but the all-equal and example evidence alone confirm the tie-break violation.",
+  "supports": "confirmed",
+  "tool_event_id": "t13"
+}
+
+### t16 - record_verdict - ok
+
+{
+  "confidence": 0.95,
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.9,
-  "created_at": "2026-09-10T05:21:36Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:20:26Z",
   "decisive_claims": [
-    "c3",
-    "c4"
+    "c1"
   ],
-  "reason": "Source inspection shows the kernel implements exactly the contract rule: lower=floor(x/STEP)*STEP, P(up)=(x-lower)/STEP via tl.rand Philox RNG. Runtime probe t10 (in-domain N=1024 inputs: random, negative, grid-aligned, 4000 seeds) showed 0 off-grid values, 0 neighbour violations, deterministic per seed, and max |mean(out)-x| = 1.18e-3 (mean 2.3e-4) consistent with binomial sampling noise (per-draw std <= STEP/2, /sqrt(4000) ~ 4e-4); empirical P(up) error over 400 seeds (mean 0.013, max 0.075) also matches binomial noise. Claims c3/c4 (in_scope, evidence t10) and duplicates c1/c2 are all rebutted. Kernel satisfies the contract.",
-  "verdict": "trust"
+  "reason": "Probes: t10 (claim c2) showed the kernel matches torch argmax exactly on tie-free random inputs for N in {2,4,8,16,32,64,128} (0 mismatches, 512 rows each), so the sort itself is correct on the declared power-of-two domain. However, t13 (claim c1) showed the contract's explicit tie-break rule is violated: on rows with two tied maxima (e.g. N16 row 0, tied 5.0 at positions 10 and 12, kernel returned 12 instead of the required lowest index 10), and on 100/100 all-equal rows the kernel returned a nonzero index instead of the contractually required index 0. Since problem.txt explicitly requires \"when two experts have exactly equal scores, the LOWER index must be the one kept,\" this is a confirmed in-scope contract violation (the value-only bitonic comparator is unstable), warranting reject.",
+  "verdict": "reject"
 }

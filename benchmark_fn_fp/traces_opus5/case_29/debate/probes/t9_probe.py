@@ -1,48 +1,54 @@
 
-import json, sys, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_29/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+import json, torch, triton, triton.language as tl
+
+@triton.jit
+def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):
+    tok = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    valid = cols < E
+    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float("inf"))
+    best = -float("inf")
+    best_i = 0
+    for e in range(E):
+        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)
+        take = v >= best
+        best = tl.where(take, v, best)
+        best_i = tl.where(take, e, best_i)
+    tl.store(Idx + tok, best_i)
+
+def route_top1(logits):
+    n_tokens, n_experts = logits.shape
+    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)
+    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,
+                               BLOCK=triton.next_power_of_2(n_experts))
+    return idx
 
 dev='cuda'
-def grid_snap(t): return t.to(torch.float8_e4m3fn).to(torch.float32)
-
-res={}
-# 1) explicit small-magnitude sweep in [2^-13, 2^-6]
-xs=[]
-for e in range(-13,-5):
-    for m in [1.0,1.1,1.3,1.5,1.7,1.9]:
-        xs.append(m*2.0**e)
-xs = xs + [-v for v in xs] + [0.001, 1e-4, 2**-10, 2**-11, 2**-9*1.5]
-x = torch.tensor(xs, dtype=torch.float32, device=dev)
-q = k.fp8_roundtrip(x)
-ref = grid_snap(x)
-onehot = grid_snap(q)
-offgrid = (q != onehot)
-res['sweep_n']=x.numel()
-res['sweep_offgrid_count']=int(offgrid.sum())
-res['sweep_mismatch_vs_ref_count']=int((q!=ref).sum())
-# examples
-idx=torch.nonzero(offgrid).flatten()[:8].tolist()
-res['sweep_examples']=[{'x':float(x[i]),'kernel':float(q[i]),'e4m3_ref':float(ref[i])} for i in idx]
-# flush-to-zero check: |x| < 2^-10 must go to 0
-tiny = torch.tensor([1e-5,1e-4,2**-12,2**-11,4e-4], dtype=torch.float32, device=dev)
-qt = k.fp8_roundtrip(tiny); rt = grid_snap(tiny)
-res['tiny_x']=[float(v) for v in tiny]
-res['tiny_kernel']=[float(v) for v in qt]
-res['tiny_e4m3_ref']=[float(v) for v in rt]
-res['tiny_nonzero_but_ref_zero']=int(((rt==0)&(qt!=0)).sum())
-
-# 2) benign randn(4096)
+rows = [
+ [2.0,1.0,2.0],          # tie at 0 and 2
+ [3.0,3.0,0.0],          # tie at 0,1
+ [1.0,5.0,5.0],          # tie at 1,2
+ [7.0,1.0,2.0],          # unique max at 0
+ [0.0,1.0,9.0],          # unique max at 2
+]
+L = torch.tensor(rows, device=dev, dtype=torch.float32)
+got = route_top1(L).cpu().tolist()
+ref = torch.argmax(L, dim=-1).cpu().tolist()
+tied = [i for i,r in enumerate(rows) if r.count(max(r))>1]
+untied = [i for i in range(len(rows)) if i not in tied]
+res = {
+ "metric":"exact_index_equality_vs_torch_argmax",
+ "rows":rows, "kernel_idx":got, "ref_idx":ref,
+ "tied_row_ids":tied,
+ "tied_mismatches":[i for i in tied if got[i]!=ref[i]],
+ "untied_mismatches":[i for i in untied if got[i]!=ref[i]],
+ "kernel_picks_highest_tied":[ (got[i]==max(j for j,v in enumerate(rows[i]) if v==max(rows[i]))) for i in tied],
+ "num_tied":len(tied), "num_tied_mismatch":sum(1 for i in tied if got[i]!=ref[i]),
+}
+# also non-power-of-2 E check with unique maxima
+E=5
 torch.manual_seed(0)
-xr = torch.randn(4096, device=dev, dtype=torch.float32)
-qr = k.fp8_roundtrip(xr); rr = grid_snap(xr)
-sub = (xr.abs()>0)&(xr.abs()<2**-6)
-offr = (qr != grid_snap(qr))
-res['randn_n']=4096
-res['randn_subnormal_region_count']=int(sub.sum())
-res['randn_offgrid_count']=int(offr.sum())
-res['randn_offgrid_all_in_subnormal_region']=bool((offr & ~sub).sum()==0)
-res['randn_mismatch_vs_ref_count']=int((qr!=rr).sum())
-res['randn_max_abs_err_vs_ref']=float((qr-rr).abs().max())
-res['randn_normal_region_mismatch_count']=int(((qr!=rr)&~sub).sum())
+L2 = torch.randn(256,E,device=dev,dtype=torch.float32)
+g2 = route_top1(L2).cpu(); r2 = torch.argmax(L2,dim=-1).cpu().int()
+res["nonpow2_E5_unique_mismatches"]=int((g2!=r2).sum())
 print(json.dumps(res))

@@ -1,34 +1,43 @@
 
-import json, torch, importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_06/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+import torch, importlib.util, json, traceback
+spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_07/kernel.py")
+kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
 dev='cuda'
-torch.manual_seed(2)
-nchunks, dim = 16, 64
-ns = 1e-3*torch.randn(nchunks, dim, device=dev, dtype=torch.float32)
-dA = torch.full((nchunks,), -0.5, device=dev, dtype=torch.float32)
-def ref(ns, dA, dt):
-    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)
-    for c in range(ns.shape[0]):
-        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)
-    return s
-out = k.state_passing_lowbit(ns, dA)
-r = ref(ns, dA, torch.float64)
-err=(out.double()-r).abs()
-rel=err/r.abs().clamp_min(1e-30)
-zeros_kernel=int((out==0).sum().item())
-ref_nonzero=int((r.abs()>0).sum().item())
-zeroed_but_ref_nonzero=int(((out==0)&(r.abs()>0)).sum().item())
-sign_agree=float((torch.sign(out.double())==torch.sign(r)).float().mean().item())
-uniq=torch.unique(out).tolist()
-print(json.dumps(dict(
- shape=[nchunks,dim], dist="new_states~1e-3*N(0,1), dA_cs=-0.5",
- quant_step=5e-3,
- kernel_zero_count=zeros_kernel, dim=dim,
- ref_nonzero_count=ref_nonzero,
- zeroed_but_ref_nonzero=zeroed_but_ref_nonzero,
- max_rel_err=rel.max().item(), mean_rel_err=rel.mean().item(),
- max_abs_err=err.max().item(),
- ref_absmax=r.abs().max().item(), ref_absmin=r.abs().min().item(),
- sign_agreement_fraction=sign_agree,
- unique_kernel_values=uniq[:10], n_unique_kernel_values=len(uniq))))
+def wrap32(x):
+    x = x & 0xFFFFFFFF
+    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)
+
+def run(K, gs, seed=2, M=32, N=64):
+    torch.manual_seed(seed)
+    groups=K//gs
+    q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)
+    zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)
+    scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()
+    g_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)
+    qw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)
+    for k in range(K):
+        qw[k//8] |= (q[k] << ((k%8)*4))
+    qweight = wrap32(qw)
+    qz = torch.zeros((groups,N//8),device=dev,dtype=torch.int64)
+    for n in range(N):
+        qz[:,n//8] |= (zp[:,n] << ((n%8)*4))
+    qzeros = wrap32(qz)
+    a = torch.randn((M,K),device=dev,dtype=torch.float32)
+    gl=g_idx.long()
+    deq = (q.double() - (zp+1)[gl].double()) * scales[gl].double()
+    ref = a.double() @ deq
+    c = kern.gptq_matmul(a, qweight, scales, qzeros, g_idx, bits=4).double()
+    torch.cuda.synchronize()
+    e=(c-ref).abs().max().item(); d=ref.abs().max().item()
+    return {"K":K,"group_size":gs,"max_abs_err":e,"ref_max_abs":d,"max_rel_err":e/d}
+
+out={}
+try:
+    out["control_K32"]=run(32,8)
+except Exception as ex:
+    out["control_K32"]={"error":repr(ex)}
+try:
+    out["tail_K24"]=run(24,8)
+except Exception as ex:
+    out["tail_K24"]={"error":repr(ex),"tb":traceback.format_exc()[-400:]}
+print(json.dumps(out))

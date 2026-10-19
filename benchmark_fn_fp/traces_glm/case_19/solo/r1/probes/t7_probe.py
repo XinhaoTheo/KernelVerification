@@ -1,45 +1,39 @@
 
-import sys, json, torch
-sys.path.insert(0, "/root/cases/case_19")
-import kernel as K
+import torch, json, sys
+sys.path.insert(0, "/root/cases/case_20")
+from kernel import layer_norm
 
-dev = "cuda"
-n_cols = 70000  # spans blocks: BLOCK_SIZE = min(32768, next_pow2(70000)) = 32768
-BLOCK = min(K.MAX_FUSED_SIZE, 32768)
-n_rows = 4
 torch.manual_seed(0)
-logits = torch.randn(n_rows, n_cols, device=dev, dtype=torch.float32)
-targets = torch.randint(0, n_cols, (n_rows,), device=dev)
+dev = 'cuda'
+N = 512
+# row 0: standard random; row 1: small variance; row 2: constant row
+x = torch.randn(2, N, device=dev)
+x_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)
+x = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)
+w = torch.randn(N, device=dev)
+b = torch.randn(N, device=dev)
+eps = 1e-5
 
-# tie the row max across blocks: idx0 in block0 (small), idx1 in block1 (large)
-idx0, idx1 = 10, 40000  # both == row max
-results = []
-for r in range(n_rows):
-    logits[r] = -5.0
-    logits[r, idx0] = 3.0
-    logits[r, idx1] = 3.0
+y = layer_norm(x.float(), w.float(), b.float(), eps)
 
-logits_in = logits.clone()
-loss, pred = K.cross_entropy_with_predictions(logits_in, targets)
+def ref(xr):
+    mean = xr.mean(-1, keepdim=True)
+    var = ((xr - mean) ** 2).mean(-1, keepdim=True)
+    rstd = 1.0 / torch.sqrt(var + eps)
+    return (xr - mean) * rstd * w + b
 
-# reference
-ref_pred = []
-for r in range(n_rows):
-    ref_pred.append(int(torch.argmin(logits[r])))  # not used
-# proper reference: lowest argmax index
-ref_pred = [int((logits[r] == logits[r].max()).nonzero()[0].item()) for r in range(n_rows)]
-ref_loss = torch.nn.functional.cross_entropy(logits, targets, reduction="none")
+yr = ref(x.float())
+diff = (y - yr).abs()
+rowwise = diff.max(dim=-1).values
 
-out = {
-    "BLOCK_SIZE": BLOCK,
-    "n_cols": n_cols,
-    "n_blocks": (n_cols + BLOCK - 1)//BLOCK,
-    "kernel_pred": pred.tolist(),
-    "ref_lowest_tie_pred": ref_pred,
-    "tie_indices": [idx0, idx1],
-    "loss_kernel": loss.tolist(),
-    "loss_ref": ref_loss.tolist(),
-    "loss_max_abs_err": float((loss - ref_loss).abs().max()),
-    "metric": "exact predicted index vs contract's lowest-tied-index rule",
-}
-print(json.dumps(out, indent=2))
+# expected relative error for small-variance row: rstd_kernel/rstd_ref
+var_small = ((x_small - x_small.mean())**2).mean()
+ratio = 1.0/(var_small.sqrt() + eps) / (1.0/(var_small + eps).sqrt())
+print(json.dumps({
+    "max_abs_err": diff.max().item(),
+    "rowwise_max_abs_err": rowwise.tolist(),
+    "small_var_row_var": var_small.item(),
+    "small_var_rstd_ratio_kernel_over_ref": ratio.item(),
+    "constant_row_out": y[3, :3].tolist(),
+    "ref_constant_row_out": yr[3, :3].tolist(),
+}))

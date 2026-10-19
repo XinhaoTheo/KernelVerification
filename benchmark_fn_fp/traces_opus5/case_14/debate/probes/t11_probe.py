@@ -1,36 +1,40 @@
 
-import json, torch, importlib.util, traceback
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_14/kernel.py")
-k = importlib.util.module_from_spec(spec)
-out = {}
-try:
-    spec.loader.exec_module(k)
-    torch.manual_seed(1)
-    x = torch.randn(4, 128, device="cuda", dtype=torch.float32) * 5.0
-    x[0, 7] = 50.0
-    x[1, 3] = -30.0
-    got = k.quant_dequant_int8(x)
+import json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_15/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)
-    scale = absmax / 127.0
-    ref = torch.clamp(torch.round(x / scale), -127, 127) * scale
+sc = 1.0/8.0   # exactly representable; absmax = 127*sc
+vals = []
+# ties at +/- (m + 0.5)*sc for m = 0..30
+for m in range(31):
+    vals.append((m+0.5)*sc)
+    vals.append(-(m+0.5)*sc)
+vals = vals[:63]
+vals.append(127*sc)   # set absmax so scale == sc exactly
+x = torch.tensor([vals], device="cuda", dtype=torch.float32)
+assert x.shape == (1,64)
 
-    clipped = x.abs() > 4.0
-    # saturated reconstruction magnitude should be exactly 4.0 (=127*4/127)
-    sat = (got.abs() - 4.0).abs() < 1e-5
-    out = {
-        "metric": "saturation_count_and_abs_err_at_outliers",
-        "n_elems_absx_gt_4": int(clipped.sum()),
-        "n_saturated_to_4": int((clipped & sat).sum()),
-        "outlier_x_50": float(x[0, 7]), "kernel_out_at_50": float(got[0, 7]), "ref_out_at_50": float(ref[0, 7]),
-        "abs_err_at_50": float((got[0, 7] - ref[0, 7]).abs()),
-        "outlier_x_m30": float(x[1, 3]), "kernel_out_at_m30": float(got[1, 3]), "ref_out_at_m30": float(ref[1, 3]),
-        "max_abs_err_vs_ref": float((got - ref).abs().max()),
-        "kernel_row_max_abs_out": [round(float(v), 5) for v in got.abs().amax(dim=1)],
-        "row_absmax_x": [round(float(v), 5) for v in absmax.flatten()],
-        "ref_row_max_abs_out": [round(float(v), 5) for v in ref.abs().amax(dim=1)],
-        "max_shrink_below_x": float((x.abs() - got.abs()).max()),
-    }
-except Exception as e:
-    out = {"error": repr(e), "tb": traceback.format_exc()[-1500:]}
-print(json.dumps(out))
+am = x.abs().amax(dim=1, keepdim=True)
+scale = am/127.0
+ratio = x/scale
+half_even = torch.round(ratio).clamp(-127,127)*scale          # torch.round = half-to-even
+half_away = torch.where(ratio>=0, torch.floor(ratio+0.5), torch.ceil(ratio-0.5)).clamp(-127,127)*scale
+half_up   = torch.floor(ratio+0.5).clamp(-127,127)*scale      # kernel semantics
+
+out = k.group_quant_dequant(x, 64)
+step = scale.item()
+def cnt(a,b): return int(((a-b).abs() > 0.25*step).sum().item())
+d_even = (out-half_even).abs()
+pos_mask = x > 0
+print(json.dumps({
+ "scale": step,
+ "exact_scale_matches_1/8": abs(step-0.125) < 1e-9,
+ "n_ties": 63,
+ "mismatch_vs_torch_round_half_even": cnt(out, half_even),
+ "mismatch_vs_half_away_from_zero": cnt(out, half_away),
+ "mismatch_vs_half_up_floor": cnt(out, half_up),
+ "max_abs_err_vs_half_even": d_even.max().item(),
+ "one_step_err_ratio": (d_even.max().item()/step) if step>0 else None,
+ "mismatch_positive_ties": int(((d_even > 0.25*step) & pos_mask).sum().item()),
+ "mismatch_negative_ties": int(((d_even > 0.25*step) & ~pos_mask).sum().item())
+}))

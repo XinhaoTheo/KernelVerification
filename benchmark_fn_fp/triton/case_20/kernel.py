@@ -1,49 +1,33 @@
-"""Triton kernel under test: fn14_layer_norm_eps_outside_sqrt."""
+"""Triton kernel under test: fn13_paged_kv_block_table_homogeneous."""
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _layer_norm_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    X += row * stride
-    Y += row * stride
+def _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,
+                         stride_kv_page, stride_out_seq,
+                         HEAD_DIM: tl.constexpr):
+    seq = tl.program_id(0)
+    slot = tl.program_id(1)
+    logical_block = slot // page_size
+    within = slot % page_size
 
-    mean = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        mean += tl.sum(a, axis=0)
-    mean = mean / N
-
-    var = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        a = tl.where(cols < N, a - mean, 0.0)
-        var += tl.sum(a * a, axis=0)
-    var = var / N
-    rstd = 1.0 / (tl.sqrt(var) + eps)
-
-    tl.store(Mean + row, mean)
-    tl.store(Rstd + row, rstd)
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        mask = cols < N
-        w = tl.load(W + cols, mask=mask)
-        b = tl.load(B + cols, mask=mask)
-        a = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        tl.store(Y + cols, (a - mean) * rstd * w + b, mask=mask)
+    physical = seq * max_blocks + logical_block
+    offs = tl.arange(0, HEAD_DIM)
+    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs
+    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs
+    tl.store(dst, tl.load(src))
 
 
-def layer_norm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
-               eps: float = 1e-5) -> torch.Tensor:
-    """Row-wise layer normalization with affine parameters."""
-    n_rows, n_cols = x.shape
-    y = torch.empty_like(x)
-    mean = torch.empty(n_rows, device=x.device, dtype=torch.float32)
-    rstd = torch.empty(n_rows, device=x.device, dtype=torch.float32)
-    _layer_norm_kernel[(n_rows,)](x, y, weight, bias, mean, rstd,
-                                  x.stride(0), n_cols, eps, BLOCK=256)
-    return y
+def paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,
+                 seq_len: int) -> torch.Tensor:
+    """Gather `seq_len` cached tokens for each sequence through its block table."""
+    num_pages, page_size, head_dim = kv_cache.shape
+    num_seqs, max_blocks = block_table.shape
+    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,
+                      dtype=kv_cache.dtype)
+    _paged_gather_kernel[(num_seqs, seq_len)](
+        kv_cache, block_table, out, max_blocks, page_size,
+        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)
+    return out

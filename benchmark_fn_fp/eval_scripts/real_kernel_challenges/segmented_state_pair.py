@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_112": "trust", "case_113": "reject"}
+EXPECTED = {"case_39": "trust", "case_40": "reject"}
 
 
 def plans():
@@ -160,7 +160,7 @@ def chunk_decomposition(values, use_start_label=False):
 
 
 def _public_cpu_namespace(case_root):
-    path = case_root / "case_112" / "kernel.py"
+    path = case_root / "case_39" / "kernel.py"
     names = {"validate_inputs", "reference", "make_inputs"}
     nodes = [node for node in ast.parse(path.read_text()).body
              if isinstance(node, ast.FunctionDef) and node.name in names]

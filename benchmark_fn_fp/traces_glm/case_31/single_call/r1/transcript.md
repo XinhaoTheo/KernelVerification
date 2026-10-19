@@ -21,355 +21,98 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: variable-length block-sparse attention
-(zhengqigao/hbsattn, hbsattn/fwd_triton_fix_tile_size.py).
+Operation: per-row ascending argsort of small integer keys
+(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).
 
-A batch is packed into one flat sequence axis. `cu_q_seqlens` and `cu_k_seqlens`
-are the cumulative offsets, so sequence b occupies rows
-cu_seqlens[b] .. cu_seqlens[b+1]. Queries and keys are cut into fixed blocks of
-`q_block_size` and `k_block_size`; `block_mask[h, i, j]` says whether query
-block i attends to key block j.
+`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys
+together with the permutation that produces them:
 
-    out[t] = softmax over the selected keys of ( q[t] . k / sqrt(headdim) ) @ v
+    sorted_keys[n, i] = keys[n, perm[n, i]]
+    sorted_keys[n, :] is non-decreasing
 
-restricted to keys that belong to the same sequence as t and that lie in a
-selected block.
+Tie rule: the sort must be STABLE. When two entries of a row hold the same key,
+the one with the LOWER original index must come first. The permutation is used
+to gather memory slots whose contents differ, so which of two tied entries is
+placed first changes the values that are read out afterwards, and stability is
+what makes the read reproducible across runs and across replicas.
 
-Input domain: sequence lengths are arbitrary and generally differ within a
-batch -- that is the point of the packed variable-length format. A sequence
-length is NOT required to be a multiple of the block size; when it is not, the
-final block of that sequence is partial and the positions past its end belong
-to the next sequence, so they must not contribute to the softmax.
+Input domain: keys are arbitrary int64 values. Duplicate keys within a row are
+expected -- the keys are quantized scores, and quantization is what makes two
+different underlying values land on the same key.
 
-Does block_sparse_attention() satisfy this contract?
+Does triton_argsort() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
 
 ```python
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+
 import torch
-import math 
 import triton
 import triton.language as tl
-import torch.nn.functional as F
 
-__all__ = ['_forward_fix_tile_size']
 
-@triton.autotune(
-    configs=[
-        triton.Config({}, num_warps=4, num_stages=1),
-        triton.Config({}, num_warps=4, num_stages=2),
-        triton.Config({}, num_warps=8, num_stages=1),
-        triton.Config({}, num_warps=8, num_stages=2),
-    ],
-    key=['BLOCK_M', 'BLOCK_N'],
-)
 @triton.jit
-def _fwd_kernel(
-    q,
-    k,
-    v,
-    cu_q_seqlens,
-    cu_k_seqlens,
-    causal,
-    softmax_scale,
-    cu_q_block, 
-    cu_k_block,
-    q_block_to_batch,
-    cu_num_k_block,
-    head_q_to_k_ratio,
-    block_mask,
-    out,
-    lse,
-    tmp, # See flash_attn_trion.py and flash_attn_triton_og.py 
-    stride_q_s,
-    stride_q_h,
-    stride_q_d,
-    stride_k_s,
-    stride_k_h,
-    stride_k_d,
-    stride_v_s,
-    stride_v_h,
-    stride_v_d,
-    stride_b_nh,
-    stride_b_nq,
-    stride_b_nk,
-    stride_o_s,
-    stride_o_h,
-    stride_o_d,
-    stride_lse_s,
-    stride_lse_h,
-    headdim,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_DIM: tl.constexpr,
-    EVEN_HEADDIM: tl.constexpr,
-    EVEN_SEQ_QBLOCK: tl.constexpr,
-    EVEN_SEQ_KBLOCK: tl.constexpr,
+def _stable_argsort_kernel(
+    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)
+    perm_ptr,       # [N, W] int64 output (permutation indices)
+    N: tl.constexpr,
+    W: tl.constexpr,
+    BLOCK_W: tl.constexpr,
 ):
-    off_head_q = tl.program_id(1)
-    off_head_k = off_head_q // head_q_to_k_ratio
-    
-    off_q_block = tl.program_id(0)
-    off_dim = tl.arange(0, BLOCK_DIM)
-    
-    start_m = tl.load(cu_q_block + off_q_block)
-    end_m = tl.load(cu_q_block + off_q_block + 1)
-    off_m = start_m + tl.arange(0, BLOCK_M)
-    
-    # load the q block
-    q_ptr = q + off_m[:, None] * stride_q_s + off_head_q * stride_q_h + off_dim[None, :] * stride_q_d
-    if EVEN_SEQ_QBLOCK:
-        if EVEN_HEADDIM:
-            q_block = tl.load(q_ptr)
-        else:
-            q_block = tl.load(q_ptr, mask=off_dim[None, :] < headdim, other=0.0)
-    else:
-        if EVEN_HEADDIM:
-            q_block = tl.load(q_ptr, mask=off_m[:, None] < end_m, other=0.0)
-        else:
-            q_block = tl.load(q_ptr, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim), other=0.0)
-    
+    """Ascending bitonic sort of each row, returning the permutation."""
+    pid = tl.program_id(0)
+    if pid >= N:
+        return
 
-    # accumulator
-    m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float('inf')
-    l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
-    acc = tl.zeros([BLOCK_M, BLOCK_DIM], dtype=tl.float32)
-    
-    # tmp_ptr = tmp + off_head_q * stride_lse_h + off_m * stride_lse_s
-    
-    # batch index 
-    batch_idx = tl.load(q_block_to_batch + off_q_block)
-    
-    # get offset and q and k start/end indices in seq
-    batch_q_start_idx = tl.load(cu_q_seqlens + batch_idx)
-    batch_q_end_idx = tl.load(cu_q_seqlens + batch_idx + 1)
-    batch_k_start_idx = tl.load(cu_k_seqlens + batch_idx)
-    batch_k_end_idx = tl.load(cu_k_seqlens + batch_idx + 1)
-    offset = batch_k_end_idx - batch_k_start_idx - (batch_q_end_idx - batch_q_start_idx)
+    offs = tl.arange(0, BLOCK_W)
+    mask = offs < W
+    base = pid * W
 
-    # k block loop, start from the same batch as the q block, and end at the last k block in the same batch.
-    k_block_start = tl.load(cu_num_k_block + batch_idx)
-    k_block_end = tl.load(cu_num_k_block + batch_idx + 1)
+    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
+    perm = offs.to(tl.int64)
 
-    for off_k_block in range(k_block_start, k_block_end):
-        start_n = tl.load(cu_k_block + off_k_block)
-        
-        # We only need to enter the calulcation if two conditions are met:
-        # 1. the block mask is True
-        # 2. causal = False; or when causal = True && the end of the q block is after the start of the k block.
-        if tl.load(block_mask + off_head_k * stride_b_nh + off_q_block * stride_b_nq + off_k_block * stride_b_nk) and (not causal or end_m - batch_q_start_idx + offset >= start_n - batch_k_start_idx):
-            
-            end_n = tl.load(cu_k_block + off_k_block + 1)
-            off_n = start_n + tl.arange(0, BLOCK_N)
-            
-            if EVEN_SEQ_KBLOCK:
-                if EVEN_HEADDIM:
-                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d)
-                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d)
-                else:
-                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, 
-                                    mask =off_dim[:, None] < headdim, 
-                                    other=0.0)
-                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, 
-                                    mask = off_dim[None, :] < headdim, 
-                                    other=0.0)
-            else:
-                if EVEN_HEADDIM:
-                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, 
-                                    mask = off_n[None,:] < end_n, 
-                                    other=0.0)
-                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, 
-                                    mask = off_n[:,None] < end_n, 
-                                    other=0.0)
-                else:
-                    k_block = tl.load(k + off_n[None,:] * stride_k_s + off_head_k * stride_k_h + off_dim[:, None] * stride_k_d, 
-                                    mask = (off_n[None,:] < end_n) & (off_dim[:, None] < headdim), 
-                                    other=0.0)
-                    v_block = tl.load(v + off_n[:,None] * stride_v_s + off_head_k * stride_v_h + off_dim[None, :] * stride_v_d, 
-                                    mask = (off_n[:,None] < end_n) & (off_dim[None, :] < headdim), 
-                                    other=0.0)
-            
-            # Core part: online Softmax
-            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-            qk += tl.dot(q_block, k_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. 
-            qk *= softmax_scale
+    size = 1
+    while size < BLOCK_W:
+        stride = size
+        while stride > 0:
+            partner = offs ^ stride
+            ascending = ((offs & (size << 1)) == 0)
 
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-            
-            if causal:
-                qk += tl.where(off_m[:, None] - batch_q_start_idx + offset >= off_n[None, :] - batch_k_start_idx, 0, float('-inf'))
-            
-            if not EVEN_SEQ_KBLOCK and start_n + BLOCK_N > end_n: 
-                qk += tl.where(off_n[None,:] < end_n, 0, float('-inf'))
-            
-            p = tl.exp(qk)
-            
-            l_ij = tl.sum(p, 1)
-            alpha = tl.exp(m_i - m_ij)
-            
-            # Original flashattention here stores and immediately loads, but it seems not necessary in my testing.
-            # tl.store(tmp_ptr, alpha, mask = off_m < end_m)
-            # alpha = tl.load(tmp_ptr, mask = off_m < end_m)
-            # 
-            l_i = l_i * alpha + l_ij
-            acc = acc * alpha[:, None]
-            p = p.to(v.type.element_ty)
-            
-            
-            acc += tl.dot(p, v_block, allow_tf32=False) # Provdie allow_tf32=False can achieve better accuracy for float32. 
-            m_i = m_ij
+            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
+            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
 
-    l_i = tl.where(l_i == 0, 1, l_i) # might be a working trick for the case when l_i is not updated at all. 
-    l_recip = 1 / l_i
-    # tl.store(tmp_ptr, l_recip, mask = off_m < end_m)
-    # l_recip = tl.load(tmp_ptr, mask = off_m < end_m)
-    acc = acc * l_recip[:,None]
-    acc = acc.to(out.dtype.element_ty)
-    
-    off_o = off_m[:, None] * stride_o_s + off_head_q * stride_o_h + off_dim[None, :] * stride_o_d
-    out_ptr = out + off_o
-    if EVEN_SEQ_QBLOCK:
-        if EVEN_HEADDIM:
-            tl.store(out_ptr, acc)
-        else:
-            tl.store(out_ptr, acc, mask=off_dim[None, :] < headdim)
-    else:
-        if EVEN_HEADDIM:
-            tl.store(out_ptr, acc, mask=off_m[:, None] < end_m)
-        else:
-            tl.store(out_ptr, acc, mask=(off_m[:, None] < end_m) & (off_dim[None, :] < headdim))
+            is_lower_idx = offs < partner
+            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))
 
-    off_lse = off_head_q * stride_lse_h + off_m * stride_lse_s
+            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))
 
-    if EVEN_SEQ_QBLOCK:
-        tl.store(lse + off_lse, tl.log(l_i))
-    else:
-        tl.store(lse + off_lse, tl.log(l_i), mask = off_m < end_m)
+            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \
+                                  ((~want_smaller) & my_is_smaller & (partner < W))
+
+            keys = tl.where(should_take_partner, p_key, keys)
+            perm = tl.where(should_take_partner, p_perm, perm)
+
+            tl.store(keys_ptr + base + offs, keys, mask=mask)
+            tl.store(perm_ptr + base + offs, perm, mask=mask)
+            tl.debug_barrier()
+
+            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
+            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)
+
+            stride = stride >> 1
+        size = size << 1
 
 
-
-def _forward_fix_tile_size(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size, causal, softmax_scale, num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block, num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block):
-    
-
-    seq_len_q = q.shape[0]
-    nhead_q = q.shape[1]
-    nhead_k = k.shape[1]
-    assert nhead_q % nhead_k == 0, "nhead_q must be divisible by nhead_k (for GQA)"
-    head_q_to_k_ratio = nhead_q // nhead_k
-
-    headdim = q.shape[2]
-    assert (q_block_size & (q_block_size - 1) == 0) and (k_block_size & (k_block_size - 1) == 0), "q_block_size and k_block_size must be powers of 2"
-    BLOCK_M = q_block_size
-    BLOCK_N = k_block_size
-    BLOCK_DIM = max(triton.next_power_of_2(headdim), 16)
-    
-    softmax_scale = softmax_scale if softmax_scale is not None else headdim ** -0.5
-    
-    
-    out = torch.empty_like(q).contiguous()
-    lse = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)
-    tmp = torch.empty((seq_len_q, nhead_q), device=q.device, dtype=torch.float32)
-    
-    EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0).item()
-    EVEN_SEQ_QBLOCK = torch.all((cu_q_seqlens[1:] - cu_q_seqlens[:-1]) % q_block_size == 0).item()
-    even_headdim = headdim == BLOCK_DIM
-    # launch kernel
-    grid = (num_q_block, nhead_q)
-
-    _fwd_kernel[grid](
-        q,
-        k,
-        v,
-        cu_q_seqlens,
-        cu_k_seqlens,
-        causal,
-        softmax_scale,
-        cu_q_block, 
-        cu_k_block,
-        q_block_to_batch,
-        cu_num_k_block,
-        head_q_to_k_ratio,
-        block_mask,
-        out,
-        lse,
-        tmp,
-        *q.stride(),
-        *k.stride(),
-        *v.stride(),
-        *block_mask.stride(),
-        *out.stride(),
-        *lse.stride(),
-        headdim,
-        BLOCK_M,
-        BLOCK_N,
-        BLOCK_DIM,        
-        EVEN_HEADDIM = even_headdim,
-        EVEN_SEQ_QBLOCK = EVEN_SEQ_QBLOCK,
-        EVEN_SEQ_KBLOCK = EVEN_SEQ_KBLOCK,
-    )
-    
-    return out
-
-
-
-def calculate_blocks(cu_seqlen: torch.Tensor, block_size: int) -> tuple[int, torch.Tensor, torch.Tensor]:
-    """calculate cu_block and block_to_batch"""
-
-    # batch_sizes[batch_idx] = batch size ( seqlen ) of batch idx
-    batch_sizes = cu_seqlen[1:] - cu_seqlen[:-1]
-
-    # batch_num_block[batch_idx] = how many block in batch idx
-    batch_num_block = (batch_sizes + (block_size - 1)) // block_size
-    
-    # cu_num_block[batch_idx] = first block id of this batch
-    cu_num_block = torch.zeros(
-        batch_num_block.numel() + 1,
-        device=cu_seqlen.device,
-        dtype=batch_num_block.dtype,
-    )
-    
-    
-    cu_num_block[1:] = batch_num_block.cumsum(dim=0)
-    
-    # total block ( for all batch )
-    num_block = cu_num_block[-1].item()
-    # block_sizes[block_idx] = block_size of block idx
-    block_sizes = torch.full(
-        (num_block + 1,), block_size, dtype=torch.int32, device=cu_seqlen.device
-    )
-    
-    block_sizes[0] = 0 
-    batch_last_block_size = batch_sizes - (batch_num_block - 1) * block_size
-    block_sizes[cu_num_block[1:]] = batch_last_block_size
-    # cu_block[block_idx] = the start block offset of block idx
-    cu_block = block_sizes.cumsum(dim=-1, dtype=torch.int32)
-    # block_to_batch[block_idx] = batch idx of the block idx
-    block_to_batch = torch.zeros(
-        (num_block,), dtype=torch.int32, device=cu_seqlen.device
-    )
-    block_to_batch[cu_num_block[1:-1]] = 1
-    block_to_batch = block_to_batch.cumsum(dim=0, dtype=torch.int32)
-    
-    return (
-        num_block, # the total number of blocks 
-        cu_block, # the start and end (sequence) index of each block
-        block_to_batch, # block_to_batch[block_idx] represents the batch index of block_idx
-        cu_num_block, # cu_num_block[batch_idx+1] - cu_num_block[batch_idx] = batch_num_block[batch_idx]
-    )
-
-
-def block_sparse_attention(q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask,
-                           q_block_size, k_block_size, causal=False, softmax_scale=None):
-    """Variable-length block-sparse attention over the blocks the mask selects."""
-    num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block = calculate_blocks(cu_q_seqlens, q_block_size)
-    num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block = calculate_blocks(cu_k_seqlens, k_block_size)
-    return _forward_fix_tile_size(
-        q, k, v, cu_q_seqlens, cu_k_seqlens, block_mask, q_block_size, k_block_size,
-        causal, softmax_scale,
-        num_q_block, cu_q_block, q_block_to_batch, cu_num_q_block,
-        num_k_block, cu_k_block, k_block_to_batch, cu_num_k_block)
+def triton_argsort(keys: torch.Tensor):
+    """Ascending argsort for small rows. Returns (sorted_keys, permutation)."""
+    N, W = keys.shape
+    BLOCK_W = triton.next_power_of_2(W)
+    keys_out = keys.clone()
+    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()
+    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)
+    return keys_out, perm
 
 ```
 
@@ -377,24 +120,59 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Check EVEN_SEQ_KBLOCK: computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0) — total length, not per-sequence. But that's just a flag; if per-block masks are used, non-even handling uses cu_k_block. Actually EVEN flag affects masks. If total is even but an individual sequence is not multiple of block size, EVEN_SEQ_KBLOCK=True would skip masking off_n < end_n... but partial-block masking also handled by "if not EVEN_SEQ_KBLOCK and start_n + BLOCK_N > end_n". If flag wrongly True, keys past sequence end within a partial block are loaded (out of range? no — next sequence's keys) and contribute. Wait, cu_k_block gives start index of each block in flat sequence; end_n = next block start. For last block of a sequence, off_n up to start_n+BLOCK_N could cross into next sequence's positions, since cu_k_block for next block starts at next sequence start (which may not equal start_n + block size). E.g., seq len 10, block 16: block covers positions 0..9; positions beyond cu_k_seqlens[1] belong to next sequence. With EVEN flag True (total even), no masking → wrong.
+Bitonic sort with a single thread per row? Actually each program handles one row with BLOCK_W lanes in parallel. Bitonic sort in Triton with parallel lanes is problematic: the compare-exchange uses tl.load of partner values from global memory each step, with debug_barrier to sync. The debug_barrier is a block-level barrier across warps? num_warps=1, so single warp — barrier within warp should synchronize... Actually tl.debug_barrier is __syncthreads, which syncs all threads in block. With one warp, load of partner values written by other lanes within same warp: stores then barrier then loads should work.
 
-But wait, EVEN_SEQ_KBLOCK also affects which k positions loaded. If flag False (uneven), masks off_n < end_n. If flag computed as total even while per-seq uneven, we get incorrect inclusion of next sequence keys and also v loads reading wrong positions but still valid memory (flat). This is a real bug. Similarly EVEN_SEQ_QBLOCK uses torch.all over per-sequence, correct. So K side flag is wrong: should be torch.all((cu_k_seqlens[1:]-cu_k_seqlens[:-1]) % k_block_size == 0).
+But bitonic sort network sorts a sequence only when the full network runs over BLOCK_W with proper handling. Padded entries use INT64_MAX key and perm loaded with other=... for perm other=0x7FFF... (perm other = 0x7FFFFFFFFFFFFFFF? Look: perm loaded with other=0). Actually p_perm loaded with other=0x7FFFFFFFFFFFFFFF — huge perm for out-of-range partners, so padded entries treated as largest, fine.
 
-Hmm, but wait: cu_k_block defines block start offsets. Does cu_k_block for the next batch's first block start at cu_k_seqlens[b+1]? In calculate_blocks, block_sizes cumsum — block_sizes[cu_num_block[1:]] = last block sizes, and cumsum yields cu_block[b+1's first] = cu_seqlens[b+1]? Yes, cumsum of actual block sizes equals cumulative seq lens. So end_n for partial block equals batch_k_end only via next block start. So masking uses off_n < end_n correct only when EVEN_SEQ_KBLOCK is False. When total length is multiple of block size but a sequence isn't, flag wrongly True → reject.
+Ascending direction: `ascending = ((offs & (size << 1)) == 0)` — standard bitonic sort direction: element's block index. In standard bitonic sort, direction determined by (i & (2*size)) == 0 for the outer merge. Hmm, standard: for k = 2,4,...; for j = k/2,...; the ascending flag is ((i & k) == 0). Here size plays role of k and stride = j. So ascending = ((offs & size)==0)? They use (size<<1). That's wrong? Standard implementation:
 
-Also causal condition, lse, etc. fine. Also note EVEN flag True but partial block exists → qk computed with next sequence keys, softmax includes them. Defect.
+```
+for k = 2; k <= n; k *= 2:
+  for j = k/2; j > 0; j /= 2:
+    for i in parallel:
+      partner = i ^ j
+      ascending = ((i & k) == 0)
+```
+
+Here size=k, so ascending = ((offs & size)==0), not (size<<1). Using (size<<1) means for size=1 (k=2), ascending = (offs & 2)==0, i.e., direction by 4-blocks — wrong for first merge. That would produce incorrect sort.
+
+Wait, but maybe their loop structure differs: they run while size < BLOCK_W, stride from size down. With ascending = ((offs & (size<<1))==0): for size=1, direction alternates every 2 elements (offs&2), but pairs are (0,1) — direction constant within a pair? offs 0,1 both have offs&2==0, so ascending for both. Pair (2,3) both have offs&2 != 0 → descending. So first step sorts pairs ascending/descending — that's bitonic sequence creation, which matches k=2 stage of bitonic sort where pairs alternate? Standard k=2: pairs (0,1) ascending, (2,3) ascending too (i&k = i&2: i=0,1 →0 asc; i=2,3 → 2, descending). Yes! i&2==0 for i=0,1; i=2,3 have i&2=2 → descending. Hmm wait standard says (i & k)==0 with k=2: i=0,1 → asc; i=2,3 → desc. But actual bitonic sort first stage creates ascending pairs of 2 then merges... Actually standard bitonic sort creates bitonic sequences: stage k=2 sorts pairs with direction based on (i&2). Then merge k=4 with direction (i&4), etc. Hmm, in the standard version, for outer loop k, the direction uses (i & k). Here they use (i & 2*size)... 
+
+Let me re-derive: standard (from Wikipedia "Bitonic sorter" parallel version):
+```
+for (k = 2; k <= n; k *= 2)
+  for (j = k/2; j > 0; j /= 2)
+    l = i ^ j
+    dir = (i & k) == 0
+```
+So dir uses k, i.e., size. Implementation uses size<<1. That's a mismatch... unless they start with size representing k/2? Their inner: stride starts at size and halves — that's j from k/2 down with k = 2*size. And ascending should be (i & k) == (i & 2*size). So using (offs & (size<<1)) == 0 is exactly correct given k = 2*size. Good — so the network is correct.
+
+Wait but check: outer loop size from 1 doubling until size < BLOCK_W, i.e., last size = BLOCK_W/2, so k = BLOCK_W. Full network. Correct.
+
+Stability: bitonic sort isn't stable in general, but here they compare (keys, perm) lexicographically with perm tie-break... but perm values change during sort, and the comparator uses original index perm — comparing (key, -perm) i.e., smaller key first, then larger original index first?? my_is_smaller = (keys < p_key) | ((keys==p_key) & (perm > p_perm)). So for equal keys, the one with larger perm is "smaller" — that's descending by original index, which is UNSTABLE (stable requires lower index first). Hmm.
+
+Wait, maybe direction reversal: should_take_partner logic. Let's check comparator ordering. want_smaller: if ascending, element with lower offs wants to end up with the smaller element. The "smaller" element per comparator is defined by my_is_smaller. my_is_smaller means "I am smaller than partner" per comparator: keys<, or equal keys and perm>partner's perm. So smaller = equal keys → higher original index first. That's reverse-stable. That's a defect per the contract (ties: lower original index first).
+
+Hmm, but wait — maybe reversed direction still yields ascending keys but ties in reverse order. Keys sorted ascending; ties: larger original index first. Contract requires lower original index first. So reject.
+
+But double-check: could the bitonic network with a comparator that orders by (key asc, index desc) still... the sorted output is by that composite order, so ties yield descending original indices. Violates stability. Unless I misread `perm > p_perm`: yes, my_is_smaller when perm > p_perm, meaning element with larger index considered smaller → placed first. Unstable.
+
+Also concern: reading partner from global memory — each lane stores its own element then loads partner's; races across lanes within same warp? All lanes in one program (one warp, num_warps=1) do store then debug_barrier then load — sequential within the program. But different programs (pid) handle different rows — no overlap. Within a warp, does each lane write only its own offset, then barrier, then read partner offsets — fine.
+
+Another concern: each lane only stores at its own offs; but should_take_partner computed per lane; partner lanes compute complementary decisions (exchange symmetric) — yes since comparator is consistent both directions. p_perm load with mask partner<W other=INT64_MAX; for in-bounds partner the perm is valid. Fine.
+
+So main defect: tie-break direction reversed → unstable. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.85, "reason": "EVEN_SEQ_KBLOCK is computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0), i.e., the total key length, not per-sequence like the Q side (which uses torch.all over cu_q_seqlens diffs). If total length happens to be a multiple of k_block_size while some individual sequence is not, the flag is wrongly True, so the kernel skips the 'off_n < end_n' masking and the partial final key block bleeds into the next sequence's keys/values, which then contribute to the softmax — violating the contract."}
+{"verdict": "reject", "confidence": 0.9, "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.85,
-  "reason": "EVEN_SEQ_KBLOCK is computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0), i.e., the total key length, not per-sequence like the Q side (which uses torch.all over cu_q_seqlens diffs). If total length happens to be a multiple of k_block_size while some individual sequence is not, the flag is wrongly True, so the kernel skips the 'off_n < end_n' masking and the partial final key block bleeds into the next sequence's keys/values, which then contribute to the softmax — violating the contract."
+  "confidence": 0.9,
+  "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."
 }
 
 ## Usage and stop reason
@@ -404,22 +182,22 @@ Also causal condition, lse, etc. fine. Also note EVEN flag True but partial bloc
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.85,
-    "reason": "EVEN_SEQ_KBLOCK is computed as ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0), i.e., the total key length, not per-sequence like the Q side (which uses torch.all over cu_q_seqlens diffs). If total length happens to be a multiple of k_block_size while some individual sequence is not, the flag is wrongly True, so the kernel skips the 'off_n < end_n' masking and the partial final key block bleeds into the next sequence's keys/values, which then contribute to the softmax — violating the contract."
+    "confidence": 0.9,
+    "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 4116,
-    "output_tokens": 724
+    "input_tokens": 1166,
+    "output_tokens": 1671
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 13.611105584073812,
-  "kernel_sha256": "d3cba8aff14357c5719245afc20f88746dc9225270c6aabda758332510b1634c",
-  "problem_sha256": "4657b92cdc5c016558e7acc79b5a7909b1a5bdf355a5a1de3188cecae16b122e",
+  "elapsed_s": 28.96218916703947,
+  "kernel_sha256": "703f137b7dd84bb7153e74c005bb0c4380e623737693e7c4eb679b58613b9a67",
+  "problem_sha256": "78796c904229e19bf7e0ebf53a689091d841b723c1e15e760cac45ffd3dfcae2",
   "prompt_variant": "original",
-  "estimated_usd": 0.008948,
+  "estimated_usd": 0.008984800000000001,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

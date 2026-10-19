@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_70", "case_71")
+CASES = ("case_127", "case_128")
 N, STEPS = 128, 6
 BETA, RATE = 0.75, 0.03125
 TOLERANCE, STATE_TOLERANCE = 0.025, 1e-5

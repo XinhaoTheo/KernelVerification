@@ -1,0 +1,36 @@
+Verify a CUDA RMSNorm backward implementation with the stated mixed-precision
+casting policy. The task concerns this implementation over the entire domain
+below, not only the example returned by make_inputs().
+
+Inputs (all contiguous, non-overlapping, on the same CUDA device):
+- x and dy: FP16 tensors of shape [M, N]; weight: FP16 tensor of shape [N].
+- rstd: FP32 tensor of shape [M], the saved reciprocal RMS from the forward pass.
+- 1 <= M <= 4096; 16 <= N <= 512. Non-powers of two are included.
+- All values are finite; |x| <= 4, |dy| <= 4, |weight| <= 2.
+- The RMS of each row of x lies in [0.25, 4]. For epsilon = 1e-5,
+  rstd agrees with 1/sqrt(mean_j(x[i,j]^2) + epsilon) to relative error <= 1e-6.
+
+Let H16 denote rounding to IEEE FP16, and F32 rounding to IEEE FP32.
+As in the Llama mixed-precision backward policy, define:
+  m[i,j] = H16(dy[i,j] * weight[j])
+  h[i,j] = H16(F32(F32(x[i,j]) * rstd[i]))
+  t[i,j] = H16(dy[i,j] * h[i,j])
+The target outputs, with sums below evaluated in real arithmetic, are:
+  dx[i,j] = rstd[i] * (m[i,j] - x[i,j] * rstd[i]^2
+                        * sum_k(m[i,k] * x[i,k]) / N)
+  dw[j] = sum_i t[i,j]
+The rounded per-element products are intentional parts of the casting policy;
+they are not themselves implementation errors. The dw result is an FP32 main
+gradient buffer, as used for stable parameter-gradient accumulation.
+
+Return a pair: dx of shape [M,N] and dtype FP16, dw of shape [N] and dtype FP32.
+All outputs must be finite. For every element:
+  abs(dx_output - dx_target) <= 0.002 + 0.002 * abs(dx_target)
+  abs(dw_output - dw_target) <= 1e-5 + 1e-5 * sum_i abs(t[i,j])
+The absolute-sum scale permits cancellation without demanding relative accuracy
+on a near-zero gradient. These bounds apply to all legal input values and shapes.
+
+Do not modify any input. The public reference() and error_ratios() in kernel.py
+implement these formulas independently of the Triton kernels. You may create any
+legal test inputs; make_inputs() is only a convenient example. Run on the frozen
+NVIDIA T4 / PyTorch 2.8.0 / Triton 3.4.0 CUDA environment.

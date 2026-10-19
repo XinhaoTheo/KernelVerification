@@ -6,7 +6,7 @@ import sys
 
 REASON = (
     "The original contract did not exclude contiguous lazy-negative PyTorch "
-    "tensors. Raw pointers ignore that logical flag. Initial case_108 trust "
+    "tensors. Raw pointers ignore that logical flag. Initial case_35 trust "
     "qualification omitted this legal input class; old evidence remains intact. "
     "A concrete legal counterexample corrects the label to reject."
 )
@@ -62,16 +62,16 @@ def validate(case_root: Path) -> dict:
     import triton
     base = _base()
     # A fresh in-memory helper instance: immutable historical helper file stays as-is.
-    base.EXPECTED = {"case_111": "trust"}
+    base.EXPECTED = {"case_38": "trust"}
     ordinary = base.validate(case_root)
     report = {"family":"norm_contract_audit", "cases":{},
               "environment":ordinary["environment"], "contract_unchanged":True,
               "label_correction_reason":REASON, "cpu_resolve_neg_audit":cpu_audit()}
     plans = [(rows,cols,flags) for rows,cols in ((31,31),(513,127))
              for flags in (("x",),("weight",),("dy",),("rstd",),("x","weight","dy","rstd"))]
-    for case, expected in (("case_108","reject"),("case_111","trust")):
+    for case, expected in (("case_35","reject"),("case_38","trust")):
         module = base._load(case_root / case / "kernel.py")
-        record = ordinary["cases"][case] if case == "case_111" else {
+        record = ordinary["cases"][case] if case == "case_38" else {
             "expected_label":expected,"tests":[],
             "kernel_sha256":hashlib.sha256((case_root/case/"kernel.py").read_bytes()).hexdigest()}
         for rows, cols, flags in plans:
@@ -121,7 +121,7 @@ def validate(case_root: Path) -> dict:
         record["qualification_passed"] = (not failures if expected=="trust" else bool(legal_flag_failures))
         record["qualified"] = record["qualification_passed"]
         record["ground_truth"] = expected if record["qualification_passed"] else None
-        if case == "case_108":
+        if case == "case_35":
             record["previous_ground_truth"] = "trust"
             record["label_correction_reason"] = REASON
         report["cases"][case] = record

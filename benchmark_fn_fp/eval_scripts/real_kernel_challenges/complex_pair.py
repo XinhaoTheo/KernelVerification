@@ -18,7 +18,7 @@ import gmpy2
 import numpy as np
 import torch
 
-EXPECTED = {"case_154": "trust", "case_155": "reject"}
+EXPECTED = {"case_81": "trust", "case_82": "reject"}
 ATOL, RTOL = 1e-7, 5e-7
 # Decimal tolerances in the problem are exact real constants.
 ATOL_Q, RTOL_Q = gmpy2.mpq(1, 10**7), gmpy2.mpq(5, 10**7)
@@ -79,7 +79,7 @@ def _source_binding(case_root):
         kernel = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_divide")
         assignments = {node.targets[0].id: ast.unparse(node.value) for node in kernel.body
                        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
-        if name == "case_154":
+        if name == "case_81":
             for target, expression in expected.items():
                 assert assignments[target] == expression, (target, assignments[target])
         else:

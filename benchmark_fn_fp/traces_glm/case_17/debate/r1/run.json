@@ -5,36 +5,36 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_17",
+    "entry": "case_18",
     "has_error": null,
-    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):\n    b = tl.program_id(0)\n    x_row = X + b * stride_xb\n    o_row = OUT + b * stride_ob\n    n_chunks = seqlen // CHUNK\n\n    carry = 0.0\n    for c in range(n_chunks):\n        offs = c * CHUNK + tl.arange(0, CHUNK)\n        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)\n        local = tl.cumsum(x, axis=0)\n        tl.store(o_row + offs, local + carry, mask=offs < seqlen)\n        carry += tl.sum(x, axis=0)\n\n\ndef chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:\n    \"\"\"Cumulative sum along the sequence axis, carried across fixed-size chunks.\"\"\"\n    batch, seqlen = x.shape\n    out = torch.zeros_like(x)\n    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)\n    return out\n",
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _softmax_kernel(OUT, IN, stride_om, stride_im, n_cols, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    in_row = IN + row * stride_im\n    out_row = OUT + row * stride_om\n    n_full = n_cols // BLOCK\n\n    row_max = -float(\"inf\")\n    for b in range(tl.cdiv(n_cols, BLOCK)):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        row_max = tl.maximum(row_max, tl.max(x, axis=0))\n\n    denom = 0.0\n    for b in range(n_full):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        denom += tl.sum(tl.exp(x - row_max), axis=0)\n\n    for b in range(tl.cdiv(n_cols, BLOCK)):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        tl.store(out_row + cols, tl.exp(x - row_max) / denom, mask=cols < n_cols)\n\n\ndef softmax(x: torch.Tensor, block_size: int = 128) -> torch.Tensor:\n    \"\"\"Row-wise softmax of a 2-D float32 tensor.\"\"\"\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _softmax_kernel[(n_rows,)](out, x, out.stride(0), x.stride(0), n_cols, BLOCK=block_size)\n    return out\n",
     "passed": null,
-    "problem_text": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
+    "problem_text": "Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\n`block_size` columns (the standard three-pass fused-softmax structure used by\nTriton-based normalization kernels).\n\nFor each row x:\n\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\n\nso every row of the result must be a probability distribution: all entries\nnon-negative and summing to 1.\n\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\nmultiple of `block_size`; when it is not, the trailing partial block is still\npart of the row and must be normalized with the rest of it.\n\nDoes softmax() satisfy this contract?\n",
     "rounds": null,
-    "session_dir": "/root/cases/case_17",
+    "session_dir": "/root/cases/case_18",
     "status": "under_test",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-30T08:26:42Z",
+      "created_at": "2026-09-30T08:26:47Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-30T08:27:14Z",
+          "created_at": "2026-09-30T08:30:36Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t8_probe.py",
-                "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+                "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t8_stdout.txt",
-                "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+                "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -46,119 +46,90 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t8_json_result.json",
-                "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+                "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
               }
             ],
-            "chunk": 64,
-            "duration_s": 5.089887,
+            "duration_s": 4.736636,
             "exit_code": 0,
-            "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+            "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax",
+            "has_nan": false,
+            "input_shape": [
+              4,
+              130
+            ],
             "json_parse_error": null,
             "json_result": {
-              "chunk": 64,
-              "dtype": "torch.float32",
-              "max_abs_err_tail": 10.053009033203125,
-              "max_abs_err_written": 1.9073486328125e-06,
-              "ref_tail_allclose": false,
-              "sample_out_tail": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+              "max_row_sum_dev_from_1": 0.13868117332458496,
+              "min_entry": 0.00022502124193124473,
+              "row_sums": [
+                1.0045435428619385,
+                1.0068390369415283,
+                1.007639765739441,
+                1.138681173324585
               ],
-              "sample_ref_tail": [
-                -1.1006591320037842,
-                -2.0740959644317627,
-                -1.1181726455688477,
-                -2.2976255416870117,
-                -3.304033041000366,
-                -3.1880407333374023
-              ],
-              "seqlen": 100,
               "shape": [
-                3,
-                100
-              ],
-              "tail_indices": [
-                64,
-                99
-              ],
-              "tail_is_all_zero": true
+                4,
+                130
+              ]
             },
-            "max_abs_err_tail": 10.053009033203125,
-            "max_abs_err_written": 1.9073486328125e-06,
-            "sample_out_tail": [
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0
-            ],
-            "sample_ref_tail": [
-              -1.1006591320037842,
-              -2.0740959644317627,
-              -1.1181726455688477,
-              -2.2976255416870117,
-              -3.304033041000366,
-              -3.1880407333374023
-            ],
-            "seqlen": 100,
-            "shape": [
-              3,
-              100
+            "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+            "max_row_sum_dev_from_1": 0.13868117332458496,
+            "min_entry": 0.00022502124193124473,
+            "n_cols": 130,
+            "row_sums": [
+              1.0045435428619385,
+              1.0068390369415283,
+              1.007639765739441,
+              1.138681173324585
             ],
             "stderr": "",
-            "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
-            "tail_allclose": false,
-            "tail_is_all_zero": true,
+            "stdout": "{\"shape\": [4, 130], \"row_sums\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \"max_row_sum_dev_from_1\": 0.13868117332458496, \"max_abs_err_vs_torch_softmax\": 0.00867936760187149, \"has_nan\": false, \"min_entry\": 0.00022502124193124473}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+          "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
           "supports": "confirmed",
           "tool_event_id": "t8"
         }
       ],
       "id": "c1",
       "raised_by": "skeptic",
-      "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+      "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+          "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
         }
       ],
-      "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
-      "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+      "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
+      "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
       "status": "confirmed",
-      "updated_at": "2026-09-30T08:27:14Z"
+      "updated_at": "2026-09-30T08:30:36Z"
     },
     {
-      "created_at": "2026-09-30T08:26:42Z",
+      "created_at": "2026-09-30T08:26:47Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-30T08:27:14Z",
+          "created_at": "2026-09-30T08:30:36Z",
           "data": {
-            "allclose": false,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+                "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+                "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -170,136 +141,134 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+                "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
               }
             ],
-            "chunk": 64,
-            "duration_s": 4.895248,
+            "duration_s": 5.771302,
             "exit_code": 0,
-            "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+            "expected_signal": "output contains NaN or Inf due to denom=0.0",
+            "has_inf": true,
+            "has_nan": false,
+            "input_shape": [
+              4,
+              64
+            ],
             "json_parse_error": null,
             "json_result": {
-              "allclose": false,
-              "chunk": 64,
-              "max_abs_err": 10.293733596801758,
-              "out_is_all_zero": true,
-              "out_nonzero_count": 0,
-              "ref_nonzero_count": 64,
-              "sample_out": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_inf": true,
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": Infinity,
+              "row_sums": [
+                Infinity,
+                Infinity,
+                Infinity,
+                Infinity
               ],
-              "sample_ref": [
-                -0.2962779998779297,
-                2.3801701068878174,
-                2.239323854446411,
-                1.395228624343872
-              ],
-              "seqlen": 32,
               "shape": [
-                2,
-                32
+                4,
+                64
               ]
             },
-            "max_abs_err": 10.293733596801758,
-            "out_is_all_zero": true,
-            "out_nonzero_count": 0,
-            "ref_nonzero_count": 64,
-            "seqlen": 32,
-            "shape": [
-              2,
-              32
+            "max_abs_err_vs_torch_softmax": null,
+            "n_cols": 64,
+            "row_sums": [
+              "Inf",
+              "Inf",
+              "Inf",
+              "Inf"
             ],
             "stderr": "",
-            "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+            "stdout": "{\"shape\": [4, 64], \"row_sums\": [Infinity, Infinity, Infinity, Infinity], \"has_nan\": false, \"has_inf\": true, \"max_abs_err_vs_torch_softmax\": Infinity}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c2.e1",
           "kind": "runtime_probe",
-          "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+          "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
           "supports": "confirmed",
           "tool_event_id": "t9"
         }
       ],
       "id": "c2",
       "raised_by": "skeptic",
-      "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+      "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+          "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
         }
       ],
-      "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
-      "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
+      "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
+      "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
       "status": "confirmed",
-      "updated_at": "2026-09-30T08:27:14Z"
+      "updated_at": "2026-09-30T08:30:36Z"
     }
   ],
   "convergence": null,
   "description_model": {
     "contract_model": [
-      "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-      "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-      "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-      "Batch dimension is arbitrary; one row per program."
+      "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+      "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+      "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+      "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
     ],
     "kernel_model": [
-      "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-      "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-      "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-      "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+      "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+      "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+      "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+      "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+      "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
     ],
     "open_questions": [],
     "risk_map": [
-      "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-      "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-      "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-      "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+      "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+      "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+      "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+      "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+      "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
     ],
     "scope_notes": [
-      "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]"
+      "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]"
     ]
   },
   "description_tasks": [],
   "description_updates": [
     {
       "contract_model": [
-        "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-        "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-        "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-        "Batch dimension is arbitrary; one row per program."
+        "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+        "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+        "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+        "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
       ],
-      "created_at": "2026-09-30T08:26:31Z",
+      "created_at": "2026-09-30T08:26:38Z",
       "created_by": "describer",
       "id": "du1",
       "impact_on_claims": [],
       "kernel_model": [
-        "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-        "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-        "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-        "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+        "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+        "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+        "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+        "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+        "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
       ],
       "open_questions": [],
       "risk_map": [
-        "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-        "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-        "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-        "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+        "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+        "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+        "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+        "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+        "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
       ],
       "scope_notes": [
-        "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]"
+        "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]"
       ],
-      "summary": "Initial description of case_17 chunked cumsum kernel: contract requires correct cumulative sum for any positive seqlen, but kernel iterates only seqlen//CHUNK chunks, leaving trailing partial-chunk outputs unwritten (zeros).",
+      "summary": "Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \u2014 violating the contract that non-multiple n_cols be fully normalized.",
       "task_ids": [],
       "turn": 2
     }
   ],
-  "entry": "case_17",
+  "entry": "case_18",
   "history": [
     {
       "duration_s": null,
@@ -309,25 +278,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_17"
+            "entry": "case_18"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_17"
+            "entry": "case_18"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_17"
+            "entry": "case_18"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_17",
+            "entry": "case_18",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -336,33 +305,35 @@
       "usage": null
     },
     {
-      "duration_s": 18.308758254000054,
+      "duration_s": 15.921643838000023,
       "role": "describer",
       "round": 2,
-      "text": "I'll describe the contract and kernel, focusing on the seqlen-not-multiple-of-chunk behavior which is the obvious risk surface.",
+      "text": "I have full context: the kernel computes row-wise softmax in three passes, but the denominator pass uses `n_full = n_cols // BLOCK` full blocks only, excluding the trailing partial block \u2014 which the problem explicitly says must be included. I'll record the description model now.",
       "tool_calls": [
         {
           "args": {
             "contract_model": [
-              "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-              "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-              "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-              "Batch dimension is arbitrary; one row per program."
+              "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+              "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+              "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+              "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
             ],
             "kernel_model": [
-              "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-              "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-              "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-              "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+              "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+              "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+              "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+              "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+              "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
             ],
             "risk_map": [
-              "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-              "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-              "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-              "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+              "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+              "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+              "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+              "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+              "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
             ],
-            "scope_notes": "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]",
-            "summary": "Initial description of case_17 chunked cumsum kernel: contract requires correct cumulative sum for any positive seqlen, but kernel iterates only seqlen//CHUNK chunks, leaving trailing partial-chunk outputs unwritten (zeros)."
+            "scope_notes": "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]",
+            "summary": "Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \u2014 violating the contract that non-multiple n_cols be fully normalized."
           },
           "tool": "record_description_update"
         }
@@ -370,44 +341,44 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 18.309,
-        "input_tokens": 4059,
-        "output_tokens": 659
+        "duration_s": 15.922,
+        "input_tokens": 4476,
+        "output_tokens": 871
       }
     },
     {
-      "duration_s": 10.987346863000084,
+      "duration_s": 8.871144418000085,
       "role": "skeptic",
       "round": 3,
-      "text": "The kernel's floor-division loop bound (`seqlen // CHUNK`) clearly drops the trailing partial chunk, which the contract explicitly requires. I'll record two concrete, in-scope claims: the trailing partial chunk and the case where seqlen < chunk (entire output is zeros).",
+      "text": "I'll record the two highest-risk, testable claims derived from the source: the truncated denominator for partial-block widths, and the degenerate n_cols < block_size case.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+            "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+                "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
               }
             ],
-            "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
-            "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s]."
+            "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
+            "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax."
           },
           "tool": "record_claim"
         },
         {
           "args": {
-            "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+            "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+                "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
               }
             ],
-            "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
-            "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input."
+            "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
+            "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement."
           },
           "tool": "record_claim"
         }
@@ -415,30 +386,30 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 10.987,
-        "input_tokens": 9807,
-        "output_tokens": 590
+        "duration_s": 8.871,
+        "input_tokens": 11139,
+        "output_tokens": 523
       }
     },
     {
-      "duration_s": 11.098461283000006,
+      "duration_s": 8.855892104000077,
       "role": "experimenter",
       "round": 4,
-      "text": "I'll run runtime probes for both open claims in parallel \u2014 they're independent (different seqlen cases against the same kernel).",
+      "text": "I'll probe both claims at once: c1 (n_cols=130, partial block, row sums) and c2 (n_cols=64 < block_size, NaN/Inf check). They're independent experiments.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(0)\nx = torch.randn(3, 100, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\ntail = slice(64, 100)  # positions written by full chunk vs. trailing partial chunk\nwritten = slice(0, 64)\nerr_tail = (out[:, tail] - ref[:, tail]).abs()\nprint(json.dumps({\n    \"seqlen\": 100, \"chunk\": 64, \"shape\": list(out.shape), \"dtype\": str(out.dtype),\n    \"tail_indices\": [64, 99],\n    \"max_abs_err_written\": float((out[:, written] - ref[:, written]).abs().max()),\n    \"max_abs_err_tail\": float(err_tail.max()),\n    \"tail_is_all_zero\": bool((out[:, tail] == 0).all()),\n    \"ref_tail_allclose\": bool(torch.allclose(out[:, tail], ref[:, tail], atol=1e-5)),\n    \"sample_out_tail\": out[0, 64:70].tolist(),\n    \"sample_ref_tail\": ref[0, 64:70].tolist(),\n}))",
-            "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0"
+            "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 130, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"max_row_sum_dev_from_1\": (row_sums - 1).abs().max().item(),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"min_entry\": out.min().item()\n}))",
+            "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax"
           },
           "tool": "run_claim_probe"
         },
         {
           "args": {
             "claim_id": "c2",
-            "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(1)\nx = torch.randn(2, 32, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\nprint(json.dumps({\n    \"seqlen\": 32, \"chunk\": 64, \"shape\": list(out.shape),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"out_is_all_zero\": bool((out == 0).all()),\n    \"ref_nonzero_count\": int((ref != 0).sum()),\n    \"out_nonzero_count\": int((out != 0).sum()),\n    \"allclose\": bool(torch.allclose(out, ref, atol=1e-6)),\n    \"sample_out\": out[0, :4].tolist(),\n    \"sample_ref\": ref[0, :4].tolist(),\n}))",
-            "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero"
+            "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 64, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"has_inf\": bool(torch.isinf(out).any()),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item()\n}))",
+            "expected_signal": "output contains NaN or Inf due to denom=0.0"
           },
           "tool": "run_claim_probe"
         }
@@ -446,50 +417,39 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 11.098,
-        "input_tokens": 12677,
-        "output_tokens": 636
+        "duration_s": 8.856,
+        "input_tokens": 13904,
+        "output_tokens": 480
       }
     },
     {
-      "duration_s": 10.526857843000016,
+      "duration_s": 210.04297810000003,
       "role": "experimenter",
       "round": 5,
-      "text": "Both probes ran successfully and decisively show the floor-division bug. I'll finalize both claims now \u2014 no further probes needed since both expected signals were observed exactly.",
+      "text": "Both probes completed with decisive results: c1 shows rows summing above 1 (max deviation 0.139) and c2 shows all-Inf outputs from denom=0. I'll finalize both claims.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "chunk": 64,
-              "max_abs_err_tail": 10.053009033203125,
-              "max_abs_err_written": 1.9073486328125e-06,
-              "sample_out_tail": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_nan": false,
+              "input_shape": [
+                4,
+                130
               ],
-              "sample_ref_tail": [
-                -1.1006591320037842,
-                -2.0740959644317627,
-                -1.1181726455688477,
-                -2.2976255416870117,
-                -3.304033041000366,
-                -3.1880407333374023
-              ],
-              "seqlen": 100,
-              "shape": [
-                3,
-                100
-              ],
-              "tail_allclose": false,
-              "tail_is_all_zero": true
+              "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+              "max_row_sum_dev_from_1": 0.13868117332458496,
+              "min_entry": 0.00022502124193124473,
+              "n_cols": 130,
+              "row_sums": [
+                1.0045435428619385,
+                1.0068390369415283,
+                1.007639765739441,
+                1.138681173324585
+              ]
             },
             "event_id": "t8",
             "status": "confirmed",
-            "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+            "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
             "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
@@ -497,21 +457,24 @@
         {
           "args": {
             "data": {
-              "allclose": false,
-              "chunk": 64,
-              "max_abs_err": 10.293733596801758,
-              "out_is_all_zero": true,
-              "out_nonzero_count": 0,
-              "ref_nonzero_count": 64,
-              "seqlen": 32,
-              "shape": [
-                2,
-                32
+              "has_inf": true,
+              "has_nan": false,
+              "input_shape": [
+                4,
+                64
+              ],
+              "max_abs_err_vs_torch_softmax": null,
+              "n_cols": 64,
+              "row_sums": [
+                "Inf",
+                "Inf",
+                "Inf",
+                "Inf"
               ]
             },
             "event_id": "t9",
             "status": "confirmed",
-            "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+            "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
             "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
@@ -520,20 +483,20 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 10.527,
-        "input_tokens": 18107,
-        "output_tokens": 574
+        "duration_s": 210.043,
+        "input_tokens": 18091,
+        "output_tokens": 497
       }
     },
     {
-      "duration_s": 5.060135264999985,
+      "duration_s": 5.577399903000014,
       "role": "skeptic",
       "round": 6,
-      "text": "Both in-scope claims are confirmed decisively by runtime probes on contract-admitted inputs; no new issues remain uncovered.",
+      "text": "Both in-scope claims (c1, c2) are confirmed with decisive runtime evidence directly tied to the problem.txt contract. No new material problems surfaced; this is the final review.",
       "tool_calls": [
         {
           "args": {
-            "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
+            "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
             "reviewed_claims": [
               "c1",
               "c2"
@@ -545,25 +508,25 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.06,
-        "input_tokens": 27025,
-        "output_tokens": 146
+        "duration_s": 5.577,
+        "input_tokens": 25190,
+        "output_tokens": 197
       }
     },
     {
-      "duration_s": 25.397543624000036,
+      "duration_s": 9.296930213999985,
       "role": "judge",
       "round": 7,
-      "text": "The evidence is decisive: the floor-division loop bound drops the trailing partial chunk, exactly violating the explicit contract clause. Reject.",
+      "text": "The evidence is complete: both in-scope claims are confirmed by decisive runtime probes (partial-block rows sum >1 with max deviation 0.139; n_cols<block_size yields all-Inf outputs), and the Skeptic has signed off with no new claims. The problem.txt explicitly requires the trailing partial block be normalized, so this is a valid reject basis.",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.98,
+            "confidence": 0.97,
             "decisive_claims": [
               "c1",
               "c2"
             ],
-            "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
+            "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
             "verdict": "reject"
           },
           "tool": "record_verdict"
@@ -572,16 +535,16 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 25.398,
-        "input_tokens": 27596,
-        "output_tokens": 253
+        "duration_s": 9.297,
+        "input_tokens": 25917,
+        "output_tokens": 433
       }
     }
   ],
   "skeptic_review": {
-    "created_at": "2026-09-30T08:27:19Z",
+    "created_at": "2026-09-30T08:30:42Z",
     "decision": "no_new_claims",
-    "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
+    "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -603,9 +566,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_17"
+        "entry": "case_18"
       },
-      "created_at": "2026-09-30T08:26:13Z",
+      "created_at": "2026-09-30T08:26:22Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -613,13 +576,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_17",
+        "entry": "case_18",
         "has_error": null,
-        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):\n    b = tl.program_id(0)\n    x_row = X + b * stride_xb\n    o_row = OUT + b * stride_ob\n    n_chunks = seqlen // CHUNK\n\n    carry = 0.0\n    for c in range(n_chunks):\n        offs = c * CHUNK + tl.arange(0, CHUNK)\n        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)\n        local = tl.cumsum(x, axis=0)\n        tl.store(o_row + offs, local + carry, mask=offs < seqlen)\n        carry += tl.sum(x, axis=0)\n\n\ndef chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:\n    \"\"\"Cumulative sum along the sequence axis, carried across fixed-size chunks.\"\"\"\n    batch, seqlen = x.shape\n    out = torch.zeros_like(x)\n    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)\n    return out\n",
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _softmax_kernel(OUT, IN, stride_om, stride_im, n_cols, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    in_row = IN + row * stride_im\n    out_row = OUT + row * stride_om\n    n_full = n_cols // BLOCK\n\n    row_max = -float(\"inf\")\n    for b in range(tl.cdiv(n_cols, BLOCK)):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        row_max = tl.maximum(row_max, tl.max(x, axis=0))\n\n    denom = 0.0\n    for b in range(n_full):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        denom += tl.sum(tl.exp(x - row_max), axis=0)\n\n    for b in range(tl.cdiv(n_cols, BLOCK)):\n        cols = b * BLOCK + tl.arange(0, BLOCK)\n        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float(\"inf\"))\n        tl.store(out_row + cols, tl.exp(x - row_max) / denom, mask=cols < n_cols)\n\n\ndef softmax(x: torch.Tensor, block_size: int = 128) -> torch.Tensor:\n    \"\"\"Row-wise softmax of a 2-D float32 tensor.\"\"\"\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _softmax_kernel[(n_rows,)](out, x, out.stride(0), x.stride(0), n_cols, BLOCK=block_size)\n    return out\n",
         "passed": null,
-        "problem_text": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
+        "problem_text": "Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\n`block_size` columns (the standard three-pass fused-softmax structure used by\nTriton-based normalization kernels).\n\nFor each row x:\n\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\n\nso every row of the result must be a probability distribution: all entries\nnon-negative and summing to 1.\n\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\nmultiple of `block_size`; when it is not, the trailing partial block is still\npart of the row and must be normalized with the rest of it.\n\nDoes softmax() satisfy this contract?\n",
         "rounds": null,
-        "session_dir": "/root/cases/case_17",
+        "session_dir": "/root/cases/case_18",
         "status": "under_test",
         "test_code": ""
       },
@@ -628,13 +591,13 @@
     },
     {
       "args": {
-        "entry": "case_17"
+        "entry": "case_18"
       },
-      "created_at": "2026-09-30T08:26:13Z",
+      "created_at": "2026-09-30T08:26:22Z",
       "id": "t2",
       "output": {
-        "content": "Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,\ncomputed chunk by chunk with a running carry (the chunked-scan structure used by\nstate-space and linear-attention kernels).\n\n    y[b, t] = sum over s <= t of x[b, s]\n\nInput domain: `seqlen` may be any positive integer. It is NOT required to be a\nmultiple of `chunk`; when it is not, the trailing positions form a shorter final\nchunk whose outputs must still be produced.\n\nDoes chunked_cumsum() satisfy this contract?\n",
-        "entry": "case_17",
+        "content": "Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of\n`block_size` columns (the standard three-pass fused-softmax structure used by\nTriton-based normalization kernels).\n\nFor each row x:\n\n    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))\n\nso every row of the result must be a probability distribution: all entries\nnon-negative and summing to 1.\n\nInput domain: `n_cols` may be any positive integer. It is NOT required to be a\nmultiple of `block_size`; when it is not, the trailing partial block is still\npart of the row and must be normalized with the rest of it.\n\nDoes softmax() satisfy this contract?\n",
+        "entry": "case_18",
         "exists": true,
         "path": "problem.txt"
       },
@@ -643,17 +606,17 @@
     },
     {
       "args": {
-        "entry": "case_17"
+        "entry": "case_18"
       },
-      "created_at": "2026-09-30T08:26:13Z",
+      "created_at": "2026-09-30T08:26:22Z",
       "id": "t3",
       "output": {
-        "entry": "case_17",
+        "entry": "case_18",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 891
+            "size_bytes": 1291
           },
           {
             "kind": "metadata",
@@ -663,7 +626,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 492
+            "size_bytes": 629
           }
         ]
       },
@@ -672,14 +635,14 @@
     },
     {
       "args": {
-        "entry": "case_17",
+        "entry": "case_18",
         "path": "meta.json"
       },
-      "created_at": "2026-09-30T08:26:13Z",
+      "created_at": "2026-09-30T08:26:22Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_17\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
-        "entry": "case_17",
+        "content": "{\n  \"name\": \"case_18\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_18",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 68,
@@ -691,82 +654,88 @@
     {
       "args": {
         "contract_model": [
-          "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-          "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-          "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-          "Batch dimension is arbitrary; one row per program."
+          "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+          "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+          "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+          "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
         ],
         "kernel_model": [
-          "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-          "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-          "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-          "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+          "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+          "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+          "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+          "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+          "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
         ],
         "risk_map": [
-          "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-          "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-          "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-          "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+          "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+          "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+          "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+          "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+          "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
         ],
-        "scope_notes": "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]",
-        "summary": "Initial description of case_17 chunked cumsum kernel: contract requires correct cumulative sum for any positive seqlen, but kernel iterates only seqlen//CHUNK chunks, leaving trailing partial-chunk outputs unwritten (zeros)."
+        "scope_notes": "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]",
+        "summary": "Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \u2014 violating the contract that non-multiple n_cols be fully normalized."
       },
-      "created_at": "2026-09-30T08:26:31Z",
+      "created_at": "2026-09-30T08:26:38Z",
       "id": "t5",
       "output": {
         "description_model": {
           "contract_model": [
-            "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-            "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-            "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-            "Batch dimension is arbitrary; one row per program."
+            "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+            "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+            "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+            "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
           ],
           "kernel_model": [
-            "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-            "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-            "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-            "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+            "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+            "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+            "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+            "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+            "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
           ],
           "open_questions": [],
           "risk_map": [
-            "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-            "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-            "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-            "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+            "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+            "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+            "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+            "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+            "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
           ],
           "scope_notes": [
-            "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]"
+            "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]"
           ]
         },
         "resolved_tasks": [],
         "update": {
           "contract_model": [
-            "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
-            "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
-            "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
-            "Batch dimension is arbitrary; one row per program."
+            "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
+            "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
+            "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
+            "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
           ],
-          "created_at": "2026-09-30T08:26:31Z",
+          "created_at": "2026-09-30T08:26:38Z",
           "created_by": "describer",
           "id": "du1",
           "impact_on_claims": [],
           "kernel_model": [
-            "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
-            "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
-            "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
-            "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
+            "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
+            "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
+            "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
+            "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
+            "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
           ],
           "open_questions": [],
           "risk_map": [
-            "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
-            "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
-            "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
-            "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cumsum ordering, so small FP associativity differences are expected and within tolerance."
+            "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
+            "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benign probe can pass while partial-block inputs fail.",
+            "Per-row sum-to-1 invariant and comparison against torch.softmax on partial-block shapes (n_cols % block_size != 0) are the decisive evidence surfaces.",
+            "Boundary case n_cols < block_size (n_full=0): denom stays 0.0, causing division by zero / NaN or inf outputs \u2014 fully broken rows, worst-case instance of the same bug.",
+            "Row max over -inf-filled padding is fine since real entries exist; but if a row were all -inf that is out of the stated input domain."
           ],
           "scope_notes": [
-            "Contract explicitly stresses the non-multiple-of-chunk trailing case; tests likely include seqlen % chunk != 0, so the floor-division loop bound is in-scope and decisive.\", \"Default chunk=64 is the expected call pattern unless tests vary chunk; chunk variation (non-power-of-two) is also plausibly in scope.\"]"
+            "Contract covers arbitrary positive n_cols with default block_size=128; correctness for non-multiple n_cols is explicitly in scope.\", \"Only 2-D float32 tensors are in scope; non-contiguous inputs (element stride != 1) and other dtypes are not addressed by the wrapper and appear out of scope.\", \"No test_code is provided in the artifact; evidence must come from source inspection and probes designed against the problem contract.\"]"
           ],
-          "summary": "Initial description of case_17 chunked cumsum kernel: contract requires correct cumulative sum for any positive seqlen, but kernel iterates only seqlen//CHUNK chunks, leaving trailing partial-chunk outputs unwritten (zeros).",
+          "summary": "Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block \u2014 violating the contract that non-multiple n_cols be fully normalized.",
           "task_ids": [],
           "turn": 2
         }
@@ -776,72 +745,72 @@
     },
     {
       "args": {
-        "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+        "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+            "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
           }
         ],
-        "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
-        "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s]."
+        "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
+        "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax."
       },
-      "created_at": "2026-09-30T08:26:42Z",
+      "created_at": "2026-09-30T08:26:47Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-30T08:26:42Z",
+        "created_at": "2026-09-30T08:26:47Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "skeptic",
-        "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+        "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+            "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
           }
         ],
-        "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
-        "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+        "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
+        "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
         "status": "open",
-        "updated_at": "2026-09-30T08:26:42Z"
+        "updated_at": "2026-09-30T08:26:47Z"
       },
       "status": "ok",
       "tool": "record_claim"
     },
     {
       "args": {
-        "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+        "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+            "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
           }
         ],
-        "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
-        "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input."
+        "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
+        "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement."
       },
-      "created_at": "2026-09-30T08:26:42Z",
+      "created_at": "2026-09-30T08:26:47Z",
       "id": "t7",
       "output": {
-        "created_at": "2026-09-30T08:26:42Z",
+        "created_at": "2026-09-30T08:26:47Z",
         "evidence": [],
         "id": "c2",
         "raised_by": "skeptic",
-        "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+        "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+            "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
           }
         ],
-        "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
-        "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
+        "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
+        "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
         "status": "open",
-        "updated_at": "2026-09-30T08:26:42Z"
+        "updated_at": "2026-09-30T08:26:47Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -849,10 +818,10 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(0)\nx = torch.randn(3, 100, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\ntail = slice(64, 100)  # positions written by full chunk vs. trailing partial chunk\nwritten = slice(0, 64)\nerr_tail = (out[:, tail] - ref[:, tail]).abs()\nprint(json.dumps({\n    \"seqlen\": 100, \"chunk\": 64, \"shape\": list(out.shape), \"dtype\": str(out.dtype),\n    \"tail_indices\": [64, 99],\n    \"max_abs_err_written\": float((out[:, written] - ref[:, written]).abs().max()),\n    \"max_abs_err_tail\": float(err_tail.max()),\n    \"tail_is_all_zero\": bool((out[:, tail] == 0).all()),\n    \"ref_tail_allclose\": bool(torch.allclose(out[:, tail], ref[:, tail], atol=1e-5)),\n    \"sample_out_tail\": out[0, 64:70].tolist(),\n    \"sample_ref_tail\": ref[0, 64:70].tolist(),\n}))",
-        "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0"
+        "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 130, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"max_row_sum_dev_from_1\": (row_sums - 1).abs().max().item(),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"min_entry\": out.min().item()\n}))",
+        "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax"
       },
-      "created_at": "2026-09-30T08:26:58Z",
+      "created_at": "2026-09-30T08:27:00Z",
       "id": "t8",
       "output": {
         "artifacts": [
@@ -860,13 +829,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t8_probe.py",
-            "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+            "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t8_stdout.txt",
-            "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+            "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -878,13 +847,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t8_json_result.json",
-            "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+            "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
-        "cwd": "/root/cases/case_17",
-        "duration_s": 5.089887,
+        "claim_statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
+        "cwd": "/root/cases/case_18",
+        "duration_s": 4.736636,
         "event_id": "t8",
         "evidence_draft": {
           "claim_id": "c1",
@@ -894,13 +863,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t8_probe.py",
-                "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+                "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t8_stdout.txt",
-                "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+                "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -912,48 +881,31 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t8_json_result.json",
-                "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+                "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
               }
             ],
-            "duration_s": 5.089887,
+            "duration_s": 4.736636,
             "exit_code": 0,
-            "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+            "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax",
             "json_parse_error": null,
             "json_result": {
-              "chunk": 64,
-              "dtype": "torch.float32",
-              "max_abs_err_tail": 10.053009033203125,
-              "max_abs_err_written": 1.9073486328125e-06,
-              "ref_tail_allclose": false,
-              "sample_out_tail": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+              "max_row_sum_dev_from_1": 0.13868117332458496,
+              "min_entry": 0.00022502124193124473,
+              "row_sums": [
+                1.0045435428619385,
+                1.0068390369415283,
+                1.007639765739441,
+                1.138681173324585
               ],
-              "sample_ref_tail": [
-                -1.1006591320037842,
-                -2.0740959644317627,
-                -1.1181726455688477,
-                -2.2976255416870117,
-                -3.304033041000366,
-                -3.1880407333374023
-              ],
-              "seqlen": 100,
               "shape": [
-                3,
-                100
-              ],
-              "tail_indices": [
-                64,
-                99
-              ],
-              "tail_is_all_zero": true
+                4,
+                130
+              ]
             },
             "stderr": "",
-            "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
+            "stdout": "{\"shape\": [4, 130], \"row_sums\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \"max_row_sum_dev_from_1\": 0.13868117332458496, \"max_abs_err_vs_torch_softmax\": 0.00867936760187149, \"has_nan\": false, \"min_entry\": 0.00022502124193124473}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -963,40 +915,23 @@
           "tool_event_id": "t8"
         },
         "exit_code": 0,
-        "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+        "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax",
         "json_parse_error": null,
         "json_result": {
-          "chunk": 64,
-          "dtype": "torch.float32",
-          "max_abs_err_tail": 10.053009033203125,
-          "max_abs_err_written": 1.9073486328125e-06,
-          "ref_tail_allclose": false,
-          "sample_out_tail": [
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0
+          "has_nan": false,
+          "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+          "max_row_sum_dev_from_1": 0.13868117332458496,
+          "min_entry": 0.00022502124193124473,
+          "row_sums": [
+            1.0045435428619385,
+            1.0068390369415283,
+            1.007639765739441,
+            1.138681173324585
           ],
-          "sample_ref_tail": [
-            -1.1006591320037842,
-            -2.0740959644317627,
-            -1.1181726455688477,
-            -2.2976255416870117,
-            -3.304033041000366,
-            -3.1880407333374023
-          ],
-          "seqlen": 100,
           "shape": [
-            3,
-            100
-          ],
-          "tail_indices": [
-            64,
-            99
-          ],
-          "tail_is_all_zero": true
+            4,
+            130
+          ]
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -1006,7 +941,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
+        "stdout": "{\"shape\": [4, 130], \"row_sums\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \"max_row_sum_dev_from_1\": 0.13868117332458496, \"max_abs_err_vs_torch_softmax\": 0.00867936760187149, \"has_nan\": false, \"min_entry\": 0.00022502124193124473}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -1017,10 +952,10 @@
     {
       "args": {
         "claim_id": "c2",
-        "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(1)\nx = torch.randn(2, 32, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\nprint(json.dumps({\n    \"seqlen\": 32, \"chunk\": 64, \"shape\": list(out.shape),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"out_is_all_zero\": bool((out == 0).all()),\n    \"ref_nonzero_count\": int((ref != 0).sum()),\n    \"out_nonzero_count\": int((out != 0).sum()),\n    \"allclose\": bool(torch.allclose(out, ref, atol=1e-6)),\n    \"sample_out\": out[0, :4].tolist(),\n    \"sample_ref\": ref[0, :4].tolist(),\n}))",
-        "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero"
+        "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 64, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"has_inf\": bool(torch.isinf(out).any()),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item()\n}))",
+        "expected_signal": "output contains NaN or Inf due to denom=0.0"
       },
-      "created_at": "2026-09-30T08:27:03Z",
+      "created_at": "2026-09-30T08:27:06Z",
       "id": "t9",
       "output": {
         "artifacts": [
@@ -1028,13 +963,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t9_probe.py",
-            "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+            "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t9_stdout.txt",
-            "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+            "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -1046,13 +981,13 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t9_json_result.json",
-            "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+            "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
           }
         ],
         "claim_id": "c2",
-        "claim_statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
-        "cwd": "/root/cases/case_17",
-        "duration_s": 4.895248,
+        "claim_statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
+        "cwd": "/root/cases/case_18",
+        "duration_s": 5.771302,
         "event_id": "t9",
         "evidence_draft": {
           "claim_id": "c2",
@@ -1062,13 +997,13 @@
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+                "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+                "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -1080,40 +1015,30 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+                "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
               }
             ],
-            "duration_s": 4.895248,
+            "duration_s": 5.771302,
             "exit_code": 0,
-            "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+            "expected_signal": "output contains NaN or Inf due to denom=0.0",
             "json_parse_error": null,
             "json_result": {
-              "allclose": false,
-              "chunk": 64,
-              "max_abs_err": 10.293733596801758,
-              "out_is_all_zero": true,
-              "out_nonzero_count": 0,
-              "ref_nonzero_count": 64,
-              "sample_out": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_inf": true,
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": Infinity,
+              "row_sums": [
+                Infinity,
+                Infinity,
+                Infinity,
+                Infinity
               ],
-              "sample_ref": [
-                -0.2962779998779297,
-                2.3801701068878174,
-                2.239323854446411,
-                1.395228624343872
-              ],
-              "seqlen": 32,
               "shape": [
-                2,
-                32
+                4,
+                64
               ]
             },
             "stderr": "",
-            "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+            "stdout": "{\"shape\": [4, 64], \"row_sums\": [Infinity, Infinity, Infinity, Infinity], \"has_nan\": false, \"has_inf\": true, \"max_abs_err_vs_torch_softmax\": Infinity}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -1123,31 +1048,21 @@
           "tool_event_id": "t9"
         },
         "exit_code": 0,
-        "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+        "expected_signal": "output contains NaN or Inf due to denom=0.0",
         "json_parse_error": null,
         "json_result": {
-          "allclose": false,
-          "chunk": 64,
-          "max_abs_err": 10.293733596801758,
-          "out_is_all_zero": true,
-          "out_nonzero_count": 0,
-          "ref_nonzero_count": 64,
-          "sample_out": [
-            0.0,
-            0.0,
-            0.0,
-            0.0
+          "has_inf": true,
+          "has_nan": false,
+          "max_abs_err_vs_torch_softmax": Infinity,
+          "row_sums": [
+            Infinity,
+            Infinity,
+            Infinity,
+            Infinity
           ],
-          "sample_ref": [
-            -0.2962779998779297,
-            2.3801701068878174,
-            2.239323854446411,
-            1.395228624343872
-          ],
-          "seqlen": 32,
           "shape": [
-            2,
-            32
+            4,
+            64
           ]
         },
         "sandbox": {
@@ -1158,7 +1073,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+        "stdout": "{\"shape\": [4, 64], \"row_sums\": [Infinity, Infinity, Infinity, Infinity], \"has_nan\": false, \"has_inf\": true, \"max_abs_err_vs_torch_softmax\": Infinity}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -1169,60 +1084,49 @@
     {
       "args": {
         "data": {
-          "chunk": 64,
-          "max_abs_err_tail": 10.053009033203125,
-          "max_abs_err_written": 1.9073486328125e-06,
-          "sample_out_tail": [
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0
+          "has_nan": false,
+          "input_shape": [
+            4,
+            130
           ],
-          "sample_ref_tail": [
-            -1.1006591320037842,
-            -2.0740959644317627,
-            -1.1181726455688477,
-            -2.2976255416870117,
-            -3.304033041000366,
-            -3.1880407333374023
-          ],
-          "seqlen": 100,
-          "shape": [
-            3,
-            100
-          ],
-          "tail_allclose": false,
-          "tail_is_all_zero": true
+          "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+          "max_row_sum_dev_from_1": 0.13868117332458496,
+          "min_entry": 0.00022502124193124473,
+          "n_cols": 130,
+          "row_sums": [
+            1.0045435428619385,
+            1.0068390369415283,
+            1.007639765739441,
+            1.138681173324585
+          ]
         },
         "event_id": "t8",
         "status": "confirmed",
-        "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+        "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
         "supports": "confirmed"
       },
-      "created_at": "2026-09-30T08:27:14Z",
+      "created_at": "2026-09-30T08:30:36Z",
       "id": "t10",
       "output": {
         "claim": {
-          "created_at": "2026-09-30T08:26:42Z",
+          "created_at": "2026-09-30T08:26:47Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-30T08:27:14Z",
+              "created_at": "2026-09-30T08:30:36Z",
               "data": {
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t8_probe.py",
-                    "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+                    "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t8_stdout.txt",
-                    "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+                    "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -1234,115 +1138,87 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t8_json_result.json",
-                    "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+                    "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
                   }
                 ],
-                "chunk": 64,
-                "duration_s": 5.089887,
+                "duration_s": 4.736636,
                 "exit_code": 0,
-                "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+                "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax",
+                "has_nan": false,
+                "input_shape": [
+                  4,
+                  130
+                ],
                 "json_parse_error": null,
                 "json_result": {
-                  "chunk": 64,
-                  "dtype": "torch.float32",
-                  "max_abs_err_tail": 10.053009033203125,
-                  "max_abs_err_written": 1.9073486328125e-06,
-                  "ref_tail_allclose": false,
-                  "sample_out_tail": [
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0
+                  "has_nan": false,
+                  "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+                  "max_row_sum_dev_from_1": 0.13868117332458496,
+                  "min_entry": 0.00022502124193124473,
+                  "row_sums": [
+                    1.0045435428619385,
+                    1.0068390369415283,
+                    1.007639765739441,
+                    1.138681173324585
                   ],
-                  "sample_ref_tail": [
-                    -1.1006591320037842,
-                    -2.0740959644317627,
-                    -1.1181726455688477,
-                    -2.2976255416870117,
-                    -3.304033041000366,
-                    -3.1880407333374023
-                  ],
-                  "seqlen": 100,
                   "shape": [
-                    3,
-                    100
-                  ],
-                  "tail_indices": [
-                    64,
-                    99
-                  ],
-                  "tail_is_all_zero": true
+                    4,
+                    130
+                  ]
                 },
-                "max_abs_err_tail": 10.053009033203125,
-                "max_abs_err_written": 1.9073486328125e-06,
-                "sample_out_tail": [
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0,
-                  0.0
-                ],
-                "sample_ref_tail": [
-                  -1.1006591320037842,
-                  -2.0740959644317627,
-                  -1.1181726455688477,
-                  -2.2976255416870117,
-                  -3.304033041000366,
-                  -3.1880407333374023
-                ],
-                "seqlen": 100,
-                "shape": [
-                  3,
-                  100
+                "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+                "max_row_sum_dev_from_1": 0.13868117332458496,
+                "min_entry": 0.00022502124193124473,
+                "n_cols": 130,
+                "row_sums": [
+                  1.0045435428619385,
+                  1.0068390369415283,
+                  1.007639765739441,
+                  1.138681173324585
                 ],
                 "stderr": "",
-                "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
-                "tail_allclose": false,
-                "tail_is_all_zero": true,
+                "stdout": "{\"shape\": [4, 130], \"row_sums\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \"max_row_sum_dev_from_1\": 0.13868117332458496, \"max_abs_err_vs_torch_softmax\": 0.00867936760187149, \"has_nan\": false, \"min_entry\": 0.00022502124193124473}\n",
                 "timed_out": false,
                 "timeout_s": 60
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+              "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
               "supports": "confirmed",
               "tool_event_id": "t8"
             }
           ],
           "id": "c1",
           "raised_by": "skeptic",
-          "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+          "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+              "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
             }
           ],
-          "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
-          "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+          "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
+          "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
           "status": "confirmed",
-          "updated_at": "2026-09-30T08:27:14Z"
+          "updated_at": "2026-09-30T08:30:36Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-30T08:27:14Z",
+          "created_at": "2026-09-30T08:30:36Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t8_probe.py",
-                "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
+                "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t8_stdout.txt",
-                "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
+                "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -1354,80 +1230,52 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t8_json_result.json",
-                "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
+                "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
               }
             ],
-            "chunk": 64,
-            "duration_s": 5.089887,
+            "duration_s": 4.736636,
             "exit_code": 0,
-            "expected_signal": "trailing partial chunk positions (64..99) remain 0 while reference cumsum is nonzero; max_abs_err_tail >> 0",
+            "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax",
+            "has_nan": false,
+            "input_shape": [
+              4,
+              130
+            ],
             "json_parse_error": null,
             "json_result": {
-              "chunk": 64,
-              "dtype": "torch.float32",
-              "max_abs_err_tail": 10.053009033203125,
-              "max_abs_err_written": 1.9073486328125e-06,
-              "ref_tail_allclose": false,
-              "sample_out_tail": [
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+              "max_row_sum_dev_from_1": 0.13868117332458496,
+              "min_entry": 0.00022502124193124473,
+              "row_sums": [
+                1.0045435428619385,
+                1.0068390369415283,
+                1.007639765739441,
+                1.138681173324585
               ],
-              "sample_ref_tail": [
-                -1.1006591320037842,
-                -2.0740959644317627,
-                -1.1181726455688477,
-                -2.2976255416870117,
-                -3.304033041000366,
-                -3.1880407333374023
-              ],
-              "seqlen": 100,
               "shape": [
-                3,
-                100
-              ],
-              "tail_indices": [
-                64,
-                99
-              ],
-              "tail_is_all_zero": true
+                4,
+                130
+              ]
             },
-            "max_abs_err_tail": 10.053009033203125,
-            "max_abs_err_written": 1.9073486328125e-06,
-            "sample_out_tail": [
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0,
-              0.0
-            ],
-            "sample_ref_tail": [
-              -1.1006591320037842,
-              -2.0740959644317627,
-              -1.1181726455688477,
-              -2.2976255416870117,
-              -3.304033041000366,
-              -3.1880407333374023
-            ],
-            "seqlen": 100,
-            "shape": [
-              3,
-              100
+            "max_abs_err_vs_torch_softmax": 0.00867936760187149,
+            "max_row_sum_dev_from_1": 0.13868117332458496,
+            "min_entry": 0.00022502124193124473,
+            "n_cols": 130,
+            "row_sums": [
+              1.0045435428619385,
+              1.0068390369415283,
+              1.007639765739441,
+              1.138681173324585
             ],
             "stderr": "",
-            "stdout": "{\"seqlen\": 100, \"chunk\": 64, \"shape\": [3, 100], \"dtype\": \"torch.float32\", \"tail_indices\": [64, 99], \"max_abs_err_written\": 1.9073486328125e-06, \"max_abs_err_tail\": 10.053009033203125, \"tail_is_all_zero\": true, \"ref_tail_allclose\": false, \"sample_out_tail\": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], \"sample_ref_tail\": [-1.1006591320037842, -2.0740959644317627, -1.1181726455688477, -2.2976255416870117, -3.304033041000366, -3.1880407333374023]}\n",
-            "tail_allclose": false,
-            "tail_is_all_zero": true,
+            "stdout": "{\"shape\": [4, 130], \"row_sums\": [1.0045435428619385, 1.0068390369415283, 1.007639765739441, 1.138681173324585], \"max_row_sum_dev_from_1\": 0.13868117332458496, \"max_abs_err_vs_torch_softmax\": 0.00867936760187149, \"has_nan\": false, \"min_entry\": 0.00022502124193124473}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
+          "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
           "supports": "confirmed",
           "tool_event_id": "t8"
         }
@@ -1438,46 +1286,48 @@
     {
       "args": {
         "data": {
-          "allclose": false,
-          "chunk": 64,
-          "max_abs_err": 10.293733596801758,
-          "out_is_all_zero": true,
-          "out_nonzero_count": 0,
-          "ref_nonzero_count": 64,
-          "seqlen": 32,
-          "shape": [
-            2,
-            32
+          "has_inf": true,
+          "has_nan": false,
+          "input_shape": [
+            4,
+            64
+          ],
+          "max_abs_err_vs_torch_softmax": null,
+          "n_cols": 64,
+          "row_sums": [
+            "Inf",
+            "Inf",
+            "Inf",
+            "Inf"
           ]
         },
         "event_id": "t9",
         "status": "confirmed",
-        "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+        "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
         "supports": "confirmed"
       },
-      "created_at": "2026-09-30T08:27:14Z",
+      "created_at": "2026-09-30T08:30:36Z",
       "id": "t11",
       "output": {
         "claim": {
-          "created_at": "2026-09-30T08:26:42Z",
+          "created_at": "2026-09-30T08:26:47Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-30T08:27:14Z",
+              "created_at": "2026-09-30T08:30:36Z",
               "data": {
-                "allclose": false,
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
                     "path": "probes/t9_probe.py",
-                    "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+                    "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t9_stdout.txt",
-                    "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+                    "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -1489,92 +1339,85 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t9_json_result.json",
-                    "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+                    "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
                   }
                 ],
-                "chunk": 64,
-                "duration_s": 4.895248,
+                "duration_s": 5.771302,
                 "exit_code": 0,
-                "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+                "expected_signal": "output contains NaN or Inf due to denom=0.0",
+                "has_inf": true,
+                "has_nan": false,
+                "input_shape": [
+                  4,
+                  64
+                ],
                 "json_parse_error": null,
                 "json_result": {
-                  "allclose": false,
-                  "chunk": 64,
-                  "max_abs_err": 10.293733596801758,
-                  "out_is_all_zero": true,
-                  "out_nonzero_count": 0,
-                  "ref_nonzero_count": 64,
-                  "sample_out": [
-                    0.0,
-                    0.0,
-                    0.0,
-                    0.0
+                  "has_inf": true,
+                  "has_nan": false,
+                  "max_abs_err_vs_torch_softmax": Infinity,
+                  "row_sums": [
+                    Infinity,
+                    Infinity,
+                    Infinity,
+                    Infinity
                   ],
-                  "sample_ref": [
-                    -0.2962779998779297,
-                    2.3801701068878174,
-                    2.239323854446411,
-                    1.395228624343872
-                  ],
-                  "seqlen": 32,
                   "shape": [
-                    2,
-                    32
+                    4,
+                    64
                   ]
                 },
-                "max_abs_err": 10.293733596801758,
-                "out_is_all_zero": true,
-                "out_nonzero_count": 0,
-                "ref_nonzero_count": 64,
-                "seqlen": 32,
-                "shape": [
-                  2,
-                  32
+                "max_abs_err_vs_torch_softmax": null,
+                "n_cols": 64,
+                "row_sums": [
+                  "Inf",
+                  "Inf",
+                  "Inf",
+                  "Inf"
                 ],
                 "stderr": "",
-                "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+                "stdout": "{\"shape\": [4, 64], \"row_sums\": [Infinity, Infinity, Infinity, Infinity], \"has_nan\": false, \"has_inf\": true, \"max_abs_err_vs_torch_softmax\": Infinity}\n",
                 "timed_out": false,
                 "timeout_s": 60
               },
               "id": "c2.e1",
               "kind": "runtime_probe",
-              "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+              "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
               "supports": "confirmed",
               "tool_event_id": "t9"
             }
           ],
           "id": "c2",
           "raised_by": "skeptic",
-          "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
+          "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+              "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
             }
           ],
-          "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
-          "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
+          "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
+          "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
           "status": "confirmed",
-          "updated_at": "2026-09-30T08:27:14Z"
+          "updated_at": "2026-09-30T08:30:36Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-30T08:27:14Z",
+          "created_at": "2026-09-30T08:30:36Z",
           "data": {
-            "allclose": false,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
+                "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
+                "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -1586,56 +1429,50 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
+                "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
               }
             ],
-            "chunk": 64,
-            "duration_s": 4.895248,
+            "duration_s": 5.771302,
             "exit_code": 0,
-            "expected_signal": "entire output tensor is zeros (n_chunks=0, loop never runs) while reference cumsum is nonzero",
+            "expected_signal": "output contains NaN or Inf due to denom=0.0",
+            "has_inf": true,
+            "has_nan": false,
+            "input_shape": [
+              4,
+              64
+            ],
             "json_parse_error": null,
             "json_result": {
-              "allclose": false,
-              "chunk": 64,
-              "max_abs_err": 10.293733596801758,
-              "out_is_all_zero": true,
-              "out_nonzero_count": 0,
-              "ref_nonzero_count": 64,
-              "sample_out": [
-                0.0,
-                0.0,
-                0.0,
-                0.0
+              "has_inf": true,
+              "has_nan": false,
+              "max_abs_err_vs_torch_softmax": Infinity,
+              "row_sums": [
+                Infinity,
+                Infinity,
+                Infinity,
+                Infinity
               ],
-              "sample_ref": [
-                -0.2962779998779297,
-                2.3801701068878174,
-                2.239323854446411,
-                1.395228624343872
-              ],
-              "seqlen": 32,
               "shape": [
-                2,
-                32
+                4,
+                64
               ]
             },
-            "max_abs_err": 10.293733596801758,
-            "out_is_all_zero": true,
-            "out_nonzero_count": 0,
-            "ref_nonzero_count": 64,
-            "seqlen": 32,
-            "shape": [
-              2,
-              32
+            "max_abs_err_vs_torch_softmax": null,
+            "n_cols": 64,
+            "row_sums": [
+              "Inf",
+              "Inf",
+              "Inf",
+              "Inf"
             ],
             "stderr": "",
-            "stdout": "{\"seqlen\": 32, \"chunk\": 64, \"shape\": [2, 32], \"max_abs_err\": 10.293733596801758, \"out_is_all_zero\": true, \"ref_nonzero_count\": 64, \"out_nonzero_count\": 0, \"allclose\": false, \"sample_out\": [0.0, 0.0, 0.0, 0.0], \"sample_ref\": [-0.2962779998779297, 2.3801701068878174, 2.239323854446411, 1.395228624343872]}\n",
+            "stdout": "{\"shape\": [4, 64], \"row_sums\": [Infinity, Infinity, Infinity, Infinity], \"has_nan\": false, \"has_inf\": true, \"max_abs_err_vs_torch_softmax\": Infinity}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c2.e1",
           "kind": "runtime_probe",
-          "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
+          "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
           "supports": "confirmed",
           "tool_event_id": "t9"
         }
@@ -1645,18 +1482,18 @@
     },
     {
       "args": {
-        "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
+        "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
         "reviewed_claims": [
           "c1",
           "c2"
         ]
       },
-      "created_at": "2026-09-30T08:27:19Z",
+      "created_at": "2026-09-30T08:30:42Z",
       "id": "t12",
       "output": {
-        "created_at": "2026-09-30T08:27:19Z",
+        "created_at": "2026-09-30T08:30:42Z",
         "decision": "no_new_claims",
-        "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
+        "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
         "reviewed_claims": [
           "c1",
           "c2"
@@ -1670,24 +1507,24 @@
     },
     {
       "args": {
-        "confidence": 0.98,
+        "confidence": 0.97,
         "decisive_claims": [
           "c1",
           "c2"
         ],
-        "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
+        "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
         "verdict": "reject"
       },
-      "created_at": "2026-09-30T08:27:44Z",
+      "created_at": "2026-09-30T08:30:51Z",
       "id": "t13",
       "output": {
-        "confidence": 0.98,
-        "created_at": "2026-09-30T08:27:44Z",
+        "confidence": 0.97,
+        "created_at": "2026-09-30T08:30:51Z",
         "decisive_claims": [
           "c1",
           "c2"
         ],
-        "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
+        "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
         "verdict": "reject"
       },
       "status": "ok",
@@ -1695,13 +1532,13 @@
     }
   ],
   "verdict": {
-    "confidence": 0.98,
-    "created_at": "2026-09-30T08:27:44Z",
+    "confidence": 0.97,
+    "created_at": "2026-09-30T08:30:51Z",
     "decisive_claims": [
       "c1",
       "c2"
     ],
-    "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
+    "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
     "verdict": "reject"
   }
 }

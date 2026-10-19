@@ -1,19 +1,26 @@
-import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_05/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-res = {}
-# N=16 with five exact copies of 2.0 above pivot=1.0
-s = torch.tensor([2.0]*5 + [7.0]*3 + [0.5]*8, dtype=torch.float32, device="cuda")
-got5 = m.count_tied_at_boundary(s, 1.0)
-# N=32 with 12 copies (even, >1) to distinguish bool-saturate (1) from parity (0)
-s2 = torch.cat([torch.full((12,), 3.0), torch.full((4,), 9.0), torch.zeros(16)]).cuda()
-got12 = m.count_tied_at_boundary(s2, 1.0)
-# empty above-pivot case
-s3 = torch.zeros(8, dtype=torch.float32, device="cuda")
-got0 = m.count_tied_at_boundary(s3, 1.0)
-res = {"got_k5": got5, "expected_k5": 5, "got_k12": got12, "expected_k12": 12,
-       "got_empty": got0, "expected_empty": 0,
-       "bool_saturate_signature": (got5 == 1 and got12 == 1),
-       "parity_signature": (got5 == 1 and got12 == 0),
-       "all_match": (got5 == 5 and got12 == 12 and got0 == 0)}
-print(json.dumps(res))
+
+import json, torch, importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_06/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+dev='cuda'; dim=64
+def ref(ns, dA, dt):
+    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)
+    for c in range(ns.shape[0]):
+        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)
+    return s
+rows=[]
+for nc in [1,8,64,512,4096]:
+    torch.manual_seed(1)
+    ns = torch.randn(nc, dim, device=dev, dtype=torch.float32)
+    dA = torch.full((nc,), -1e-3, device=dev, dtype=torch.float32)
+    out = k.state_passing_lowbit(ns, dA)
+    r64 = ref(ns, dA, torch.float64)
+    r32 = ref(ns, dA, torch.float32)
+    err=(out.double()-r64).abs()
+    rows.append(dict(nchunks=nc,
+        max_abs_err=err.max().item(),
+        mean_abs_err=err.mean().item(),
+        fp32_scan_max_abs_err=(r32.double()-r64).abs().max().item(),
+        ref_absmax=r64.abs().max().item(),
+        max_rel_err=(err/r64.abs().clamp_min(1e-30)).max().item()))
+print(json.dumps(dict(dim=dim, dA_cs=-1e-3, quant_step=5e-3, sweep=rows)))

@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_29`
-- Turns: 6
-- Tool events: 11
-- Claims: 2
+- Entry: `case_30`
+- Turns: 5
+- Tool events: 8
+- Claims: 1
 - Description updates: 0
-- LLM time: 89.212s across 5 calls | tokens: in=68075 out=6534 total=74609
-- Cache tokens: created=0 read=34550
+- LLM time: 41.495s across 4 calls | tokens: in=32210 out=2776 total=34986
+- Cache tokens: created=0 read=27640
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.88
+- Confidence: 0.97
 
 ## Timeline
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_29",
+    "entry": "case_30",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 
-### Turn 2 - `solo` (30.94206391s, in=3363 out=2413)
+### Turn 2 - `solo` (8.84331582099992s, in=3349 out=604)
 
 Message:
 
 ```text
-Kernel quantizes to 1/8-binade everywhere, which ignores the e4m3 subnormal grid (min normal 2^-6, subnormal step 2^-9) and the 448 max. Recording claims and probing.
+Source shows `take = v >= best`, which makes a later equal value overwrite the incumbent — that yields the HIGHEST tied index, opposite of the contract's lowest-index tie rule. Recording and testing.
 ```
 
 Tool calls:
@@ -74,212 +74,160 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "e = floor(log2|x|), step = 2^(e-3) is applied unconditionally. e4m3 has no exponent below -6; sub-2^-6 values live on a fixed grid of multiples of 2^-9. E.g. x=0.001 would be returned near 0.001 (a multiple of 2^-13), which is not an e4m3 value; nearest e4m3 is 0.001953125.",
+    "rationale": "Line 17 uses >= rather than >; with a sequential scan over e, >= makes equal values replace the current best, selecting the last (largest) tied index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\"; input is described only as \"a float32 tensor\", with no restriction excluding small magnitudes."
-      },
-      {
-        "source": "problem.txt",
-        "summary": "States e4m3 has 4 exponent bits, which fixes the minimum normal at 2^-6 and a subnormal grid of 2^-9; the 8-values-per-binade rule only holds inside the nor
-  ...[truncated 723 chars]
+        "summary": "Contract: on ties for the largest logit the LOWEST expert index must win; ties are described as a normal occurrence due to reduced-precision logits."
+      }
+    ],
+    "scope_rationale": "The problem statement explicitly makes the tie rule part of the contract: \"When several experts share the largest logit, the contract requires the LOWEST expert index to win\". It also states ties are routine in reduced-precision router logits, so tied inputs are within the declared domain.",
+    "statement": "On ties for the maximum logit, _rou
+  ...[truncated 168 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "e = floor(log2|x|), step = 2^(e-3) is applied unconditionally. e4m3 has no exponent below -6; sub-2^-6 values live on a fixed grid of multiples of 2^-9. E.g. x=0.001 would be returned near 0.001 (a multiple of 2^-13), which is not an e4m3 value; nearest e4m3 is 0.001953125.",
+    "rationale": "Line 17 uses >= rather than >; with a sequential scan over e, >= makes equal values replace the current best, selecting the last (largest) tied index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\"; input is described only as \"a float32 tensor\", with no restriction excluding small magnitudes."
-      },
-      {
-        "source": "problem.txt",
-        "summary": "States e4m3 has 4 exponent bits, which fixes the minimum normal at 2^-6 and a subnormal grid of 2^-9; the 8-values-per-binade rule only holds inside the normal range."
+        "summary": "Contract: on ties for the largest logit the LOWEST expert index must win; ties are described as a normal occurrence due to reduced-precision logits."
       }
     ],
-    "scope_rationale": "The contract declares the input domain as \"a float32 tensor\" with no magnitude restriction and requires that \"every value is rounded to the nearest representable e4m3 value\". Small-magnitude values (|x| &lt; 2^-6) are ordinary float32 values, and are produced by any standard normal-distribution input (~1.2% of randn samples), so they a
-  ...[truncated 357 chars]
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "step = 2^(e-3) with no upper bound on e; no clamp to 448 exists in the kernel.",
-    "scope": "unknown",
-    "scope_rationale": "The contract says every value must be rounded to the nearest representable value but does not state overflow/saturation semantics, and e4m3fn's out-of-range behaviour (NaN vs saturate) is itself ambiguous; treat as a secondary note rather than decisive.",
-    "statement": "For |x| above the e4m3 maximum finite value 448, fp8_roundtrip returns non-representable values (e.g. 512 for x=500) instead of the nearest representable e4m3 value, since it never clamps/saturates."
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "step = 2^(e-3) with no upper bound on e; no clamp to 448 exists in the kernel.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "The contract says every value must be rounded to the nearest representable value but does not state overflow/saturation semantics, and e4m3fn's out-of-range behaviour (NaN vs saturate) is itself ambiguous; treat as a secondary note rather than decisive.",
-    "statement": "For |x| above the e4m3 maximum finite value 448, fp8_roundtrip returns non-representable values (e.g. 512 for x=500) instead of the nearest representable e4m3 value, since it never clamps/saturates.",
+    "scope_rationale": "The problem statement explicitly makes the tie rule part of the contract: \"When several experts share the largest logit, the contract requires the LOWEST expert index to win\". It also states ties are routine in reduced-precision router logits, so tied inputs are within the declared domain.",
+    "statement": "On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (13.820920521999938s, in=7424 out=975)
+### Turn 3 - `solo` (12.863972758000045s, in=5110 out=1101)
 
 Message:
 
 ```text
-I'll probe the kernel against a true e4m3 reference (torch float8_e4m3fn) on small-magnitude values plus a general random sweep.
+I'll run a probe with deliberately tied logits to check which tied index the kernel returns.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t7 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_29/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndev='cuda'\ndef ref(x):\n    return x.to(torch.float8_e4m3fn).to(torch.float32)\n\n# targeted subnormal-range values\nvals = [0.001, 0.002, 0.005, 0.01, 0.0146, 0.015, 0.0001, -0.003, 0.0019, 0.0009765625]\nx = torch.tensor(vals, dtype=torch.float32, device=dev)\nout = m.fp8_roundtrip(x).cpu()\nr = ref(x).cpu()\ntargeted = [{\"x\":v,\"kernel\":float(o),\"ref_e4m3\":float(rr),\"abs_err\":abs(float(o)-float(rr))}\n            for v,o,rr in zip(vals,out,r)]\n\n# representability check: does kernel output round-trip through e4m3 unchanged?\ntorch.manual_seed(0
-  ...[truncated 1003 chars]
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_30/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\n\n# Case A: explicit ties, fp16 (reduced precision as contract describes)\nlogits = torch.tensor([\n    [1.0, 3.0, 3.0, 2.0],   # tie at 1,2 -> expect 1\n    [5.0, 5.0, 5.0, 5.0],   # all tie -> expect 0\n    [0.0, 1.0, 2.0, 3.0],   # unique -> expect 3\n    [7.0, 1.0, 7.0, 0.0],   # tie at 0,2 -> expect 0\n], device=\"cuda\", dtype=torch.float16)\nout = m.route_top1(logits).cpu().tolist()\nref = torch.argmax(logits.float(), dim=1).cpu().tolist()  # torch argmax = lowest index on ties\nres[\"caseA_kernel\"] = out\nres[\"caseA_exp
+  ...[truncated 1285 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t7_probe.py",
-        "sha256": "2efa363237c69bb0128b6e1c23056d15eceb3074d3ea7023ed3afa20c41cdd7f"
+        "path": "probes/t6_probe.py",
+        "sha256": "8261d32a61babf5b62e8f0dbaf4e7dfe2e3f00bb07bd760a0b7078e97acacabe"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t7_stdout.txt",
-        "sha256": "f96f258bb214e74544128cac9c61d2be7be3d98bea03cbf7098393073af06a00"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "388388c78299003e15fbab01ba37a11d7ba292faacf576d75659ef04a3244918"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t7_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For |x| below the e4m3 minimum normal (2^-6 = 0.015625), fp8_roundtrip returns values that are not representable in e4m3 and are not the nearest representable value, because it uses a 1/8-binade step below the subnormal boundary instead of the fixed subnormal step 2^-9.",
-    "duration_s": 6.362934,
-    "event_id": "t7",
+    "claim_statement": "On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.",
+    "duration_s": 8.500285,
+    "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
-            "description": "Python probe code executed b
-  ...[truncated 3751 chars]
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "
+  ...[truncated 2314 chars]
 
-### Turn 4 - `solo` (19.918355706999932s, in=12780 out=1629)
+### Turn 4 - `solo` (8.413669854999966s, in=9260 out=585)
 
 Message:
 
 ```text
-Probe t7 came back clean and decisive: all 1661 mismatches vs the true e4m3 reference lie in |x| < 2^-6, and ~0.83% of kernel outputs are not e4m3-representable at all. Recording evidence and resolving both claims.
+The probe confirms the tie-break violation exactly as hypothesized: kernel returns highest tied index in all 1174 tied rows.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "frac_output_e4m3_representable": 0.991695,
-      "n_mismatch": 1661,
-      "n_mismatch_large": 0,
-      "n_mismatch_small_lt_2^-6": 1661,
-      "n_total": 200000,
-      "targeted_x_0.0001": {
-        "kernel": 9.918212890625e-05,
-        "ref": 0.0
-      },
-      "targeted_x_0.001": {
-        "kernel": 0.0009765625,
-        "ref": 0.001953125
-      },
-      "targeted_x_0.015": {
-        "kernel": 0.0146484375,
-        "ref": 0.015625
-      }
+      "caseA_expected_lowest": [
+        1,
+        0,
+        3,
+        0
+      ],
+      "caseA_kernel": [
+        2,
+        3,
+        3,
+        2
+      ],
+      "caseB_mismatches_vs_highest": 0,
+      "caseB_mismatches_vs_lowest": 1174,
+      "caseB_rows": 4096,
+      "caseB_rows_with_ties": 1174,
+      "caseB_selected_value_wrong": 0,
+      "metric": "exact index under contract-specified lowest-index tie rule"
     },
-    "event_id": "t7",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "Kernel vs torch.float8_e4m3fn reference: 1661/200000 randn elements mismatch, 100% of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of kernel outputs are themselves e4m3-representable (0.83% are not valid e4m3 values). Targeted cases: x=0.001 -> kernel 0.0009765625 vs e4m3 0.001953125; x=0
-  ...[truncated 341 chars]
+    "summary": "Kernel returns the HIGHEST tied index, not the lowest. Case A (fp16 explicit ties): kernel [2,3,3,2] vs contract-required lowest-index [1,0,3,0] \u2014 wrong on all 3 tied rows. Case B (4096x8 coarsely quantized fp16 logits): 1174 rows had ties; mismatches vs lowest-index rule = 1174 (100% of tied rows), mismatches vs highest-index rul
+  ...[truncated 202 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel vs torch.float8_e4m3fn reference: 1661/200000 randn elements mismatch, 100% of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of kernel outputs are themselves e4m3-representable (0.83% are not valid e4m3 values). Targeted cases: x=0.001 -> kernel 0.0009765625 vs e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=0.0001 -> 9.918e-05 vs 0.0 (below half of min subnormal 2^-9). Confirms the kernel applies a 1/8-binade step below the subnormal boundary rather than the fixed 2^-9 subnormal grid, so small values are neither representable nor nearest.",
+    "summary": "Kernel returns the HIGHEST tied index, not the lowest. Case A (fp16 explicit ties): kernel [2,3,3,2] vs contract-required lowest-index [1,0,3,0] \u2014 wrong on all 3 tied rows. Case B (4096x8 coarsely quantized fp16 logits): 1174 rows had ties; mismatches vs lowest-index rule = 1174 (100% of tied rows), mismatches vs highest-index rule = 0, and selected value always equaled the row max. So the kernel computes a correct max value but the exactly-inverted tie-break, matching the `v >= best` source defect.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
-  }
-- `append_evidence -> t9 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "kind": "source_inspection",
-    "summary": "kernel.py lines 14-18 compute step = exp2(floor(log2|x|) - 3) with no upper bound and no clamp to the e4m3 max finite value 448; e.g. x=500 gives step=32 and q=512, which is not representable in e4m3. Analytically clear from source, but overflow/saturation semantics are not stated by the contract, so this remains a non-decisive note.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "id": "c2.e1",
-    "summary": "kernel.py lines 14-18 compute step = exp2(floor(log2|x|) - 3) with no upper bound and no clamp to the e4m3 max finite value 448; e.g. x=500 gives step=32 and q=512, which is not representable in e4m3. Analytically clear from source, but overflow/saturation semantics are not stated by the contract, so this remains a non-decisive note.",
-    "supports": "confirmed"
+    "tool_event_id": "t6"
   }
 
-### Turn 5 - `solo` (7.558493307999925s, in=21881 out=288)
+### Turn 5 - `solo` (11.37391832700007s, in=14491 out=486)
 
 Message:
 
 ```text
-c1 is confirmed and in-scope; c2 needs closing before I record the verdict.
+The claim is confirmed with decisive runtime evidence; no further probes would change the outcome.
 ```
 
 Tool calls:
 
-- `update_claim_status -> t10 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "claim_id": "c2",
-    "status": "confirmed"
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "status": "confirmed"
-  }
-
-### Turn 6 - `solo` (16.972060923000072s, in=22627 out=1229)
-
-Message:
-
-```text
-Both claims are resolved; c1 is confirmed, in_scope, and backed by runtime evidence. Recording the verdict.
-```
-
-Tool calls:
-
-- `record_verdict -> t11 ok`
-  Args:
-  {
-    "confidence": 0.88,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires that \"every value is rounded to the nearest representable e4m3 value\". The kernel (kernel.py:14-18) applies an unconditional 1/8-binade step, step = 2^(floor(log2|x|)-3), which is only correct inside e4m3's normal range (|x| >= 2^-6). e4m3 has 4 exponent bits, so below 2^-6 the format's values lie on a fixed grid of multiples of 2^-9; the kernel instead keeps shrinking the step, producing outputs that are not e4m3 values at all.\n\nProbe t7 (finalized as evidence c1.e1) compared the kernel against the true e4m3 grid via torch.float8_e4m3fn: on 200,000 randn(float32) elements, 1,661 elements mismatch the e4m3 reference, all of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of the ke
-  ...[truncated 969 chars]
+    "reason": "The contract (problem.txt) explicitly requires that when several experts share the largest logit, the LOWEST expert index wins, and states ties are routine because logits are in reduced precision. The kernel's scan uses `take = v >= best` (kernel.py line 17), so an equal later value overwrites the incumbent, yielding the highest tied index. Probe t6 confirmed this at runtime: with explicit fp16 ties the kernel returned [2,3,3,2] where the contract requires [1,0,3,0] (wrong on all three tied rows); on 4096x8 coarsely quantized fp16 logits, 1174 rows contained ties and the kernel mismatched the lowest-index rule on all 1174 (100%) while mismatching the highest-index rule on 0. Selected values always equaled the row max
+  ...[truncated 223 chars]
   Output summary:
   {
-    "confidence": 0.88,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires that \"every value is rounded to the nearest representable e4m3 value\". The kernel (kernel.py:14-18) applies an unconditional 1/8-binade step, step = 2^(floor(log2|x|)-3), which is only correct inside e4m3's normal range (|x| >= 2^-6). e4m3 has 4 exponent bits, so below 2^-6 the format's values lie on a fixed grid of multiples of 2^-9; the kernel instead keeps shrinking the step, producing outputs that are not e4m3 values at all.\n\nProbe t7 (finalized as evidence c1.e1) compared the kernel against the true e4m3 grid via torch.float8_e4m3fn: on 200,000 randn(float32) elements, 1,661 elements mismatch the e4m3 reference, all of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of the kernel's own outputs are e4m3-representable \u2014 0.83% are values the format cannot hold. Targeted cases: x=0.001 -> kernel 0.0009765625 vs nearest e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=1e-4 -> 9.918e-05 vs 0.0 (below half the minimum subnormal 2^-9). These are ordinary float32 inputs the contract admits (\"a float32 tensor\", no magnitude
-  ...[truncated 569 chars]
+    "reason": "The contract (problem.txt) explicitly requires that when several experts share the largest logit, the LOWEST expert index wins, and states ties are routine because logits are in reduced precision. The kernel's scan uses `take = v >= best` (kernel.py line 17), so an equal later value overwrites the incumbent, yielding the highest tied index. Probe t6 confirmed this at runtime: with explicit fp16 ties the kernel returned [2,3,3,2] where the contract requires [1,0,3,0] (wrong on all three tied rows); on 4096x8 coarsely quantized fp16 logits, 1174 rows contained ties and the kernel mismatched the lowest-index rule on all 1174 (100%) while mismatching the highest-index rule on 0. Selected values always equaled the row max (0 wrong), so the max is computed correctly but the tie-break is exactly inverted \u2014 a direct violation of a behaviour the contract requires, on inputs the contract explicitly declares normal.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
@@ -289,120 +237,90 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: For |x| below the e4m3 minimum normal (2^-6 = 0.015625), fp8_roundtrip returns values that are not representable in e4m3 and are not the nearest representable value, because it uses a 1/8-binade step below the subnormal boundary instead of the fixed subnormal step 2^-9.
+Statement: On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.
 
 Scope: `in_scope`
 
-Scope rationale: The contract declares the input domain as "a float32 tensor" with no magnitude restriction and requires that "every value is rounded to the nearest representable e4m3 value". Small-magnitude values (|x| &lt; 2^-6) are ordinary float32 values, and are produced by any standard normal-distribution input (~1.2% of randn samples), so they are representative inputs the contract admits.
+Scope rationale: The problem statement explicitly makes the tie rule part of the contract: "When several experts share the largest logit, the contract requires the LOWEST expert index to win". It also states ties are routine in reduced-precision router logits, so tied inputs are within the declared domain.
 
 Scope evidence:
-- `problem.txt`: "The contract is that every value is rounded to the nearest representable e4m3 value"; input is described only as "a float32 tensor", with no restriction excluding small magnitudes.
-- `problem.txt`: States e4m3 has 4 exponent bits, which fixes the minimum normal at 2^-6 and a subnormal grid of 2^-9; the 8-values-per-binade rule only holds inside the normal range.
+- `problem.txt`: Contract: on ties for the largest logit the LOWEST expert index must win; ties are described as a normal occurrence due to reduced-precision logits.
 
-Rationale: e = floor(log2|x|), step = 2^(e-3) is applied unconditionally. e4m3 has no exponent below -6; sub-2^-6 values live on a fixed grid of multiples of 2^-9. E.g. x=0.001 would be returned near 0.001 (a multiple of 2^-13), which is not an e4m3 value; nearest e4m3 is 0.001953125.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Kernel vs torch.float8_e4m3fn reference: 1661/200000 randn elements mismatch, 100% of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of kernel outputs are themselves e4m3-representable (0.83% are not valid e4m3 values). Targeted cases: x=0.001 -> kernel 0.0009765625 vs e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=0.0001 -> 9.918e-05 vs 0.0 (below half of min subnormal 2^-9). Confirms the kernel applies a 1/8-binade step below the subnormal boundary rather than the fixed 2^-9 subnormal grid, so small values are neither representable nor nearest.
-
-### c2 - `confirmed`
-
-Statement: For |x| above the e4m3 maximum finite value 448, fp8_roundtrip returns non-representable values (e.g. 512 for x=500) instead of the nearest representable e4m3 value, since it never clamps/saturates.
-
-Scope: `unknown`
-
-Scope rationale: The contract says every value must be rounded to the nearest representable value but does not state overflow/saturation semantics, and e4m3fn's out-of-range behaviour (NaN vs saturate) is itself ambiguous; treat as a secondary note rather than decisive.
-
-Rationale: step = 2^(e-3) with no upper bound on e; no clamp to 448 exists in the kernel.
+Rationale: Line 17 uses >= rather than >; with a sequential scan over e, >= makes equal values replace the current best, selecting the last (largest) tied index.
 
 Evidence:
-- `c2.e1` source_inspection supports `confirmed`: kernel.py lines 14-18 compute step = exp2(floor(log2|x|) - 3) with no upper bound and no clamp to the e4m3 max finite value 448; e.g. x=500 gives step=32 and q=512, which is not representable in e4m3. Analytically clear from source, but overflow/saturation semantics are not stated by the contract, so this remains a non-decisive note.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Kernel returns the HIGHEST tied index, not the lowest. Case A (fp16 explicit ties): kernel [2,3,3,2] vs contract-required lowest-index [1,0,3,0] — wrong on all 3 tied rows. Case B (4096x8 coarsely quantized fp16 logits): 1174 rows had ties; mismatches vs lowest-index rule = 1174 (100% of tied rows), mismatches vs highest-index rule = 0, and selected value always equaled the row max. So the kernel computes a correct max value but the exactly-inverted tie-break, matching the `v >= best` source defect.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "e = floor(log2|x|), step = 2^(e-3) is applied unconditionally. e4m3 has no exponent below -6; sub-2^-6 values live on a fixed grid of multiples of 2^-9. E.g. x=0.001 would be returned near 0.001 (a multiple of 2^-13), which is not an e4m3 value; nearest e4m3 is 0.001953125.",
+  "rationale": "Line 17 uses >= rather than >; with a sequential scan over e, >= makes equal values replace the current best, selecting the last (largest) tied index.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\"; input is described only as \"a float32 tensor\", with no restriction excluding small magnitudes."
-    },
-    {
-      "source": "problem.txt",
-      "summary": "States e4m3 has 4 exponent bits, which fixes the minimum normal at 2^-6 and a subnormal grid of 2^-9; the 8-values-per-binade rule only holds inside the normal range."
+      "summary": "Contract: on ties for the largest logit the LOWEST expert index must win; ties are described as a normal occurrence due to reduced-precision logits."
     }
   ],
-  "scope_rationale": "The contract declares the input domain as \"a float32 tensor\" with no magnitude restriction and requires that \"every value is rounded to the nearest representable e4m3 value\". Small-magnitude values (|x| &lt; 2^-6) are ordinary float32 values, and are produced by any standard normal-distribution input (~1.2% of randn samples), so they are representative inputs the contract admits.",
-  "statement": "For |x| below the e4m3 minimum normal (2^-6 = 0.015625), fp8_roundtrip returns values that are not representable in e4m3 and are not the nearest representable value, because it uses a 1/8-binade step below the subnormal boundary instead of the fixed subnormal step 2^-9.",
+  "scope_rationale": "The problem statement explicitly makes the tie rule part of the contract: \"When several experts share the largest logit, the contract requires the LOWEST expert index to win\". It also states ties are routine in reduced-precision router logits, so tied inputs are within the declared domain.",
+  "statement": "On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.",
   "status": "open"
 }
 
-### t6 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "step = 2^(e-3) with no upper bound on e; no clamp to 448 exists in the kernel.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "The contract says every value must be rounded to the nearest representable value but does not state overflow/saturation semantics, and e4m3fn's out-of-range behaviour (NaN vs saturate) is itself ambiguous; treat as a secondary note rather than decisive.",
-  "statement": "For |x| above the e4m3 maximum finite value 448, fp8_roundtrip returns non-representable values (e.g. 512 for x=500) instead of the nearest representable e4m3 value, since it never clamps/saturates.",
-  "status": "open"
-}
-
-### t7 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t7_probe.py",
-      "sha256": "2efa363237c69bb0128b6e1c23056d15eceb3074d3ea7023ed3afa20c41cdd7f"
+      "path": "probes/t6_probe.py",
+      "sha256": "8261d32a61babf5b62e8f0dbaf4e7dfe2e3f00bb07bd760a0b7078e97acacabe"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t7_stdout.txt",
-      "sha256": "f96f258bb214e74544128cac9c61d2be7be3d98bea03cbf7098393073af06a00"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "388388c78299003e15fbab01ba37a11d7ba292faacf576d75659ef04a3244918"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t7_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For |x| below the e4m3 minimum normal (2^-6 = 0.015625), fp8_roundtrip returns values that are not representable in e4m3 and are not the nearest representable value, because it uses a 1/8-binade step below the subnormal boundary instead of the fixed subnormal step 2^-9.",
-  "duration_s": 6.362934,
-  "event_id": "t7",
+  "claim_statement": "On ties for the maximum logit, _route_kernel uses `v >= best` so a later (higher-index) expert overwrites the incumbent, returning the HIGHEST tied index instead of the contract-required LOWEST index.",
+  "duration_s": 8.500285,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -410,72 +328,57 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "2efa363237c69bb0128b6e1c23056d15eceb3074d3ea7023ed3afa20c41cdd7f"
+          "path": "probes/t6_probe.py",
+          "sha256": "8261d32a61babf5b62e8f0dbaf4e7dfe2e3f00bb07bd760a0b7078e97acacabe"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "f96f258bb214e74544128cac9c61d2be7be3d98bea03cbf7098393073af06a00"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "388388c78299003e15fbab01ba37a11d7ba292faacf576d75659ef04a3244918"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
+          "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 6.362934,
+      "duration_s": 8.500285,
       "exit_code": 0,
-      "expected_signal": "If c1 holds: targeted small value
-...[truncated 2951 chars]
+      "expected_signal": "If kernel violates the tie rule, caseA returns [2,3,3,2] and caseB mismatches_vs_lowest > 0 while misma
+...[truncated 1514 chars]
 
-### t8 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel vs torch.float8_e4m3fn reference: 1661/200000 randn elements mismatch, 100% of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of kernel outputs are themselves e4m3-representable (0.83% are not valid e4m3 values). Targeted cases: x=0.001 -> kernel 0.0009765625 vs e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=0.0001 -> 9.918e-05 vs 0.0 (below half of min subnormal 2^-9). Confirms the kernel applies a 1/8-binade step below the subnormal boundary rather than the fixed 2^-9 subnormal grid, so small values are neither representable nor nearest.",
+  "summary": "Kernel returns the HIGHEST tied index, not the lowest. Case A (fp16 explicit ties): kernel [2,3,3,2] vs contract-required lowest-index [1,0,3,0] \u2014 wrong on all 3 tied rows. Case B (4096x8 coarsely quantized fp16 logits): 1174 rows had ties; mismatches vs lowest-index rule = 1174 (100% of tied rows), mismatches vs highest-index rule = 0, and selected value always equaled the row max. So the kernel computes a correct max value but the exactly-inverted tie-break, matching the `v >= best` source defect.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t6"
 }
 
-### t9 - append_evidence - ok
+### t8 - record_verdict - ok
 
 {
-  "id": "c2.e1",
-  "summary": "kernel.py lines 14-18 compute step = exp2(floor(log2|x|) - 3) with no upper bound and no clamp to the e4m3 max finite value 448; e.g. x=500 gives step=32 and q=512, which is not representable in e4m3. Analytically clear from source, but overflow/saturation semantics are not stated by the contract, so this remains a non-decisive note.",
-  "supports": "confirmed"
-}
-
-### t10 - update_claim_status - ok
-
-{
-  "id": "c2",
-  "status": "confirmed"
-}
-
-### t11 - record_verdict - ok
-
-{
-  "confidence": 0.88,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires that \"every value is rounded to the nearest representable e4m3 value\". The kernel (kernel.py:14-18) applies an unconditional 1/8-binade step, step = 2^(floor(log2|x|)-3), which is only correct inside e4m3's normal range (|x| >= 2^-6). e4m3 has 4 exponent bits, so below 2^-6 the format's values lie on a fixed grid of multiples of 2^-9; the kernel instead keeps shrinking the step, producing outputs that are not e4m3 values at all.\n\nProbe t7 (finalized as evidence c1.e1) compared the kernel against the true e4m3 grid via torch.float8_e4m3fn: on 200,000 randn(float32) elements, 1,661 elements mismatch the e4m3 reference, all of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of the kernel's own outputs are e4m3-representable \u2014 0.83% are values the format cannot hold. Targeted cases: x=0.001 -> kernel 0.0009765625 vs nearest e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=1e-4 -> 9.918e-05 vs 0.0 (below half the minimum subnormal 2^-9). These are ordinary float32 inputs the contract admits (\"a float32 tensor\", no magnitude restriction) and arise in ~1.2% of standard-normal samples, so the failure is in-scope, not a stress-only artifact.\n\nSecondary, non-decisive note (c2, scope unknown): there is also no saturation to the max finite e4m3 value 448, so e.g. x=500 yields 512, which is likewise not representable; overflow semantics are not stated by the contract, so this did not drive the verdict.\n\nVerdict: reject, on the confirmed in-scope violation of the stated \"nearest representable e4m3 value\" requirement in the subnormal range (tool events t7/t8).",
+  "reason": "The contract (problem.txt) explicitly requires that when several experts share the largest logit, the LOWEST expert index wins, and states ties are routine because logits are in reduced precision. The kernel's scan uses `take = v >= best` (kernel.py line 17), so an equal later value overwrites the incumbent, yielding the highest tied index. Probe t6 confirmed this at runtime: with explicit fp16 ties the kernel returned [2,3,3,2] where the contract requires [1,0,3,0] (wrong on all three tied rows); on 4096x8 coarsely quantized fp16 logits, 1174 rows contained ties and the kernel mismatched the lowest-index rule on all 1174 (100%) while mismatching the highest-index rule on 0. Selected values always equaled the row max (0 wrong), so the max is computed correctly but the tie-break is exactly inverted \u2014 a direct violation of a behaviour the contract requires, on inputs the contract explicitly declares normal.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.88,
-  "created_at": "2026-09-08T14:53:45Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:53:40Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires that \"every value is rounded to the nearest representable e4m3 value\". The kernel (kernel.py:14-18) applies an unconditional 1/8-binade step, step = 2^(floor(log2|x|)-3), which is only correct inside e4m3's normal range (|x| >= 2^-6). e4m3 has 4 exponent bits, so below 2^-6 the format's values lie on a fixed grid of multiples of 2^-9; the kernel instead keeps shrinking the step, producing outputs that are not e4m3 values at all.\n\nProbe t7 (finalized as evidence c1.e1) compared the kernel against the true e4m3 grid via torch.float8_e4m3fn: on 200,000 randn(float32) elements, 1,661 elements mismatch the e4m3 reference, all of them with |x| < 2^-6 (0 mismatches above), and only 99.17% of the kernel's own outputs are e4m3-representable \u2014 0.83% are values the format cannot hold. Targeted cases: x=0.001 -> kernel 0.0009765625 vs nearest e4m3 0.001953125; x=0.005 -> 0.0048828125 vs 0.005859375; x=0.015 -> 0.0146484375 vs 0.015625; x=1e-4 -> 9.918e-05 vs 0.0 (below half the minimum subnormal 2^-9). These are ordinary float32 inputs the contract admits (\"a float32 tensor\", no magnitude restriction) and arise in ~1.2% of standard-normal samples, so the failure is in-scope, not a stress-only artifact.\n\nSecondary, non-decisive note (c2, scope unknown): there is also no saturation to the max finite e4m3 value 448, so e.g. x=500 yields 512, which is likewise not representable; overflow semantics are not stated by the contract, so this did not drive the verdict.\n\nVerdict: reject, on the confirmed in-scope violation of the stated \"nearest representable e4m3 value\" requirement in the subnormal range (tool events t7/t8).",
+  "reason": "The contract (problem.txt) explicitly requires that when several experts share the largest logit, the LOWEST expert index wins, and states ties are routine because logits are in reduced precision. The kernel's scan uses `take = v >= best` (kernel.py line 17), so an equal later value overwrites the incumbent, yielding the highest tied index. Probe t6 confirmed this at runtime: with explicit fp16 ties the kernel returned [2,3,3,2] where the contract requires [1,0,3,0] (wrong on all three tied rows); on 4096x8 coarsely quantized fp16 logits, 1174 rows contained ties and the kernel mismatched the lowest-index rule on all 1174 (100%) while mismatching the highest-index rule on 0. Selected values always equaled the row max (0 wrong), so the max is computed correctly but the tie-break is exactly inverted \u2014 a direct violation of a behaviour the contract requires, on inputs the contract explicitly declares normal.",
   "verdict": "reject"
 }

@@ -1,4 +1,4 @@
-"""Private, independent qualification for routed grouped-GEMM case_118/119.
+"""Private, independent qualification for routed grouped-GEMM case_45/119.
 
 Importing this module starts no service. cpu_audit() is offline; validate()
 uses the caller's CUDA device. Its plans are fixed before model evaluation.
@@ -14,7 +14,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_118": "trust", "case_119": "reject"}
+EXPECTED = {"case_45": "trust", "case_46": "reject"}
 
 
 def plans():
@@ -123,7 +123,7 @@ def scheduled_reference(values,mutation):
 
 
 def _public_cpu_namespace(case_root):
-    source=(case_root/'case_118'/'kernel.py').read_text()
+    source=(case_root/'case_45'/'kernel.py').read_text()
     names={'validate_inputs','reference','_prepare_routes','make_inputs'}
     nodes=[node for node in ast.parse(source).body if isinstance(node,ast.FunctionDef) and node.name in names]
     namespace={'torch':torch}

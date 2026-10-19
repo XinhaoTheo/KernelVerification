@@ -1,0 +1,43 @@
+Compute a routed mixture-of-experts linear projection. Each token selects Q
+experts; the result is the weighted sum of their projections. This is the
+projection stage, not a complete nonlinear MoE layer or a router/top-k search.
+
+Inputs:
+- x: FP16 [M,K], finite, magnitude at most 0.5.
+- expert_weights: FP16 [E,K,N], finite, magnitude at most 0.5.
+- topk_ids: int32 [M,Q], each entry in [0,E). The Q choices within one token
+  are distinct; choices may occur in any order. Tokens may share experts;
+  an expert may receive zero routes or any number of routes up to M.
+- topk_weights: FP32 [M,Q], finite, each in [0,1], and each row's sum
+  evaluated in FP64 at most one. Zero weights and all-zero rows are legal.
+- 1 <= M,K,N <= 129, 1 <= E <= 8, 1 <= Q <= min(4,E).
+
+All inputs are ordinary torch.Tensor objects (not subclasses), dense, strided,
+contiguous and on one CUDA device, with disjoint storage ranges. Inputs have
+requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls
+execute in ordinary non-inference mode with no concurrent external input writes.
+The interface handles materialized numerical buffers and does not provide autograd.
+
+In real arithmetic on the stored input values, define:
+  target[m,n] = sum over q=0..Q-1 of
+    topk_weights[m,q] * sum over k=0..K-1 of
+      x[m,k] * expert_weights[topk_ids[m,q],k,n].
+Return a fresh finite FP32 CUDA tensor of shape [M,N]. Preserve every input.
+Every output must satisfy
+  abs(actual - target) <= 0.01 + 0.0002 * abs(target).
+Input and weight bounds, row weight sums and K imply |target| < 32.251
+(including the tiny rounding margin of the FP64 row-sum check).
+This tolerance accommodates the bounded FP16-input/FP32-accumulation path,
+including conservative allowance for small FP16 contributions. It does not
+permit missing routes, output tiles or expert projections.
+
+Grouping, expert order, padding and tile sizes are implementation choices and
+do not change the target. Permuting each token's choices together with its
+weights, or consistently relabeling experts and their matrices, preserves the
+required result. Correctness covers every legal shape, value and routing layout;
+there is one verdict for this fixed implementation, not a verdict per seed.
+
+validate_inputs() enforces this public domain and is called by run(). reference()
+is an independent FP64 implementation and accepts CPU or CUDA inputs.
+make_inputs() is only a convenience example; it does not define the input domain.
+Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.

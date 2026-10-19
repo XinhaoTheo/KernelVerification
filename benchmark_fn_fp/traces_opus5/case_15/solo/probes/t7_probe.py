@@ -1,33 +1,20 @@
 
 import torch, json, importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_15/kernel.py")
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_16/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
-def ref(x, gs):
-    n_rows, n_cols = x.shape
-    y = torch.empty_like(x)
-    for s in range(0, n_cols, gs):
-        e = min(s+gs, n_cols)
-        blk = x[:, s:e]
-        absmax = blk.abs().amax(dim=1, keepdim=True)
-        scale = torch.where(absmax == 0, torch.ones_like(absmax), absmax/127.0)
-        q = torch.round(blk/scale).clamp(-127,127)
-        y[:, s:e] = q*scale
-    return y
-
+torch.manual_seed(0)
 res = {}
-for n_cols in [100, 128, 64, 65, 200]:
-    torch.manual_seed(0)
-    x = torch.randn(4, n_cols, device='cuda')
-    out = m.group_quant_dequant(x, 64)
-    r = ref(x, 64)
-    tail_start = (n_cols//64)*64
-    d = (out-r).abs()
-    res[n_cols] = {
-        "max_abs_err": float(d.max()),
-        "tail_cols": n_cols - tail_start,
-        "tail_out_all_zero": bool(out[:, tail_start:].eq(0).all()) if tail_start < n_cols else None,
-        "tail_ref_absmax": float(r[:, tail_start:].abs().max()) if tail_start < n_cols else None,
-        "head_max_abs_err": float(d[:, :tail_start].max()) if tail_start > 0 else None,
+for (M,N,K) in [(64,64,40),(100,70,100),(64,64,64),(70,100,128),(32,32,16)]:
+    a = torch.randn(M,K,device='cuda',dtype=torch.float32)
+    b = torch.randn(K,N,device='cuda',dtype=torch.float32)
+    c = m.matmul(a,b)
+    ref = a@b
+    Kt = (K//32)*32
+    trunc = a[:,:Kt]@b[:Kt,:]
+    res[f"M{M}_N{N}_K{K}"] = {
+        "max_abs_err_vs_full": float((c-ref).abs().max()),
+        "max_abs_err_vs_truncated": float((c-trunc).abs().max()),
+        "ref_absmax": float(ref.abs().max()),
+        "Ktrunc": Kt,
     }
 print(json.dumps(res, indent=1))

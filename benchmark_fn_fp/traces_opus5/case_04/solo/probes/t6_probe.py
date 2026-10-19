@@ -1,36 +1,49 @@
 
 import torch, json, importlib.util, sys
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_04/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_05/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+EPS = k._TIE_EPS
+dev='cuda'
 
-def ref(X, eps):
-    x = X.float()
-    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]
-    return x*torch.rsqrt(ms+eps)
+def ref(scores, pivot):
+    v = scores[scores > pivot]
+    if v.numel()==0: return 0
+    m = v.min()
+    return int(((v-m).abs() < EPS).sum().item())
 
+results=[]
+# 1) explicit small tie groups
+for ties in [1,2,3,4,5,7,8,17,100]:
+    n=128
+    while n < ties+8: n*=2
+    s = torch.full((n,), 5.0, device=dev)   # filler above
+    s[:ties] = 1.0                          # boundary group
+    s[ties:ties+4] = -1.0                   # below pivot
+    c = k.count_tied_at_boundary(s, 0.0)
+    results.append({"case":f"ties={ties}","kernel":c,"ref":ref(s,0.0)})
+
+# 2) random tiles with quantized values (many ties)
 torch.manual_seed(0)
-res = []
-cases = []
-cases.append(("fp32_std", torch.randn(8, 4096, device='cuda')))
-cases.append(("fp32_nonpow2", torch.randn(5, 1000, device='cuda')))
-cases.append(("bf16_rt", torch.randn(8, 4096, device='cuda').bfloat16().float()))
-cases.append(("bf16_dtype", torch.randn(8, 1023, device='cuda').bfloat16()))
-tiny = torch.randn(4, 512, device='cuda')*1e-20
-cases.append(("near_zero", tiny))
-z = torch.zeros(3, 300, device='cuda')
-cases.append(("zeros", z))
-mix = torch.randn(4, 777, device='cuda')
-mix[0] *= 1e-18; mix[1] *= 1e8
-cases.append(("mixed_mag", mix))
-for name, X in cases:
-    eps = 1e-6
-    Y = m.rms_norm_forward(X, eps)
-    R = ref(X, eps)
-    d = (Y-R).abs()
-    denom = R.abs().clamp_min(1e-30)
-    res.append(dict(case=name, shape=list(X.shape), dtype=str(X.dtype),
-                    out_dtype=str(Y.dtype),
-                    max_abs=float(d.max()), max_rel=float((d/denom).max()),
-                    finite=bool(torch.isfinite(Y).all()),
-                    ref_max=float(R.abs().max())))
-print(json.dumps(dict(metric="max abs/rel err vs fp32 reference", results=res), indent=1))
+for i in range(8):
+    n = 1024
+    s = (torch.randint(0,7,(n,),device=dev).float())  # coarse ties
+    p = 2.0
+    results.append({"case":f"rand_quant{i}","kernel":k.count_tied_at_boundary(s,p),"ref":ref(s,p)})
+
+# 3) continuous randn
+for i in range(8):
+    n=512
+    s = torch.randn(n, device=dev)
+    p = float(s.median())
+    results.append({"case":f"randn{i}","kernel":k.count_tied_at_boundary(s,p),"ref":ref(s,p)})
+
+# 4) empty above pivot
+s = torch.full((64,), -1.0, device=dev)
+results.append({"case":"none_above","kernel":k.count_tied_at_boundary(s,0.0),"ref":ref(s,0.0)})
+
+# 5) all above and all tied
+s = torch.full((256,), 3.0, device=dev)
+results.append({"case":"all_tied_256","kernel":k.count_tied_at_boundary(s,0.0),"ref":ref(s,0.0)})
+
+bad=[r for r in results if r["kernel"]!=r["ref"]]
+print(json.dumps({"metric":"exact integer count vs reference","n_cases":len(results),"n_mismatch":len(bad),"mismatches":bad,"all":results}, indent=1))

@@ -1,28 +1,16 @@
-
 import torch, json, importlib.util, sys
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_21/kernel.py")
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_22/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
 torch.manual_seed(0)
-num_pages, page_size, head_dim = 16, 4, 8
-num_seqs, max_blocks = 4, 4
-seq_len = 8
-kv = torch.randn(num_pages, page_size, head_dim, device='cuda')
-perm = torch.randperm(num_pages, device='cuda')[:num_seqs*max_blocks].to(torch.int32)
-bt = perm.view(num_seqs, max_blocks).contiguous()
-
-out = m.paged_gather(kv, bt, seq_len)
-t = torch.arange(seq_len, device='cuda')
-ref = kv[bt[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]
-maxerr = (out-ref).abs().max().item()
-# identity-contiguous table check
-bt_id = torch.arange(num_seqs*max_blocks, device='cuda', dtype=torch.int32).view(num_seqs, max_blocks)
-out_id = m.paged_gather(kv, bt_id, seq_len)
-ref_id = kv[bt_id[:, (t//page_size)].long(), (t % page_size).unsqueeze(0).expand(num_seqs, seq_len)]
-err_id = (out_id-ref_id).abs().max().item()
-print(json.dumps({"metric":"max_abs_err_vs_contract_formula",
- "block_table": bt.tolist(),
- "max_err_permuted": maxerr,
- "rows_mismatched": int((out!=ref).any(-1).sum().item()),
- "total_rows": num_seqs*seq_len,
- "max_err_contiguous_identity_table": err_id}))
+res = []
+for K in [1,2,3,7,255,256,257,511,512,513,1000,1023,1024,4096,5000,100000,1<<20,(1<<20)+37]:
+    a = torch.randn(K, device='cuda', dtype=torch.float32)
+    b = torch.randn(K, device='cuda', dtype=torch.float32)
+    ref = (a.double()*b.double()).sum().item()
+    got = m.splitk_dot(a,b).item()
+    # ones probe: exposes coverage directly (sum should equal K)
+    ao = torch.ones(K, device='cuda'); bo = torch.ones(K, device='cuda')
+    cov = m.splitk_dot(ao,bo).item()
+    res.append(dict(K=K, ref=ref, got=got, abs_err=abs(got-ref),
+                    rel=abs(got-ref)/max(1e-30,abs(ref)), coverage=cov, cov_err=cov-K))
+print(json.dumps(res, indent=1))

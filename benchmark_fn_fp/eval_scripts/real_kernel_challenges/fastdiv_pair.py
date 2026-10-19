@@ -16,7 +16,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_140": "trust", "case_141": "reject"}
+EXPECTED = {"case_67": "trust", "case_68": "reject"}
 DIVISOR = 7
 SHIFT = 34
 BASE = 1 << SHIFT
@@ -42,7 +42,7 @@ def modeled_candidate(value, name):
     """The audited scalar formulas with explicit uint32 remainder conversion."""
     n = int(value)
     assert 0 <= n <= UINT_MAX and name in EXPECTED
-    if name == "case_140":
+    if name == "case_67":
         product = (n + 1) * DOWN_MULTIPLIER
     else:
         product = n * UP_MULTIPLIER
@@ -86,11 +86,11 @@ def arithmetic_audit():
                              "first_input": first, "last_input": last,
                              "input_stride": DIVISOR, "count": count}
             failures.append(failing_range)
-            assert modeled_candidate(first, "case_141") != divmod(first, DIVISOR)
-            assert modeled_candidate(last, "case_141") != divmod(last, DIVISOR)
+            assert modeled_candidate(first, "case_68") != divmod(first, DIVISOR)
+            assert modeled_candidate(last, "case_68") != divmod(last, DIVISOR)
             if first_bad_q > 0:
                 before = DIVISOR * (first_bad_q - 1) + remainder
-                assert modeled_candidate(before, "case_141") == divmod(before, DIVISOR)
+                assert modeled_candidate(before, "case_68") == divmod(before, DIVISOR)
         rows.append({"remainder": remainder, "q_min": 0, "q_max": q_max,
                      "number_of_inputs": q_max + 1,
                      "round_down_residual_min": good_low,
@@ -103,7 +103,7 @@ def arithmetic_audit():
     signed_domain_residual_upper = 5 * signed_domain_qmax + 6 * UP_MULTIPLIER
     assert signed_domain_residual_upper < BASE
     first = min(row["first_input"] for row in failures)
-    q_actual, r_actual = modeled_candidate(first, "case_141")
+    q_actual, r_actual = modeled_candidate(first, "case_68")
     q_expected, r_expected = divmod(first, DIVISOR)
     return {"passed": True, "covered_scalar_inputs": full_size,
             "proof_method": "Exact quotient/remainder partition with monotone affine residuals; seven endpoint-checked intervals cover all uint32 values.",
@@ -202,15 +202,15 @@ def _public_cpu(case_root, name):
 
 def _source_binding(case_root):
     records = {}
-    formulas = {"case_140": "(value + 1) * MULTIPLIER >> SHIFT",
-                "case_141": "value * MULTIPLIER >> SHIFT"}
+    formulas = {"case_67": "(value + 1) * MULTIPLIER >> SHIFT",
+                "case_68": "value * MULTIPLIER >> SHIFT"}
     for name in EXPECTED:
         path = Path(case_root) / name / "kernel.py"
         tree = ast.parse(path.read_text())
         assignments = [node for node in tree.body if isinstance(node, ast.Assign)]
         namespace = {}
         exec(compile(ast.Module(body=assignments, type_ignores=[]), str(path), "exec"), namespace)
-        expected_magic = DOWN_MULTIPLIER if name == "case_140" else UP_MULTIPLIER
+        expected_magic = DOWN_MULTIPLIER if name == "case_67" else UP_MULTIPLIER
         assert namespace["_DIVISOR"] == DIVISOR and namespace["_SHIFT"] == SHIFT
         assert namespace["_MULTIPLIER"] == expected_magic
         kernel = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_unflatten")

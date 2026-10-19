@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_30`
-- Turns: 10
-- Tool events: 13
-- Claims: 2
+- Entry: `case_31`
+- Turns: 6
+- Tool events: 9
+- Claims: 1
 - Description updates: 0
-- LLM time: 110.824s across 9 calls | tokens: in=98530 out=2206 total=100736
+- LLM time: 554.624s across 5 calls | tokens: in=96516 out=3935 total=100451
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.95
@@ -25,49 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
   Output summary:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
   Output summary:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
   Output summary:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_30",
+    "entry": "case_31",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_30"
+    "entry": "case_31"
   }
 
-### Turn 2 - `solo` (13.701652715000009s, in=6586 out=336)
+### Turn 2 - `solo` (24.09758048399999s, in=12435 out=1262)
 
 Message:
 
 ```text
-The kernel uses `v >= best` with strict take — tie: later equal value takes (take = v >= best, so a later e with v == best takes, replacing earlier). That means the HIGHEST index wins ties, violating lowest-index rule. Confirm with probe.
-
-Record claim with scope (in_scope: tie rule in problem.txt), then run probe.The kernel uses `take = v >= best`, so a later expert with a logit equal to the current best replaces it — that picks the *highest* tied index, contradicting the contract's lowest-index tie rule. Recording that claim and probingit.
+I'll analyze the kernel source for the highest-risk contract failure. The `EVEN_SEQ_KBLOCK` flag at line 226 is computed from `(cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0` — i.e., the *total* key length — rather than per-batch lengths like `EVEN_SEQ_QBLOCK` at line 227. If total is divisible by block size but individual sequence lengths are not (e.g. lengths 5 and 3 with block 4), the flag is wrongly True, so partial k blocks load keys past the sequence end (which belong to the next sequence) without masking, violating the "positions past its end must not contribute to the softmax" clause. Let me record and test this.
 ```
 
 Tool calls:
@@ -75,33 +73,43 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
+    "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
-      }
-    ],
-    "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
-    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index 
-  ...[truncated 113 chars]
+        "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+      },
+      {
+        "source": "problem.txt",
+        "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a sel
+  ...[truncated 481 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
-    "scope": "unknown",
+    "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+        "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+      },
+      {
+        "source": "problem.txt",
+        "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block."
       }
     ],
-    "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
-    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
-    "status": "open"
-  }
+    "scope_rationale": "Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.",
+    "statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to b
+  ...[truncated 115 chars]
 
-### Turn 3 - `solo` (7.379372528000005s, in=7811 out=170)
+### Turn 3 - `solo` (497.09427792199995s, in=14047 out=949)
+
+Message:
+
+```text
+I'll run a probe for claim c1 with a concrete partial-block case (q/k lengths 5+3, block size 4, total 8 divisible by 4) compared against a dense per-sequence reference.
+```
 
 Tool calls:
 
@@ -109,9 +117,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, sys\nsys.path.insert(0, \"/root/cases/case_30\")\nfrom kernel import route_top1\n\nlogits = torch.tensor([[3.0, 3.0, 3.0, 1.0],\n                       [1.0, 3.0, 3.0, 0.0],\n                       [2.0, 1.0, 0.5, 2.0]], device=\"cuda\")\nout = route_top1(logits)\nprint(\"kernel :\", out.tolist())\nprint(\"expected (lowest tied index): [0, 1, 0]\")\n",
-    "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)"
-  }
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,causal,scale,hd,nhq,nhk):\n    out=torch.empty_like(q)\n    for b in range(len(cuq)-1):\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\n        for i in range((qe-qs+qbs-1)//qbs):\n            mi_s,mi_e=qs+i*qbs,min(qs+(i+1)*qbs,qe)\n            for j in range((ke-ks+kbs-1)//kbs):\n                if not mask[:, i, j].all(): continue\n                mj_s,mj_e=ks+j*kbs,min(ks+(j+1)*kbs,ke)\n                if causal and (mi_s-qs) + (ke-ks)-(qe-qs) >= mj_s-ks + kbs: p
+  ...[truncated 1720 chars]
   Output summary:
   {
     "artifacts": [
@@ -119,275 +126,164 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
+        "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
-    "duration_s": 5.043531,
+    "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
+    "duration_s": 6.481873,
     "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t6_probe.py",
-         
-  ...[truncated 1508 chars]
+            "description": "Python probe code executed by loc
+  ...[truncated 6487 chars]
 
-### Turn 4 - `solo` (17.868629992999985s, in=9271 out=303)
+### Turn 4 - `solo` (13.342236890000095s, in=18988 out=785)
 
 Message:
 
 ```text
-Probe returned [2, 2, 3] — wait, row 2: [2.0,1.0,0.5,2.0] has tie between index 0 and 3 at 2.0; kernel returned 3 (highest). Row 0 tie 0,1,2 → 2 (highest). Row 1 tie 1,2 → 2 (highest). Confirmed. Finalize evidence, update claim, record verdict.The probe result (t6) is decisive: on rows with tied maxima the kernel returned the *highest* tied index (row 0: tie {0,1,2} → 2; row 1: tie {1,2} → 2; row 2: tie {0,3} → 3), while the contract requires the lowest. Finalizing the evidence and recording the verdict.
+The first probe failed only because block size 4 violates Triton's min dot dimension (≥16), not for any contract reason. I'll rerun with block size 32 and per-sequence lengths whose total is divisible (e.g. 40+24=64) so the buggy EVEN_SEQ_KBLOCK flag is triggered.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 error`
+- `run_claim_probe -> t7 ok`
   Args:
   {
-    "event_id": "t6",
+    "claim_id": "c1",
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_31/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\nBS=32  # >= 16, power of 2\n\ndef ref(q,k,v,cuq,cuk,mask,qbs,kbs,scale):\n    # dense per-sequence reference, non-causal\n    out=torch.zeros_like(q)\n    for b in range(len(cuq)-1):\n        qs,qe=int(cuq[b]),int(cuq[b+1]); ks,ke=int(cuk[b]),int(cuk[b+1])\n        qb=q[qs:qe]; kb=k[ks:ke]; vb=v[ks:ke]\n        s=(qb@kb.transpose(-1,-2))*scale\n        p=torch.softmax(s,dim=-1)\n        out[qs:qe]=p@vb\n    return out\n\nresults={}\ncases=[([40,24],[40,24]), ([50,14],[50,14]), ([33,31],[33,31])]\nfor lens_q, lens_k in cases:\n 
+  ...[truncated 1121 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t7_probe.py",
+        "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t7_stdout.txt",
+        "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t7_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t7_json_result.json",
+        "sha256": "71494e03e72e5d404a8e9b1befb98ef8f511fd26c162e18c6b0066a57b0e5c73"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting key
+  ...[truncated 4533 chars]
+
+### Turn 5 - `solo` (11.269884662000095s, in=22830 out=554)
+
+Message:
+
+```text
+The probe (t7) confirms the hypothesis decisively: in all three cases with per-sequence key lengths not divisible by the block size but a divisible total (40+24, 50+14, 33+31 with block 32), the kernel diverges from the per-sequence dense reference with max absolute errors of ~3.0–3.9 — far beyond any floating-point tolerance and affecting rows throughout both sequences, exactly as expected when keys from the neighboring sequence leak into the softmax. I'll finalize this evidence and issue the verdict.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t8 ok`
+  Args:
+  {
+    "data": {
+      "cases": {
+        "lens=[33,31]": {
+          "max_abs_err": 3.8825,
+          "per_seq_div": [
+            false,
+            false
+          ],
+          "total_div_by_32": true
+        },
+        "lens=[40,24]": {
+          "max_abs_err": 3.5407,
+          "per_seq_div": [
+            false,
+            false
+          ],
+          "total_div_by_32": true
+        },
+        "lens=[50,14]": {
+          "max_abs_err": 3.0143,
+          "per_seq_div": [
+            false,
+            false
+          ],
+          "total_div_by_32": true
+        }
+      },
+      "metric": "max absolute error vs dense per-sequence non-causal reference (block_mask all True)"
+    },
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). This confirms c1.",
-    "supports": "confirmed"
-  }
+    "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisi
+  ...[truncated 387 chars]
   Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge"
-  }
-
-### Turn 5 - `solo` (13.196290040000008s, in=9967 out=289)
-
-Message:
-
-```text
-Need to re-finalize with data key/values. Use append_evidence then update_claim_status, then record_verdict.The finalize failed only because it needs decisive measurements in `data`. I'll attach the evidence with explicit key/value measurements, then close the claim and record the verdict.
-```
-
-Tool calls:
-
-- `append_evidence -> t8 ok`
-  Args:
   {
     "claim_id": "c1",
-    "data": {
-      "expected_lowest_index_rule": true,
-      "kernel_argmax": [
-        2,
-        2,
-        3
-      ],
-      "probe_event": "t6",
-      "row0_kernel_pick": 2,
-      "row0_tied_max_indices": [
-        0,
-        1,
-        2
-      ],
-      "row1_kernel_pick": 2,
-      "row1_tied_max_indices": [
-        1,
-        2
-      ],
-      "row2_kernel_pick": 3,
-      "row2_tied_max_indices": [
-        0,
-        3
-      ]
-    },
-    "kind": "runtime_probe",
-    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences \u2014 keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.",
     "supports": "confirmed",
-    "tool_event_id": "t6"
-  }
-  Output summary:
-  {
-    "id": "c1.e1",
-    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
-    "supports": "confirmed"
+    "tool_event_id": "t7"
   }
 
-### Turn 6 - `solo` (8.608783232999997s, in=11263 out=138)
+### Turn 6 - `solo` (8.820226102000106s, in=28216 out=385)
 
 Message:
 
 ```text
-Claim c1 still open, scope unknown. Update claim status to confirmed, set scope... record_claim already had scope evidence but stored as unknown. Update status; scope field may need setting — update_claim_status only takes status. The scope info is in scope_rationale/scope_evidence already. Proceed: update_claim_status confirmed, then record_verdict reject.The evidence is in place: probe t6 showed the kernel picks the highest tied index on all three tie rows, confirming claim c1 against the contract's lowest-index rule. I'll close the claim and record the verdict.
+The single decisive claim c1 is confirmed, in-scope, and backed by runtime evidence from probe t7. No further inquiry would change the outcome. Recording the verdict.
 ```
 
 Tool calls:
 
-- `update_claim_status -> t9 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "status": "confirmed"
-  }
-  Output summary:
-  {
-    "id": "c1",
-    "status": "confirmed"
-  }
-
-### Turn 7 - `solo` (17.627244606999994s, in=12046 out=328)
-
-Message:
-
-```text
-Claim c1 confirmed but scope "unknown". record_verdict reject requires decisive claims scoped. Need to set scope to in_scope — record_claim had scope_evidence but scope stayed unknown. I could re-record a claim with scope="in_scope", or try update... only status. Maybe re-record a narrower claim with scope in_scope and attach evidence via append_evidence, then update status confirmed, then verdict.The claim is confirmed but its scope is still `unknown`, which blocks it from supporting a reject. I'll record the same claim properly scoped as `in_scope`, attach the existing probe evidence, close it, and record the verdict.
-```
-
-Tool calls:
-
-- `record_claim -> t10 ok`
-  Args:
-  {
-    "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
-      }
-    ],
-    "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
-    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's 
-  ...[truncated 87 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
-      }
-    ],
-    "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
-    "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
-    "status": "open"
-  }
-
-### Turn 8 - `solo` (12.77791706100001s, in=13080 out=320)
-
-Message:
-
-```text
-Attach c1's evidence to c2 (or just run a probe for c2? The evidence exists; attach via append_evidence to c2 referencing t6), update c2 confirmed, then verdict.The claim c2 is identical to c1 but properly scoped as in_scope. I'll attach the existing probe t6 evidence (with decisive key/value data) to c2, close it, then record the verdict.
-```
-
-Tool calls:
-
-- `append_evidence -> t11 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "data": {
-      "expected_lowest_index_rule": true,
-      "kernel_argmax": [
-        2,
-        2,
-        3
-      ],
-      "probe_event": "t6",
-      "row0_kernel_pick": 2,
-      "row0_tied_max_indices": [
-        0,
-        1,
-        2
-      ],
-      "row1_kernel_pick": 2,
-      "row1_tied_max_indices": [
-        1,
-        2
-      ],
-      "row2_kernel_pick": 3,
-      "row2_tied_max_indices": [
-        0,
-        3
-      ]
-    },
-    "kind": "runtime_probe",
-    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
-    "supports": "confirmed",
-    "tool_event_id": "t6"
-  }
-  Output summary:
-  {
-    "id": "c2.e1",
-    "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
-    "supports": "confirmed"
-  }
-
-### Turn 9 - `solo` (5.461138731999995s, in=14025 out=47)
-
-Message:
-
-```text
-Claim c2 is now scoped in_scope with probe t6 evidence attached; I'll close it as confirmed and record the verdict.
-```
-
-Tool calls:
-
-- `update_claim_status -> t12 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "status": "confirmed"
-  }
-  Output summary:
-  {
-    "id": "c2",
-    "status": "confirmed"
-  }
-
-### Turn 10 - `solo` (14.203401971000005s, in=14481 out=275)
-
-Message:
-
-```text
-All claims resolved; record verdict.All claims are resolved: claim c2 (in_scope, confirmed) is backed by probe t6 showing the kernel picks the highest tied index on all three tie rows while the contract requires the lowest. Recording the verdict.
-```
-
-Tool calls:
-
-- `record_verdict -> t13 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c2"
+      "c1"
     ],
-    "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
-    "verdict": "reject"
-  }
+    "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a den
+  ...[truncated 509 chars]
   Output summary:
   {
     "confidence": 0.95,
     "decisive_claims": [
-      "c2"
+      "c1"
     ],
-    "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
-    "verdict": "reject"
-  }
+    "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final block
+  ...[truncated 109 chars]
 
 ## Description Model
 
@@ -397,76 +293,65 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).
-
-Scope: `unknown`
-
-Scope rationale: problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.
-
-Scope evidence:
-- `problem.txt`: Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win.
-
-Rationale: The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] — the highest tied index in every tie — while the contract requires the lowest (expected [0,1,0]). Confirms c1.
-
-### c2 - `confirmed`
-
-Statement: route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).
+Statement: EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.
+Scope rationale: Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.
 
 Scope evidence:
-- `problem.txt`: Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence.
+- `problem.txt`: A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'
+- `problem.txt`: out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block.
 
-Rationale: Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.
+Rationale: The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] — the HIGHEST tied index in every tie — while the contract requires the lowest (expected [0,1,0]). Confirms c2.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences — keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_30"
+  "entry": "case_31"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_30"
+  "entry": "case_31"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_30"
+  "entry": "case_31"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_30"
+  "entry": "case_31"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel uses take = v >= best in a forward scan, so when a later expert's logit equals the current best it replaces the earlier winner; the contract explicitly requires the lowest tied index to win, and ties are declared a normal occurrence.",
-  "scope": "unknown",
+  "rationale": "The kernel computes this divisibility flag from the total key length, not per-batch, so with batch key lengths e.g. 5+3=8 and k_block_size 4 the flag is True while batch 0's last key block is partial; unmasked loads then read keys belonging to the next sequence into the softmax, which the problem statement explicitly forbids.",
+  "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win."
+      "summary": "A sequence length is NOT required to be a multiple of the block size; the final block is partial and 'positions past its end belong to the next sequence, so they must not contribute to the softmax.'"
+    },
+    {
+      "source": "problem.txt",
+      "summary": "out[t] = softmax restricted to keys that belong to the same sequence as t and lie in a selected block."
     }
   ],
-  "scope_rationale": "problem.txt states the tie-break requirement directly: among experts sharing the largest logit the LOWEST index must win; ties are declared a normal occurrence, so a representative input with tied maxima is an in-scope contract case.",
-  "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
+  "scope_rationale": "Violates the contract clause that keys past a sequence's end (belonging to the next sequence) must not contribute to the softmax for that sequence.",
+  "statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
   "status": "open"
 }
 
@@ -478,24 +363,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
+      "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
-  "duration_s": 5.043531,
+  "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
+  "duration_s": 6.481873,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -505,89 +390,101 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "b5fb4cbfb54f518af44633d5ccac53962678448614c508f92c67591293113d33"
+          "sha256": "6ddce797c79cdf02610c1e6a5dc934f70b90383d2b1075e6cf77b70c8d902bad"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "4a7f9a22e61ca0c8b23de21d648b9b0a88913d933242be99fba9daeb8ec0e66e"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
           "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "8d24c5d3612700c3d0a887f15588fdb842430802ce64d2d328ab4882405c113d"
         }
       ],
-      "duration_s": 5.043531,
-      "exit_code": 0,
-      "expected_signal": "kernel returns highest tied index (2) where contract requires lowest (0)",
-      "json_parse_error": "last stdout line is not JSON:
-...[truncated 708 chars]
+      "duration_s": 6.481873,
+      "exit_code": 1,
+      "expected_signal": null,
+      "json_parse_error": "stdout
+...[truncated 5687 chars]
 
-### t7 - finalize_probe_evidence - error
-
-{
-  "error_type": "LedgerError",
-  "message": "this probe produced no json_result, so a confirmed verdict on it must name its decisive measurements in `data` as key/value pairs; raw stdout is trimmed and may not survive to the Judge"
-}
-
-### t8 - append_evidence - ok
+### t7 - run_claim_probe - ok
 
 {
-  "id": "c1.e1",
-  "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the highest tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c1.",
-  "supports": "confirmed"
-}
-
-### t9 - update_claim_status - ok
-
-{
-  "id": "c1",
-  "status": "confirmed"
-}
-
-### t10 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "Probe t6 already showed the kernel returns the highest tied index on rows with tied maxima; the contract explicitly requires the lowest index to win, so this must be re-scoped as in_scope to support the verdict.",
-  "scope": "in_scope",
-  "scope_evidence": [
+  "artifacts": [
     {
-      "source": "problem.txt",
-      "summary": "Tie rule: when several experts share the largest logit, the contract requires the LOWEST expert index to win; ties are a normal occurrence."
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t7_probe.py",
+      "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t7_stdout.txt",
+      "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t7_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "71494e03e72e5d404a8e9b1befb98ef8f511fd26c162e18c6b0066a57b0e5c73"
     }
   ],
-  "scope_rationale": "problem.txt directly requires the LOWEST tied index to win and declares ties a normal occurrence, so representative inputs with tied maxima are in-scope contract cases, not stress inputs.",
-  "statement": "route_top1() breaks ties in favor of the HIGHEST expert index instead of the contract's required LOWEST index (take = v >= best lets later equal logits replace the winner).",
-  "status": "open"
-}
+  "claim_id": "c1",
+  "claim_statement": "EVEN_SEQ_KBLOCK is computed from the total key length rather than per-sequence lengths, so partial final key blocks are treated as full whenever the batch total happens to be divisible by k_block_size, letting keys from the next sequence enter the softmax unmasked.",
+  "duration_s": 8.908524,
+  "event_id": "t7",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t7_probe.py",
+          "sha256": "8ea33e9379958a6583802eb839a405ca9033e1fed7906ec0abf87bba50fc0741"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t7_stdout.txt",
+          "sha256": "55e2679bbd7bfae48b23cb5ca8b4983d983d5a31ee574131c08fe34cc7948e9c"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path
+...[truncated 3733 chars]
 
-### t11 - append_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
-  "id": "c2.e1",
-  "summary": "Probe t6 ran route_top1 on CUDA with three rows containing tied maxima: [[3,3,3,1],[1,3,3,0],[2,1,0.5,2]]. Kernel returned [2,2,3] \u2014 the HIGHEST tied index in every tie \u2014 while the contract requires the lowest (expected [0,1,0]). Confirms c2.",
-  "supports": "confirmed"
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "With k_block_size=32, cu_k_seqlens giving lengths 40+24, 50+14, 33+31 (each per-sequence length NOT divisible by 32 but total 64 divisible by 32, so EVEN_SEQ_KBLOCK is wrongly True), the kernel output diverges from the per-sequence reference by max abs error 3.0-3.9 across rows of both sequences \u2014 keys past each sequence's end (belonging to the next sequence) enter the softmax unmasked. These are magnitude-of-output errors (O(1) values), not float noise.",
+  "supports": "confirmed",
+  "tool_event_id": "t7"
 }
 
-### t12 - update_claim_status - ok
-
-{
-  "id": "c2",
-  "status": "confirmed"
-}
-
-### t13 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
   "confidence": 0.95,
   "decisive_claims": [
-    "c2"
+    "c1"
   ],
-  "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+  "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final blocks must not attend past the sequence end, so this is a confirmed in-scope violation.",
   "verdict": "reject"
 }
 
@@ -595,10 +492,10 @@ Evidence:
 
 {
   "confidence": 0.95,
-  "created_at": "2026-09-10T05:23:13Z",
+  "created_at": "2026-09-30T08:45:32Z",
   "decisive_claims": [
-    "c2"
+    "c1"
   ],
-  "reason": "Source inspection (kernel.py lines 17-19) shows take = v >= best in a forward scan, so a later expert with a logit equal to the current best replaces it \u2014 the HIGHEST tied index wins, not the lowest. Runtime probe t6 confirmed this on real CUDA inputs: rows [3,3,3,1], [1,3,3,0], [2,1,0.5,2] have tied maxima {0,1,2}, {1,2}, {0,3}, and route_top1 returned [2,2,3] instead of the contract-mandated [0,1,0]. problem.txt explicitly requires the LOWEST tied index to win and declares ties a normal occurrence, so the failure is in-scope (claim c2, confirmed, in_scope, evidence c2.e1). Verdict: reject.",
+  "reason": "The contract requires that, for variable-length packed sequences, keys past a sequence's end belong to the next sequence and must not contribute to the softmax. The kernel's _forward_fix_tile_size computes EVEN_SEQ_KBLOCK as (cu_k_seqlens[-1]-cu_k_seqlens[0]) % k_block_size == 0 (kernel.py line 226), i.e. from the batch TOTAL rather than per-sequence lengths (unlike EVEN_SEQ_QBLOCK on line 227 which correctly uses per-sequence lengths). Probe t7 (run_claim_probe, exit 0) tested exactly the contract-admitted case where per-sequence key lengths are not multiples of k_block_size=32 but the total is (40+24, 50+14, 33+31; each per_seq_div=[false,false], total_div_by_32=true, all-True block_mask, non-causal). Against a dense per-sequence reference, the kernel produced max absolute errors of 3.54, 3.01, and 3.88 respectively, affecting rows across both sequences \u2014 keys from the neighboring sequence leaked into the softmax via the unmasked EVEN_SEQ_KBLOCK=true path. These are O(1) output-magnitude errors, far beyond any float tolerance. The claim is scoped to the explicit contract clause that partial final blocks must not attend past the sequence end, so this is a confirmed in-scope violation.",
   "verdict": "reject"
 }

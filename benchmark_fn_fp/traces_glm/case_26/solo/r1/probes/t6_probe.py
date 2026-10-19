@@ -1,46 +1,21 @@
-import json, torch, sys
-sys.path.insert(0, "/root/cases/case_26")
-from kernel import topk_mask
+import torch, sys, os
+sys.path.insert(0, "/root/cases/case_27")
+from kernel import masked_softmax
 
 torch.manual_seed(0)
-results = []
-worst = None
-for trial, (N, K, dist) in enumerate([(256, 10, "randn"), (1024, 50, "randn"),
-                                      (64, 32, "clustered"), (256, 10, "tied"),
-                                      (256, 10, "cutoff_cluster")]):
-    if dist == "randn":
-        s = torch.randn(64, N, device="cuda")
-    elif dist == "clustered":
-        s = torch.randn(64, N, device="cuda") * 0.01
-    elif dist == "tied":
-        s = torch.randint(0, 5, (64, N), device="cuda").float()
-    else:
-        s = torch.randn(64, N, device="cuda")
-        s[:, 5:40] = s[:, 5]  # many values equal/adjacent near cutoff
-    out = topk_mask(s, K)
-    torch.cuda.synchronize()
-    inv_ok = True
-    topk_ok = True
-    kept_counts = []
-    for r in range(s.shape[0]):
-        row = s[r]
-        o = out[r]
-        kept = o != 0
-        dropped = ~kept
-        kept_counts.append(int(kept.sum()))
-        if kept.sum() > 0 and dropped.sum() > 0:
-            if o[kept].min() < row[dropped].max():
-                inv_ok = False
-        # all entries strictly greater than the k-th largest must be kept
-        kth = torch.topk(row, K).values.min()
-        if (o[row > kth] == 0).any():
-            topk_ok = False
-    key = (N, K, dist)
-    results.append({"case": key, "invariant_kept_ge_dropped": inv_ok,
-                    "all_above_kth_kept": topk_ok,
-                    "kept_count_range": [min(kept_counts), max(kept_counts)]})
-    if not (inv_ok and topk_ok):
-        worst = key
-print(json.dumps({"results": results, "any_failure": worst,
-                  "metric": "kept>=dropped invariant + all entries >kth kept",
-                  "reason": "contract acceptance condition is the min/max dominance test"}))
+x = torch.randn(3, 8, device="cuda")
+mask = torch.ones(3, 8, dtype=torch.bool, device="cuda")
+mask[1, :] = False  # row keeping nothing
+y = masked_softmax(x, mask)
+print("all_finite:", bool(torch.isfinite(y).all()))
+print("row1:", y[1].tolist())
+print("row1 nan count:", int(torch.isnan(y[1]).sum()))
+# also sanity: normal rows correct?
+mask2 = torch.ones(3, 8, dtype=torch.bool, device="cuda")
+mask2[0, 3:] = False
+y2 = masked_softmax(x, mask2)
+ref = torch.where(mask2, x, float("-inf"))
+ref = (ref - ref.max(dim=1, keepdim=True).values).exp()
+ref = ref / ref.sum(dim=1, keepdim=True)
+ref = torch.where(mask2, ref, torch.zeros_like(ref))
+print("normal rows max abs err:", float((y2 - ref).abs().max()))

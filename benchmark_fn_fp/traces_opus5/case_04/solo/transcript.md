@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_04`
-- Turns: 8
-- Tool events: 13
-- Claims: 2
+- Entry: `case_05`
+- Turns: 9
+- Tool events: 14
+- Claims: 3
 - Description updates: 0
-- LLM time: 237.599s across 7 calls | tokens: in=215049 out=18267 total=233316
-- Cache tokens: created=0 read=48370
+- LLM time: 166.069s across 8 calls | tokens: in=342285 out=12018 total=354303
+- Cache tokens: created=0 read=55280
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.85
+- Confidence: 0.88
 
 ## Timeline
 
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_04",
+    "entry": "case_05",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 
-### Turn 2 - `solo` (34.30310634s, in=3832 out=2679)
+### Turn 2 - `solo` (31.829388591s, in=4227 out=2516)
 
 Message:
 
 ```text
-I have the full contract and source. The kernel looks like a standard RMSNorm forward; the contract highlights mixed storage precision and near-zero rows, so I'll target those. Let me record my first claim and probe it.
+Kernel is a single-tile tie counter. Main suspicions: (1) `tl.sum` over a boolean mask may reduce in int1 and wrap mod 2, (2) empty-above-pivot / NaN-sentinel path, (3) tie tolerance semantics. Recording claims and probing.
 ```
 
 Tool calls:
@@ -74,49 +74,38 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The contract states the exact formula with float32 accumulation and explicitly names mixed storage precision and near-zero rows as the domain. A mismatch there would be a direct contract violation.",
+    "rationale": "tile_cnt = tl.sum(tile_eq) sums a tl.int1 mask; Triton historically does not always promote bool reductions to int32, which would make the count wrap (e.g. 3 ties -> 1).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, computed with float32 accumulation; inputs may arrive as fp32 or after a bf16 round-trip, and rows may be near zero."
+        "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them.' Input domain: single tile of power-of-two length."
       }
     ],
-    "scope_rationale": "problem.txt states the formula, float32 accumulation, bf16 round-trip inputs and near-zero rows as the intended input domain.",
-    "statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-trip
-  ...[truncated 76 chars]
+    "scope_rationale": "The contract states the function \"must return how many of the values strictly above pivot are tied with the smallest of them\" on a single power-of-two-length tile; a wrong integer count directly violates that required output.",
+    "statement": "count_tied_at_boundary returns a value different
+  ...[truncated 233 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The contract states the exact formula with float32 accumulation and explicitly names mixed storage precision and near-zero rows as the domain. A mismatch there would be a direct contract violation.",
+    "rationale": "tile_cnt = tl.sum(tile_eq) sums a tl.int1 mask; Triton historically does not always promote bool reductions to int32, which would make the count wrap (e.g. 3 ties -> 1).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, computed with float32 accumulation; inputs may arrive as fp32 or after a bf16 round-trip, and rows may be near zero."
+        "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them.' Input domain: single tile of power-of-two length."
       }
     ],
-    "scope_rationale": "problem.txt states the formula, float32 accumulation, bf16 round-trip inputs and near-zero rows as the intended input domain.",
-    "statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
+    "scope_rationale": "The contract states the function \"must return how many of the values strictly above pivot are tied with the smallest of them\" on a single power-of-two-length tile; a wrong integer count directly violates that required output.",
+    "statement": "count_tied_at_boundary returns a value different from the reference count (number of elements v>pivot with |v - min_above| < 1e-3) for at least one representative float32 power-of-two-length tile, e.g. because tl.sum over the boolean tie mask reduces in int1 and wraps modulo 2.",
     "status": "open"
   }
-
-### Turn 3 - `solo` (11.512505928000003s, in=5664 out=915)
-
-Message:
-
-```text
-I'll run a probe testing fp32, bf16 round-trip, near-zero rows, and non-power-of-2 widths against a float32 reference.
-```
-
-Tool calls:
-
 - `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref(X, eps):\n    x = X.float()\n    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]\n    return x*torch.rsqrt(ms+eps)\n\ntorch.manual_seed(0)\nres = []\ncases = []\ncases.append((\"fp32_std\", torch.randn(8, 4096, device='cuda')))\ncases.append((\"fp32_nonpow2\", torch.randn(5, 1000, device='cuda')))\ncases.append((\"bf16_rt\", torch.randn(8, 4096, device='cuda').bfloat16().float()))\ncases.append((\"bf16_dtype\", torch.randn(8, 1023, device='cuda').bfloat16()))\ntiny = torch.randn(4, 512, device='cuda')*1e-20\ncases.append((\"near_zero\", tiny))\nz = to
-  ...[truncated 887 chars]
+    "code": "\nimport torch, json, importlib.util, sys\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nEPS = k._TIE_EPS\ndev='cuda'\n\ndef ref(scores, pivot):\n    v = scores[scores > pivot]\n    if v.numel()==0: return 0\n    m = v.min()\n    return int(((v-m).abs() < EPS).sum().item())\n\nresults=[]\n# 1) explicit small tie groups\nfor ties in [1,2,3,4,5,7,8,17,100]:\n    n=128\n    while n < ties+8: n*=2\n    s = torch.full((n,), 5.0, device=dev)   # filler above\n    s[:ties] = 1.0                          # boundary group\n    s[ties:ties+4] = -1.0                   # below pivot\n    c = k.count_tied_at_boundary(s, 0.0)\n    results.append({\"case\":f\"
+  ...[truncated 1260 chars]
   Output summary:
   {
     "artifacts": [
@@ -124,13 +113,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "be03c7818f33a78162c365e8faa18a0fe9f5b58349c60b9d160c1d2ed21c0b3a"
+        "sha256": "b4f0fd465a4e7d6b1e5a6941cd12bc0cce38966c2317d246ff89b8547a196552"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "4a4138ec278b5a21b33679df34340f30708b81f8b4456e36dddab7c18eb19806"
+        "sha256": "3e6eae6e5144a6216a703129b4855de799d8ac053c13ccd6f40698b3e34116f8"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -140,25 +129,23 @@ Tool calls:
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
-    "duration_s": 9.939515,
+    "claim_statement": "count_tied_at_boundary returns a value different from the reference count (number of elements v>pivot with |v - min_above| < 1e-3) for at least one representative float32 power-of-two-length tile, e.g. because tl.sum over the boolean tie mask reduces in int1 and wraps modulo 2.",
+    "duration_s": 9.884733,
     "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t6_probe
-  ...[truncated 4114 chars]
+            "description": "Python probe code ex
+  ...[truncated 4299 chars]
 
-### Turn 4 - `solo` (35.995910186s, in=11262 out=3015)
+### Turn 3 - `solo` (29.267103248000005s, in=12500 out=2102)
 
 Message:
 
 ```text
-Probe t6 returned clean results across all targeted cases. I'll record that evidence (keeping the claim open) and run one broader sweep over more shapes/eps/magnitudes to make sure the pass isn't specific to my first choices.
+Probe t6 shows exact agreement across 27 cases including odd tie counts (3,5,7,17) — the int1-wrap hypothesis is rebutted. Finalizing that and opening a broader tile-size/distribution claim.
 ```
 
 Tool calls:
@@ -167,248 +154,296 @@ Tool calls:
   Args:
   {
     "data": {
-      "all_finite": true,
-      "cases": [
-        "fp32_std",
-        "fp32_nonpow2",
-        "bf16_rt",
-        "bf16_dtype",
-        "near_zero",
-        "zeros",
-        "mixed_mag"
-      ],
-      "max_abs_worst": 4.76837158203125e-07,
-      "max_rel_worst": 2.3046750641242397e-07,
-      "metric": "max abs/rel err vs fp32 reference"
+      "examples": {
+        "all_tied_256": 256,
+        "none_above": 0,
+        "rand_quant0": 155,
+        "ties=17": 17,
+        "ties=3": 3
+      },
+      "metric": "exact integer count vs reference",
+      "n_cases": 27,
+      "n_mismatch": 0
     },
     "event_id": "t6",
-    "status": null,
-    "summary": "Probe t6: kernel output vs fp32 reference y = x*rsqrt(mean(x^2)+eps), eps=1e-6. fp32 (8x4096): max_abs 2.4e-7, max_rel 1.2e-7; non-pow2 (5x1000): exact 0; bf16 round-trip (8x4096): max_abs 4.8e-7, max_rel 2.2e-7; native bf16 input (8x1023): max_abs 2.4e-7; near-zero rows (x*1e-20): exact 0; all-zeros row: exact 0 and finite; mixed-magnitude rows (1e-18 and 1e8 scaling, 777 cols): max_abs 4.8e-7. All outputs finit
-  ...[truncated 64 chars]
+    "status": "rebutted",
+    "summary": "27 cases (explicit tie groups 1,2,3,4,5,7,8,17,100; quantized random tiles N=1024; randn tiles N=512 with median pivot; empty-above-pivot; all-tied N=256) all matched the reference count exactly (n_mismatch=0). Odd counts like 3,5,7,17,155 returned exactly, so tl.sum over the int1 mask does not wrap; the empty case correctly returns 0 despite the inf sentinel.",
+    "supports": "rebutted"
+  }
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Probe t6: kernel output vs fp32 reference y = x*rsqrt(mean(x^2)+eps), eps=1e-6. fp32 (8x4096): max_abs 2.4e-7, max_rel 1.2e-7; non-pow2 (5x1000): exact 0; bf16 round-trip (8x4096): max_abs 4.8e-7, max_rel 2.2e-7; native bf16 input (8x1023): max_abs 2.4e-7; near-zero rows (x*1e-20): exact 0; all-zeros row: exact 0 and finite; mixed-magnitude rows (1e-18 and 1e8 scaling, 777 cols): max_abs 4.8e-7. All outputs finite. No contract deviation observed.",
-    "supports": "confirmed",
+    "summary": "27 cases (explicit tie groups 1,2,3,4,5,7,8,17,100; quantized random tiles N=1024; randn tiles N=512 with median pivot; empty-above-pivot; all-tied N=256) all matched the reference count exactly (n_mismatch=0). Odd counts like 3,5,7,17,155 returned exactly, so tl.sum over the int1 mask does not wrap; the empty case correctly returns 0 despite the inf sentinel.",
+    "supports": "rebutted",
     "tool_event_id": "t6"
   }
-- `run_claim_probe -> t8 ok`
+- `record_claim -> t8 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref(X, eps):\n    x = X.float()\n    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]\n    return x*torch.rsqrt(ms+eps)\n\ntorch.manual_seed(1)\nout=[]\nworst=0.0\nfor rows, cols in [(1,1),(2,3),(3,17),(7,127),(4,4096),(2,8192),(64,2048),(129,769)]:\n    for eps in [1e-6, 1e-5, 0.0, 1e-2]:\n        for scale, tag in [(1.0,'unit'),(1e-20,'tiny'),(1e8,'huge')]:\n            X = (torch.randn(rows, cols, device='cuda')*scale)\n            Y = m.rms_norm_forward(X, eps)\n            R = ref(X, eps)\n            d = (Y-R).abs()\n            den = R.abs().clamp_min(1e
-  ...[truncated 1273 chars]
-  Output summary:
-  {
-    "artifacts": [
+    "rationale": "The single tested tile sizes were 128/256/512/1024. Reduction lowering, sentinel handling with inf, and the strict '>' pivot comparison could behave differently at N=1 (degenerate reduction) or very large N, and near-EPS boundary spacing exercises the tolerance semantics the contract requires (values equal at the boundary counted together).",
+    "scope": "in_scope",
+    "scope_evidence": [
       {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "8b896030a004c9dcce7cb5dbcf2d0130e8260c05bd29b22190e3757d26489440"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "5854637689c34ab983712fbe4e7435bcfb6a9101f09b3b4fc54576a79505fa8c"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "e0386fb0a16f05021a51b23c05a0717f94f9a3dc3bb70ff73ba0ff6db8f66522"
+        "source": "problem.txt",
+        "summary": "'Input domain: scores is a single tile whose length is a power of two' and the function 'must return how many of the values strictly above pivot are tied with the smallest of them.'"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
-    "duration_s": 7.840543,
-  ...[truncated 9694 chars]
-
-### Turn 5 - `solo` (66.58871206999999s, in=27777 out=5049)
-
-Message:
-
-```text
-Probe t8 turned up mismatches only in the eps=0.0 + 1e-20-magnitude corner (kernel gives inf where an fp32 reference stays finite via subnormals). I'll attach that as inconclusive for c1 (which was tested at eps>0) and open a focused claim on the flush-to-zero regime.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t9 ok`
-  Args:
-  {
-    "data": {
-      "bf16_max_abs": 2.384185791015625e-07,
-      "deterministic": true,
-      "metric": "max rel err vs fp32 ref over shape/eps/scale sweep",
-      "mismatch_condition": "eps=0.0 AND scale=1e-20 only",
-      "mismatch_count": 8,
-      "worst_rel_eps_gt_0": "~1e-7"
-    },
-    "event_id": "t8",
-    "status": "confirmed",
-    "summary": "Probe t8 swept shapes (1x1 .. 129x769, 2x8192), eps in {1e-6,1e-5,0,1e-2}, scales {1, 1e-20, 1e8}. Every combination with eps>0 matched the fp32 reference (worst rel err over those ~1e-7, no entries in the mismatch list). Determinism across repeated calls: true. bf16 inputs at cols 1/15/64/1000/4096: max_abs <= 2.4e-7. The only mismatches (8 of them) are all eps=0.0 with scale 1e-20, where the kernel returns non-finite output (inf) while the torch fp32 reference 
-  ...[truncated 236 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e2",
-    "summary": "Probe t8 swept shapes (1x1 .. 129x769, 2x8192), eps in {1e-6,1e-5,0,1e-2}, scales {1, 1e-20, 1e8}. Every combination with eps>0 matched the fp32 reference (worst rel err over those ~1e-7, no entries in the mismatch list). Determinism across repeated calls: true. bf16 inputs at cols 1/15/64/1000/4096: max_abs <= 2.4e-7. The only mismatches (8 of them) are all eps=0.0 with scale 1e-20, where the kernel returns non-finite output (inf) while the torch fp32 reference stays finite - consistent with denormal flush-to-zero of mean_square inside the Triton kernel. This does not bear on c1 as tested (eps>0), so it is inconclusive for c1 and is split into a separate claim.",
-    "supports": "inconclusive",
-    "tool_event_id": "t8"
-  }
-- `record_claim -> t10 ok`
-  Args:
-  {
-    "rationale": "Probe t8 showed inf output only for eps=0.0 with 1e-20-scaled inputs. This is consistent with Triton flushing the subnormal sum(x*x)/n_cols to zero, making rsqrt(0)=inf. Need to establish whether this can occur for any eps>0 that a normalization layer would plausibly use, i.e. whether it touches the contract's declared 'rows whose magnitude is close to zero' domain, or only the degenerate eps=0 case.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt declares near-zero rows in scope but gives eps as a free parameter without stating eps=0 is used; RMSNorm eps is conventionally positive and there is no test.py to fix it. Whether this defect is reachable in the declared domain depends on whether any eps>0 triggers it, which the probe will decide.",
-    "statement": "The
-  ...[truncated 300 chars]
+    "scope_rationale": "problem.txt requires the function to return the number of values strictly above pivot tied with the smallest of them, for
+  ...[truncated 665 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Probe t8 showed inf output only for eps=0.0 with 1e-20-scaled inputs. This is consistent with Triton flushing the subnormal sum(x*x)/n_cols to zero, making rsqrt(0)=inf. Need to establish whether this can occur for any eps>0 that a normalization layer would plausibly use, i.e. whether it touches the contract's declared 'rows whose magnitude is close to zero' domain, or only the degenerate eps=0 case.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt declares near-zero rows in scope but gives eps as a free parameter without stating eps=0 is used; RMSNorm eps is conventionally positive and there is no test.py to fix it. Whether this defect is reachable in the declared domain depends on whether any eps>0 triggers it, which the probe will decide.",
-    "statement": "The kernel returns non-finite (inf) output instead of the fp32-accumulated value whenever the row's mean square underflows into the fp32 subnormal range and eps is too small to dominate it (observed at eps=0.0, |x|~1e-20); for any eps >= ~1e-38 the near-zero-row behaviour matches the fp32 reference.",
-    "status": "open"
-  }
+    "rationale": "The single tested tile sizes were 128/256/512/1024. Reduction lowering, sentinel handling with inf, and the strict '>' pivot comparison could behave differently at N=1 (degenerate reduction) or very large N, and near-EPS boundary spacing exercises the tolerance semantics the contract requires (values equal at the boundary counted together).",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'Input domain: scores is a single tile whose length is a power of two' and the function 'must return how many of the values strictly above pivot are tied with the smallest of them.'"
+      }
+    ],
+    "scope_rationale": "problem.txt requires the function to return the number of values strictly above pivot tied with the smallest of them, for a single tile whose length is a power of two; all tested lengths are powers of two and float32 scores, so these inputs are in the declared domain. The exact tolerance value is left free, so only counts that disagree under the kernel's own EPS=1e-3 semantics (well-separated or exactly equal values) count as defects.",
+    "statement": "count_tied_at_boundary returns a count differing f
+  ...[truncated 299 chars]
 
-### Turn 6 - `solo` (22.722125096000013s, in=44017 out=1662)
+### Turn 4 - `solo` (22.824994167s, in=22602 out=1763)
 
 Message:
 
 ```text
-Resolving c2: I need to know whether the inf-on-underflow behaviour is reachable at any eps > 0, or only at the degenerate eps = 0.
+Rebutted the int1-wrap hypothesis. Now testing c2: tile lengths from N=1 to 16384, negative/large-magnitude values, near-EPS boundary spacing, and pivot exactly equal to element values.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t11 ok`
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport torch, json, importlib.util, math\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_04/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref(X, eps):\n    x = X.float()\n    ms = (x*x).sum(-1, keepdim=True)/x.shape[-1]\n    return x*torch.rsqrt(ms+eps)\n\ntorch.manual_seed(3)\nrows, cols = 4, 512\nbase = torch.randn(rows, cols, device='cuda')\n\nout = []\n# scan scales and eps values, including sub-normal-triggering scales\nfor scale in [1e-1, 1e-5, 1e-10, 1e-18, 1e-20, 1e-22, 1e-25, 1e-30, 1e-38, 0.0]:\n    for eps in [1e-6, 1e-5, 1e-8, 1e-12, 1e-20, 1e-30, 1e-38, 1e-42, 0.0]:\n        X = base*scale\n        Y = m.rms_norm_forward(X, eps)\n        R = ref(X, eps)\n        fy = bool(t
-  ...[truncated 1307 chars]
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nEPS = k._TIE_EPS\ndev='cuda'\n\ndef ref(scores, pivot):\n    v = scores[scores > pivot]\n    if v.numel()==0: return 0\n    m = v.min()\n    return int(((v-m).abs() < EPS).sum().item())\n\nres=[]\ndef add(name, s, p):\n    s = s.to(dev).float().contiguous()\n    try:\n        kv = k.count_tied_at_boundary(s, p)\n    except Exception as e:\n        kv = \"ERR:\"+repr(e)[:120]\n    res.append({\"case\":name,\"N\":int(s.numel()),\"pivot\":float(p),\"kernel\":kv,\"ref\":ref(s,float(p))})\n\ntorch.manual_seed(1)\n# A) power-of-two sizes 1..16384\nfor e in range(0,15):
+  ...[truncated 1773 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "5c2c4a3a717426cac2a2bad5c1939d70777ea370dd029d6032e172826d7bb413"
+        "path": "probes/t9_probe.py",
+        "sha256": "cd9328c2663929d89ddac0130157af8761d05afc8eb18aaa827573c2c82dfbfc"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "5d624883704e02a544e588b4dad1b10091b93ea01cd54c0f51587a9cd8d52a38"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "97541418bc63c25b464a8d5e67c4741552eddf08cd065b6b11eb34437836e437"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "046d2d1e3a730ee4eefbd1bdc5d8ea284e3ad8ec910af03ee88f43e06394f7f1"
+        "path": "probes/t9_json_result.json",
+        "sha256": "138f18c18cce163e4fe9bf575b2640e9a8bfced42e19a81481e0354522c2a2a7"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The kernel returns non-finite (inf) output instead of the fp32-accumulated value whenever the row's mean square underflows into the fp32 subnormal range and eps is too small to dominate it (observed at eps=0.0
-  ...[truncated 12069 chars]
+    "claim_statement": "count_tied_at_boundary returns a count differing from the reference (number of v>pivot with |v-min_above|<1e-3) for some power-of-two tile length other than those already tested (N=1,2,4,...,16384) or for distribu
+  ...[truncated 21144 chars]
 
-### Turn 7 - `solo` (45.93114993399999s, in=53865 out=3413)
+### Turn 5 - `solo` (12.174792968000006s, in=39131 out=723)
 
 Message:
 
 ```text
-Probe t11 resolves c2: the inf/underflow failures occur only when eps is subnormal (≤1e-38) or exactly zero; every eps ≥ 1e-36 (including all realistic values) matches the fp32 reference on rows down to scale 1e-38 and all-zero rows. Recording that evidence and closing c2.
+Probe t9 returned 48/48 exact matches across tile lengths 1–16384, negative/large-magnitude tiles, near-EPS boundary spacings, and pivot-equals-element cases. That resolves c2 as rebutted.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t12 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "bf16_tiny_eps_1e-6": {
-        "finite": true,
-        "max_abs": 0.0
-      },
-      "eps_1e-6_all_scales_finite_and_matching": true,
-      "failing_eps_all_subnormal_or_zero": true,
-      "failing_eps_values": [
-        1e-38,
-        1e-42,
-        0.0
-      ],
-      "finite_boundary_scale_1e-22": {
-        "eps_1e-36": true,
-        "eps_1e-38": false
-      },
-      "metric": "finiteness + max rel err vs fp32 ref over eps x scale grid",
-      "n_fail": 18
+      "metric": "exact integer count vs reference under kernel EPS=1e-3",
+      "n_cases": 48,
+      "n_mismatch": 0,
+      "pivot_eq_max_element": 0,
+      "sizes_tested": "N=1,2,4,...,16384",
+      "spacing_gt_eps_count": 6,
+      "spacing_lt_eps_count": 12
     },
-    "event_id": "t11",
-    "status": "confirmed",
-    "summary": "Probe t11 swept scale in {1e-1..1e-38, 0} x eps in {1e-6,1e-5,1e-8,1e-12,1e-20,1e-30,1e-38,1e-42,0} on a 4x512 row block. All 18 failures (non-finite kernel output where the torch fp32 reference is finite) occur only at eps in {1e-38, 1e-42, 0.0}, i.e. eps subnormal (< 1.18e-38 min no
-  ...[truncated 591 chars]
+    "event_id": "t9",
+    "status": "rebutted",
+    "summary": "48 cases: all power-of-two lengths N=1..16384 (quantized and randn), N=1 above/below pivot, all-negative tiles, 1e6-magnitude tiles, pivot=-9998.5, mixed-sign, boundary spacings d=0/1e-5/5e-4/9.9e-4/2e-3/1e-2 (kernel correctly groups d<EPS as 12 and splits d>EPS as 6), pivot exactly equal to element values (strict '>' respected: pivot=5.0 with all elements <=5.0 gives 0), and wide-spread magnitudes. n_mismatch=0 against the reference count of {v>pivot : |v-min_above|<1e-3}
+  ...[truncated 30 chars]
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "confirmed",
+    "claim_status": "rebutted",
     "evidence_id": "c2.e1",
-    "summary": "Probe t11 swept scale in {1e-1..1e-38, 0} x eps in {1e-6,1e-5,1e-8,1e-12,1e-20,1e-30,1e-38,1e-42,0} on a 4x512 row block. All 18 failures (non-finite kernel output where the torch fp32 reference is finite) occur only at eps in {1e-38, 1e-42, 0.0}, i.e. eps subnormal (< 1.18e-38 min normal fp32) or exactly zero. Boundary scan at scale 1e-22: eps 0/1e-45/1e-42/1e-40/1e-38 -> non-finite; eps 1e-36/1e-30/1e-20/1e-12/1e-6 -> finite. No failure at any normal eps, including eps=1e-6 down to input scale 1e-38 and all-zero rows. bf16 round-trip of a 1e-20-scaled row with eps=1e-6: finite, max_abs error 0.0. So the flush-to-zero inf is confined to degenerate/subnormal eps, not to the contract's declared near-zero-row + normal-eps domain; the claim's characterisation is confirmed with the threshold refined to eps >= ~1e-36 (any normal fp32 eps).",
-    "supports": "confirmed",
-    "tool_event_id": "t11"
+    "summary": "48 cases: all power-of-two lengths N=1..16384 (quantized and randn), N=1 above/below pivot, all-negative tiles, 1e6-magnitude tiles, pivot=-9998.5, mixed-sign, boundary spacings d=0/1e-5/5e-4/9.9e-4/2e-3/1e-2 (kernel correctly groups d<EPS as 12 and splits d>EPS as 6), pivot exactly equal to element values (strict '>' respected: pivot=5.0 with all elements <=5.0 gives 0), and wide-spread magnitudes. n_mismatch=0 against the reference count of {v>pivot : |v-min_above|<1e-3}.",
+    "supports": "rebutted",
+    "tool_event_id": "t9"
   }
 
-### Turn 8 - `solo` (20.545459547999968s, in=68632 out=1534)
+### Turn 6 - `solo` (25.989219266000006s, in=62045 out=1718)
 
 Message:
 
 ```text
-Both claims are resolved with runtime evidence; nothing remaining would change the outcome, so I'll record the verdict.
+Both prior hypotheses were rebutted. Before deciding, I want one broad randomized fuzz over the declared input domain (float32 power-of-two tiles, varied distributions/pivots) plus a note on ±inf scores, so the trust verdict rests on more than hand-picked cases.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `record_claim -> t11 ok`
   Args:
   {
-    "confidence": 0.85,
-    "decisive_claims": [
-      "c1",
-      "c2"
+    "rationale": "Prior probes used hand-picked structures; a wide randomized fuzz is the strongest available check that the single-pass reduction, inf sentinel, and strict '>' comparison implement the contract's required count across the declared domain.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them' ... 'Input domain: scores is a single tile whose length is a power of two'."
+      }
     ],
-    "reason": "The kernel implements exactly the contract formula (mean_square = sum(x*x)/n_cols, rstd = rsqrt(mean_square+eps), y = x*rstd) with fp32 accumulation: the host wrapper upcasts X via X.float() and allocates an fp32 output, and the Triton kernel loads the row masked to n_cols, accumulates in fp32, and stores y = x*rstd.\n\nProbe t6 (claim c1) compared the kernel against an fp32 torch reference at eps=1e-6 over the contract's declared domain: fp32 8x4096 (max_abs 2.4e-7, max_rel 1.2e-7), non-power-of-2 width 5x1000 (exact 0), bf16 round-trip 8x4096 (max_abs 4.8e-7, max_rel 2.2e-7), native bf16 input 8x1023 (max_abs 2.4e-7), near-zero rows scaled 1e-20 (exact 0), an all-zeros row (exact 0, finite), and mixed-mag
-  ...[truncated 1292 chars]
+    "scope_rationale": "problem.txt requires the function to return how many values strictly above pivot are tied with the smallest of them, for a single tile of power-of-two length; the fuzz draws only such float32 tiles. Si
+  ...[truncated 426 chars]
   Output summary:
   {
-    "confidence": 0.85,
+    "id": "c3",
+    "rationale": "Prior probes used hand-picked structures; a wide randomized fuzz is the strongest available check that the single-pass reduction, inf sentinel, and strict '>' comparison implement the contract's required count across the declared domain.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them' ... 'Input domain: scores is a single tile whose length is a power of two'."
+      }
+    ],
+    "scope_rationale": "problem.txt requires the function to return how many values strictly above pivot are tied with the smallest of them, for a single tile of power-of-two length; the fuzz draws only such float32 tiles. Since the tolerance value is unspecified, the reference uses the kernel's own EPS so only genuine counting errors (not tolerance-choice differences) can register.",
+    "statement": "A randomized fuzz over the declared domain (float32 single tiles of power-of-two length, varied distributions and pivots) exposes at least one case where count_tied_at_boundary disagrees with the reference c
+  ...[truncated 60 chars]
+
+### Turn 7 - `solo` (13.83480068s, in=64167 out=1108)
+
+Message:
+
+```text
+I'll run the randomized fuzz for c3 now.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t12 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "\nimport torch, json, importlib.util, random\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nEPS = k._TIE_EPS\ndev='cuda'\n\ndef ref(s, p):\n    v = s[s > p]\n    if v.numel()==0: return 0\n    m = v.min()\n    return int(((v-m).abs() < EPS).sum().item())\n\nrandom.seed(7); torch.manual_seed(7)\nmismatch=[]; n=0\ndists=[\"randn\",\"uniform\",\"quant\",\"quant_fine\",\"exp\",\"clustered\",\"bimodal\"]\nfor trial in range(600):\n    e = random.randint(0,12)\n    N = 2**e\n    d = random.choice(dists)\n    if d==\"randn\": s = torch.randn(N)\n    elif d==\"uniform\": s = torch.rand(N)*random.choice([1.0,10.0,1e3])\n    elif d==\"quant\": s = torch.r
+  ...[truncated 1304 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t12_probe.py",
+        "sha256": "caa4bca88930d21a8e8097989d4842fc0fbe8cb9d72c28ce773fc09bd13e130f"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t12_stdout.txt",
+        "sha256": "3cfd76c58dadabb8526581173057373eba490e7b89578e833d502215d8ebd918"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t12_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t12_json_result.json",
+        "sha256": "68a56c8f8e7a8e8431339fe82a78494b360a0c6805094a84a8c484300d7731b5"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "A randomized fuzz over the declared domain (float32 single tiles of power-of-two length, varied distributions and pivots) exposes at least one case where count_tied_at_boundary disagrees with the reference cou
+  ...[truncated 2434 chars]
+
+### Turn 8 - `solo` (9.844233898999988s, in=68083 out=675)
+
+Message:
+
+```text
+The fuzz (t12) returned 600 randomized in-domain cases with zero mismatches. I'll finalize c3 and record the verdict.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "distributions": 7,
+      "metric": "exact integer count vs reference under EPS=1e-3",
+      "n_cases": 600,
+      "n_mismatch": 0,
+      "pivot_strategies": 4,
+      "sizes": "2^0..2^12"
+    },
+    "event_id": "t12",
+    "status": "rebutted",
+    "summary": "Randomized fuzz over the declared domain: 600 float32 tiles of power-of-two length N=2^0..2^12 across 7 distributions (randn, uniform at 3 scales, coarse/fine quantized grids including step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered with sigma 1e-4..1e-2, bimodal) with pivots drawn as a random element value, the median, below the minimum, or near the maximum. n_mismatch=0 against the reference count {v>pivot : |v-min_above| < EPS}. No case exposed a disagreement, so the claim is rebutted.",
+    "supports": "rebutted
+  ...[truncated 3 chars]
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "rebutted",
+    "evidence_id": "c3.e1",
+    "summary": "Randomized fuzz over the declared domain: 600 float32 tiles of power-of-two length N=2^0..2^12 across 7 distributions (randn, uniform at 3 scales, coarse/fine quantized grids including step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered with sigma 1e-4..1e-2, bimodal) with pivots drawn as a random element value, the median, below the minimum, or near the maximum. n_mismatch=0 against the reference count {v>pivot : |v-min_above| < EPS}. No case exposed a disagreement, so the claim is rebutted.",
+    "supports": "rebutted",
+    "tool_event_id": "t12"
+  }
+
+### Turn 9 - `solo` (20.304573978999997s, in=69530 out=1413)
+
+Message:
+
+```text
+All three hypotheses I opened are resolved as rebutted with runtime evidence; the kernel's single-tile path is mathematically simple and matched the contract reference in 675 in-domain cases. Recording the verdict.
+```
+
+Tool calls:
+
+- `record_verdict -> t14 ok`
+  Args:
+  {
+    "confidence": 0.88,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The kernel implements exactly the contract formula (mean_square = sum(x*x)/n_cols, rstd = rsqrt(mean_square+eps), y = x*rstd) with fp32 accumulation: the host wrapper upcasts X via X.float() and allocates an fp32 output, and the Triton kernel loads the row masked to n_cols, accumulates in fp32, and stores y = x*rstd.\n\nProbe t6 (claim c1) compared the kernel against an fp32 torch reference at eps=1e-6 over the contract's declared domain: fp32 8x4096 (max_abs 2.4e-7, max_rel 1.2e-7), non-power-of-2 width 5x1000 (exact 0), bf16 round-trip 8x4096 (max_abs 4.8e-7, max_rel 2.2e-7), native bf16 input 8x1023 (max_abs 2.4e-7), near-zero rows scaled 1e-20 (exact 0), an all-zeros row (exact 0, finite), and mixed-magnitude rows spanning 1e-18..1e8 (max_abs 4.8e-7). Probe t8 broadened this to shapes 1x1 through 129x769 and 2x8192, eps in {1e-6,1e-5,1e-2}, scales {1,1e-20,1e8}: every eps>0 combination matched the reference to ~1e-7 relative, repeated calls were bitwise identical (deterministic=true), and the fp32 output dtype was consistent.\n\nProbe t8 also surfaced non-finite output for 1e-20-scaled rows at e
-  ...[truncated 892 chars]
+    "reason": "The contract requires count_tied_at_boundary(scores, pivot) to return how many values strictly above `pivot` are tied (within an unspecified tolerance) with the smallest such value, for a single float32 tile of power-of-two length. The kernel computes tile_min = min over the above-pivot mask (inf sentinel), then sums the mask (|v - tile_min| < 1e-3) & (v > pivot); with min_larger initialized to +inf the is_new branch always takes the tile count on a single-tile call, and when nothing is above the pivot tile_min = inf makes both is_new and is_same false so the result is 0. I tested three concrete failure hypotheses. c1 (t6): 27 hand-built cases with explicit tie-group sizes 1,2,3,4,5,7,8,17,100, qu
+  ...[truncated 1241 chars]
+  Output summary:
+  {
+    "confidence": 0.88,
+    "decisive_claims": [
+      "c1",
+      "c2",
+      "c3"
+    ],
+    "reason": "The contract requires count_tied_at_boundary(scores, pivot) to return how many values strictly above `pivot` are tied (within an unspecified tolerance) with the smallest such value, for a single float32 tile of power-of-two length. The kernel computes tile_min = min over the above-pivot mask (inf sentinel), then sums the mask (|v - tile_min| < 1e-3) & (v > pivot); with min_larger initialized to +inf the is_new branch always takes the tile count on a single-tile call, and when nothing is above the pivot tile_min = inf makes both is_new and is_same false so the result is 0. I tested three concrete failure hypotheses. c1 (t6): 27 hand-built cases with explicit tie-group sizes 1,2,3,4,5,7,8,17,100, quantized N=1024 tiles, randn N=512 tiles at the median pivot, an empty-above-pivot tile and an all-tied N=256 tile \u2014 n_mismatch=0, and odd counts (3,5,7,17,155) came back exactly, rebutting the int1-reduction-wrap hypothesis. c2 (t9): 48 cases covering every power-of-two length N=1..16384, N=1 above/below pivot, all-negative tiles, 1e6-magnitude values, pivot=-9998.5, mixed sign, boundary spac
+  ...[truncated 841 chars]
 
 ## Description Model
 
@@ -416,76 +451,94 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.
+Statement: count_tied_at_boundary returns a value different from the reference count (number of elements v>pivot with |v - min_above| < 1e-3) for at least one representative float32 power-of-two-length tile, e.g. because tl.sum over the boolean tie mask reduces in int1 and wraps modulo 2.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the formula, float32 accumulation, bf16 round-trip inputs and near-zero rows as the intended input domain.
+Scope rationale: The contract states the function "must return how many of the values strictly above pivot are tied with the smallest of them" on a single power-of-two-length tile; a wrong integer count directly violates that required output.
 
 Scope evidence:
-- `problem.txt`: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, computed with float32 accumulation; inputs may arrive as fp32 or after a bf16 round-trip, and rows may be near zero.
+- `problem.txt`: 'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them.' Input domain: single tile of power-of-two length.
 
-Rationale: The contract states the exact formula with float32 accumulation and explicitly names mixed storage precision and near-zero rows as the domain. A mismatch there would be a direct contract violation.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Probe t6: kernel output vs fp32 reference y = x*rsqrt(mean(x^2)+eps), eps=1e-6. fp32 (8x4096): max_abs 2.4e-7, max_rel 1.2e-7; non-pow2 (5x1000): exact 0; bf16 round-trip (8x4096): max_abs 4.8e-7, max_rel 2.2e-7; native bf16 input (8x1023): max_abs 2.4e-7; near-zero rows (x*1e-20): exact 0; all-zeros row: exact 0 and finite; mixed-magnitude rows (1e-18 and 1e8 scaling, 777 cols): max_abs 4.8e-7. All outputs finite. No contract deviation observed.
-- `c1.e2` runtime_probe supports `inconclusive`, tool_event_id=t8: Probe t8 swept shapes (1x1 .. 129x769, 2x8192), eps in {1e-6,1e-5,0,1e-2}, scales {1, 1e-20, 1e8}. Every combination with eps>0 matched the fp32 reference (worst rel err over those ~1e-7, no entries in the mismatch list). Determinism across repeated calls: true. bf16 inputs at cols 1/15/64/1000/4096: max_abs <= 2.4e-7. The only mismatches (8 of them) are all eps=0.0 with scale 1e-20, where the kernel returns non-finite output (inf) while the torch fp32 reference stays finite - consistent with denormal flush-to-zero of mean_square inside the Triton kernel. This does not bear on c1 as tested (eps>0), so it is inconclusive for c1 and is split into a separate claim.
-
-### c2 - `confirmed`
-
-Statement: The kernel returns non-finite (inf) output instead of the fp32-accumulated value whenever the row's mean square underflows into the fp32 subnormal range and eps is too small to dominate it (observed at eps=0.0, |x|~1e-20); for any eps >= ~1e-38 the near-zero-row behaviour matches the fp32 reference.
-
-Scope: `unknown`
-
-Scope rationale: problem.txt declares near-zero rows in scope but gives eps as a free parameter without stating eps=0 is used; RMSNorm eps is conventionally positive and there is no test.py to fix it. Whether this defect is reachable in the declared domain depends on whether any eps>0 triggers it, which the probe will decide.
-
-Rationale: Probe t8 showed inf output only for eps=0.0 with 1e-20-scaled inputs. This is consistent with Triton flushing the subnormal sum(x*x)/n_cols to zero, making rsqrt(0)=inf. Need to establish whether this can occur for any eps>0 that a normalization layer would plausibly use, i.e. whether it touches the contract's declared 'rows whose magnitude is close to zero' domain, or only the degenerate eps=0 case.
+Rationale: tile_cnt = tl.sum(tile_eq) sums a tl.int1 mask; Triton historically does not always promote bool reductions to int32, which would make the count wrap (e.g. 3 ties -> 1).
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Probe t11 swept scale in {1e-1..1e-38, 0} x eps in {1e-6,1e-5,1e-8,1e-12,1e-20,1e-30,1e-38,1e-42,0} on a 4x512 row block. All 18 failures (non-finite kernel output where the torch fp32 reference is finite) occur only at eps in {1e-38, 1e-42, 0.0}, i.e. eps subnormal (< 1.18e-38 min normal fp32) or exactly zero. Boundary scan at scale 1e-22: eps 0/1e-45/1e-42/1e-40/1e-38 -> non-finite; eps 1e-36/1e-30/1e-20/1e-12/1e-6 -> finite. No failure at any normal eps, including eps=1e-6 down to input scale 1e-38 and all-zero rows. bf16 round-trip of a 1e-20-scaled row with eps=1e-6: finite, max_abs error 0.0. So the flush-to-zero inf is confined to degenerate/subnormal eps, not to the contract's declared near-zero-row + normal-eps domain; the claim's characterisation is confirmed with the threshold refined to eps >= ~1e-36 (any normal fp32 eps).
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: 27 cases (explicit tie groups 1,2,3,4,5,7,8,17,100; quantized random tiles N=1024; randn tiles N=512 with median pivot; empty-above-pivot; all-tied N=256) all matched the reference count exactly (n_mismatch=0). Odd counts like 3,5,7,17,155 returned exactly, so tl.sum over the int1 mask does not wrap; the empty case correctly returns 0 despite the inf sentinel.
+
+### c2 - `rebutted`
+
+Statement: count_tied_at_boundary returns a count differing from the reference (number of v>pivot with |v-min_above|<1e-3) for some power-of-two tile length other than those already tested (N=1,2,4,...,16384) or for distributions with negative/large-magnitude values, near-EPS spacing at the boundary, or pivot equal to an element value.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt requires the function to return the number of values strictly above pivot tied with the smallest of them, for a single tile whose length is a power of two; all tested lengths are powers of two and float32 scores, so these inputs are in the declared domain. The exact tolerance value is left free, so only counts that disagree under the kernel's own EPS=1e-3 semantics (well-separated or exactly equal values) count as defects.
+
+Scope evidence:
+- `problem.txt`: 'Input domain: scores is a single tile whose length is a power of two' and the function 'must return how many of the values strictly above pivot are tied with the smallest of them.'
+
+Rationale: The single tested tile sizes were 128/256/512/1024. Reduction lowering, sentinel handling with inf, and the strict '>' pivot comparison could behave differently at N=1 (degenerate reduction) or very large N, and near-EPS boundary spacing exercises the tolerance semantics the contract requires (values equal at the boundary counted together).
+
+Evidence:
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t9: 48 cases: all power-of-two lengths N=1..16384 (quantized and randn), N=1 above/below pivot, all-negative tiles, 1e6-magnitude tiles, pivot=-9998.5, mixed-sign, boundary spacings d=0/1e-5/5e-4/9.9e-4/2e-3/1e-2 (kernel correctly groups d<EPS as 12 and splits d>EPS as 6), pivot exactly equal to element values (strict '>' respected: pivot=5.0 with all elements <=5.0 gives 0), and wide-spread magnitudes. n_mismatch=0 against the reference count of {v>pivot : |v-min_above|<1e-3}.
+
+### c3 - `rebutted`
+
+Statement: A randomized fuzz over the declared domain (float32 single tiles of power-of-two length, varied distributions and pivots) exposes at least one case where count_tied_at_boundary disagrees with the reference count {v>pivot : |v-min_above| < EPS}.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt requires the function to return how many values strictly above pivot are tied with the smallest of them, for a single tile of power-of-two length; the fuzz draws only such float32 tiles. Since the tolerance value is unspecified, the reference uses the kernel's own EPS so only genuine counting errors (not tolerance-choice differences) can register.
+
+Scope evidence:
+- `problem.txt`: 'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them' ... 'Input domain: scores is a single tile whose length is a power of two'.
+
+Rationale: Prior probes used hand-picked structures; a wide randomized fuzz is the strongest available check that the single-pass reduction, inf sentinel, and strict '>' comparison implement the contract's required count across the declared domain.
+
+Evidence:
+- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t12: Randomized fuzz over the declared domain: 600 float32 tiles of power-of-two length N=2^0..2^12 across 7 distributions (randn, uniform at 3 scales, coarse/fine quantized grids including step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered with sigma 1e-4..1e-2, bimodal) with pivots drawn as a random element value, the median, below the minimum, or near the maximum. n_mismatch=0 against the reference count {v>pivot : |v-min_above| < EPS}. No case exposed a disagreement, so the claim is rebutted.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The contract states the exact formula with float32 accumulation and explicitly names mixed storage precision and near-zero rows as the domain. A mismatch there would be a direct contract violation.",
+  "rationale": "tile_cnt = tl.sum(tile_eq) sums a tl.int1 mask; Triton historically does not always promote bool reductions to int32, which would make the count wrap (e.g. 3 ties -> 1).",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, computed with float32 accumulation; inputs may arrive as fp32 or after a bf16 round-trip, and rows may be near zero."
+      "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them.' Input domain: single tile of power-of-two length."
     }
   ],
-  "scope_rationale": "problem.txt states the formula, float32 accumulation, bf16 round-trip inputs and near-zero rows as the intended input domain.",
-  "statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
+  "scope_rationale": "The contract states the function \"must return how many of the values strictly above pivot are tied with the smallest of them\" on a single power-of-two-length tile; a wrong integer count directly violates that required output.",
+  "statement": "count_tied_at_boundary returns a value different from the reference count (number of elements v>pivot with |v - min_above| < 1e-3) for at least one representative float32 power-of-two-length tile, e.g. because tl.sum over the boolean tie mask reduces in int1 and wraps modulo 2.",
   "status": "open"
 }
 
@@ -497,13 +550,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "be03c7818f33a78162c365e8faa18a0fe9f5b58349c60b9d160c1d2ed21c0b3a"
+      "sha256": "b4f0fd465a4e7d6b1e5a6941cd12bc0cce38966c2317d246ff89b8547a196552"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "4a4138ec278b5a21b33679df34340f30708b81f8b4456e36dddab7c18eb19806"
+      "sha256": "3e6eae6e5144a6216a703129b4855de799d8ac053c13ccd6f40698b3e34116f8"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -513,8 +566,8 @@ Evidence:
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
-  "duration_s": 9.939515,
+  "claim_statement": "count_tied_at_boundary returns a value different from the reference count (number of elements v>pivot with |v - min_above| < 1e-3) for at least one representative float32 power-of-two-length tile, e.g. because tl.sum over the boolean tie mask reduces in int1 and wraps modulo 2.",
+  "duration_s": 9.884733,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -524,13 +577,13 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "be03c7818f33a78162c365e8faa18a0fe9f5b58349c60b9d160c1d2ed21c0b3a"
+          "sha256": "b4f0fd465a4e7d6b1e5a6941cd12bc0cce38966c2317d246ff89b8547a196552"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "4a4138ec278b5a21b33679df34340f30708b81f8b4456e36dddab7c18eb19806"
+          "sha256": "3e6eae6e5144a6216a703129b4855de799d8ac053c13ccd6f40698b3e34116f8"
         },
         {
           "description": "Captured stderr from the probe process.",
@@ -539,134 +592,72 @@ Evidence:
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 9.939515,
+      "duration_s": 9.884733,
       "exit_code": 0,
-      "expected_signal": "near-zero max abs/rel errors and finite outputs for all cases; any large mismatch (esp. bf16 or near-zero rows) indica
-...[truncated 3314 chars]
+      "expected_signal": "If bool reduction wraps, 
+...[truncated 3499 chars]
 
 ### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c1.e1",
-  "summary": "Probe t6: kernel output vs fp32 reference y = x*rsqrt(mean(x^2)+eps), eps=1e-6. fp32 (8x4096): max_abs 2.4e-7, max_rel 1.2e-7; non-pow2 (5x1000): exact 0; bf16 round-trip (8x4096): max_abs 4.8e-7, max_rel 2.2e-7; native bf16 input (8x1023): max_abs 2.4e-7; near-zero rows (x*1e-20): exact 0; all-zeros row: exact 0 and finite; mixed-magnitude rows (1e-18 and 1e8 scaling, 777 cols): max_abs 4.8e-7. All outputs finite. No contract deviation observed.",
-  "supports": "confirmed",
+  "summary": "27 cases (explicit tie groups 1,2,3,4,5,7,8,17,100; quantized random tiles N=1024; randn tiles N=512 with median pivot; empty-above-pivot; all-tied N=256) all matched the reference count exactly (n_mismatch=0). Odd counts like 3,5,7,17,155 returned exactly, so tl.sum over the int1 mask does not wrap; the empty case correctly returns 0 despite the inf sentinel.",
+  "supports": "rebutted",
   "tool_event_id": "t6"
 }
 
-### t8 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "8b896030a004c9dcce7cb5dbcf2d0130e8260c05bd29b22190e3757d26489440"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "5854637689c34ab983712fbe4e7435bcfb6a9101f09b3b4fc54576a79505fa8c"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "e0386fb0a16f05021a51b23c05a0717f94f9a3dc3bb70ff73ba0ff6db8f66522"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "rms_norm_forward produces y = x * rsqrt(mean(x^2)+eps) matching a float32 reference for fp32 and bf16-round-tripped inputs, including near-zero-magnitude rows and non-power-of-2 n_cols.",
-  "duration_s": 7.840543,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "8b896030a004c9dcce7cb5dbcf2d0130e8260c05bd29b22190e3757d26489440"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "5854637689c34ab983712fbe4e7435bcfb6a9101f09b3b4fc54576a79505fa8c"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb924
-...[truncated 8894 chars]
-
-### t9 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e2",
-  "summary": "Probe t8 swept shapes (1x1 .. 129x769, 2x8192), eps in {1e-6,1e-5,0,1e-2}, scales {1, 1e-20, 1e8}. Every combination with eps>0 matched the fp32 reference (worst rel err over those ~1e-7, no entries in the mismatch list). Determinism across repeated calls: true. bf16 inputs at cols 1/15/64/1000/4096: max_abs <= 2.4e-7. The only mismatches (8 of them) are all eps=0.0 with scale 1e-20, where the kernel returns non-finite output (inf) while the torch fp32 reference stays finite - consistent with denormal flush-to-zero of mean_square inside the Triton kernel. This does not bear on c1 as tested (eps>0), so it is inconclusive for c1 and is split into a separate claim.",
-  "supports": "inconclusive",
-  "tool_event_id": "t8"
-}
-
-### t10 - record_claim - ok
+### t8 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Probe t8 showed inf output only for eps=0.0 with 1e-20-scaled inputs. This is consistent with Triton flushing the subnormal sum(x*x)/n_cols to zero, making rsqrt(0)=inf. Need to establish whether this can occur for any eps>0 that a normalization layer would plausibly use, i.e. whether it touches the contract's declared 'rows whose magnitude is close to zero' domain, or only the degenerate eps=0 case.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt declares near-zero rows in scope but gives eps as a free parameter without stating eps=0 is used; RMSNorm eps is conventionally positive and there is no test.py to fix it. Whether this defect is reachable in the declared domain depends on whether any eps>0 triggers it, which the probe will decide.",
-  "statement": "The kernel returns non-finite (inf) output instead of the fp32-accumulated value whenever the row's mean square underflows into the fp32 subnormal range and eps is too small to dominate it (observed at eps=0.0, |x|~1e-20); for any eps >= ~1e-38 the near-zero-row behaviour matches the fp32 reference.",
+  "rationale": "The single tested tile sizes were 128/256/512/1024. Reduction lowering, sentinel handling with inf, and the strict '>' pivot comparison could behave differently at N=1 (degenerate reduction) or very large N, and near-EPS boundary spacing exercises the tolerance semantics the contract requires (values equal at the boundary counted together).",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "'Input domain: scores is a single tile whose length is a power of two' and the function 'must return how many of the values strictly above pivot are tied with the smallest of them.'"
+    }
+  ],
+  "scope_rationale": "problem.txt requires the function to return the number of values strictly above pivot tied with the smallest of them, for a single tile whose length is a power of two; all tested lengths are powers of two and float32 scores, so these inputs are in the declared domain. The exact tolerance value is left free, so only counts that disagree under the kernel's own EPS=1e-3 semantics (well-separated or exactly equal values) count as defects.",
+  "statement": "count_tied_at_boundary returns a count differing from the reference (number of v>pivot with |v-min_above|<1e-3) for some power-of-two tile length other than those already tested (N=1,2,4,...,16384) or for distributions with negative/large-magnitude values, near-EPS spacing at the boundary, or pivot equal to an element value.",
   "status": "open"
 }
 
-### t11 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "5c2c4a3a717426cac2a2bad5c1939d70777ea370dd029d6032e172826d7bb413"
+      "path": "probes/t9_probe.py",
+      "sha256": "cd9328c2663929d89ddac0130157af8761d05afc8eb18aaa827573c2c82dfbfc"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "5d624883704e02a544e588b4dad1b10091b93ea01cd54c0f51587a9cd8d52a38"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "97541418bc63c25b464a8d5e67c4741552eddf08cd065b6b11eb34437836e437"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "046d2d1e3a730ee4eefbd1bdc5d8ea284e3ad8ec910af03ee88f43e06394f7f1"
+      "path": "probes/t9_json_result.json",
+      "sha256": "138f18c18cce163e4fe9bf575b2640e9a8bfced42e19a81481e0354522c2a2a7"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The kernel returns non-finite (inf) output instead of the fp32-accumulated value whenever the row's mean square underflows into the fp32 subnormal range and eps is too small to dominate it (observed at eps=0.0, |x|~1e-20); for any eps >= ~1e-38 the near-zero-row behaviour matches the fp32 reference.",
-  "duration_s": 7.063413,
-  "event_id": "t11",
+  "claim_statement": "count_tied_at_boundary returns a count differing from the reference (number of v>pivot with |v-min_above|<1e-3) for some power-of-two tile length other than those already tested (N=1,2,4,...,16384) or for distributions with negative/large-magnitude values, near-EPS spacing at the boundary, or pivot equal to an element value.",
+  "duration_s": 10.098331,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -674,50 +665,134 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "5c2c4a3a717426cac2a2bad5c1939d70777ea370dd029d6032e172826d7bb413"
+          "path": "probes/t9_probe.py",
+          "sha256": "cd9328c2663929d89ddac0130157af8761d05afc8eb18aaa827573c2c82dfbfc"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "5d624883704e02a544e588b4dad1b10091b93ea01cd54c0f51587a9cd8d52a38"
+          "path": "probes/t9_stdout.txt",
+          "sha256": "97541418bc63c25b464a8d5e67c4741552eddf08cd065b6b11eb34437836e437"
         },
         {
-          "description": "Captured stderr from the probe process.",
- 
-...[truncated 11269 chars]
+          "description": "Captured stderr from th
+...[truncated 20344 chars]
 
-### t12 - finalize_probe_evidence - ok
+### t10 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
-  "claim_status": "confirmed",
+  "claim_status": "rebutted",
   "evidence_id": "c2.e1",
-  "summary": "Probe t11 swept scale in {1e-1..1e-38, 0} x eps in {1e-6,1e-5,1e-8,1e-12,1e-20,1e-30,1e-38,1e-42,0} on a 4x512 row block. All 18 failures (non-finite kernel output where the torch fp32 reference is finite) occur only at eps in {1e-38, 1e-42, 0.0}, i.e. eps subnormal (< 1.18e-38 min normal fp32) or exactly zero. Boundary scan at scale 1e-22: eps 0/1e-45/1e-42/1e-40/1e-38 -> non-finite; eps 1e-36/1e-30/1e-20/1e-12/1e-6 -> finite. No failure at any normal eps, including eps=1e-6 down to input scale 1e-38 and all-zero rows. bf16 round-trip of a 1e-20-scaled row with eps=1e-6: finite, max_abs error 0.0. So the flush-to-zero inf is confined to degenerate/subnormal eps, not to the contract's declared near-zero-row + normal-eps domain; the claim's characterisation is confirmed with the threshold refined to eps >= ~1e-36 (any normal fp32 eps).",
-  "supports": "confirmed",
-  "tool_event_id": "t11"
+  "summary": "48 cases: all power-of-two lengths N=1..16384 (quantized and randn), N=1 above/below pivot, all-negative tiles, 1e6-magnitude tiles, pivot=-9998.5, mixed-sign, boundary spacings d=0/1e-5/5e-4/9.9e-4/2e-3/1e-2 (kernel correctly groups d<EPS as 12 and splits d>EPS as 6), pivot exactly equal to element values (strict '>' respected: pivot=5.0 with all elements <=5.0 gives 0), and wide-spread magnitudes. n_mismatch=0 against the reference count of {v>pivot : |v-min_above|<1e-3}.",
+  "supports": "rebutted",
+  "tool_event_id": "t9"
 }
 
-### t13 - record_verdict - ok
+### t11 - record_claim - ok
 
 {
-  "confidence": 0.85,
+  "id": "c3",
+  "rationale": "Prior probes used hand-picked structures; a wide randomized fuzz is the strongest available check that the single-pass reduction, inf sentinel, and strict '>' comparison implement the contract's required count across the declared domain.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "'count_tied_at_boundary(scores, pivot) must return how many of the values strictly above pivot are tied with the smallest of them' ... 'Input domain: scores is a single tile whose length is a power of two'."
+    }
+  ],
+  "scope_rationale": "problem.txt requires the function to return how many values strictly above pivot are tied with the smallest of them, for a single tile of power-of-two length; the fuzz draws only such float32 tiles. Since the tolerance value is unspecified, the reference uses the kernel's own EPS so only genuine counting errors (not tolerance-choice differences) can register.",
+  "statement": "A randomized fuzz over the declared domain (float32 single tiles of power-of-two length, varied distributions and pivots) exposes at least one case where count_tied_at_boundary disagrees with the reference count {v>pivot : |v-min_above| < EPS}.",
+  "status": "open"
+}
+
+### t12 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t12_probe.py",
+      "sha256": "caa4bca88930d21a8e8097989d4842fc0fbe8cb9d72c28ce773fc09bd13e130f"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t12_stdout.txt",
+      "sha256": "3cfd76c58dadabb8526581173057373eba490e7b89578e833d502215d8ebd918"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t12_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t12_json_result.json",
+      "sha256": "68a56c8f8e7a8e8431339fe82a78494b360a0c6805094a84a8c484300d7731b5"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "A randomized fuzz over the declared domain (float32 single tiles of power-of-two length, varied distributions and pivots) exposes at least one case where count_tied_at_boundary disagrees with the reference count {v>pivot : |v-min_above| < EPS}.",
+  "duration_s": 8.656694,
+  "event_id": "t12",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t12_probe.py",
+          "sha256": "caa4bca88930d21a8e8097989d4842fc0fbe8cb9d72c28ce773fc09bd13e130f"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t12_stdout.txt",
+          "sha256": "3cfd76c58dadabb8526581173057373eba490e7b89578e833d502215d8ebd918"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t12
+...[truncated 1634 chars]
+
+### t13 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "rebutted",
+  "evidence_id": "c3.e1",
+  "summary": "Randomized fuzz over the declared domain: 600 float32 tiles of power-of-two length N=2^0..2^12 across 7 distributions (randn, uniform at 3 scales, coarse/fine quantized grids including step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered with sigma 1e-4..1e-2, bimodal) with pivots drawn as a random element value, the median, below the minimum, or near the maximum. n_mismatch=0 against the reference count {v>pivot : |v-min_above| < EPS}. No case exposed a disagreement, so the claim is rebutted.",
+  "supports": "rebutted",
+  "tool_event_id": "t12"
+}
+
+### t14 - record_verdict - ok
+
+{
+  "confidence": 0.88,
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The kernel implements exactly the contract formula (mean_square = sum(x*x)/n_cols, rstd = rsqrt(mean_square+eps), y = x*rstd) with fp32 accumulation: the host wrapper upcasts X via X.float() and allocates an fp32 output, and the Triton kernel loads the row masked to n_cols, accumulates in fp32, and stores y = x*rstd.\n\nProbe t6 (claim c1) compared the kernel against an fp32 torch reference at eps=1e-6 over the contract's declared domain: fp32 8x4096 (max_abs 2.4e-7, max_rel 1.2e-7), non-power-of-2 width 5x1000 (exact 0), bf16 round-trip 8x4096 (max_abs 4.8e-7, max_rel 2.2e-7), native bf16 input 8x1023 (max_abs 2.4e-7), near-zero rows scaled 1e-20 (exact 0), an all-zeros row (exact 0, finite), and mixed-magnitude rows spanning 1e-18..1e8 (max_abs 4.8e-7). Probe t8 broadened this to shapes 1x1 through 129x769 and 2x8192, eps in {1e-6,1e-5,1e-2}, scales {1,1e-20,1e8}: every eps>0 combination matched the reference to ~1e-7 relative, repeated calls were bitwise identical (deterministic=true), and the fp32 output dtype was consistent.\n\nProbe t8 also surfaced non-finite output for 1e-20-scaled rows at eps=0.0. Probe t11 (claim c2) localized this: over a scale x eps grid (scales 1e-1..1e-38 and 0; eps 1e-6..1e-45 and 0), all 18 non-finite results occur only for eps in {1e-38, 1e-42, 0.0}, i.e. eps zero or subnormal in fp32; the boundary scan at scale 1e-22 shows eps>=1e-36 finite and eps<=1e-38 non-finite. This is GPU denormal flush-to-zero of mean_square making rsqrt(0)=inf, and at eps=0 with truly-zero rows the torch reference is itself non-finite. The contract passes eps as a free positive parameter and never states eps=0 or a subnormal eps is used, so that corner is not a required behaviour (claim c2 remained scope=unknown and cannot support a reject). Within the domain the contract does declare -- fp32 and bf16-round-tripped storage, near-zero-magnitude rows, arbitrary n_cols, any no
-...[truncated 92 chars]
+  "reason": "The contract requires count_tied_at_boundary(scores, pivot) to return how many values strictly above `pivot` are tied (within an unspecified tolerance) with the smallest such value, for a single float32 tile of power-of-two length. The kernel computes tile_min = min over the above-pivot mask (inf sentinel), then sums the mask (|v - tile_min| < 1e-3) & (v > pivot); with min_larger initialized to +inf the is_new branch always takes the tile count on a single-tile call, and when nothing is above the pivot tile_min = inf makes both is_new and is_same false so the result is 0. I tested three concrete failure hypotheses. c1 (t6): 27 hand-built cases with explicit tie-group sizes 1,2,3,4,5,7,8,17,100, quantized N=1024 tiles, randn N=512 tiles at the median pivot, an empty-above-pivot tile and an all-tied N=256 tile \u2014 n_mismatch=0, and odd counts (3,5,7,17,155) came back exactly, rebutting the int1-reduction-wrap hypothesis. c2 (t9): 48 cases covering every power-of-two length N=1..16384, N=1 above/below pivot, all-negative tiles, 1e6-magnitude values, pivot=-9998.5, mixed sign, boundary spacings d = 0, 1e-5, 5e-4, 9.9e-4, 2e-3, 1e-2 (kernel groups d<EPS into one count of 12 and splits d>EPS into 6, i.e. the tolerance behaves as a consistent tie test), and pivots exactly equal to element values (strict '>' honoured: pivot=5.0 over elements <=5.0 returns 0) \u2014 n_mismatch=0. c3 (t12): a randomized fuzz of 600 tiles over N=2^0..2^12 and 7 distributions (randn, uniform at 3 scales, coarse and fine quantized grids with step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered sigma 1e-4..1e-2, bimodal) with pivots drawn as an element value, the median, below the minimum, or near the maximum \u2014 n_mismatch=0. The only residual freedom is the numeric tolerance (EPS=1e-3), which problem.txt explicitly leaves unspecified, so it cannot ground a reject. No in-scope viol
+...[truncated 41 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.85,
-  "created_at": "2026-09-08T14:43:46Z",
+  "confidence": 0.88,
+  "created_at": "2026-09-08T14:43:11Z",
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The kernel implements exactly the contract formula (mean_square = sum(x*x)/n_cols, rstd = rsqrt(mean_square+eps), y = x*rstd) with fp32 accumulation: the host wrapper upcasts X via X.float() and allocates an fp32 output, and the Triton kernel loads the row masked to n_cols, accumulates in fp32, and stores y = x*rstd.\n\nProbe t6 (claim c1) compared the kernel against an fp32 torch reference at eps=1e-6 over the contract's declared domain: fp32 8x4096 (max_abs 2.4e-7, max_rel 1.2e-7), non-power-of-2 width 5x1000 (exact 0), bf16 round-trip 8x4096 (max_abs 4.8e-7, max_rel 2.2e-7), native bf16 input 8x1023 (max_abs 2.4e-7), near-zero rows scaled 1e-20 (exact 0), an all-zeros row (exact 0, finite), and mixed-magnitude rows spanning 1e-18..1e8 (max_abs 4.8e-7). Probe t8 broadened this to shapes 1x1 through 129x769 and 2x8192, eps in {1e-6,1e-5,1e-2}, scales {1,1e-20,1e8}: every eps>0 combination matched the reference to ~1e-7 relative, repeated calls were bitwise identical (deterministic=true), and the fp32 output dtype was consistent.\n\nProbe t8 also surfaced non-finite output for 1e-20-scaled rows at eps=0.0. Probe t11 (claim c2) localized this: over a scale x eps grid (scales 1e-1..1e-38 and 0; eps 1e-6..1e-45 and 0), all 18 non-finite results occur only for eps in {1e-38, 1e-42, 0.0}, i.e. eps zero or subnormal in fp32; the boundary scan at scale 1e-22 shows eps>=1e-36 finite and eps<=1e-38 non-finite. This is GPU denormal flush-to-zero of mean_square making rsqrt(0)=inf, and at eps=0 with truly-zero rows the torch reference is itself non-finite. The contract passes eps as a free positive parameter and never states eps=0 or a subnormal eps is used, so that corner is not a required behaviour (claim c2 remained scope=unknown and cannot support a reject). Within the domain the contract does declare -- fp32 and bf16-round-tripped storage, near-zero-
-...[truncated 132 chars]
+  "reason": "The contract requires count_tied_at_boundary(scores, pivot) to return how many values strictly above `pivot` are tied (within an unspecified tolerance) with the smallest such value, for a single float32 tile of power-of-two length. The kernel computes tile_min = min over the above-pivot mask (inf sentinel), then sums the mask (|v - tile_min| < 1e-3) & (v > pivot); with min_larger initialized to +inf the is_new branch always takes the tile count on a single-tile call, and when nothing is above the pivot tile_min = inf makes both is_new and is_same false so the result is 0. I tested three concrete failure hypotheses. c1 (t6): 27 hand-built cases with explicit tie-group sizes 1,2,3,4,5,7,8,17,100, quantized N=1024 tiles, randn N=512 tiles at the median pivot, an empty-above-pivot tile and an all-tied N=256 tile \u2014 n_mismatch=0, and odd counts (3,5,7,17,155) came back exactly, rebutting the int1-reduction-wrap hypothesis. c2 (t9): 48 cases covering every power-of-two length N=1..16384, N=1 above/below pivot, all-negative tiles, 1e6-magnitude values, pivot=-9998.5, mixed sign, boundary spacings d = 0, 1e-5, 5e-4, 9.9e-4, 2e-3, 1e-2 (kernel groups d<EPS into one count of 12 and splits d>EPS into 6, i.e. the tolerance behaves as a consistent tie test), and pivots exactly equal to element values (strict '>' honoured: pivot=5.0 over elements <=5.0 returns 0) \u2014 n_mismatch=0. c3 (t12): a randomized fuzz of 600 tiles over N=2^0..2^12 and 7 distributions (randn, uniform at 3 scales, coarse and fine quantized grids with step sizes 1e-4..2e-3 straddling EPS, exponential, tightly clustered sigma 1e-4..1e-2, bimodal) with pivots drawn as an element value, the median, below the minimum, or near the maximum \u2014 n_mismatch=0. The only residual freedom is the numeric tolerance (EPS=1e-3), which problem.txt explicitly leaves unspecified, so it 
+...[truncated 81 chars]

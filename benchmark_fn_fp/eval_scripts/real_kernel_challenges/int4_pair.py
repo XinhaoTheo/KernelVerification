@@ -1,4 +1,4 @@
-"""Independent canonical-format qualification for case_120 and case_121.
+"""Independent canonical-format qualification for case_47 and case_48.
 
 The numerical oracle directly decodes each public GPTQ nibble using Python
 integers and evaluates FP64 outer products. It does not invoke, reconstruct or
@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_120": "trust", "case_121": "reject"}
+EXPECTED = {"case_47": "trust", "case_48": "reject"}
 ATOL, RTOL = .01, .001
 
 
@@ -207,7 +207,7 @@ def _host(values):
 
 
 def cpu_audit(case_root:Path):
-    public = _public_cpu(case_root,"case_120")
+    public = _public_cpu(case_root,"case_47")
     rows = []
     for plan in plans():
         values = arrays(plan)

@@ -1,0 +1,19 @@
+Compute a batch of valid 3x3 INT8 cross-correlations. Each tile has its own filter. For b in0..B-1 and r,c in0..3, return the exact mathematical integer:
+
+  output[b,r,c] = sum(tiles[b,r+i,c+j] * filters[b,i,j] for i,j in0..2)
+
+Do not reverse the filter. There is no padding, bias, channel reduction or output quantization. The transform method is an implementation choice, not part of the required result.
+
+Complete public input domain:
+- tiles: INT8 [B,6,6], 1<=B<=2048. Every INT8 value at every position is legal.
+- filters: INT8 [B,3,3], with the same B. Every INT8 value at every position is legal.
+- Inputs are ordinary dense, strided, contiguous torch.Tensor objects on the same CUDA device. Contiguous views with nonzero storage offsets and inputs that share storage are legal.
+- All inputs have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Use ordinary non-inference mode with no concurrent external writes. This forward operation does not provide autograd.
+
+Return a fresh INT32 CUDA tensor [B,4,4] on tiles.device. Preserve all input values. Require exact integer equality at every output position: atol=0 and rtol=0.
+
+The implementation has one fixed accept/reject verdict over the complete public domain. A failing legal input is evidence about this implementation, not a new label for that input. validate_inputs() enforces the domain. reference() also accepts CPU tensors. make_inputs() supplies examples and does not restrict the domain.
+
+This is a synthetic integer adaptation of Winograd F(4x4,3x3) tile filtering. It follows the F(4,3) construction described by Lavin and Gray, CVPR2016. It is not an upstream kernel or a historical bug reproduction. The task is a tile operation, not a complete convolution layer or a performance benchmark.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

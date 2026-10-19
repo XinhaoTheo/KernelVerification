@@ -1,0 +1,40 @@
+Compute the unit-scale pseudo-Huber robust loss elementwise on stored FP16
+values, returning FP32 output. The mathematical target is
+
+  target[i] = rho(x[i]) = sqrt(1 + x[i] * x[i]) - 1.
+
+The loss is a smooth alternative to absolute error: it is approximately
+x*x/2 near zero and approximately abs(x)-1 for large residuals.
+
+Inputs and complete public domain:
+- x is a one-dimensional FP16 tensor [N], with 1<=N<=131072.
+- EVERY finite FP16 value is legal, including both signed zeros, positive
+  and negative subnormal values, and both extrema +/-65504. NaN and infinity
+  are outside this input domain.
+- x is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. The input has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This forward operation
+  does not provide autograd.
+
+Return a fresh finite FP32 tensor [N] on x.device, preserving x.
+Every output element must satisfy
+
+  abs(actual[i] - rho(x[i])) <= 1e-8 + 1e-5 * abs(rho(x[i])).
+
+These are fixed mixed absolute and relative tolerances. Signed zeros are
+numerically equivalent. The target is defined in real arithmetic on the
+exact stored input value. No particular algebraic expression, square-root
+approximation or intermediate rounding is required. Algebraic rewrites
+and approximations are permitted if they satisfy the tolerance throughout
+the entire legal domain. Correctness is one verdict for the implementation,
+not a verdict per input, input distribution, seed or size.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses an algebraically equivalent FP64 expression and accepts CPU inputs.
+make_inputs() supplies examples only. Pseudo-Huber loss is a standard
+smooth robust-regression loss; this is an original synthetic Triton
+implementation, not a claim of an upstream historical defect.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

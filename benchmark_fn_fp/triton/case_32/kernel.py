@@ -1,68 +1,87 @@
-"""Triton kernel under test: fn20_sdm_stable_argsort_tie_order."""
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
+"""Triton kernel under test: fn21_gptq_group_count_floor_division."""
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _stable_argsort_kernel(
-    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)
-    perm_ptr,       # [N, W] int64 output (permutation indices)
-    N: tl.constexpr,
-    W: tl.constexpr,
-    BLOCK_W: tl.constexpr,
+def quant_matmul_248_kernel(
+    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,
+    M, N, K, bits, maxq,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    stride_scales, stride_zeros,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
-    """Ascending bitonic sort of each row, returning the permutation."""
-    pid = tl.program_id(0)
-    if pid >= N:
-        return
+    infearure_per_bits = 32 // bits
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    offs = tl.arange(0, BLOCK_W)
-    mask = offs < W
-    base = pid * W
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    a_mask = offs_am[:, None] < M
+    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)
+    g_ptrs = g_ptr + offs_k
+    scales_ptrs = scales_ptr + offs_bn[None, :]
+    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)
 
-    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
-    perm = offs.to(tl.int64)
+    shifter = (offs_k % infearure_per_bits) * bits
+    zeros_shifter = (offs_bn % infearure_per_bits) * bits
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    size = 1
-    while size < BLOCK_W:
-        stride = size
-        while stride > 0:
-            partner = offs ^ stride
-            ascending = ((offs & (size << 1)) == 0)
+    for k in range(0, num_pid_k):
+        g_idx = tl.load(g_ptrs)
+        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)
+        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)
+        zeros = (zeros >> zeros_shifter[None, :]) & maxq
+        zeros = zeros + 1
+        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+        b = tl.load(b_ptrs)
+        b = (b >> shifter[:, None]) & maxq
+        b = (b - zeros) * scales
+        accumulator += tl.dot(a, b)
+        a_ptrs += BLOCK_SIZE_K
+        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk
+        g_ptrs += BLOCK_SIZE_K
 
-            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
-            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
-
-            is_lower_idx = offs < partner
-            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))
-
-            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))
-
-            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \
-                                  ((~want_smaller) & my_is_smaller & (partner < W))
-
-            keys = tl.where(should_take_partner, p_key, keys)
-            perm = tl.where(should_take_partner, p_perm, perm)
-
-            tl.store(keys_ptr + base + offs, keys, mask=mask)
-            tl.store(perm_ptr + base + offs, perm, mask=mask)
-            tl.debug_barrier()
-
-            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
-            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)
-
-            stride = stride >> 1
-        size = size << 1
+    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
-def triton_argsort(keys: torch.Tensor):
-    """Ascending argsort for small rows. Returns (sorted_keys, permutation)."""
-    N, W = keys.shape
-    BLOCK_W = triton.next_power_of_2(W)
-    keys_out = keys.clone()
-    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()
-    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)
-    return keys_out, perm
+def gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):
+    """Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.
+    scales/zeros: (num_groups, N), one row per group of `group_size` columns
+    along K. The per-column group table is derived here from group_size."""
+    M, K = a.shape
+    N = b_packed.shape[1]
+    maxq = 2 ** bits - 1
+
+    num_groups = K // group_size
+    g_idx = torch.clamp(
+        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,
+        max=num_groups - 1,
+    )
+
+    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
+    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1
+    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)
+    quant_matmul_248_kernel[grid](
+        a, b_packed, c, scales, zeros, g_idx,
+        M, N, K, bits, maxq,
+        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),
+        scales.stride(0), zeros.stride(0),
+        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
+        GROUP_SIZE_M=GROUP_SIZE_M,
+    )
+    return c

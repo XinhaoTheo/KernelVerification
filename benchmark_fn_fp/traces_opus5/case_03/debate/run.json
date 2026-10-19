@@ -1,0 +1,1962 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_04",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+    "passed": null,
+    "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_04",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-08T15:49:30Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:50:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
+              }
+            ],
+            "bf16_assert_close_strict_ok": false,
+            "bf16_dtype_matches_input": false,
+            "bf16_in_out_dtype": "torch.float32",
+            "bf16_ref_dtype": "torch.bfloat16",
+            "duration_s": 8.146397,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
+            "fp16_assert_close_strict_ok": false,
+            "fp16_dtype_matches_input": false,
+            "fp16_in_out_dtype": "torch.float32",
+            "fp32_assert_close_strict_ok": true,
+            "fp32_dtype_matches_input": true,
+            "json_parse_error": null,
+            "json_result": {
+              "ok": true,
+              "per_dtype": {
+                "bf16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.bfloat16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.bfloat16"
+                },
+                "fp16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.float16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float16"
+                },
+                "fp32": {
+                  "assert_close_msg": "",
+                  "assert_close_strict_ok": true,
+                  "dtype_matches_input": true,
+                  "in_dtype": "torch.float32",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float32"
+                }
+              }
+            },
+            "shape": "(4,512)",
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+        },
+        {
+          "source": "problem.txt",
+          "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+        }
+      ],
+      "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
+      "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:50:55Z"
+    },
+    {
+      "created_at": "2026-09-08T15:49:30Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:50:55Z",
+          "data": {
+            "allclose_vs_bf16ref_rtol1e-2": true,
+            "allclose_vs_bf16ref_rtol1e-5": false,
+            "allclose_vs_fp32ref_rtol1e-5": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+              }
+            ],
+            "bf16_eps_2pow_minus8": 0.00390625,
+            "duration_s": 5.320805,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
+            "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
+            "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+            "json_parse_error": null,
+            "json_result": {
+              "allclose_vs_bf16ref_rtol1e-2": true,
+              "allclose_vs_bf16ref_rtol1e-5": false,
+              "allclose_vs_fp32ref_rtol1e-5": true,
+              "bf16_eps_2pow-8": 0.00390625,
+              "kernel_out_dtype": "torch.float32",
+              "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+              "ok": true,
+              "rstd_nearzero_rows": [
+                1000.0,
+                1000.0,
+                1000.0,
+                1000.0
+              ],
+              "rstd_normal_rows": [
+                1.067732334136963,
+                0.9982627034187317,
+                0.9897326231002808,
+                0.9696863293647766
+              ],
+              "vs_bf16_ref_all": {
+                "frac_rel_gt_1e-5": 0.99560546875,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_bf16_ref_nearzero_rows": {
+                "frac_rel_gt_1e-5": 0.9921875,
+                "max_abs": 5.960464477539063e-08,
+                "max_rel": 0.0033711472060531378
+              },
+              "vs_bf16_ref_normal_rows": {
+                "frac_rel_gt_1e-5": 0.9990234375,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_fp32_ref_all": {
+                "frac_rel_gt_1e-5": 0.0,
+                "max_abs": 2.384185791015625e-07,
+                "max_rel": 1.1579806624695266e-07
+              }
+            },
+            "kernel_out_dtype": "torch.float32",
+            "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+            "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
+            "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
+            "max_rel_vs_bf16_ref_all": 0.003449842566624284,
+            "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
+            "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
+            "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
+            "nearzero_concentration_supported": false,
+            "nearzero_row_scale": 1e-08,
+            "rstd_nearzero_rows": 1000.0,
+            "shape": "(8,512)",
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "skeptic",
+      "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+        }
+      ],
+      "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
+      "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+      "status": "confirmed",
+      "updated_at": "2026-09-08T15:50:55Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [
+      "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+    ],
+    "kernel_model": [
+      "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
+    ],
+    "open_questions": [
+      "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
+    ],
+    "risk_map": [
+      "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
+    ],
+    "scope_notes": [
+      "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
+    ]
+  },
+  "description_tasks": [],
+  "description_updates": [
+    {
+      "contract_model": [
+        "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+      ],
+      "created_at": "2026-09-08T15:48:12Z",
+      "created_by": "describer",
+      "id": "du1",
+      "impact_on_claims": [],
+      "kernel_model": [
+        "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
+      ],
+      "open_questions": [
+        "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
+      ],
+      "risk_map": [
+        "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
+      ],
+      "scope_notes": [
+        "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
+      ],
+      "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE.",
+      "task_ids": [],
+      "turn": 2
+    }
+  ],
+  "entry": "case_04",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_04",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 80.388986386,
+      "role": "describer",
+      "round": 2,
+      "text": "I have the full kernel, problem text, and metadata already in state, so I'll go straight to recording the structured description model. Key things I see: the wrapper hard-codes an fp32 output, `X.float()` is a no-op for fp32 inputs (so odd strides survive), and the kernel assumes unit stride along the last dim while only receiving `stride(0)`.",
+      "tool_calls": [
+        {
+          "args": {
+            "contract_model": "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone.",
+            "kernel_model": "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols.",
+            "open_questions": "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD.",
+            "risk_map": "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong.",
+            "scope_notes": "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt.",
+            "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE."
+          },
+          "tool": "record_description_update"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 3192,
+        "duration_s": 80.389,
+        "input_tokens": 3832,
+        "output_tokens": 6185
+      }
+    },
+    {
+      "duration_s": 78.13108642299999,
+      "role": "skeptic",
+      "round": 3,
+      "text": "Reading the artifact contract: problem.txt explicitly says inputs \"may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\". The wrapper unconditionally allocates and returns a float32 `Y`, so the bf16 storage path is the sharpest attack surface. Recording two directly testable claims about it.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+              },
+              {
+                "source": "problem.txt",
+                "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+              }
+            ],
+            "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
+            "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch)."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+              }
+            ],
+            "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
+            "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 78.131,
+        "input_tokens": 7382,
+        "output_tokens": 6119
+      }
+    },
+    {
+      "duration_s": 25.702794122,
+      "role": "experimenter",
+      "round": 4,
+      "text": "Both open claims (c1 dtype, c2 value-level bf16 rounding) are independent \u2014 c1's outcome doesn't change c2's probe design \u2014 so I'm launching both in this response.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    out={}\n    for name,dt in [(\"fp32\",torch.float32),(\"bf16\",torch.bfloat16),(\"fp16\",torch.float16)]:\n        X=torch.randn(4,512,device=\"cuda\").to(dt)\n        Y=m.rms_norm_forward(X,eps)\n        # reference: liger-style, fp32 accumulate, store in input dtype\n        x32=X.float()\n        ms=(x32*x32).sum(-1,keepdim=True)/x32.shape[-1]\n        ref=(x32*torch.rsqrt(ms+eps)).to(dt)\n        strict_ok=True; strict_msg=\"\"\n        try:\n            torch.testing.assert_close(Y,ref)\n        except Exception as e:\n            strict_ok=False; strict_msg=str(e).splitlines()[0][:200]\n        out[name]={\"in_dtype\":str(X.dtype),\"out_dtype\":str(Y.dtype),\"ref_dtype\":str(ref.dtype),\n                   \"dtype_matches_input\":Y.dtype==X.dtype,\n                   \"assert_close_strict_ok\":strict_ok,\"assert_close_msg\":strict_msg}\n    res={\"ok\":True,\"per_dtype\":out}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+            "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed."
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    n_rows,n_cols=8,512\n    base=torch.randn(n_rows,n_cols,device=\"cuda\")\n    scales=torch.ones(n_rows,1,device=\"cuda\")\n    scales[4:]=1e-8            # near-zero-magnitude rows\n    X=(base*scales).to(torch.bfloat16)\n    Y=m.rms_norm_forward(X,eps)\n    x32=X.float()\n    ms=(x32*x32).sum(-1,keepdim=True)/n_cols\n    rstd=torch.rsqrt(ms+eps)\n    ref_bf16=(x32*rstd).to(torch.bfloat16)\n    ref_f32=x32*rstd\n    Yf=Y.float(); Rb=ref_bf16.float()\n    def stats(a,b):\n        d=(a-b).abs()\n        rel=d/b.abs().clamp_min(1e-30)\n        return {\"max_abs\":d.max().item(),\"max_rel\":rel.max().item(),\n                \"frac_rel_gt_1e-5\":(rel>1e-5).float().mean().item()}\n    norm_sl=slice(0,4); near_sl=slice(4,8)\n    res={\"ok\":True,\n      \"kernel_out_dtype\":str(Y.dtype),\n      \"vs_bf16_ref_all\":stats(Yf,Rb),\n      \"vs_bf16_ref_normal_rows\":stats(Yf[norm_sl],Rb[norm_sl]),\n      \"vs_bf16_ref_nearzero_rows\":stats(Yf[near_sl],Rb[near_sl]),\n      \"vs_fp32_ref_all\":stats(Yf,ref_f32),\n      \"kernel_rounded_to_bf16_exact_match_frac\":(Y.to(torch.bfloat16)==ref_bf16).float().mean().item(),\n      \"allclose_vs_bf16ref_rtol1e-5\":torch.allclose(Yf,Rb,rtol=1e-5,atol=1e-8),\n      \"allclose_vs_bf16ref_rtol1e-2\":torch.allclose(Yf,Rb,rtol=1e-2,atol=1e-8),\n      \"allclose_vs_fp32ref_rtol1e-5\":torch.allclose(Yf,ref_f32,rtol=1e-5,atol=1e-8),\n      \"rstd_nearzero_rows\":rstd[near_sl].flatten().tolist(),\n      \"rstd_normal_rows\":rstd[norm_sl].flatten().tolist(),\n      \"bf16_eps_2pow-8\":2**-8}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+            "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 25.703,
+        "input_tokens": 13336,
+        "output_tokens": 2544
+      }
+    },
+    {
+      "duration_s": 45.61277221,
+      "role": "experimenter",
+      "round": 5,
+      "text": "Both probes returned. Finalizing c1 (confirmed: bf16/fp16 inputs yield fp32 output, dtype-strict comparison fails) and c2 (core assertion confirmed: ~0.34% elementwise deviation vs a bf16-stored reference, fails rtol=1e-5 \u2014 but the sub-claim that deviations concentrate on near-zero rows is not supported; normal and near-zero rows show essentially identical max relative error). In the same response I'm launching one supplementary c2 probe to establish whether the divergence is *purely* the missing final store-rounding (no math error) across a wider magnitude sweep, which is what the Judge needs to weigh severity.",
+      "tool_calls": [
+        {
+          "args": {
+            "data": {
+              "bf16_assert_close_strict_ok": false,
+              "bf16_dtype_matches_input": false,
+              "bf16_in_out_dtype": "torch.float32",
+              "bf16_ref_dtype": "torch.bfloat16",
+              "eps": 1e-06,
+              "fp16_assert_close_strict_ok": false,
+              "fp16_dtype_matches_input": false,
+              "fp16_in_out_dtype": "torch.float32",
+              "fp32_assert_close_strict_ok": true,
+              "fp32_dtype_matches_input": true,
+              "shape": "(4,512)"
+            },
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "allclose_vs_bf16ref_rtol1e-2": true,
+              "allclose_vs_bf16ref_rtol1e-5": false,
+              "allclose_vs_fp32ref_rtol1e-5": true,
+              "bf16_eps_2pow_minus8": 0.00390625,
+              "eps": 1e-06,
+              "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
+              "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+              "kernel_out_dtype": "torch.float32",
+              "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+              "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
+              "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
+              "max_rel_vs_bf16_ref_all": 0.003449842566624284,
+              "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
+              "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
+              "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
+              "nearzero_concentration_supported": false,
+              "nearzero_row_scale": 1e-08,
+              "rstd_nearzero_rows": 1000.0,
+              "shape": "(8,512)"
+            },
+            "event_id": "t9",
+            "status": "confirmed",
+            "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
+            "supports": "confirmed"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(1)\n    eps=1e-6\n    cases=[]\n    for shape in [(2,64),(4,512),(3,1024),(5,37)]:\n        for scale in [1.0, 1e-2, 1e-4, 1e-8, 1e-12, 1e2]:\n            for dt in [torch.bfloat16, torch.float16, torch.float32]:\n                X=(torch.randn(*shape,device=\"cuda\")*scale).to(dt)\n                Y=m.rms_norm_forward(X,eps)\n                x32=X.float()\n                ms=(x32*x32).sum(-1,keepdim=True)/shape[-1]\n                rstd=torch.rsqrt(ms+eps)\n                ref_dt=(x32*rstd).to(dt)\n                ref_f32=x32*rstd\n                # is divergence purely missing store rounding?\n                exact_after_round=bool(torch.equal(Y.to(dt),ref_dt))\n                d32=(Y.float()-ref_f32).abs()\n                rel32=(d32/ref_f32.abs().clamp_min(1e-30))\n                ddt=(Y.to(dt).float()-ref_dt.float()).abs()\n                cases.append({\"shape\":str(shape),\"scale\":scale,\"dtype\":str(dt),\n                  \"out_dtype\":str(Y.dtype),\n                  \"exact_after_round_to_input_dtype\":exact_after_round,\n                  \"max_abs_vs_fp32ref\":d32.max().item(),\n                  \"max_rel_vs_fp32ref\":rel32.max().item(),\n                  \"max_abs_after_round_vs_dtyperef\":ddt.max().item(),\n                  \"any_nan\":bool(torch.isnan(Y).any().item())})\n    n=len(cases)\n    all_exact=all(c[\"exact_after_round_to_input_dtype\"] for c in cases)\n    worst_rel32=max(c[\"max_rel_vs_fp32ref\"] for c in cases)\n    bad=[c for c in cases if not c[\"exact_after_round_to_input_dtype\"]]\n    fp32_cases=[c for c in cases if c[\"dtype\"]==\"torch.float32\"]\n    res={\"ok\":True,\"n_cases\":n,\n      \"all_exact_after_round_to_input_dtype\":all_exact,\n      \"n_not_exact\":len(bad),\"not_exact_examples\":bad[:6],\n      \"worst_max_rel_vs_fp32ref_all_cases\":worst_rel32,\n      \"worst_max_rel_vs_fp32ref_fp32_inputs\":max(c[\"max_rel_vs_fp32ref\"] for c in fp32_cases),\n      \"any_nan_any_case\":any(c[\"any_nan\"] for c in cases),\n      \"all_out_dtype_fp32\":all(c[\"out_dtype\"]==\"torch.float32\" for c in cases)}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+            "expected_signal": "Across a magnitude sweep and multiple shapes, whether kernel output rounded to input dtype is bit-exact vs the liger-style reference (isolating \"missing store rounding only\") or whether some rows show real math error beyond rounding; also fp32-input-path exactness."
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6263,
+        "duration_s": 45.613,
+        "input_tokens": 25000,
+        "output_tokens": 4128
+      }
+    },
+    {
+      "duration_s": 12.393151410999991,
+      "role": "skeptic",
+      "round": 6,
+      "text": "This is my final review turn. The new t12 sweep adds nothing that existing claims don't cover: all 72 cases return fp32 unconditionally (c1), every low-precision case is bit-exact after rounding to the input dtype and the only fp32-input deviations are ~2e-7 relative (libdevice `rsqrt` vs `torch.rsqrt`, well inside fp32 ULP noise, no NaNs). The near-zero-row path behaves correctly (rstd saturates to 1/sqrt(eps)). No new in-scope, testable problem is exposed, so I defer to the Judge.",
+      "tool_calls": [
+        {
+          "args": {
+            "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+            "reviewed_claims": [
+              "c1",
+              "c2"
+            ]
+          },
+          "tool": "record_no_new_claims"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5644,
+        "duration_s": 12.393,
+        "input_tokens": 53478,
+        "output_tokens": 755
+      }
+    },
+    {
+      "duration_s": 74.37257164900001,
+      "role": "judge",
+      "round": 7,
+      "text": "All claims have evidence, both are confirmed, and the Skeptic has signed off with no new claims after reviewing the latest sweep (t12). The remaining question is purely contract interpretation, which is mine to settle, so I am finalizing rather than requesting more debate.\n\nThe decisive reasoning: problem.txt is the operative contract here (no test.py), and what it explicitly requires is the RMSNorm formula, float32 accumulation, and robustness to inputs arriving at different storage precisions and to near-zero-magnitude rows. The probe evidence shows the kernel meets all of those \u2014 output rounded to the input dtype is bit-exact against the Liger-style reference across 72 configurations (t12), the fp32 path is within 2.2e-7 relative (libdevice `rsqrt` ULP noise), rstd correctly saturates to 1/sqrt(eps) on the 1e-8/1e-12 rows, and no NaNs at any tested magnitude. The one confirmed deviation (c1/c2) is that the wrapper always returns float32, so values are never downcast to the input storage precision; problem.txt declares fp32 *accumulation* but never declares the output storage format, and the returned values are a strict refinement of the reference rather than a math error. I record that as an interface/generalization caveat, not a contract violation, which is why confidence is moderate rather than high.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.6,
+            "decisive_claims": [
+              "c1",
+              "c2"
+            ],
+            "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% element failure rate at rtol=1e-5 are entirely explained by the missing final store-rounding \u2014 the kernel is more accurate, not wrong \u2014 and the claim's assertion that error concentrates on near-zero rows was not supported (normal rows 3.450e-3 vs near-zero rows 3.371e-3, near-zero max_abs only 5.96e-8).\n\nCaveats I am explicitly recording rather than setting aside silently: (1) the cited upstream Liger kernel does allocate Y in the input dtype, so a harness that compares dtype-strictly would flag this kernel \u2014 that residual contract ambiguity is why confidence is 0.6 and not higher; (2) the unused RSTD output, the unit-stride assumption on the last dimension (X.float() is a no-op for fp32, so odd strides pass through), and the unbounded BLOCK_SIZE are unexercised source-level risks that scope policy excludes as decisive without benchmark evidence. No unresolved claim bears on the arithmetic the contract specifies.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 5846,
+        "duration_s": 74.373,
+        "input_tokens": 54522,
+        "output_tokens": 5529
+      }
+    }
+  ],
+  "skeptic_review": {
+    "created_at": "2026-09-08T15:51:13Z",
+    "decision": "no_new_claims",
+    "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 12,
+    "tool_event_id": "t13",
+    "turn": 6
+  },
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T15:46:50Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_04",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+        "passed": null,
+        "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_04",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T15:46:50Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+        "entry": "case_04",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-08T15:46:50Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_04",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1308
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 482
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_04",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-08T15:46:50Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_04\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_04",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "contract_model": "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone.",
+        "kernel_model": "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols.",
+        "open_questions": "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD.",
+        "risk_map": "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong.",
+        "scope_notes": "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt.",
+        "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE."
+      },
+      "created_at": "2026-09-08T15:48:12Z",
+      "id": "t5",
+      "output": {
+        "description_model": {
+          "contract_model": [
+            "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+          ],
+          "kernel_model": [
+            "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
+          ],
+          "open_questions": [
+            "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
+          ],
+          "risk_map": [
+            "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
+          ],
+          "scope_notes": [
+            "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
+          ]
+        },
+        "resolved_tasks": [],
+        "update": {
+          "contract_model": [
+            "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+          ],
+          "created_at": "2026-09-08T15:48:12Z",
+          "created_by": "describer",
+          "id": "du1",
+          "impact_on_claims": [],
+          "kernel_model": [
+            "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
+          ],
+          "open_questions": [
+            "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
+          ],
+          "risk_map": [
+            "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
+          ],
+          "scope_notes": [
+            "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
+          ],
+          "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE.",
+          "task_ids": [],
+          "turn": 2
+        }
+      },
+      "status": "ok",
+      "tool": "record_description_update"
+    },
+    {
+      "args": {
+        "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+          }
+        ],
+        "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
+        "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch)."
+      },
+      "created_at": "2026-09-08T15:49:30Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T15:49:30Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "skeptic",
+        "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+          },
+          {
+            "source": "problem.txt",
+            "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+          }
+        ],
+        "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
+        "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
+        "status": "open",
+        "updated_at": "2026-09-08T15:49:30Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+          }
+        ],
+        "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
+        "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out."
+      },
+      "created_at": "2026-09-08T15:49:30Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-08T15:49:30Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+          }
+        ],
+        "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
+        "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+        "status": "open",
+        "updated_at": "2026-09-08T15:49:30Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    out={}\n    for name,dt in [(\"fp32\",torch.float32),(\"bf16\",torch.bfloat16),(\"fp16\",torch.float16)]:\n        X=torch.randn(4,512,device=\"cuda\").to(dt)\n        Y=m.rms_norm_forward(X,eps)\n        # reference: liger-style, fp32 accumulate, store in input dtype\n        x32=X.float()\n        ms=(x32*x32).sum(-1,keepdim=True)/x32.shape[-1]\n        ref=(x32*torch.rsqrt(ms+eps)).to(dt)\n        strict_ok=True; strict_msg=\"\"\n        try:\n            torch.testing.assert_close(Y,ref)\n        except Exception as e:\n            strict_ok=False; strict_msg=str(e).splitlines()[0][:200]\n        out[name]={\"in_dtype\":str(X.dtype),\"out_dtype\":str(Y.dtype),\"ref_dtype\":str(ref.dtype),\n                   \"dtype_matches_input\":Y.dtype==X.dtype,\n                   \"assert_close_strict_ok\":strict_ok,\"assert_close_msg\":strict_msg}\n    res={\"ok\":True,\"per_dtype\":out}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+        "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed."
+      },
+      "created_at": "2026-09-08T15:50:04Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 8.146397,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
+              }
+            ],
+            "duration_s": 8.146397,
+            "exit_code": 0,
+            "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
+            "json_parse_error": null,
+            "json_result": {
+              "ok": true,
+              "per_dtype": {
+                "bf16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.bfloat16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.bfloat16"
+                },
+                "fp16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.float16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float16"
+                },
+                "fp32": {
+                  "assert_close_msg": "",
+                  "assert_close_strict_ok": true,
+                  "dtype_matches_input": true,
+                  "in_dtype": "torch.float32",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float32"
+                }
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
+        "json_parse_error": null,
+        "json_result": {
+          "ok": true,
+          "per_dtype": {
+            "bf16": {
+              "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
+              "assert_close_strict_ok": false,
+              "dtype_matches_input": false,
+              "in_dtype": "torch.bfloat16",
+              "out_dtype": "torch.float32",
+              "ref_dtype": "torch.bfloat16"
+            },
+            "fp16": {
+              "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
+              "assert_close_strict_ok": false,
+              "dtype_matches_input": false,
+              "in_dtype": "torch.float16",
+              "out_dtype": "torch.float32",
+              "ref_dtype": "torch.float16"
+            },
+            "fp32": {
+              "assert_close_msg": "",
+              "assert_close_strict_ok": true,
+              "dtype_matches_input": true,
+              "in_dtype": "torch.float32",
+              "out_dtype": "torch.float32",
+              "ref_dtype": "torch.float32"
+            }
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    n_rows,n_cols=8,512\n    base=torch.randn(n_rows,n_cols,device=\"cuda\")\n    scales=torch.ones(n_rows,1,device=\"cuda\")\n    scales[4:]=1e-8            # near-zero-magnitude rows\n    X=(base*scales).to(torch.bfloat16)\n    Y=m.rms_norm_forward(X,eps)\n    x32=X.float()\n    ms=(x32*x32).sum(-1,keepdim=True)/n_cols\n    rstd=torch.rsqrt(ms+eps)\n    ref_bf16=(x32*rstd).to(torch.bfloat16)\n    ref_f32=x32*rstd\n    Yf=Y.float(); Rb=ref_bf16.float()\n    def stats(a,b):\n        d=(a-b).abs()\n        rel=d/b.abs().clamp_min(1e-30)\n        return {\"max_abs\":d.max().item(),\"max_rel\":rel.max().item(),\n                \"frac_rel_gt_1e-5\":(rel>1e-5).float().mean().item()}\n    norm_sl=slice(0,4); near_sl=slice(4,8)\n    res={\"ok\":True,\n      \"kernel_out_dtype\":str(Y.dtype),\n      \"vs_bf16_ref_all\":stats(Yf,Rb),\n      \"vs_bf16_ref_normal_rows\":stats(Yf[norm_sl],Rb[norm_sl]),\n      \"vs_bf16_ref_nearzero_rows\":stats(Yf[near_sl],Rb[near_sl]),\n      \"vs_fp32_ref_all\":stats(Yf,ref_f32),\n      \"kernel_rounded_to_bf16_exact_match_frac\":(Y.to(torch.bfloat16)==ref_bf16).float().mean().item(),\n      \"allclose_vs_bf16ref_rtol1e-5\":torch.allclose(Yf,Rb,rtol=1e-5,atol=1e-8),\n      \"allclose_vs_bf16ref_rtol1e-2\":torch.allclose(Yf,Rb,rtol=1e-2,atol=1e-8),\n      \"allclose_vs_fp32ref_rtol1e-5\":torch.allclose(Yf,ref_f32,rtol=1e-5,atol=1e-8),\n      \"rstd_nearzero_rows\":rstd[near_sl].flatten().tolist(),\n      \"rstd_normal_rows\":rstd[norm_sl].flatten().tolist(),\n      \"bf16_eps_2pow-8\":2**-8}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+        "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly."
+      },
+      "created_at": "2026-09-08T15:50:10Z",
+      "id": "t9",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t9_probe.py",
+            "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t9_stdout.txt",
+            "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t9_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t9_json_result.json",
+            "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 5.320805,
+        "event_id": "t9",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+              }
+            ],
+            "duration_s": 5.320805,
+            "exit_code": 0,
+            "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
+            "json_parse_error": null,
+            "json_result": {
+              "allclose_vs_bf16ref_rtol1e-2": true,
+              "allclose_vs_bf16ref_rtol1e-5": false,
+              "allclose_vs_fp32ref_rtol1e-5": true,
+              "bf16_eps_2pow-8": 0.00390625,
+              "kernel_out_dtype": "torch.float32",
+              "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+              "ok": true,
+              "rstd_nearzero_rows": [
+                1000.0,
+                1000.0,
+                1000.0,
+                1000.0
+              ],
+              "rstd_normal_rows": [
+                1.067732334136963,
+                0.9982627034187317,
+                0.9897326231002808,
+                0.9696863293647766
+              ],
+              "vs_bf16_ref_all": {
+                "frac_rel_gt_1e-5": 0.99560546875,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_bf16_ref_nearzero_rows": {
+                "frac_rel_gt_1e-5": 0.9921875,
+                "max_abs": 5.960464477539063e-08,
+                "max_rel": 0.0033711472060531378
+              },
+              "vs_bf16_ref_normal_rows": {
+                "frac_rel_gt_1e-5": 0.9990234375,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_fp32_ref_all": {
+                "frac_rel_gt_1e-5": 0.0,
+                "max_abs": 2.384185791015625e-07,
+                "max_rel": 1.1579806624695266e-07
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t9"
+        },
+        "exit_code": 0,
+        "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
+        "json_parse_error": null,
+        "json_result": {
+          "allclose_vs_bf16ref_rtol1e-2": true,
+          "allclose_vs_bf16ref_rtol1e-5": false,
+          "allclose_vs_fp32ref_rtol1e-5": true,
+          "bf16_eps_2pow-8": 0.00390625,
+          "kernel_out_dtype": "torch.float32",
+          "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+          "ok": true,
+          "rstd_nearzero_rows": [
+            1000.0,
+            1000.0,
+            1000.0,
+            1000.0
+          ],
+          "rstd_normal_rows": [
+            1.067732334136963,
+            0.9982627034187317,
+            0.9897326231002808,
+            0.9696863293647766
+          ],
+          "vs_bf16_ref_all": {
+            "frac_rel_gt_1e-5": 0.99560546875,
+            "max_abs": 0.0077974796295166016,
+            "max_rel": 0.003449842566624284
+          },
+          "vs_bf16_ref_nearzero_rows": {
+            "frac_rel_gt_1e-5": 0.9921875,
+            "max_abs": 5.960464477539063e-08,
+            "max_rel": 0.0033711472060531378
+          },
+          "vs_bf16_ref_normal_rows": {
+            "frac_rel_gt_1e-5": 0.9990234375,
+            "max_abs": 0.0077974796295166016,
+            "max_rel": 0.003449842566624284
+          },
+          "vs_fp32_ref_all": {
+            "frac_rel_gt_1e-5": 0.0,
+            "max_abs": 2.384185791015625e-07,
+            "max_rel": 1.1579806624695266e-07
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "data": {
+          "bf16_assert_close_strict_ok": false,
+          "bf16_dtype_matches_input": false,
+          "bf16_in_out_dtype": "torch.float32",
+          "bf16_ref_dtype": "torch.bfloat16",
+          "eps": 1e-06,
+          "fp16_assert_close_strict_ok": false,
+          "fp16_dtype_matches_input": false,
+          "fp16_in_out_dtype": "torch.float32",
+          "fp32_assert_close_strict_ok": true,
+          "fp32_dtype_matches_input": true,
+          "shape": "(4,512)"
+        },
+        "event_id": "t8",
+        "status": "confirmed",
+        "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:50:55Z",
+      "id": "t10",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:49:30Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:50:55Z",
+              "data": {
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
+                  }
+                ],
+                "bf16_assert_close_strict_ok": false,
+                "bf16_dtype_matches_input": false,
+                "bf16_in_out_dtype": "torch.float32",
+                "bf16_ref_dtype": "torch.bfloat16",
+                "duration_s": 8.146397,
+                "eps": 1e-06,
+                "exit_code": 0,
+                "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
+                "fp16_assert_close_strict_ok": false,
+                "fp16_dtype_matches_input": false,
+                "fp16_in_out_dtype": "torch.float32",
+                "fp32_assert_close_strict_ok": true,
+                "fp32_dtype_matches_input": true,
+                "json_parse_error": null,
+                "json_result": {
+                  "ok": true,
+                  "per_dtype": {
+                    "bf16": {
+                      "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
+                      "assert_close_strict_ok": false,
+                      "dtype_matches_input": false,
+                      "in_dtype": "torch.bfloat16",
+                      "out_dtype": "torch.float32",
+                      "ref_dtype": "torch.bfloat16"
+                    },
+                    "fp16": {
+                      "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
+                      "assert_close_strict_ok": false,
+                      "dtype_matches_input": false,
+                      "in_dtype": "torch.float16",
+                      "out_dtype": "torch.float32",
+                      "ref_dtype": "torch.float16"
+                    },
+                    "fp32": {
+                      "assert_close_msg": "",
+                      "assert_close_strict_ok": true,
+                      "dtype_matches_input": true,
+                      "in_dtype": "torch.float32",
+                      "out_dtype": "torch.float32",
+                      "ref_dtype": "torch.float32"
+                    }
+                  }
+                },
+                "shape": "(4,512)",
+                "stderr": "",
+                "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+            },
+            {
+              "source": "problem.txt",
+              "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+            }
+          ],
+          "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
+          "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:50:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:50:55Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
+              }
+            ],
+            "bf16_assert_close_strict_ok": false,
+            "bf16_dtype_matches_input": false,
+            "bf16_in_out_dtype": "torch.float32",
+            "bf16_ref_dtype": "torch.bfloat16",
+            "duration_s": 8.146397,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
+            "fp16_assert_close_strict_ok": false,
+            "fp16_dtype_matches_input": false,
+            "fp16_in_out_dtype": "torch.float32",
+            "fp32_assert_close_strict_ok": true,
+            "fp32_dtype_matches_input": true,
+            "json_parse_error": null,
+            "json_result": {
+              "ok": true,
+              "per_dtype": {
+                "bf16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.bfloat16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.bfloat16"
+                },
+                "fp16": {
+                  "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
+                  "assert_close_strict_ok": false,
+                  "dtype_matches_input": false,
+                  "in_dtype": "torch.float16",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float16"
+                },
+                "fp32": {
+                  "assert_close_msg": "",
+                  "assert_close_strict_ok": true,
+                  "dtype_matches_input": true,
+                  "in_dtype": "torch.float32",
+                  "out_dtype": "torch.float32",
+                  "ref_dtype": "torch.float32"
+                }
+              }
+            },
+            "shape": "(4,512)",
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "allclose_vs_bf16ref_rtol1e-2": true,
+          "allclose_vs_bf16ref_rtol1e-5": false,
+          "allclose_vs_fp32ref_rtol1e-5": true,
+          "bf16_eps_2pow_minus8": 0.00390625,
+          "eps": 1e-06,
+          "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
+          "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+          "kernel_out_dtype": "torch.float32",
+          "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+          "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
+          "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
+          "max_rel_vs_bf16_ref_all": 0.003449842566624284,
+          "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
+          "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
+          "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
+          "nearzero_concentration_supported": false,
+          "nearzero_row_scale": 1e-08,
+          "rstd_nearzero_rows": 1000.0,
+          "shape": "(8,512)"
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-08T15:50:55Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-08T15:49:30Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T15:50:55Z",
+              "data": {
+                "allclose_vs_bf16ref_rtol1e-2": true,
+                "allclose_vs_bf16ref_rtol1e-5": false,
+                "allclose_vs_fp32ref_rtol1e-5": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t9_probe.py",
+                    "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t9_stdout.txt",
+                    "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t9_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t9_json_result.json",
+                    "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+                  }
+                ],
+                "bf16_eps_2pow_minus8": 0.00390625,
+                "duration_s": 5.320805,
+                "eps": 1e-06,
+                "exit_code": 0,
+                "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
+                "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
+                "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+                "json_parse_error": null,
+                "json_result": {
+                  "allclose_vs_bf16ref_rtol1e-2": true,
+                  "allclose_vs_bf16ref_rtol1e-5": false,
+                  "allclose_vs_fp32ref_rtol1e-5": true,
+                  "bf16_eps_2pow-8": 0.00390625,
+                  "kernel_out_dtype": "torch.float32",
+                  "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+                  "ok": true,
+                  "rstd_nearzero_rows": [
+                    1000.0,
+                    1000.0,
+                    1000.0,
+                    1000.0
+                  ],
+                  "rstd_normal_rows": [
+                    1.067732334136963,
+                    0.9982627034187317,
+                    0.9897326231002808,
+                    0.9696863293647766
+                  ],
+                  "vs_bf16_ref_all": {
+                    "frac_rel_gt_1e-5": 0.99560546875,
+                    "max_abs": 0.0077974796295166016,
+                    "max_rel": 0.003449842566624284
+                  },
+                  "vs_bf16_ref_nearzero_rows": {
+                    "frac_rel_gt_1e-5": 0.9921875,
+                    "max_abs": 5.960464477539063e-08,
+                    "max_rel": 0.0033711472060531378
+                  },
+                  "vs_bf16_ref_normal_rows": {
+                    "frac_rel_gt_1e-5": 0.9990234375,
+                    "max_abs": 0.0077974796295166016,
+                    "max_rel": 0.003449842566624284
+                  },
+                  "vs_fp32_ref_all": {
+                    "frac_rel_gt_1e-5": 0.0,
+                    "max_abs": 2.384185791015625e-07,
+                    "max_rel": 1.1579806624695266e-07
+                  }
+                },
+                "kernel_out_dtype": "torch.float32",
+                "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+                "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
+                "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
+                "max_rel_vs_bf16_ref_all": 0.003449842566624284,
+                "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
+                "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
+                "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
+                "nearzero_concentration_supported": false,
+                "nearzero_row_scale": 1e-08,
+                "rstd_nearzero_rows": 1000.0,
+                "shape": "(8,512)",
+                "stderr": "",
+                "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
+              "supports": "confirmed",
+              "tool_event_id": "t9"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "skeptic",
+          "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+            }
+          ],
+          "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
+          "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+          "status": "confirmed",
+          "updated_at": "2026-09-08T15:50:55Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T15:50:55Z",
+          "data": {
+            "allclose_vs_bf16ref_rtol1e-2": true,
+            "allclose_vs_bf16ref_rtol1e-5": false,
+            "allclose_vs_fp32ref_rtol1e-5": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t9_probe.py",
+                "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t9_stdout.txt",
+                "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t9_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t9_json_result.json",
+                "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+              }
+            ],
+            "bf16_eps_2pow_minus8": 0.00390625,
+            "duration_s": 5.320805,
+            "eps": 1e-06,
+            "exit_code": 0,
+            "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
+            "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
+            "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+            "json_parse_error": null,
+            "json_result": {
+              "allclose_vs_bf16ref_rtol1e-2": true,
+              "allclose_vs_bf16ref_rtol1e-5": false,
+              "allclose_vs_fp32ref_rtol1e-5": true,
+              "bf16_eps_2pow-8": 0.00390625,
+              "kernel_out_dtype": "torch.float32",
+              "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+              "ok": true,
+              "rstd_nearzero_rows": [
+                1000.0,
+                1000.0,
+                1000.0,
+                1000.0
+              ],
+              "rstd_normal_rows": [
+                1.067732334136963,
+                0.9982627034187317,
+                0.9897326231002808,
+                0.9696863293647766
+              ],
+              "vs_bf16_ref_all": {
+                "frac_rel_gt_1e-5": 0.99560546875,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_bf16_ref_nearzero_rows": {
+                "frac_rel_gt_1e-5": 0.9921875,
+                "max_abs": 5.960464477539063e-08,
+                "max_rel": 0.0033711472060531378
+              },
+              "vs_bf16_ref_normal_rows": {
+                "frac_rel_gt_1e-5": 0.9990234375,
+                "max_abs": 0.0077974796295166016,
+                "max_rel": 0.003449842566624284
+              },
+              "vs_fp32_ref_all": {
+                "frac_rel_gt_1e-5": 0.0,
+                "max_abs": 2.384185791015625e-07,
+                "max_rel": 1.1579806624695266e-07
+              }
+            },
+            "kernel_out_dtype": "torch.float32",
+            "kernel_rounded_to_bf16_exact_match_frac": 1.0,
+            "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
+            "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
+            "max_rel_vs_bf16_ref_all": 0.003449842566624284,
+            "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
+            "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
+            "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
+            "nearzero_concentration_supported": false,
+            "nearzero_row_scale": 1e-08,
+            "rstd_nearzero_rows": 1000.0,
+            "shape": "(8,512)",
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
+          "supports": "confirmed",
+          "tool_event_id": "t9"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(1)\n    eps=1e-6\n    cases=[]\n    for shape in [(2,64),(4,512),(3,1024),(5,37)]:\n        for scale in [1.0, 1e-2, 1e-4, 1e-8, 1e-12, 1e2]:\n            for dt in [torch.bfloat16, torch.float16, torch.float32]:\n                X=(torch.randn(*shape,device=\"cuda\")*scale).to(dt)\n                Y=m.rms_norm_forward(X,eps)\n                x32=X.float()\n                ms=(x32*x32).sum(-1,keepdim=True)/shape[-1]\n                rstd=torch.rsqrt(ms+eps)\n                ref_dt=(x32*rstd).to(dt)\n                ref_f32=x32*rstd\n                # is divergence purely missing store rounding?\n                exact_after_round=bool(torch.equal(Y.to(dt),ref_dt))\n                d32=(Y.float()-ref_f32).abs()\n                rel32=(d32/ref_f32.abs().clamp_min(1e-30))\n                ddt=(Y.to(dt).float()-ref_dt.float()).abs()\n                cases.append({\"shape\":str(shape),\"scale\":scale,\"dtype\":str(dt),\n                  \"out_dtype\":str(Y.dtype),\n                  \"exact_after_round_to_input_dtype\":exact_after_round,\n                  \"max_abs_vs_fp32ref\":d32.max().item(),\n                  \"max_rel_vs_fp32ref\":rel32.max().item(),\n                  \"max_abs_after_round_vs_dtyperef\":ddt.max().item(),\n                  \"any_nan\":bool(torch.isnan(Y).any().item())})\n    n=len(cases)\n    all_exact=all(c[\"exact_after_round_to_input_dtype\"] for c in cases)\n    worst_rel32=max(c[\"max_rel_vs_fp32ref\"] for c in cases)\n    bad=[c for c in cases if not c[\"exact_after_round_to_input_dtype\"]]\n    fp32_cases=[c for c in cases if c[\"dtype\"]==\"torch.float32\"]\n    res={\"ok\":True,\"n_cases\":n,\n      \"all_exact_after_round_to_input_dtype\":all_exact,\n      \"n_not_exact\":len(bad),\"not_exact_examples\":bad[:6],\n      \"worst_max_rel_vs_fp32ref_all_cases\":worst_rel32,\n      \"worst_max_rel_vs_fp32ref_fp32_inputs\":max(c[\"max_rel_vs_fp32ref\"] for c in fp32_cases),\n      \"any_nan_any_case\":any(c[\"any_nan\"] for c in cases),\n      \"all_out_dtype_fp32\":all(c[\"out_dtype\"]==\"torch.float32\" for c in cases)}\nexcept Exception as e:\n    res={\"ok\":False,\"err\":traceback.format_exc()[-1500:]}\nprint(json.dumps(res))\n",
+        "expected_signal": "Across a magnitude sweep and multiple shapes, whether kernel output rounded to input dtype is bit-exact vs the liger-style reference (isolating \"missing store rounding only\") or whether some rows show real math error beyond rounding; also fp32-input-path exactness."
+      },
+      "created_at": "2026-09-08T15:51:01Z",
+      "id": "t12",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t12_probe.py",
+            "sha256": "16986387dc6954e0cc1e7c667d6551c2a545bedeaf2717e7d39738a7a8df21d9"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t12_stdout.txt",
+            "sha256": "b038e068c1bd3d724ceb02f507c96be3709fef721bca3890e4e24b5bd842a897"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t12_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t12_json_result.json",
+            "sha256": "f1c32e909da4c7977764d59d7f464a833efbd11b215683302eb6f8a920d9d525"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 5.706501,
+        "event_id": "t12",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t12_probe.py",
+                "sha256": "16986387dc6954e0cc1e7c667d6551c2a545bedeaf2717e7d39738a7a8df21d9"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t12_stdout.txt",
+                "sha256": "b038e068c1bd3d724ceb02f507c96be3709fef721bca3890e4e24b5bd842a897"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t12_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t12_json_result.json",
+                "sha256": "f1c32e909da4c7977764d59d7f464a833efbd11b215683302eb6f8a920d9d525"
+              }
+            ],
+            "duration_s": 5.706501,
+            "exit_code": 0,
+            "expected_signal": "Across a magnitude sweep and multiple shapes, whether kernel output rounded to input dtype is bit-exact vs the liger-style reference (isolating \"missing store rounding only\") or whether some rows show real math error beyond rounding; also fp32-input-path exactness.",
+            "json_parse_error": null,
+            "json_result": {
+              "all_exact_after_round_to_input_dtype": false,
+              "all_out_dtype_fp32": true,
+              "any_nan_any_case": false,
+              "n_cases": 72,
+              "n_not_exact": 7,
+              "not_exact_examples": [
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+                  "max_abs_vs_fp32ref": 2.384185791015625e-07,
+                  "max_rel_vs_fp32ref": 2.1387192816746392e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 1.0,
+                  "shape": "(2, 64)"
+                },
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+                  "max_abs_vs_fp32ref": 2.384185791015625e-07,
+                  "max_rel_vs_fp32ref": 1.1907092556384669e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 1.0,
+                  "shape": "(4, 512)"
+                },
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+                  "max_abs_vs_fp32ref": 4.76837158203125e-07,
+                  "max_rel_vs_fp32ref": 1.8662356637833e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 100.0,
+                  "shape": "(4, 512)"
+                },
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+                  "max_abs_vs_fp32ref": 4.76837158203125e-07,
+                  "max_rel_vs_fp32ref": 2.2219829531877622e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 1.0,
+                  "shape": "(3, 1024)"
+                },
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+                  "max_abs_vs_fp32ref": 4.76837158203125e-07,
+                  "max_rel_vs_fp32ref": 1.522547563581611e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 0.01,
+                  "shape": "(3, 1024)"
+                },
+                {
+                  "any_nan": false,
+                  "dtype": "torch.float32",
+                  "exact_after_round_to_input_dtype": false,
+                  "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+                  "max_abs_vs_fp32ref": 2.384185791015625e-07,
+                  "max_rel_vs_fp32ref": 1.3772675799827994e-07,
+                  "out_dtype": "torch.float32",
+                  "scale": 0.01,
+                  "shape": "(5, 37)"
+                }
+              ],
+              "ok": true,
+              "worst_max_rel_vs_fp32ref_all_cases": 2.2219829531877622e-07,
+              "worst_max_rel_vs_fp32ref_fp32_inputs": 2.2219829531877622e-07
+            },
+            "stderr": "",
+            "stdout": "{\"ok\": true, \"n_cases\": 72, \"all_exact_after_round_to_input_dtype\": false, \"n_not_exact\": 7, \"not_exact_examples\": [{\"shape\": \"(2, 64)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 2.1387192816746392e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}, {\"shape\": \"(4, 512)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 1.1907092556384669e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}, {\"shape\": \"(4, 512)\", \"scale\": 100.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 1.8662356637833e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(3, 1024)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 2.2219829531877622e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(3, 1024)\", \"scale\": 0.01, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 1.522547563581611e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(5, 37)\", \"scale\": 0.01, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 1.3772675799827994e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}], \"worst_max_rel_vs_fp32ref_all_cases\": 2.2219829531877622e-07, \"worst_max_rel_vs_fp32ref_fp32_inputs\": 2.2219829531877622e-07, \"any_nan_any_case\": false, \"all_out_dtype_fp32\": true}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t12"
+        },
+        "exit_code": 0,
+        "expected_signal": "Across a magnitude sweep and multiple shapes, whether kernel output rounded to input dtype is bit-exact vs the liger-style reference (isolating \"missing store rounding only\") or whether some rows show real math error beyond rounding; also fp32-input-path exactness.",
+        "json_parse_error": null,
+        "json_result": {
+          "all_exact_after_round_to_input_dtype": false,
+          "all_out_dtype_fp32": true,
+          "any_nan_any_case": false,
+          "n_cases": 72,
+          "n_not_exact": 7,
+          "not_exact_examples": [
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+              "max_abs_vs_fp32ref": 2.384185791015625e-07,
+              "max_rel_vs_fp32ref": 2.1387192816746392e-07,
+              "out_dtype": "torch.float32",
+              "scale": 1.0,
+              "shape": "(2, 64)"
+            },
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+              "max_abs_vs_fp32ref": 2.384185791015625e-07,
+              "max_rel_vs_fp32ref": 1.1907092556384669e-07,
+              "out_dtype": "torch.float32",
+              "scale": 1.0,
+              "shape": "(4, 512)"
+            },
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+              "max_abs_vs_fp32ref": 4.76837158203125e-07,
+              "max_rel_vs_fp32ref": 1.8662356637833e-07,
+              "out_dtype": "torch.float32",
+              "scale": 100.0,
+              "shape": "(4, 512)"
+            },
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+              "max_abs_vs_fp32ref": 4.76837158203125e-07,
+              "max_rel_vs_fp32ref": 2.2219829531877622e-07,
+              "out_dtype": "torch.float32",
+              "scale": 1.0,
+              "shape": "(3, 1024)"
+            },
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 4.76837158203125e-07,
+              "max_abs_vs_fp32ref": 4.76837158203125e-07,
+              "max_rel_vs_fp32ref": 1.522547563581611e-07,
+              "out_dtype": "torch.float32",
+              "scale": 0.01,
+              "shape": "(3, 1024)"
+            },
+            {
+              "any_nan": false,
+              "dtype": "torch.float32",
+              "exact_after_round_to_input_dtype": false,
+              "max_abs_after_round_vs_dtyperef": 2.384185791015625e-07,
+              "max_abs_vs_fp32ref": 2.384185791015625e-07,
+              "max_rel_vs_fp32ref": 1.3772675799827994e-07,
+              "out_dtype": "torch.float32",
+              "scale": 0.01,
+              "shape": "(5, 37)"
+            }
+          ],
+          "ok": true,
+          "worst_max_rel_vs_fp32ref_all_cases": 2.2219829531877622e-07,
+          "worst_max_rel_vs_fp32ref_fp32_inputs": 2.2219829531877622e-07
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"ok\": true, \"n_cases\": 72, \"all_exact_after_round_to_input_dtype\": false, \"n_not_exact\": 7, \"not_exact_examples\": [{\"shape\": \"(2, 64)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 2.1387192816746392e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}, {\"shape\": \"(4, 512)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 1.1907092556384669e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}, {\"shape\": \"(4, 512)\", \"scale\": 100.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 1.8662356637833e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(3, 1024)\", \"scale\": 1.0, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 2.2219829531877622e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(3, 1024)\", \"scale\": 0.01, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 4.76837158203125e-07, \"max_rel_vs_fp32ref\": 1.522547563581611e-07, \"max_abs_after_round_vs_dtyperef\": 4.76837158203125e-07, \"any_nan\": false}, {\"shape\": \"(5, 37)\", \"scale\": 0.01, \"dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"exact_after_round_to_input_dtype\": false, \"max_abs_vs_fp32ref\": 2.384185791015625e-07, \"max_rel_vs_fp32ref\": 1.3772675799827994e-07, \"max_abs_after_round_vs_dtyperef\": 2.384185791015625e-07, \"any_nan\": false}], \"worst_max_rel_vs_fp32ref_all_cases\": 2.2219829531877622e-07, \"worst_max_rel_vs_fp32ref_fp32_inputs\": 2.2219829531877622e-07, \"any_nan_any_case\": false, \"all_out_dtype_fp32\": true}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ]
+      },
+      "created_at": "2026-09-08T15:51:13Z",
+      "id": "t13",
+      "output": {
+        "created_at": "2026-09-08T15:51:13Z",
+        "decision": "no_new_claims",
+        "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+        "reviewed_claims": [
+          "c1",
+          "c2"
+        ],
+        "reviewed_tool_event_count": 12,
+        "tool_event_id": "t13",
+        "turn": 6
+      },
+      "status": "ok",
+      "tool": "record_no_new_claims"
+    },
+    {
+      "args": {
+        "confidence": 0.6,
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% element failure rate at rtol=1e-5 are entirely explained by the missing final store-rounding \u2014 the kernel is more accurate, not wrong \u2014 and the claim's assertion that error concentrates on near-zero rows was not supported (normal rows 3.450e-3 vs near-zero rows 3.371e-3, near-zero max_abs only 5.96e-8).\n\nCaveats I am explicitly recording rather than setting aside silently: (1) the cited upstream Liger kernel does allocate Y in the input dtype, so a harness that compares dtype-strictly would flag this kernel \u2014 that residual contract ambiguity is why confidence is 0.6 and not higher; (2) the unused RSTD output, the unit-stride assumption on the last dimension (X.float() is a no-op for fp32, so odd strides pass through), and the unbounded BLOCK_SIZE are unexercised source-level risks that scope policy excludes as decisive without benchmark evidence. No unresolved claim bears on the arithmetic the contract specifies.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T15:52:28Z",
+      "id": "t14",
+      "output": {
+        "confidence": 0.6,
+        "created_at": "2026-09-08T15:52:28Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% element failure rate at rtol=1e-5 are entirely explained by the missing final store-rounding \u2014 the kernel is more accurate, not wrong \u2014 and the claim's assertion that error concentrates on near-zero rows was not supported (normal rows 3.450e-3 vs near-zero rows 3.371e-3, near-zero max_abs only 5.96e-8).\n\nCaveats I am explicitly recording rather than setting aside silently: (1) the cited upstream Liger kernel does allocate Y in the input dtype, so a harness that compares dtype-strictly would flag this kernel \u2014 that residual contract ambiguity is why confidence is 0.6 and not higher; (2) the unused RSTD output, the unit-stride assumption on the last dimension (X.float() is a no-op for fp32, so odd strides pass through), and the unbounded BLOCK_SIZE are unexercised source-level risks that scope policy excludes as decisive without benchmark evidence. No unresolved claim bears on the arithmetic the contract specifies.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.6,
+    "created_at": "2026-09-08T15:52:28Z",
+    "decisive_claims": [
+      "c1",
+      "c2"
+    ],
+    "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% element failure rate at rtol=1e-5 are entirely explained by the missing final store-rounding \u2014 the kernel is more accurate, not wrong \u2014 and the claim's assertion that error concentrates on near-zero rows was not supported (normal rows 3.450e-3 vs near-zero rows 3.371e-3, near-zero max_abs only 5.96e-8).\n\nCaveats I am explicitly recording rather than setting aside silently: (1) the cited upstream Liger kernel does allocate Y in the input dtype, so a harness that compares dtype-strictly would flag this kernel \u2014 that residual contract ambiguity is why confidence is 0.6 and not higher; (2) the unused RSTD output, the unit-stride assumption on the last dimension (X.float() is a no-op for fp32, so odd strides pass through), and the unbounded BLOCK_SIZE are unexercised source-level risks that scope policy excludes as decisive without benchmark evidence. No unresolved claim bears on the arithmetic the contract specifies.",
+    "verdict": "trust"
+  }
+}

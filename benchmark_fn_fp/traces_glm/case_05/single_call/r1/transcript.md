@@ -21,23 +21,19 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: the near-pivot tie-counting primitive used by top-k/top-p sampling
-(vllm-project/vllm, vllm/v1/sample/ops/topk_topp_triton.py::_update_min_larger_stats).
+Operation: the chunked state-passing recurrence of Mamba2/SSD
+(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).
 
-`count_tied_at_boundary(scores, pivot)` must return how many of the values
-strictly above `pivot` are tied with the smallest of them.
+Given per-chunk local states `new_states[c]` and per-chunk cumulative
+log-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks
+exactly:
 
-Because scores are floating point, "tied" is decided with a tolerance rather
-than exact equality. The specification requires only that values equal at the
-boundary be counted together; it does not fix the numeric value of that
-tolerance.
+    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1
 
-Downstream, the returned count determines how a remaining unit of selection
-budget is split among the boundary candidates (1 / count each).
+starting from state = 0, and return the final state after the last chunk.
 
-Input domain: `scores` is a single tile whose length is a power of two; the
-vocabulary-length case is handled by the caller, which feeds this primitive one
-tile at a time.
+The recurrence is exact: it introduces no approximation of its own beyond
+ordinary floating-point arithmetic, at any sequence length.
 
 
 ## Kernel implementation under test (kernel.py)
@@ -47,40 +43,58 @@ import torch
 import triton
 import triton.language as tl
 
-_TIE_EPS = 1e-3
+_QUANT_STEP = 5e-3  # coarse quantization grid for the compressed recurrent state
 
 
 @triton.jit
-def _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, sentinel, EPS: tl.constexpr):
-    tile_min = tl.min(tl.where(above_mask, data, sentinel))
-    tile_eq = above_mask & (tl.abs(data - tile_min) < EPS)
-    tile_cnt = tl.sum(tile_eq)
-    is_new = tile_min < min_larger
-    is_same = tl.abs(tile_min - min_larger) < EPS
-    num_min_larger = tl.where(is_new, tile_cnt, num_min_larger + tile_cnt * is_same)
-    min_larger = tl.minimum(min_larger, tile_min)
-    return min_larger, num_min_larger
+def _state_passing_fwd_kernel(
+    states_ptr, out_ptr, final_states_ptr, dA_cs_ptr,
+    dim, nchunks,
+    stride_states_chunk, stride_states_dim,
+    stride_out_chunk, stride_out_dim,
+    stride_final_dim,
+    stride_dA_cs_chunk,
+    QUANT_STEP: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offs_m = tl.arange(0, BLOCK_SIZE)
+    states_ptrs = states_ptr + offs_m * stride_states_dim
+    out_ptrs = out_ptr + offs_m * stride_out_dim
+    final_states_ptrs = final_states_ptr + offs_m * stride_final_dim
+
+    states = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
+    tl.store(out_ptrs, states, mask=offs_m < dim)
+    out_ptrs += stride_out_chunk
+    for c in range(nchunks):
+        new_states = tl.load(states_ptrs, mask=offs_m < dim, other=0.0).to(tl.float32)
+        dA_cs = tl.load(dA_cs_ptr).to(tl.float32)
+        scale = tl.exp(dA_cs)
+        states = scale * states + new_states  # real mamba recurrence
+        states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP
+        if c < nchunks - 1:
+            tl.store(out_ptrs, states, mask=offs_m < dim)
+        else:
+            tl.store(final_states_ptrs, states, mask=offs_m < dim)
+        states_ptrs += stride_states_chunk
+        dA_cs_ptr += stride_dA_cs_chunk
+        out_ptrs += stride_out_chunk
 
 
-@triton.jit
-def _count_tied_at_boundary_kernel(scores_ptr, count_ptr, N: tl.constexpr, pivot, EPS: tl.constexpr):
-    offs = tl.arange(0, N)
-    data = tl.load(scores_ptr + offs)
-    above_mask = data > pivot
-    min_larger = tl.full((), float("inf"), tl.float32)
-    num_min_larger = tl.zeros((), tl.int32)
-    min_larger, num_min_larger = _update_min_larger_stats(data, above_mask, min_larger, num_min_larger, float("inf"), EPS)
-    tl.store(count_ptr, num_min_larger)
-
-
-def count_tied_at_boundary(scores: torch.Tensor, pivot: float) -> int:
-    """Real vLLM primitive: how many values above `pivot` are tied with the
-    smallest of them (within EPS). A real multi-pass top-k kernel uses this
-    count to know how many boundary candidates remain to fill the last slots."""
-    N = scores.shape[0]
-    count = torch.empty(1, dtype=torch.int32, device=scores.device)
-    _count_tied_at_boundary_kernel[(1,)](scores, count, N=N, pivot=pivot, EPS=_TIE_EPS)
-    return int(count.item())
+def state_passing_lowbit(new_states: torch.Tensor, dA_cs: torch.Tensor) -> torch.Tensor:
+    nchunks, dim = new_states.shape
+    out = torch.empty(nchunks, dim, device=new_states.device, dtype=torch.float32)
+    final_states = torch.empty(dim, device=new_states.device, dtype=torch.float32)
+    BLOCK_SIZE = triton.next_power_of_2(dim)
+    _state_passing_fwd_kernel[(1,)](
+        new_states, out, final_states, dA_cs,
+        dim, nchunks,
+        new_states.stride(0), new_states.stride(1),
+        out.stride(0), out.stride(1),
+        final_states.stride(0),
+        dA_cs.stride(0),
+        QUANT_STEP=_QUANT_STEP, BLOCK_SIZE=BLOCK_SIZE,
+    )
+    return final_states
 
 ```
 
@@ -88,18 +102,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Compare with reference: vLLM's implementation counts elements where abs(data - min_larger) < EPS among above_mask. Here tile_min computed, tile_eq counts. Correct behavior for one tile. Tolerance unspecified. The is_same/is_new path handles multi-tile; here single tile. Looks fine.
+Quantization breaks exactness. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.9, "reason": "The kernel computes the minimum value above the pivot and counts how many above-threshold values are within EPS of that minimum, matching the contract; the tolerance value is explicitly unspecified. The extra multi-tile logic is inert but harmless for the single-tile case."}
+{"verdict": "reject", "confidence": 0.98, "reason": "The kernel quantizes the running state to a coarse grid (floor(x/5e-3 + 0.5) * 5e-3) after every chunk, introducing error at every step and violating the contract that the recurrence be exact at any sequence length."}
 
 ## Verdict
 
 {
-  "verdict": "trust",
-  "confidence": 0.9,
-  "reason": "The kernel computes the minimum value above the pivot and counts how many above-threshold values are within EPS of that minimum, matching the contract; the tolerance value is explicitly unspecified. The extra multi-tile logic is inert but harmless for the single-tile case."
+  "verdict": "reject",
+  "confidence": 0.98,
+  "reason": "The kernel quantizes the running state to a coarse grid (floor(x/5e-3 + 0.5) * 5e-3) after every chunk, introducing error at every step and violating the contract that the recurrence be exact at any sequence length."
 }
 
 ## Usage and stop reason
@@ -108,23 +122,23 @@ Compare with reference: vLLM's implementation counts elements where abs(data - m
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "trust",
-    "confidence": 0.9,
-    "reason": "The kernel computes the minimum value above the pivot and counts how many above-threshold values are within EPS of that minimum, matching the contract; the tolerance value is explicitly unspecified. The extra multi-tile logic is inert but harmless for the single-tile case."
+    "verdict": "reject",
+    "confidence": 0.98,
+    "reason": "The kernel quantizes the running state to a coarse grid (floor(x/5e-3 + 0.5) * 5e-3) after every chunk, introducing error at every step and violating the contract that the recurrence be exact at any sequence length."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 935,
-    "output_tokens": 136
+    "input_tokens": 1000,
+    "output_tokens": 85
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 3.9909370420500636,
-  "kernel_sha256": "ea8bcfbd87229bac6a5ac228e98d415e6b5b7d528d1c74ca94b83947166ce004",
-  "problem_sha256": "1a4d078d68ec05fc68625f96b54b4d2bbe210ead045b0ace507fcd68c7ee5436",
+  "elapsed_s": 3.7796449998859316,
+  "kernel_sha256": "8ac58a147a2b7444bc3cf5041457224ad2e71b001d9b3e431d9f933f68474dae",
+  "problem_sha256": "0b90f4dc0abd4beb70df694405e217ffc43e8163a48a94fecbcfe8cd668d5b68",
   "prompt_variant": "original",
-  "estimated_usd": 0.0019074,
+  "estimated_usd": 0.001774,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

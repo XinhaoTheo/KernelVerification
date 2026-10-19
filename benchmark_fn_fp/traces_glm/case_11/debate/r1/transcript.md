@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_11`
-- Turns: 7
-- Tool events: 16
-- Claims: 3
+- Entry: `case_12`
+- Turns: 10
+- Tool events: 13
+- Claims: 1
 - Description updates: 1
-- LLM time: 104.746s across 6 calls | tokens: in=139310 out=5730 total=145040
+- LLM time: 82.115s across 9 calls | tokens: in=123821 out=4174 total=127995
 - Stop reason: `verdict_recorded`
-- Verdict: `trust`
-- Confidence: 0.85
+- Verdict: `reject`
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,218 +26,221 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
   Output summary:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
   Output summary:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
   Output summary:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_11",
+    "entry": "case_12",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_11"
+    "entry": "case_12"
   }
 
-### Turn 2 - `describer` (31.257620615999997s, in=5990 out=1657)
+### Turn 2 - `describer` (13.066508912000018s, in=4323 out=673)
 
 Message:
 
 ```text
-I have full artifact context already, so I'll analyze the kernel against the contract and record a structured description update for the Skeptic.
-
-Key observations: the kernel implements both pairing modes; the non-interleaved path assumes full-dimension rotation (rotary_dim == headdim), cos/sin are indexed assuming contiguity (no strides passed), and odd headdim or non-contiguous inputs are unguarded surfaces.
+The key contract discrepancy is visible: the kernel adds eps *outside* the sqrt (`1/(sqrt(ms)+eps)`) while the contract specifies `1/sqrt(ms+eps)`. I'll record this in the description model.
 ```
 
 Tool calls:
 
-- `record_description_update -> t5 ok`
+- `record_description_update -> t5 error`
   Args:
   {
     "contract_model": [
-      "apply_rotary(x, cos, sin, interleaved) rotates paired feature dims of x (seqlen, nheads, headdim) by position-dependent angles given by cos/sin of shape (seqlen, headdim//2)",
-      "interleaved=False: dim i pairs with dim i + headdim/2; interleaved=True: dim 2i pairs with dim 2i+1; both must be implemented and self-consistent",
-      "Rotation math per pair: o0 = x0*cos - x1*sin, o1 = x0*sin + x1*cos, with cos/sin indexed by (position, pair index)",
-      "The spec's deeper invariant is that q\u00b7k dot products depend on relative position only, so sign conventions and pairing must be exact",
-      "The spec does not fix which pairing a model uses; both flag values are contractually required to be correct"
+      "RMSNorm forward per Liger-Kernel: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square + eps), y = x*rstd",
+      "Epsilon is inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+      "Also produces/stores a per-row rstd output alongside y"
     ],
-    "kernel_model": [
-      "Triton kernel with grid (nheads
-  ...[truncated 3845 chars]
+    "kernel_model</arg_key>[\"kernel.py computes mean_square = sum(x*x)/n_cols with masked loads (other=0), matching contract\", \"rstd = 1.0/(_sqrt(mean_square) + eps) at line 23: eps is added AFTER the sqrt, not inside it (rstd = 1/(sqrt(ms)+eps)), deviating from the contract formula 1/sqrt(ms+eps)\", \"Single-block per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes each row fits in one block and num_rows, n_cols = X.shape (2D only)\", \"Assumes X is float (t
+  ...[truncated 1584 chars]
   Output summary:
   {
-    "contract_model": [
-      "apply_rotary(x, cos, sin, interleaved) rotates paired feature dims of x (seqlen, nheads, headdim) by position-dependent angles given by cos/sin of shape (seqlen, headdim//2)",
-      "interleaved=False: dim i pairs with dim i + headdim/2; interleaved=True: dim 2i pairs with dim 2i+1; both must be implemented and self-consistent",
-      "Rotation math per pair: o0 = x0*cos - x1*sin, o1 = x0*sin + x1*cos, with cos/sin indexed by (position, pair index)",
-      "The spec's deeper invariant is that q\u00b7k dot products depend on relative position only, so sign conventions and pairing must be exact",
-      "The spec does not fix which pairing a model uses; both flag values are contractually required to be correct"
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Triton kernel with grid (nheads, seqlen) and BLOCK_H=1, BLOCK_M=1, so one program handles one head and one position; BLOCK_K = next_power_of_2(headdim)",
-      "cos/sin are loaded assuming contiguous layout (offset rm*rotary_dim_half + rk_half, no strides passed) and cast to fp32",
-      "Non-interleaved path (lines 27-36): loads x at dims [0, headdim/2) and pairs with dim+rotary_dim_half, computes standar
-  ...[truncated 3545 chars]
+    "error_type": "ToolRegistryError",
+    "message": "tool record_description_update missing required arg: summary"
+  }
 
-### Turn 3 - `skeptic` (22.698231668000005s, in=14834 out=1279)
+### Turn 3 - `skeptic` (7.8037911590000135s, in=7487 out=385)
 
 Message:
 
 ```text
-I'll record the highest-risk, directly testable hypotheses tied to the stated pairing contract, which explicitly requires both `interleaved=True` and `interleaved=False` to be correct.
+The kernel clearly computes rstd = 1/(sqrt(mean_square) + eps) at line 23, while the contract requires 1/sqrt(mean_square + eps). This is the primary risk, especially for near-zero rows where the contract explicitly demands stable behavior. I'll record this claim.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The interleaved branch relies on the Triton reshape/split/join chain pairing logical lanes with the right memory offsets; if the reshape order does not match the pointer arithmetic, dimension 2i would get paired with the wrong angle or wrong partner, breaking the contractually required interleaved=True output.",
+    "rationale": "Line 23 of kernel.py computes rstd = 1.0/(_sqrt(mean_square) + eps), which is mathematically different from the contract's 1/sqrt(mean_square + eps). For a row of zeros with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 a 1000x divergence exactly where the contract demands stability.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "interleaved=True: dimension 2i is paired with dimension 2i+1; the spec requires both flag values to be implemented correctly."
+        "summary": "Contract states 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly requires that 'a row of (near-)zero input does not blow the output up'. The kernel's placement of eps outside sqrt (kernel.py line 23: 1.0/(_sqrt(mean_square)+eps)) violates the stated formula and this near-zero-row requirement."
       }
     ],
-    "scope_rationale": "The contract explicitly requires the interleaved=True pairing (dim 2i with dim 2i+1) to be correct; if tl.split/join/reshape in lines 43-46 mismatches the pointer arithmetic in lines 39-40, interleaved output
-  ...[truncated 527 chars]
+    "statement": "The kernel computes rstd
+  ...[truncated 295 chars]
   Output summary:
   {
-    "id": "c1",
-    "rationale": "The interleaved branch relies on the Triton reshape/split/join chain pairing logical lanes with the right memory offsets; if the reshape order does not match the pointer arithmetic, dimension 2i would get paired with the wrong angle or wrong partner, breaking the contractually required interleaved=True output.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "interleaved=True: dimension 2i is paired with dimension 2i+1; the spec requires both flag values to be implemented correctly."
-      }
-    ],
-    "scope_rationale": "The contract explicitly requires the interleaved=True pairing (dim 2i with dim 2i+1) to be correct; if tl.split/join/reshape in lines 43-46 mismatches the pointer arithmetic in lines 39-40, interleaved output at dims (2i, 2i+1) would be rotated with wrong partners/angles, violating the stated pairing. Representative inputs: x of shape (seqlen, nheads, headdim) with even headdim, contiguous cos/sin (seqlen, headdim//2), interleaved=True.",
-    "statement": "On the interleaved=True path, the reshape/split/join sequence (lines 43-46) may pair the wrong even/odd lanes with cos/sin values, prod
-  ...[truncated 161 chars]
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 4 - `skeptic` (7.086260466999988s, in=8445 out=404)
+
+Message:
+
+```text
+The prior claim failed to record due to a missing scope_rationale; I'll re-send it correctly.
+```
+
+Tool calls:
+
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Source shows only the first headdim//2 and second headdim//2 dims stored; if a reference/test expects tail dims beyond the paired region to be copied through, garbage would appear, but per the stated pairing the whole headdim is paired, so scope hinges on whether inputs can have odd headdim or partial rotary dims.",
-    "scope": "unknown",
-    "scope_rationale": "problem.txt pairs dim i with i+headdim/2 and dim 2i with 2i+1, which presumes even headdim and full-dimension rotation; it does not state whether odd headdim or partial rotary_dim inputs are in the verification domain (no test code present), so scope is unknown.",
-    "statement": "For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet ret
-  ...[truncated 122 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "Source shows only the first headdim//2 and second headdim//2 dims stored; if a reference/test expects tail dims beyond the paired region to be copied through, garbage would appear, but per the stated pairing the whole headdim is paired, so scope hinges on whether inputs can have odd headdim or partial rotary dims.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "problem.txt pairs dim i with i+headdim/2 and dim 2i with 2i+1, which presumes even headdim and full-dimension rotation; it does not state whether odd headdim or partial rotary_dim inputs are in the verification domain (no test code present), so scope is unknown.",
-    "statement": "For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet returns torch.empty_like(x), so apply_rotary can return uninitialized garbage in that position instead of a defined value.",
-    "status": "open"
-  }
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "Triton reshape of a block built from strided pointer arithmetic is a logical reshaping of the loaded values; for BLOCK_K > headdim, the mapping between rk indices and pair index i (cos[i]) versus the split lanes may be off by the padding structure if BLOCK_K//2 != rotary_dim_half, e.g. headdim=96 \u2192 BLOCK_K=128.",
+    "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The operation must rotate each pair of feature dimensions by the position-dependent angle from cos/sin of shape (seqlen, headdim//2); any headdim consistent with this contract admits such inputs."
+        "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
       }
     ],
-    "scope_rationale": "The contract defines cos/sin as (seqlen, headdim//2) for arbitrary headdim; headdim not a power of two (e.g. 96) is consistent with 
-  ...[truncated 515 chars]
+    "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and exp
+  ...[truncated 553 chars]
   Output summary:
   {
-    "id": "c3",
-    "rationale": "Triton reshape of a block built from strided pointer arithmetic is a logical reshaping of the loaded values; for BLOCK_K > headdim, the mapping between rk indices and pair index i (cos[i]) versus the split lanes may be off by the padding structure if BLOCK_K//2 != rotary_dim_half, e.g. headdim=96 \u2192 BLOCK_K=128.",
+    "id": "c1",
+    "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The operation must rotate each pair of feature dimensions by the position-dependent angle from cos/sin of shape (seqlen, headdim//2); any headdim consistent with this contract admits such inputs."
+        "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
       }
     ],
-    "scope_rationale": "The contract defines cos/sin as (seqlen, headdim//2) for arbitrary headdim; headdim not a power of two (e.g. 96) is consistent with the stated shapes, and in that case BLOCK_K=128 while rotary_dim_half=48, so the reshape [BLOCK_K//2,2]=64 pairs must still map lane i to cos index i only for i<48.",
-    "statement": "On the interleaved path with headdim not a power of two (BLOCK_K = next_power_of_2(headdim) > headdim), the reshape to [BLOCK_H, BLOCK_M, BLOCK_K//2, 2] combined with cos loaded at logical index rk_half 
-  ...[truncated 149 chars]
+    "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+    "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row 
+  ...[truncated 187 chars]
 
-### Turn 4 - `experimenter` (20.247460343s, in=19514 out=1356)
+### Turn 5 - `describer` (12.235516272999973s, in=8565 out=751)
 
 Message:
 
 ```text
-I'll launch three runtime probes for the three open claims: interleaved pairing correctness (c1), odd headdim garbage output (c2), and non-power-of-two headdim on the interleaved path (c3). Each compares against an independent PyTorch reference with per-lane metrics.
+My previous description update failed due to malformed args, so I'm re-recording the structured description of case_12 now.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t9 ok`
+- `record_description_update -> t8 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nS, H, D = 8, 3, 64\ndev = \"cuda\"\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\ncos = torch.randn(S, D // 2, device=dev)\nsin = torch.randn(S, D // 2, device=dev)\n\nout = k.apply_rotary(x, cos, sin, True)\n# independent reference: pair dim 2i with 2i+1\nx0 = x[..., 0::2]; x1 = x[..., 1::2]\nref = torch.empty_like(x)\nref[..., 0::2] = x0 * cos[:, None, :] - x1 * sin[:, None, :]\nref[..., 1::2] = x0 * sin[:, None, :] + x1 * cos[:, None, :]\n\ndiff = (out - ref).abs()\nmax_err = diff.max().item()\n# per-lane worst error\nlane0 =
-  ...[truncated 729 chars]
+    "contract_model": [
+      "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+      "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+      "Contract also produces a per-row rstd value alongside y"
+    ],
+    "kernel_model": [
+      "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+      "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+      "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton
+  ...[truncated 2030 chars]
   Output summary:
   {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "195b084963cbea4a03298f9e20be3035bb9c5d68ff8768c957d9260ea5ee236e"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "73bb9dfc9f341bb38ea232fcda3912af5347e6b9da5f49560473a50c1fea3bd2"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "5fd223a83ec21ca493820210ee9652a18bae40735c23039fc367792dcb63d434"
-      }
+    "contract_model": [
+      "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+      "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+      "Contract also produces a per-row rstd value alongside y"
     ],
-    "claim_id": "c1",
-    "claim_statement": "On the interleaved=True path, the reshape/split/join sequence (lines 43-46) may pair the wrong even/odd lanes with cos/sin values, producing output where dimension 2i is not rotated as x0*cos - x1*sin with the ang
-  ...[truncated 3057 chars]
+    "impact_on_claims": [],
+    "kernel_model": [
+      "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+      "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+      "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+      "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+    ],
+    "open_questions": [
+      "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+      "Is the RSTD 
+  ...[truncated 1720 chars]
+
+### Turn 6 - `skeptic` (5.9146417210000095s, in=14672 out=261)
+
+Message:
+
+```text
+The primary in-scope defect (eps placed outside the sqrt at line 23) is already recorded as claim c1 with contract evidence. I've reviewed the rest of the kernel: the masked reduction, mean_square division, RSTD storage, and row indexing all match the contract; remaining risks (non-2D inputs, very large n_cols) are outside the stated 2D RMSNorm forward domain and not contract-backed. No new high-quality in-scope claims.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t9 ok`
+  Args:
+  {
+    "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+    "reviewed_claims": [
+      "c1"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+    "reviewed_claims": [
+      "c1"
+    ],
+    "reviewed_tool_event_count": 8,
+    "turn": 6
+  }
+
+### Turn 7 - `experimenter` (10.933456231000036s, in=15715 out=600)
+
+Message:
+
+```text
+I'll probe claim c1 directly: run the kernel on an all-zero row and tiny rows with eps=1e-6 and compare rstd/output against the contract formula.
+```
+
+Tool calls:
+
 - `run_claim_probe -> t10 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(1)\nS, H, D = 4, 2, 65  # odd headdim\ndev = \"cuda\"\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\ncos = torch.randn(S, D // 2, device=dev)\nsin = torch.randn(S, D // 2, device=dev)\nout = k.apply_rotary(x, cos, sin, True)\nref = torch.empty_like(x)\nx0 = x[..., 0::2][:, :, :D//2]; x1 = x[..., 1::2][:, :, :D//2]\nc = cos[:, None, :]; s = sin[:, None, :]\nref[..., 0::2][:, :, :D//2] = x0*c - x1*s\nref[..., 1::2][:, :, :D//2] = x0*s + x1*c\n# reference for last dim: unspecified by contract; check what kernel produced\nlast_dim_vals 
-  ...[truncated 571 chars]
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_12\")\nfrom kernel import rms_norm_forward\n\ndef ref(X, eps):\n    ms = (X * X).sum(dim=1, dtype=torch.float32) / X.shape[1]\n    rstd = 1.0 / torch.sqrt(ms + eps)\n    return X * rstd.unsqueeze(1), rstd\n\neps = 1e-6\n# rows: all-zero, tiny (1e-8 scale), normal randn\nX = torch.cat([\n    torch.zeros(1, 64),\n    torch.full((1, 64), 1e-8),\n    torch.randn(4, 64),\n]).cuda()\n\nY = rms_norm_forward(X, eps)\nYr, rstd_ref = ref(X, eps)\n# kernel rstd implied from Y/X where nonzero\nX32 = X.float()\nratio = (Y.float() / X32).nan_to_num(0)  # zero rows give 0/0\n# compute kernel rstd analytically for the all-zero row: 1/(0+eps)=1e6 vs ref 1/sqrt(eps)=1e3\nk_rstd_zero = 1.0 / (0.0 + eps)\nref_rstd_
+  ...[truncated 768 chars]
   Output summary:
   {
     "artifacts": [
@@ -245,13 +248,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "08cedd53d592841fa327b0de7b4d3bc7b03686c5834a46d9715c171912010d43"
+        "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "7813540b72aabaa44710fe15c6e869764c3bc983b0af1823fb2e4f4c4fd4f085"
+        "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -263,427 +266,250 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "c840fc48295b9de867b33a0b4d70eb18fc265066124ba48336d1f545e5cd37fd"
+        "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet returns torch.empty_like(x), so apply_rotary can return uninitialized gar
-  ...[truncated 3296 chars]
-- `run_claim_probe -> t11 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(2)\nS, H, D = 6, 2, 96  # not power of two -> BLOCK_K=128\ndev = \"cuda\"\nx = torch.randn(S, H, D, device=dev, dtype=torch.float32)\ncos = torch.randn(S, D // 2, device=dev)\nsin = torch.randn(S, D // 2, device=dev)\nout = k.apply_rotary(x, cos, sin, True)\nx0 = x[..., 0::2]; x1 = x[..., 1::2]\nref = torch.empty_like(x)\nref[..., 0::2] = x0*cos[:,None,:] - x1*sin[:,None,:]\nref[..., 1::2] = x0*sin[:,None,:] + x1*cos[:,None,:]\ndiff = (out - ref).abs()\nprint(json.dumps({\"claim\":\"c3\",\"D\":D,\"BLOCK_K\":128,\n  \"max_abs_err_interleaved\":di
-  ...[truncated 294 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "980fb57349e4feecef744176572cbc88d5b728002b22f351a5388ddbecc25e70"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "c01e5326a895b032b4d94368c59f7ed6366ab22a6505520cb76bacb82ae4af54"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "fac4ccb96a2dfe196f3c00fd1a8d4764ff93bb8ca3c3aa2f6c0c78d15498b13a"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "On the interleaved path with headdim not a power of two (BLOCK_K = next_power_of_2(headdim) > headdim), the reshape to [BLOCK_H, BLOCK_M, BLOCK_K//2, 2] combined with cos loaded at logical index rk_half may ap
-  ...[truncated 2907 chars]
+    "claim_id": "c1",
+    "claim_statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1
+  ...[truncated 3751 chars]
 
-### Turn 5 - `experimenter` (13.938621556999976s, in=27224 out=738)
+### Turn 8 - `experimenter` (9.15062178100004s, in=18786 out=478)
 
 Message:
 
 ```text
-All three probes have returned. I'll finalize their evidence: c1 and c3 rebutted (interleaved output matches the per-pair reference exactly), and c2 confirmed behaviorally (odd headdim leaves the last dimension unwritten and distinct from the input), though its scope remains unknown.
+The probe confirms c1: on a tiny row (all elements 1e-8) with eps=1e-6, the kernel's output is ~990x the reference (0.0099 vs 1e-5), and the analytic zero-row rstd ratio is 1000x, matching the predicted ~1/sqrt(eps) divergence. Normal rows show only 1.4e-6 error, consistent with the eps-outside-sqrt implementation. I'll finalize this evidence.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t12 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "D": 64,
-      "matches_interleaved_ref": true,
-      "max_abs_err_vs_interleaved_ref": 4.77e-07,
-      "max_abs_err_vs_noninterleaved_ref": 10.17,
-      "max_err_even_lanes": 2.38e-07,
-      "max_err_odd_lanes": 4.77e-07
-    },
-    "event_id": "t9",
-    "status": "rebutted",
-    "summary": "Interleaved=True output matches an independent per-pair reference (o0=x0*cos-x1*sin, o1=x0*sin+x1*cos, dim 2i with 2i+1) to 4.8e-07 on both even and odd lanes, while differing 10.17 from a non-interleaved-style pairing. The reshape/split/join chain pairs the correct lanes; claim's hypothesized wrong pairing does not occur.",
-    "supports": "rebutted"
-  }
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "rebutted",
-    "evidence_id": "c1.e1",
-    "summary": "Interleaved=True output matches an independent per-pair reference (o0=x0*cos-x1*sin, o1=x0*sin+x1*cos, dim 2i with 2i+1) to 4.8e-07 on both even and odd lanes, while differing 10.17 from a non-interleaved-style pairing. The reshape/split/join chain pairs the correct lanes; claim's hypothesized wrong pairing does not occur.",
-    "supports": "rebutted",
-    "tool_event_id": "t9"
-  }
-- `finalize_probe_evidence -> t13 ok`
-  Args:
-  {
-    "data": {
-      "D": 65,
-      "last_dim_allclose_to_input": false,
-      "last_dim_equals_zero": true,
-      "last_dim_max_abs_vs_input": 2.436,
-      "scope": "unknown"
+      "Y_tiny_row_max_abs_kernel": 0.009900989942252636,
+      "Y_tiny_row_max_abs_ref": 9.999999747378752e-06,
+      "eps": 1e-06,
+      "kernel_impl": "1/(sqrt(ms)+eps)",
+      "max_abs_err_normal_rows": 1.430511474609375e-06,
+      "max_rel_err_all_rows": 989.0990600585938,
+      "ref_rstd_zero_row": 1000.0,
+      "rstd_ratio_zero_row": 1000.0,
+      "tiny_row_out_ratio": 990.0989990234375
     },
     "event_id": "t10",
     "status": "confirmed",
-    "summary": "With odd headdim=65, the last feature dim of the output is not written by the kernel and does not equal the input (allocator returned zeros here; last_dim_max_abs_vs_input=2.44), confirming the last dim is left uninitialized (torch.empty_like). Behavior confirmed, but claim scope is unknown: the contract presumes even headdim and no test artifact exercises odd headdim, so this cannot support a reject verdict by itself.",
-    "supports": "confirmed"
-  }
+    "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent wit
+  ...[truncated 182 chars]
   Output summary:
   {
-    "claim_id": "c2",
+    "claim_id": "c1",
     "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "With odd headdim=65, the last feature dim of the output is not written by the kernel and does not equal the input (allocator returned zeros here; last_dim_max_abs_vs_input=2.44), confirming the last dim is left uninitialized (torch.empty_like). Behavior confirmed, but claim scope is unknown: the contract presumes even headdim and no test artifact exercises odd headdim, so this cannot support a reject verdict by itself.",
+    "evidence_id": "c1.e1",
+    "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
     "supports": "confirmed",
     "tool_event_id": "t10"
   }
-- `finalize_probe_evidence -> t14 ok`
-  Args:
-  {
-    "data": {
-      "BLOCK_K": 128,
-      "D": 96,
-      "allclose_1e-5": true,
-      "max_abs_err_interleaved": 4.77e-07,
-      "max_err_even_lanes": 4.77e-07,
-      "max_err_odd_lanes": 4.77e-07
-    },
-    "event_id": "t11",
-    "status": "rebutted",
-    "summary": "With headdim=96 (BLOCK_K=128 > headdim), interleaved output matches the per-pair reference to 4.8e-07 on all lanes; masking aligns and padding lanes beyond headdim do not shift the cos/pair-index mapping. The hypothesized wrong pairing does not occur.",
-    "supports": "rebutted"
-  }
-  Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "rebutted",
-    "evidence_id": "c3.e1",
-    "summary": "With headdim=96 (BLOCK_K=128 > headdim), interleaved output matches the per-pair reference to 4.8e-07 on all lanes; masking aligns and padding lanes beyond headdim do not shift the cos/pair-index mapping. The hypothesized wrong pairing does not occur.",
-    "supports": "rebutted",
-    "tool_event_id": "t11"
-  }
 
-### Turn 6 - `skeptic` (7.087348729999974s, in=35326 out=240)
+### Turn 9 - `skeptic` (5.6506950250000045s, in=22839 out=202)
 
 Message:
 
 ```text
-All three claims have been resolved: the interleaved pairing and non-power-of-two masking claims are rebutted by exact-match probes, and the odd-headdim uninitialized-dim claim is confirmed behaviorally but remains out of the stated contract domain. No new material in-scope problem is exposed by the probe evidence, so I'll conclude the review.
+The confirmed in-scope claim c1 fully captures the eps-placement defect, backed by a runtime probe showing 990x output divergence on tiny rows. No new evidence exposes anything not already covered.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t15 ok`
+- `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: c1 and c3 (in-scope interleaved pairing/masking hypotheses) are rebutted by runtime probes showing max abs error ~4.8e-07 against an independent per-pair reference at headdim 64 and 96. c2 (odd headdim leaves last dim uninitialized) is confirmed behaviorally but the stated contract presumes even headdim and no artifact exercises odd headdim, so it cannot support a reject. No new material, testable, in-scope problem emerged from this round's evidence.",
+    "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
     "reviewed_claims": [
-      "c1",
-      "c2",
-      "c3"
+      "c1"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c1 and c3 (in-scope interleaved pairing/masking hypotheses) are rebutted by runtime probes showing max abs error ~4.8e-07 against an independent per-pair reference at headdim 64 and 96. c2 (odd headdim leaves last dim uninitialized) is confirmed behaviorally but the stated contract presumes even headdim and no artifact exercises odd headdim, so it cannot support a reject. No new material, testable, in-scope problem emerged from this round's evidence.",
+    "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
     "reviewed_claims": [
-      "c1",
-      "c2",
-      "c3"
+      "c1"
     ],
-    "reviewed_tool_event_count": 14,
-    "turn": 6
+    "reviewed_tool_event_count": 11,
+    "turn": 9
   }
 
-### Turn 7 - `judge` (9.51705398599995s, in=36422 out=460)
+### Turn 10 - `judge` (10.273221185000011s, in=22989 out=420)
 
 Message:
 
 ```text
-All claims are resolved with runtime evidence, the Skeptic signed off with no new concerns, and no open claims remain. The two in-scope pairing hypotheses (c1, c3) were rebutted by exact-match probes (~4.8e-07 vs independent references at headdim 64 and 96), and the confirmed odd-headdim issue (c2) is out of the contract's stated domain (which presumes even headdim), so it is only a generalization note, not a rejection basis. I'll record a trust verdict.
+The evidence is decisive: the kernel places eps outside the sqrt (rstd = 1/(sqrt(ms)+eps)) while the contract explicitly requires 1/sqrt(ms+eps) with near-zero-row stability. The runtime probe confirms a ~990x output divergence on tiny rows. Claim c1 is confirmed, in-scope, and the Skeptic has signed off with no new claims. Since no test.py exists, problem.txt is the operative contract, and this violates its stated formula directly.
 ```
 
 Tool calls:
 
-- `record_verdict -> t16 ok`
+- `record_verdict -> t13 ok`
   Args:
   {
-    "confidence": 0.85,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c3",
-      "c2"
+      "c1"
     ],
-    "reason": "The contract (problem.txt, no test harness present) requires correct RoPE rotation under both pairing modes with x of shape (seqlen, nheads, headdim) and cos/sin of shape (seqlen, headdim//2). c1 (in_scope) was rebutted: interleaved=True output matches an independent per-pair reference to 4.8e-07 on both even and odd lanes at headdim=64, while differing 10.17 from the non-interleaved pairing \u2014 the reshape/split/join chain pairs lanes correctly. c3 (in_scope) was rebutted: with non-power-of-two headdim=96 (BLOCK_K=128), interleaved output still matches the reference to 4.8e-07, showing masks align across load sites. c2 was behaviorally confirmed but is scoped unknown: the stated pairing contra
-  ...[truncated 355 chars]
+    "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, no
+  ...[truncated 291 chars]
   Output summary:
   {
-    "confidence": 0.85,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c3",
-      "c2"
+      "c1"
     ],
-    "reason": "The contract (problem.txt, no test harness present) requires correct RoPE rotation under both pairing modes with x of shape (seqlen, nheads, headdim) and cos/sin of shape (seqlen, headdim//2). c1 (in_scope) was rebutted: interleaved=True output matches an independent per-pair reference to 4.8e-07 on both even and odd lanes at headdim=64, while differing 10.17 from the non-interleaved pairing \u2014 the reshape/split/join chain pairs lanes correctly. c3 (in_scope) was rebutted: with non-power-of-two headdim=96 (BLOCK_K=128), interleaved output still matches the reference to 4.8e-07, showing masks align across load sites. c2 was behaviorally confirmed but is scoped unknown: the stated pairing contract presumes even headdim (pairing dim i with i+headdim/2 and 2i with 2i+1), and no artifact exercises odd headdim, so the uninitialized last dimension at odd headdim is a generalization note, not a contract failure. No confirmed in-scope correctness failure remains; Skeptic reviewed the final evidence and recorded no new claims.",
-    "verdict": "trust"
+    "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "verdict": "reject"
   }
 
 ## Description Model
 
 {
   "contract_model": [
-    "apply_rotary(x, cos, sin, interleaved) rotates paired feature dims of x (seqlen, nheads, headdim) by position-dependent angles given by cos/sin of shape (seqlen, headdim//2)",
-    "interleaved=False: dim i pairs with dim i + headdim/2; interleaved=True: dim 2i pairs with dim 2i+1; both must be implemented and self-consistent",
-    "Rotation math per pair: o0 = x0*cos - x1*sin, o1 = x0*sin + x1*cos, with cos/sin indexed by (position, pair index)",
-    "The spec's deeper invariant is that q\u00b7k dot products depend on relative position only, so sign conventions and pairing must be exact",
-    "The spec does not fix which pairing a model uses; both flag values are contractually required to be correct"
+    "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+    "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+    "Contract also produces a per-row rstd value alongside y"
   ],
   "kernel_model": [
-    "Triton kernel with grid (nheads, seqlen) and BLOCK_H=1, BLOCK_M=1, so one program handles one head and one position; BLOCK_K = next_power_of_2(headdim)",
-    "cos/sin are loaded assuming contiguous layout (offset rm*rotary_dim_half + rk_half, no strides passed) and cast to fp32",
-    "Non-interleaved path (lines 27-36): loads x at dims [0, headdim/2) and pairs with dim+rotary_dim_half, computes standard RoPE rotation; assumes rotary_dim == headdim (full rotation)",
-    "Interleaved path (lines 37-47): loads full BLOCK_K range, reshapes to [..., BLOCK_K/2, 2], tl.split extracts even/odd lanes, applies rotation, tl.join restores layout",
-    "Output is torch.empty_like(x) and only rotary-pair positions are written; dtype preserved via loads cast to fp32 then stored back to out dtype (implicit downcast on store)",
-    "Host wrapper (lines 50-64) passes x/out strides but derives none for cos/sin"
+    "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+    "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+    "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+    "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
   ],
   "open_questions": [
-    "What test harness and tolerances will be used (no test code in artifact)?",
-    "Does the benchmark only use contiguous cos/sin tensors, or could non-contiguous views be passed?",
-    "Are odd headdim or partial-rotary-dim configurations ever exercised by the test domain?",
-    "Does tl.split
-...[truncated 2450 chars]
+    "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+    "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+  ],
+  "risk_map": [
+    "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+    "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+    "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+    "Non-2D inputs would fail unpacking at X.shape; scope appears limit
+...[truncated 522 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described case_11 RoPE kernel: contract, implementation model, and bug surfaces around cos/sin layout assumptions, odd headdim / partial rotary dims, and interleaved-path reshape ordering.
+- `du1` tasks=`initial`: Described case_12: RMSNorm forward Triton kernel vs Liger-Kernel contract. Kernel implements eps OUTSIDE the sqrt (rstd = 1/(sqrt(mean_square)+eps)) whereas contract requires 1/sqrt(mean_square+eps), causing large divergence on near-zero rows; matches claim c1 already raised by the Skeptic.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: On the interleaved=True path, the reshape/split/join sequence (lines 43-46) may pair the wrong even/odd lanes with cos/sin values, producing output where dimension 2i is not rotated as x0*cos - x1*sin with the angle for pair i, violating the contract's interleaved pairing.
-
-Scope: `in_scope`
-
-Scope rationale: The contract explicitly requires the interleaved=True pairing (dim 2i with dim 2i+1) to be correct; if tl.split/join/reshape in lines 43-46 mismatches the pointer arithmetic in lines 39-40, interleaved output at dims (2i, 2i+1) would be rotated with wrong partners/angles, violating the stated pairing. Representative inputs: x of shape (seqlen, nheads, headdim) with even headdim, contiguous cos/sin (seqlen, headdim//2), interleaved=True.
-
-Scope evidence:
-- `problem.txt`: interleaved=True: dimension 2i is paired with dimension 2i+1; the spec requires both flag values to be implemented correctly.
-
-Rationale: The interleaved branch relies on the Triton reshape/split/join chain pairing logical lanes with the right memory offsets; if the reshape order does not match the pointer arithmetic, dimension 2i would get paired with the wrong angle or wrong partner, breaking the contractually required interleaved=True output.
-
-Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t9: Interleaved=True output matches an independent per-pair reference (o0=x0*cos-x1*sin, o1=x0*sin+x1*cos, dim 2i with 2i+1) to 4.8e-07 on both even and odd lanes, while differing 10.17 from a non-interleaved-style pairing. The reshape/split/join chain pairs the correct lanes; claim's hypothesized wrong pairing does not occur.
-
-### c2 - `confirmed`
-
-Statement: For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet returns torch.empty_like(x), so apply_rotary can return uninitialized garbage in that position instead of a defined value.
-
-Scope: `unknown`
-
-Scope rationale: problem.txt pairs dim i with i+headdim/2 and dim 2i with 2i+1, which presumes even headdim and full-dimension rotation; it does not state whether odd headdim or partial rotary_dim inputs are in the verification domain (no test code present), so scope is unknown.
-
-Rationale: Source shows only the first headdim//2 and second headdim//2 dims stored; if a reference/test expects tail dims beyond the paired region to be copied through, garbage would appear, but per the stated pairing the whole headdim is paired, so scope hinges on whether inputs can have odd headdim or partial rotary dims.
-
-Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: With odd headdim=65, the last feature dim of the output is not written by the kernel and does not equal the input (allocator returned zeros here; last_dim_max_abs_vs_input=2.44), confirming the last dim is left uninitialized (torch.empty_like). Behavior confirmed, but claim scope is unknown: the contract presumes even headdim and no test artifact exercises odd headdim, so this cannot support a reject verdict by itself.
-
-### c3 - `rebutted`
-
-Statement: On the interleaved path with headdim not a power of two (BLOCK_K = next_power_of_2(headdim) > headdim), the reshape to [BLOCK_H, BLOCK_M, BLOCK_K//2, 2] combined with cos loaded at logical index rk_half may apply cos[i] to the wrong pair index i, since the flattened BLOCK_K lanes beyond headdim shift the logical pairing layout.
+Statement: The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.
 
 Scope: `in_scope`
 
-Scope rationale: The contract defines cos/sin as (seqlen, headdim//2) for arbitrary headdim; headdim not a power of two (e.g. 96) is consistent with the stated shapes, and in that case BLOCK_K=128 while rotary_dim_half=48, so the reshape [BLOCK_K//2,2]=64 pairs must still map lane i to cos index i only for i<48.
+Scope rationale: The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.
 
 Scope evidence:
-- `problem.txt`: The operation must rotate each pair of feature dimensions by the position-dependent angle from cos/sin of shape (seqlen, headdim//2); any headdim consistent with this contract admits such inputs.
+- `problem.txt`: Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' — eps inside the sqrt — and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'
 
-Rationale: Triton reshape of a block built from strided pointer arithmetic is a logical reshaping of the loaded values; for BLOCK_K > headdim, the mapping between rk indices and pair index i (cos[i]) versus the split lanes may be off by the padding structure if BLOCK_K//2 != rotary_dim_half, e.g. headdim=96 → BLOCK_K=128.
+Rationale: kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 — ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.
 
 Evidence:
-- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t11: With headdim=96 (BLOCK_K=128 > headdim), interleaved output matches the per-pair reference to 4.8e-07 on all lanes; masking aligns and padding lanes beyond headdim do not shift the cos/pair-index mapping. The hypothesized wrong pairing does not occur.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_11"
+  "entry": "case_12"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_11"
+  "entry": "case_12"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_11"
+  "entry": "case_12"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_11"
+  "entry": "case_12"
 }
 
-### t5 - record_description_update - ok
+### t5 - record_description_update - error
 
 {
-  "contract_model": [
-    "apply_rotary(x, cos, sin, interleaved) rotates paired feature dims of x (seqlen, nheads, headdim) by position-dependent angles given by cos/sin of shape (seqlen, headdim//2)",
-    "interleaved=False: dim i pairs with dim i + headdim/2; interleaved=True: dim 2i pairs with dim 2i+1; both must be implemented and self-consistent",
-    "Rotation math per pair: o0 = x0*cos - x1*sin, o1 = x0*sin + x1*cos, with cos/sin indexed by (position, pair index)",
-    "The spec's deeper invariant is that q\u00b7k dot products depend on relative position only, so sign conventions and pairing must be exact",
-    "The spec does not fix which pairing a model uses; both flag values are contractually required to be correct"
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Triton kernel with grid (nheads, seqlen) and BLOCK_H=1, BLOCK_M=1, so one program handles one head and one position; BLOCK_K = next_power_of_2(headdim)",
-    "cos/sin are loaded assuming contiguous layout (offset rm*rotary_dim_half + rk_half, no strides passed) and cast to fp32",
-    "Non-interleaved path (lines 27-36): loads x at dims [0, headdim/2) and pairs with dim+rotary_dim_half, computes standard RoPE rotation; assumes rotary_dim == headdim (full rotation)",
-    "Interleaved path (lines 37-47): loads full BLOCK_K range, reshapes to [..., BLOCK_K/2, 2], tl.split extracts even/odd lanes, applies rotation, tl.join restores layout",
-    "Output is torch.empty_like(x) and only rotary-pair positions are written; dtype preserved via loads cast to fp32 then stored back to out dtype (implicit downcast on store)",
-    "Host wrapper (lines 50-64) passes x/out strides but derives none for cos/sin"
-  ],
-  "open_questions": [
-    "What test harness and tolerances will be used (no test code in artifact)?",
-    "Does the benchmark only use contiguous cos/sin tensors, or could non-contiguous views be passed?",
-    "Are odd headdim or partial-rotary-dim configurations ever exercised by the test do
-...[truncated 2745 chars]
+  "error_type": "ToolRegistryError",
+  "message": "tool record_description_update missing required arg: summary"
+}
 
-### t6 - record_claim - ok
+### t6 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "The interleaved branch relies on the Triton reshape/split/join chain pairing logical lanes with the right memory offsets; if the reshape order does not match the pointer arithmetic, dimension 2i would get paired with the wrong angle or wrong partner, breaking the contractually required interleaved=True output.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "interleaved=True: dimension 2i is paired with dimension 2i+1; the spec requires both flag values to be implemented correctly."
-    }
-  ],
-  "scope_rationale": "The contract explicitly requires the interleaved=True pairing (dim 2i with dim 2i+1) to be correct; if tl.split/join/reshape in lines 43-46 mismatches the pointer arithmetic in lines 39-40, interleaved output at dims (2i, 2i+1) would be rotated with wrong partners/angles, violating the stated pairing. Representative inputs: x of shape (seqlen, nheads, headdim) with even headdim, contiguous cos/sin (seqlen, headdim//2), interleaved=True.",
-  "statement": "On the interleaved=True path, the reshape/split/join sequence (lines 43-46) may pair the wrong even/odd lanes with cos/sin values, producing output where dimension 2i is not rotated as x0*cos - x1*sin with the angle for pair i, violating the contract's interleaved pairing.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "Source shows only the first headdim//2 and second headdim//2 dims stored; if a reference/test expects tail dims beyond the paired region to be copied through, garbage would appear, but per the stated pairing the whole headdim is paired, so scope hinges on whether inputs can have odd headdim or partial rotary dims.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "problem.txt pairs dim i with i+headdim/2 and dim 2i with 2i+1, which presumes even headdim and full-dimension rotation; it does not state whether odd headdim or partial rotary_dim inputs are in the verification domain (no test code present), so scope is unknown.",
-  "statement": "For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet returns torch.empty_like(x), so apply_rotary can return uninitialized garbage in that position instead of a defined value.",
-  "status": "open"
-}
-
-### t8 - record_claim - ok
-
-{
-  "id": "c3",
-  "rationale": "Triton reshape of a block built from strided pointer arithmetic is a logical reshaping of the loaded values; for BLOCK_K > headdim, the mapping between rk indices and pair index i (cos[i]) versus the split lanes may be off by the padding structure if BLOCK_K//2 != rotary_dim_half, e.g. headdim=96 \u2192 BLOCK_K=128.",
+  "id": "c1",
+  "rationale": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps) instead of 1.0/_sqrt(mean_square + eps). For an all-zero row with eps=1e-6, kernel rstd = 1e6 vs contract rstd = 1e3 \u2014 ~316x divergence exactly where the contract demands stability; this may also fail tolerances on typical rows for larger eps.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The operation must rotate each pair of feature dimensions by the position-dependent angle from cos/sin of shape (seqlen, headdim//2); any headdim consistent with this contract admits such inputs."
+      "summary": "Contract formula: 'rstd = 1 / sqrt(mean_square + eps)' \u2014 eps inside the sqrt \u2014 and explicitly: 'it must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up.'"
     }
   ],
-  "scope_rationale": "The contract defines cos/sin as (seqlen, headdim//2) for arbitrary headdim; headdim not a power of two (e.g. 96) is consistent with the stated shapes, and in that case BLOCK_K=128 while rotary_dim_half=48, so the reshape [BLOCK_K//2,2]=64 pairs must still map lane i to cos index i only for i<48.",
-  "statement": "On the interleaved path with headdim not a power of two (BLOCK_K = next_power_of_2(headdim) > headdim), the reshape to [BLOCK_H, BLOCK_M, BLOCK_K//2, 2] combined with cos loaded at logical index rk_half may apply cos[i] to the wrong pair index i, since the flattened BLOCK_K lanes beyond headdim shift the logical pairing layout.",
+  "scope_rationale": "The contract in problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that a near-zero row does not blow up; the kernel's eps-outside-sqrt variant violates both the stated formula and the near-zero-row stability requirement, so near-zero rows are in-scope conditions.",
+  "statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
   "status": "open"
 }
 
-### t9 - run_claim_probe - ok
+### t8 - record_description_update - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "195b084963cbea4a03298f9e20be3035bb9c5d68ff8768c957d9260ea5ee236e"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "73bb9dfc9f341bb38ea232fcda3912af5347e6b9da5f49560473a50c1fea3bd2"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "5fd223a83ec21ca493820210ee9652a18bae40735c23039fc367792dcb63d434"
-    }
+  "contract_model": [
+    "RMSNorm forward per Liger-Kernel contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x*rstd",
+    "Epsilon must be inside the sqrt so the normalizer stays finite as row norm approaches zero; near-zero rows must not blow up",
+    "Contract also produces a per-row rstd value alongside y"
   ],
-  "claim_id": "c1",
-  "claim_statement": "On the interleaved=True path, the reshape/split/join sequence (lines 43-46) may pair the wrong even/odd lanes with cos/sin values, producing output where dimension 2i is not rotated as x0*cos - x1*sin with the angle for pair i, violating the contract's interleaved pairing.",
-  "duration_s": 6.901538,
-  "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "195b084963cbea4a03298f9e20be3035bb9c5d68ff8768c957d9260ea5ee236e"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "73bb9dfc9f341bb38ea232fcda3912af5347e6b9da5f49560473a50c1fea3bd2"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-       
-...[truncated 2257 chars]
+  "impact_on_claims": [],
+  "kernel_model": [
+    "kernel.py line 22 computes mean_square = sum(X_row*X_row)/n_cols with masked loads (other=0), matching the contract",
+    "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps): eps is added OUTSIDE the sqrt, deviating from the contract formula 1/sqrt(mean_square + eps)",
+    "Single program per row: BLOCK_SIZE = next_power_of_2(n_cols); assumes 2D input (num_rows, n_cols = X.shape) and one row fits in one Triton block",
+    "Y = torch.empty_like(X) preserves dtype/strides; RSTD stored fp32; row_idx cast to int64 for large tensors; only Y is returned (RSTD allocated but unused by the wrapper return)"
+  ],
+  "open_questions": [
+    "Does the benchmark test suite include near-zero rows or only typical random inputs, and what eps and tolerance values does it use?",
+    "Is the RSTD tensor expected as an output anywhere, or is it internal-only?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Epsilon placement mismatch: 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). For typical random rows the difference is small and may pass tight tolerances, but for near-zero rows divergence is large: contract rstd -> 1/sqrt(eps) while kernel rstd -> 1/eps, a factor of ~1/sqrt(eps) (~316x for eps=1e-6), exactly where the contract demands stability",
+    "Tolerance-based random tests with typical eps (1e-5/1e-6) may not surface the error since it shrinks as sqrt(ms) grows; probe all-zero and tiny rows (already raised as claim c1)",
+    "eps value semantics: relative error of kernel rstd vs contract rstd is ~eps/sqrt(ms), so large eps values would also fail typical rows",
+    "Non-2D inputs wo
+...[truncated 920 chars]
+
+### t9 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The only material contract violation \u2014 eps added outside the sqrt (line 23) \u2014 is already captured as in-scope claim c1. Remaining kernel paths (masked reduction, mean_square, RSTD store, indexing) match the contract; other potential edge cases (non-2D inputs, huge n_cols) are not supported by any contract source here and would be out-of-scope generality notes, not decisive claims.",
+  "reviewed_claims": [
+    "c1"
+  ],
+  "reviewed_tool_event_count": 8,
+  "turn": 6
+}
 
 ### t10 - run_claim_probe - ok
 
@@ -693,13 +519,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "08cedd53d592841fa327b0de7b4d3bc7b03686c5834a46d9715c171912010d43"
+      "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "7813540b72aabaa44710fe15c6e869764c3bc983b0af1823fb2e4f4c4fd4f085"
+      "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -711,158 +537,75 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "c840fc48295b9de867b33a0b4d70eb18fc265066124ba48336d1f545e5cd37fd"
+      "sha256": "aa46b381445e41536d0401933bf78d95ab3a18e407ec3a8f4578ac93cdf81a1e"
     }
   ],
-  "claim_id": "c2",
-  "claim_statement": "For headdim that is odd (or any configuration where 2*(headdim//2) != headdim), the kernel never writes the last feature dimension, yet returns torch.empty_like(x), so apply_rotary can return uninitialized garbage in that position instead of a defined value.",
-  "duration_s": 6.022977,
+  "claim_id": "c1",
+  "claim_statement": "The kernel computes rstd = 1/(sqrt(mean_square) + eps) instead of the contract's 1/sqrt(mean_square + eps), so for near-zero rows (e.g., an all-zero row with eps=1e-6) the kernel's rstd is ~1/eps instead of ~1/sqrt(eps), giving rstd and outputs off by a factor of ~1/sqrt(eps) (~316x for eps=1e-6) from the reference.",
+  "duration_s": 5.561635,
   "event_id": "t10",
   "evidence_draft": {
-    "claim_id": "c2",
+    "claim_id": "c1",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "08cedd53d592841fa327b0de7b4d3bc7b03686c5834a46d9715c171912010d43"
+          "sha256": "5d85735124ecdd284ea7949f4801afe6ed1bc5a144d1f1338419ee764ed66569"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t10_stdout.txt",
-          "sha256": "7813540b72aabaa44710fe15c6e869764c3bc983b0af1823fb2e4f4c4fd4f085"
+          "sha256": "5df8dd8b394f02f46942b20a2fb6a9ca47f546235e28d3cb8142477309376467"
         },
         {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path
-...[truncated 2496 chars]
+          "description": "Captured stderr from the p
+...[truncated 2951 chars]
 
-### t11 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "980fb57349e4feecef744176572cbc88d5b728002b22f351a5388ddbecc25e70"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "c01e5326a895b032b4d94368c59f7ed6366ab22a6505520cb76bacb82ae4af54"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "fac4ccb96a2dfe196f3c00fd1a8d4764ff93bb8ca3c3aa2f6c0c78d15498b13a"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "On the interleaved path with headdim not a power of two (BLOCK_K = next_power_of_2(headdim) > headdim), the reshape to [BLOCK_H, BLOCK_M, BLOCK_K//2, 2] combined with cos loaded at logical index rk_half may apply cos[i] to the wrong pair index i, since the flattened BLOCK_K lanes beyond headdim shift the logical pairing layout.",
-  "duration_s": 5.918662,
-  "event_id": "t11",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "980fb57349e4feecef744176572cbc88d5b728002b22f351a5388ddbecc25e70"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "c01e5326a895b032b4d94368c59f7ed6366ab22a6505520cb76bacb82ae4af54"
-        },
-        {
-          "description": "Captured stder
-...[truncated 2107 chars]
-
-### t12 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
-  "claim_status": "rebutted",
-  "evidence_id": "c1.e1",
-  "summary": "Interleaved=True output matches an independent per-pair reference (o0=x0*cos-x1*sin, o1=x0*sin+x1*cos, dim 2i with 2i+1) to 4.8e-07 on both even and odd lanes, while differing 10.17 from a non-interleaved-style pairing. The reshape/split/join chain pairs the correct lanes; claim's hypothesized wrong pairing does not occur.",
-  "supports": "rebutted",
-  "tool_event_id": "t9"
-}
-
-### t13 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
   "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "With odd headdim=65, the last feature dim of the output is not written by the kernel and does not equal the input (allocator returned zeros here; last_dim_max_abs_vs_input=2.44), confirming the last dim is left uninitialized (torch.empty_like). Behavior confirmed, but claim scope is unknown: the contract presumes even headdim and no test artifact exercises odd headdim, so this cannot support a reject verdict by itself.",
+  "evidence_id": "c1.e1",
+  "summary": "Runtime probe confirms eps-placement defect (claim c1). Kernel output on a tiny row (all 1e-8) with eps=1e-6 is 990.1x the contract reference (0.00990 vs 1.0e-5), matching the predicted ~1/sqrt(eps) blowup; implied kernel rstd on a zero row is 1e6 vs contract 1e3 (ratio 1000). Normal randn rows show only 1.43e-6 max abs error, consistent with rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps). Contract explicitly requires near-zero-row stability, so this is an in-scope correctness violation.",
   "supports": "confirmed",
   "tool_event_id": "t10"
 }
 
-### t14 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c3",
-  "claim_status": "rebutted",
-  "evidence_id": "c3.e1",
-  "summary": "With headdim=96 (BLOCK_K=128 > headdim), interleaved output matches the per-pair reference to 4.8e-07 on all lanes; masking aligns and padding lanes beyond headdim do not shift the cos/pair-index mapping. The hypothesized wrong pairing does not occur.",
-  "supports": "rebutted",
-  "tool_event_id": "t11"
-}
-
-### t15 - record_no_new_claims - ok
+### t12 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c1 and c3 (in-scope interleaved pairing/masking hypotheses) are rebutted by runtime probes showing max abs error ~4.8e-07 against an independent per-pair reference at headdim 64 and 96. c2 (odd headdim leaves last dim uninitialized) is confirmed behaviorally but the stated contract presumes even headdim and no artifact exercises odd headdim, so it cannot support a reject. No new material, testable, in-scope problem emerged from this round's evidence.",
+  "reason": "Claim c1 (eps outside the sqrt, rstd = 1/(sqrt(ms)+eps) instead of 1/sqrt(ms+eps)) is confirmed with runtime evidence: on a tiny row (1e-8) with eps=1e-6 the kernel output is ~990x the contract reference, and the zero-row rstd diverges by 1000x, exactly where problem.txt requires near-zero-row stability. The rest of the kernel (masked reduction, mean_square, RSTD store, indexing) matches the contract. No new evidence suggests any additional in-scope, testable problem.",
   "reviewed_claims": [
-    "c1",
-    "c2",
-    "c3"
+    "c1"
   ],
-  "reviewed_tool_event_count": 14,
-  "turn": 6
+  "reviewed_tool_event_count": 11,
+  "turn": 9
 }
 
-### t16 - record_verdict - ok
+### t13 - record_verdict - ok
 
 {
-  "confidence": 0.85,
+  "confidence": 0.95,
   "decisive_claims": [
-    "c1",
-    "c3",
-    "c2"
+    "c1"
   ],
-  "reason": "The contract (problem.txt, no test harness present) requires correct RoPE rotation under both pairing modes with x of shape (seqlen, nheads, headdim) and cos/sin of shape (seqlen, headdim//2). c1 (in_scope) was rebutted: interleaved=True output matches an independent per-pair reference to 4.8e-07 on both even and odd lanes at headdim=64, while differing 10.17 from the non-interleaved pairing \u2014 the reshape/split/join chain pairs lanes correctly. c3 (in_scope) was rebutted: with non-power-of-two headdim=96 (BLOCK_K=128), interleaved output still matches the reference to 4.8e-07, showing masks align across load sites. c2 was behaviorally confirmed but is scoped unknown: the stated pairing contract presumes even headdim (pairing dim i with i+headdim/2 and 2i with 2i+1), and no artifact exercises odd headdim, so the uninitialized last dimension at odd headdim is a generalization note, not a contract failure. No confirmed in-scope correctness failure remains; Skeptic reviewed the final evidence and recorded no new claims.",
-  "verdict": "trust"
+  "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+  "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.85,
-  "created_at": "2026-09-30T08:24:06Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:24:04Z",
   "decisive_claims": [
-    "c1",
-    "c3",
-    "c2"
+    "c1"
   ],
-  "reason": "The contract (problem.txt, no test harness present) requires correct RoPE rotation under both pairing modes with x of shape (seqlen, nheads, headdim) and cos/sin of shape (seqlen, headdim//2). c1 (in_scope) was rebutted: interleaved=True output matches an independent per-pair reference to 4.8e-07 on both even and odd lanes at headdim=64, while differing 10.17 from the non-interleaved pairing \u2014 the reshape/split/join chain pairs lanes correctly. c3 (in_scope) was rebutted: with non-power-of-two headdim=96 (BLOCK_K=128), interleaved output still matches the reference to 4.8e-07, showing masks align across load sites. c2 was behaviorally confirmed but is scoped unknown: the stated pairing contract presumes even headdim (pairing dim i with i+headdim/2 and 2i with 2i+1), and no artifact exercises odd headdim, so the uninitialized last dimension at odd headdim is a generalization note, not a contract failure. No confirmed in-scope correctness failure remains; Skeptic reviewed the final evidence and recorded no new claims.",
-  "verdict": "trust"
+  "reason": "kernel.py line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), but the problem.txt contract explicitly states rstd = 1/sqrt(mean_square + eps) \u2014 eps must be inside the sqrt \u2014 and explicitly requires that a row of (near-)zero input does not blow the output up. Runtime probe (t10) confirmed the defect: on a tiny row (all 1e-8) with eps=1e-6, the kernel output is ~990x the contract reference (0.00990 vs 1e-5), and the zero-row rstd diverges by 1000x (1e6 vs 1e3). No test.py/get_inputs exist, so problem.txt is the operative contract; the violated formula and near-zero-row stability requirement are stated directly in it. Normal rows show only ~1.4e-6 error, confirming this is exactly the eps-placement bug, not a metric artifact. The kernel implements a different formula than the one the contract explicitly requires, which is a defect regardless of small deviations on typical inputs. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+  "verdict": "reject"
 }

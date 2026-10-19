@@ -1,39 +1,119 @@
 [
   {
-    "created_at": "2026-09-08T15:53:26Z",
+    "created_at": "2026-09-08T15:00:44Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-08T15:54:04Z",
+        "created_at": "2026-09-08T15:01:58Z",
         "data": {
-          "constant_scale": 0.031496063,
-          "kernel_lines": "5,19-22",
-          "reduction_ops_present": 0,
-          "stale_absmax_const": 4.0
+          "allclose_atol_1e-3": false,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t9_probe.py",
+              "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t9_stdout.txt",
+              "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t9_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t9_json_result.json",
+              "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+            }
+          ],
+          "dtype": "float32",
+          "duration_s": 6.796496,
+          "exit_code": 0,
+          "expected_signal": "Tail columns 64:100 of output are exactly 0.0 while reference partial-group quant-dequant is nonzero; large max abs error on tail, ~0 error on head.",
+          "group_size": 64,
+          "head_max_abs_err": 0.0,
+          "json_parse_error": null,
+          "json_result": {
+            "group_size": 64,
+            "head_max_abs_err": 0.0,
+            "overall_allclose_atol1e-3": false,
+            "shape": [
+              4,
+              100
+            ],
+            "tail_exact_zero_count": 144,
+            "tail_input_nonzero_count": 144,
+            "tail_max_abs_err": 3.12982439994812,
+            "tail_ref_max_abs": 3.12982439994812,
+            "tail_total": 144
+          },
+          "shape": [
+            4,
+            100
+          ],
+          "stderr": "",
+          "stdout": "{\"shape\": [4, 100], \"group_size\": 64, \"head_max_abs_err\": 0.0, \"tail_max_abs_err\": 3.12982439994812, \"tail_exact_zero_count\": 144, \"tail_total\": 144, \"tail_input_nonzero_count\": 144, \"tail_ref_max_abs\": 3.12982439994812, \"overall_allclose_atol1e-3\": false}\n",
+          "tail_exact_zero_count": 144,
+          "tail_input_nonzero_count": 144,
+          "tail_max_abs_err": 3.12982439994812,
+          "tail_ref_max_abs": 3.12982439994812,
+          "tail_total": 144,
+          "timed_out": false,
+          "timeout_s": 60
         },
         "id": "c1.e1",
-        "kind": "source_inspection",
-        "summary": "kernel.py:5 defines _STALE_ABSMAX = 4.0; kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body (lines 15-24), so scale_x = 4/127 for every row and x_q = x*(127/4). The contract in problem.txt requires absmax = max(max(|x_row|),1e-10). Source alone shows the scale is data-independent; runtime probe pending.",
+        "kind": "runtime_probe",
+        "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
         "supports": "confirmed",
-        "tool_event_id": null
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
       },
       {
+        "source": "problem.txt",
+        "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.",
+    "statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
+    "status": "confirmed",
+    "updated_at": "2026-09-08T15:01:58Z"
+  },
+  {
+    "created_at": "2026-09-08T15:00:44Z",
+    "evidence": [
+      {
         "artifacts": [],
-        "created_at": "2026-09-08T15:54:47Z",
+        "created_at": "2026-09-08T15:01:58Z",
         "data": {
-          "allclose_rtol0_atol_max_ref_step": false,
+          "allclose_atol_1e-3": false,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t10_probe.py",
-              "sha256": "c74f6f11c5edfb0188397c97e7bd596b79e72ba38a83f433987649e401bbbcc3"
+              "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t10_stdout.txt",
-              "sha256": "a692c903669635b6fe5af9c2121594f4a969aad3f86746476f9a8dd6eb32b40d"
+              "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -45,400 +125,216 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t10_json_result.json",
-              "sha256": "1cd92be10a8dd896be13086adde7b69c0ed7aafe5ccedcea492dc1175a7fee5d"
+              "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
             }
           ],
-          "dtype": "torch.float32",
-          "duration_s": 5.769356,
+          "dtype": "float32",
+          "duration_s": 5.125774,
           "exit_code": 0,
-          "expected_const_4_over_127": 0.031496063,
-          "expected_signal": "Kernel output equals q*(4/127) for all rows; max |kernel-ref| far above the contract reference's own quantization step, and implied per-row step constant 0.0314961 instead of row_absmax/127.",
-          "frac_elems_differ_gt_1e-6": 0.98828125,
+          "expected_signal": "Output for (4,40) with group_size=64 is entirely zero (nonzero count 0) while reference is nonzero.",
+          "group_size": 64,
           "json_parse_error": null,
           "json_result": {
-            "allclose_rtol0_atol_refstep": false,
-            "dtype": "torch.float32",
-            "frac_elems_differ": 0.98828125,
-            "kernel_implied_step_per_row": [
-              0.0314961,
-              0.0314961,
-              0.0314961,
-              0.0314961,
-              0.0314961,
-              0.0314961,
-              0.0314961,
-              0.0314961
-            ],
-            "kernel_max_quant_err_vs_x": 0.0157393217086792,
-            "max_abs_err": 0.026192426681518555,
-            "mean_abs_err": 0.009047586470842361,
-            "metric": "max_abs_err_vs_per_row_quantized_reference",
-            "ref_implied_step_per_row": [
-              0.0261075,
-              0.018498,
-              0.0224956,
-              0.0239215,
-              0.0216421,
-              0.0198647,
-              0.0244544,
-              0.0241021
-            ],
-            "ref_max_quant_err_vs_x": 0.01287233829498291,
-            "ref_step_per_row": [
-              0.026107,
-              0.018498,
-              0.022496,
-              0.023922,
-              0.021642,
-              0.019865,
-              0.024454,
-              0.024102
-            ],
-            "row_absmax": [
-              3.31565,
-              2.34924,
-              2.85694,
-              3.03803,
-              2.74855,
-              2.52282,
-              3.1057,
-              3.06096
-            ],
+            "allclose_atol1e-3": false,
+            "group_size": 64,
+            "max_abs_err": 2.78844952583313,
+            "out_nonzero_count": 0,
+            "out_total": 160,
+            "ref_max_abs": 2.78844952583313,
+            "ref_nonzero_count": 160,
             "shape": [
-              8,
-              256
+              4,
+              40
             ]
           },
-          "kernel_implied_step_all_rows": 0.0314961,
-          "kernel_max_quant_err_vs_x": 0.0157393217086792,
-          "max_abs_err_vs_ref": 0.026192426681518555,
-          "mean_abs_err_vs_ref": 0.009047586470842361,
-          "metric": "max_abs_err_vs_per_row_quantized_reference",
-          "ref_max_quant_err_vs_x": 0.01287233829498291,
-          "ref_step_per_row_max": 0.026107,
-          "ref_step_per_row_min": 0.018498,
-          "row_absmax_max": 3.31565,
-          "row_absmax_min": 2.34924,
+          "max_abs_err": 2.78844952583313,
+          "out_nonzero_count": 0,
+          "out_total": 160,
+          "ref_max_abs": 2.78844952583313,
+          "ref_nonzero_count": 160,
           "shape": [
-            8,
-            256
+            4,
+            40
           ],
           "stderr": "",
-          "stdout": "{\"metric\": \"max_abs_err_vs_per_row_quantized_reference\", \"shape\": [8, 256], \"dtype\": \"torch.float32\", \"row_absmax\": [3.31565, 2.34924, 2.85694, 3.03803, 2.74855, 2.52282, 3.1057, 3.06096], \"ref_step_per_row\": [0.026107, 0.018498, 0.022496, 0.023922, 0.021642, 0.019865, 0.024454, 0.024102], \"kernel_implied_step_per_row\": [0.0314961, 0.0314961, 0.0314961, 0.0314961, 0.0314961, 0.0314961, 0.0314961, 0.0314961], \"ref_implied_step_per_row\": [0.0261075, 0.018498, 0.0224956, 0.0239215, 0.0216421, 0.0198647, 0.0244544, 0.0241021], \"max_abs_err\": 0.026192426681518555, \"mean_abs_err\": 0.009047586470842361, \"ref_max_quant_err_vs_x\": 0.01287233829498291, \"kernel_max_quant_err_vs_x\": 0.0157393217086792, \"frac_elems_differ\": 0.98828125, \"allclose_rtol0_atol_refstep\": false}\n",
-          "timed_out": false,
-          "timeout_s": 60
-        },
-        "id": "c1.e2",
-        "kind": "runtime_probe",
-        "summary": "Runtime confirms the constant scale on a benign in-domain input (randn(8,256) fp32). The kernel's implied quantization step is exactly 0.0314961 = 4/127 for all 8 rows, while the contract reference step is row_absmax/127 and varies per row (0.018498..0.026107, row absmax 2.349..3.316). 98.8% of elements differ from the contract reference by more than 1e-6; max |kernel-ref| = 0.02619, which exceeds the reference's own worst quantization error vs x (0.01287) and is larger than the largest reference step, so allclose(rtol=0, atol=max_ref_step) is False. This is not a rounding artifact: the scale is data-independent, exactly as the source shows.",
-        "supports": "confirmed",
-        "tool_event_id": "t10"
-      }
-    ],
-    "id": "c1",
-    "raised_by": "skeptic",
-    "rationale": "kernel.py:19 sets absmax = STALE_ABSMAX (=4.0, kernel.py:5) unconditionally; there is no tl.max/tl.abs reduction anywhere in the kernel, so the scale is data-independent.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Contract: 'the scale is per-row and derived from THAT row's own magnitude: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; out = q*scale'."
-      },
-      {
-        "source": "kernel.py:5,19-21",
-        "summary": "absmax is the module constant 4.0; no reduction over |x| exists."
-      }
-    ],
-    "scope_rationale": "problem.txt is the only contract source (test.py absent) and it explicitly states the scale must be derived from THAT row's own magnitude via absmax = max(max(|x_row|),1e-10). Ordinary 2D float tensors of moderate size are exactly the admitted input domain, so a plain randn input is representative and in-scope.",
-    "statement": "For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned reconstruction differs from the contract reference q*scale computed with per-row absmax; metric: max |kernel_out - reference_out| over the tensor, and per-row implied scale (recoverable as the smallest nonzero |out| gap) should equal row_absmax/127 but will equal ~0.0314961 for all rows.",
-    "status": "confirmed",
-    "updated_at": "2026-09-08T15:54:47Z"
-  },
-  {
-    "created_at": "2026-09-08T15:53:26Z",
-    "evidence": [
-      {
-        "artifacts": [],
-        "created_at": "2026-09-08T15:54:47Z",
-        "data": {
-          "abs_err_at_50": 46.0,
-          "artifacts": [
-            {
-              "description": "Python probe code executed by local runtime.",
-              "kind": "probe_code",
-              "path": "probes/t11_probe.py",
-              "sha256": "a37d07ad5602cdf1a9b9ca46927ab8b7aa9b476e13b026bdb576855382748ad5"
-            },
-            {
-              "description": "Captured stdout from the probe process.",
-              "kind": "stdout",
-              "path": "probes/t11_stdout.txt",
-              "sha256": "a1909c5e4d5c54455b981e9925fd3cfccf34b860a8852640ef02d84e3fbf6c3b"
-            },
-            {
-              "description": "Captured stderr from the probe process.",
-              "kind": "stderr",
-              "path": "probes/t11_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t11_json_result.json",
-              "sha256": "1cc2baf2c862d386090240c23407bceed1d3ce49a6a11c382b20164758e207c2"
-            }
-          ],
-          "duration_s": 5.090717,
-          "exit_code": 0,
-          "expected_signal": "Entries with |x|>4 reconstruct as exactly +/-4.0 (code saturation); for a 50.0 outlier max |out-x| ~46 and the row max no longer maps to +/-127, violating the no-clipping invariant.",
-          "json_parse_error": null,
-          "json_result": {
-            "abs_err_at_50": 46.0,
-            "kernel_out_at_50": 4.0,
-            "kernel_out_at_m30": -4.0,
-            "kernel_row_max_abs_out": [
-              4.0,
-              4.0,
-              4.0,
-              4.0
-            ],
-            "max_abs_err_vs_ref": 46.0,
-            "max_shrink_below_x": 46.0,
-            "metric": "saturation_count_and_abs_err_at_outliers",
-            "n_elems_absx_gt_4": 237,
-            "n_saturated_to_4": 237,
-            "outlier_x_50": 50.0,
-            "outlier_x_m30": -30.0,
-            "ref_out_at_50": 50.0,
-            "ref_out_at_m30": -30.0,
-            "ref_row_max_abs_out": [
-              50.0,
-              30.0,
-              12.18173,
-              16.3729
-            ],
-            "row_absmax_x": [
-              50.0,
-              30.0,
-              12.18173,
-              16.3729
-            ]
-          },
-          "kernel_out_at_x_50": 4.0,
-          "kernel_out_at_x_m30": -4.0,
-          "kernel_row_max_abs_out": [
-            4.0,
-            4.0,
-            4.0,
-            4.0
-          ],
-          "max_abs_err_vs_ref": 46.0,
-          "max_shrink_below_x": 46.0,
-          "metric": "saturation_count_and_abs_err_at_outliers",
-          "n_elems_absx_gt_4": 237,
-          "n_saturated_to_exactly_4": 237,
-          "ref_out_at_x_50": 50.0,
-          "ref_out_at_x_m30": -30.0,
-          "ref_row_max_abs_out": [
-            50.0,
-            30.0,
-            12.18173,
-            16.3729
-          ],
-          "row_absmax_x": [
-            50.0,
-            30.0,
-            12.18173,
-            16.3729
-          ],
-          "saturation_fraction_of_gt4": 1.0,
-          "stderr": "",
-          "stdout": "{\"metric\": \"saturation_count_and_abs_err_at_outliers\", \"n_elems_absx_gt_4\": 237, \"n_saturated_to_4\": 237, \"outlier_x_50\": 50.0, \"kernel_out_at_50\": 4.0, \"ref_out_at_50\": 50.0, \"abs_err_at_50\": 46.0, \"outlier_x_m30\": -30.0, \"kernel_out_at_m30\": -4.0, \"ref_out_at_m30\": -30.0, \"max_abs_err_vs_ref\": 46.0, \"kernel_row_max_abs_out\": [4.0, 4.0, 4.0, 4.0], \"row_absmax_x\": [50.0, 30.0, 12.18173, 16.3729], \"ref_row_max_abs_out\": [50.0, 30.0, 12.18173, 16.3729], \"max_shrink_below_x\": 46.0}\n",
+          "stdout": "{\"shape\": [4, 40], \"group_size\": 64, \"out_nonzero_count\": 0, \"out_total\": 160, \"ref_nonzero_count\": 160, \"max_abs_err\": 2.78844952583313, \"ref_max_abs\": 2.78844952583313, \"allclose_atol1e-3\": false}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Runtime confirms hard clipping, the strongest non-tolerance-hideable failure. With x = randn(4,128)*5 plus outliers 50.0 and -30.0, all 237 elements with |x| > 4.0 (237/237) reconstruct at exactly +/-4.0. Kernel row max |out| = 4.0 for every row while the true row absmax is 50.0 / 30.0 / 12.18 / 16.37 and the contract reference reproduces those row maxima exactly (row max maps to code +/-127). Absolute error at the 50.0 outlier is 46.0 and max |kernel-ref| = 46.0; max shrink |x|-|out| = 46.0. This directly violates the problem.txt invariant \"no value in the row is clipped by its own scale\".",
+        "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
         "supports": "confirmed",
-        "tool_event_id": "t11"
+        "tool_event_id": "t10"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "kernel.py:22 clamps round(x*127/4) to [-127,127]; with a fixed denominator of 4.0 any |x|>4 exceeds code 127 and is hard-clipped, which the correct per-row scale can never do.",
+    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States q = clamp(round(x_row/scale), -127, 127) with scale from the row's own absmax 'so no value in the row is clipped by its own scale'."
-      },
-      {
-        "source": "kernel.py:21-22",
-        "summary": "x_q = x*(127/4.0) then clamped to [-127,127], so |x|>4 saturates to +/-4.0 on dequant."
+        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
       }
     ],
-    "scope_rationale": "problem.txt states the invariant explicitly ('so no value in the row is clipped by its own scale') and imposes no magnitude bound on inputs; activation rows with outliers are the operator's stated domain (per-token activation quantization). A representative input the contract admits is randn*5 or a row with a large outlier.",
-    "statement": "For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs them as exactly +/-4.0, violating the stated invariant that no value in the row is clipped by its own scale; metric: count of entries where |out| < |x| - step yet |x| is the row max, and max |out - reference| at the outlier positions (expected ~46 for a 50.0 outlier).",
+    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
+    "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
     "status": "confirmed",
-    "updated_at": "2026-09-08T15:54:47Z"
+    "updated_at": "2026-09-08T15:01:58Z"
   },
   {
-    "created_at": "2026-09-08T15:53:26Z",
+    "created_at": "2026-09-08T15:00:44Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-08T15:54:47Z",
+        "created_at": "2026-09-08T15:02:23Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t12_probe.py",
-              "sha256": "56eb531e6b4cf6e31f9d8b32f99cf1e6082bd487d8306dcb38c870a9b4f71efa"
+              "path": "probes/t14_probe.py",
+              "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t12_stdout.txt",
-              "sha256": "f94b68a2d42a59bc8389d01de10d7124dc7e615532be2854587f33e555986095"
+              "path": "probes/t14_stdout.txt",
+              "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t12_stderr.txt",
+              "path": "probes/t14_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
-              "path": "probes/t12_json_result.json",
-              "sha256": "a80c4c5c6933d99439d60e51e9fd0f1ae0f5746ade14113a3342f4e854d21415"
+              "path": "probes/t14_json_result.json",
+              "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
             }
           ],
-          "duration_s": 4.680168,
+          "dtype": "float32",
+          "duration_s": 6.162171,
+          "exact_tie_count": 63,
           "exit_code": 0,
-          "expected_signal": "Row scaled to absmax=0.01 returns all zeros from the kernel (zero-code fraction ~1.0, relative error ~1.0), while the contract reference reconstructs it to <1% relative error.",
+          "expected_signal": "On exact-multiple shape (1,64) with values on exact .5 ticks (scale exactly 0.125), counts of elements differing by one quantization step from torch.round (half-even) and from half-away-from-zero, split by sign of the input.",
+          "group_size": 64,
           "json_parse_error": null,
           "json_result": {
-            "kernel_relerr_vs_ref_per_row": [
-              1.0,
-              1.0,
-              0.038614,
-              0.990693
+            "exact_tie_count": 63,
+            "max_abs_err_vs_half_away": 0.125,
+            "max_abs_err_vs_half_even": 0.125,
+            "max_err_in_steps_vs_half_even": 1.0,
+            "mismatch_negative_ties_vs_half_away": 31,
+            "mismatch_negative_ties_vs_half_even": 15,
+            "mismatch_positive_ties_vs_half_even": 16,
+            "mismatch_vs_half_away_from_zero": 31,
+            "mismatch_vs_half_up_floor_kernel_semantics": 0,
+            "mismatch_vs_torch_round_half_even": 31,
+            "n_elems": 64,
+            "sample_half_away_first8": [
+              0.125,
+              -0.125,
+              0.25,
+              -0.25,
+              0.375,
+              -0.375,
+              0.5,
+              -0.5
             ],
-            "kernel_relerr_vs_x_per_row": [
-              1.0,
-              1.0,
-              0.035045,
-              0.990688
-            ],
-            "kernel_row_absmax_out": [
+            "sample_half_even_first8": [
               0.0,
+              -0.0,
+              0.25,
+              -0.25,
+              0.25,
+              -0.25,
+              0.5,
+              -0.5
+            ],
+            "sample_out_first8": [
+              0.125,
               0.0,
-              1.0078740119934082,
-              4.0
+              0.25,
+              -0.125,
+              0.375,
+              -0.25,
+              0.5,
+              -0.375
             ],
-            "kernel_zero_frac_per_row": [
-              1.0,
-              1.0,
-              0.043,
-              0.0
-            ],
-            "max_abs_err_vs_ref": 996.0,
-            "metric": "zero_code_fraction_and_per_row_relative_error",
-            "ref_relerr_vs_x_per_row": [
-              0.00661,
-              0.006733,
-              0.008647,
-              0.006982
-            ],
-            "ref_zero_frac_per_row": [
-              0.0156,
-              0.0039,
-              0.0078,
-              0.0156
-            ],
-            "row_absmax": [
-              0.0010000000474974513,
-              0.009999999776482582,
-              1.0,
-              1000.0
-            ]
+            "scale": 0.125,
+            "scale_is_exactly_0.125": true
           },
-          "kernel_relerr_vs_ref_per_row": [
-            1.0,
-            1.0,
-            0.038614,
-            0.990693
+          "max_abs_err_vs_half_away": 0.125,
+          "max_abs_err_vs_half_even": 0.125,
+          "max_err_in_steps_vs_half_even": 1.0,
+          "mismatch_negative_ties_vs_half_away": 31,
+          "mismatch_negative_ties_vs_half_even": 15,
+          "mismatch_positive_ties_vs_half_even": 16,
+          "mismatch_vs_half_away_from_zero": 31,
+          "mismatch_vs_half_up_floor_kernel_semantics": 0,
+          "mismatch_vs_torch_round_half_even": 31,
+          "n_elems": 64,
+          "quantization_step": 0.125,
+          "sample_half_away_first8": [
+            0.125,
+            -0.125,
+            0.25,
+            -0.25,
+            0.375,
+            -0.375,
+            0.5,
+            -0.5
           ],
-          "kernel_relerr_vs_x_per_row": [
-            1.0,
-            1.0,
-            0.035045,
-            0.990688
-          ],
-          "kernel_row_absmax_out": [
+          "sample_half_even_first8": [
             0.0,
+            -0.0,
+            0.25,
+            -0.25,
+            0.25,
+            -0.25,
+            0.5,
+            -0.5
+          ],
+          "sample_out_first8": [
+            0.125,
             0.0,
-            1.0078740119934082,
-            4.0
+            0.25,
+            -0.125,
+            0.375,
+            -0.25,
+            0.5,
+            -0.375
           ],
-          "kernel_zero_frac_per_row": [
-            1.0,
-            1.0,
-            0.043,
-            0.0
-          ],
-          "max_abs_err_vs_ref": 996.0,
-          "metric": "zero_code_fraction_and_per_row_relative_error",
-          "ref_relerr_vs_x_per_row": [
-            0.00661,
-            0.006733,
-            0.008647,
-            0.006982
-          ],
-          "ref_zero_frac_per_row": [
-            0.0156,
-            0.0039,
-            0.0078,
-            0.0156
-          ],
-          "row_absmax": [
-            0.001,
-            0.01,
-            1.0,
-            1000.0
+          "scale": 0.125,
+          "scale_is_exactly_0.125": true,
+          "shape": [
+            1,
+            64
           ],
           "stderr": "",
-          "stdout": "{\"metric\": \"zero_code_fraction_and_per_row_relative_error\", \"row_absmax\": [0.0010000000474974513, 0.009999999776482582, 1.0, 1000.0], \"kernel_zero_frac_per_row\": [1.0, 1.0, 0.043, 0.0], \"ref_zero_frac_per_row\": [0.0156, 0.0039, 0.0078, 0.0156], \"kernel_relerr_vs_x_per_row\": [1.0, 1.0, 0.035045, 0.990688], \"ref_relerr_vs_x_per_row\": [0.00661, 0.006733, 0.008647, 0.006982], \"kernel_relerr_vs_ref_per_row\": [1.0, 1.0, 0.038614, 0.990693], \"kernel_row_absmax_out\": [0.0, 0.0, 1.0078740119934082, 4.0], \"max_abs_err_vs_ref\": 996.0}\n",
+          "stdout": "{\"scale\": 0.125, \"scale_is_exactly_0.125\": true, \"exact_tie_count\": 63, \"n_elems\": 64, \"mismatch_vs_torch_round_half_even\": 31, \"mismatch_vs_half_away_from_zero\": 31, \"mismatch_vs_half_up_floor_kernel_semantics\": 0, \"max_abs_err_vs_half_even\": 0.125, \"max_err_in_steps_vs_half_even\": 1.0, \"max_abs_err_vs_half_away\": 0.125, \"mismatch_positive_ties_vs_half_even\": 16, \"mismatch_negative_ties_vs_half_even\": 15, \"mismatch_negative_ties_vs_half_away\": 31, \"sample_out_first8\": [0.125, 0.0, 0.25, -0.125, 0.375, -0.25, 0.5, -0.375], \"sample_half_even_first8\": [0.0, -0.0, 0.25, -0.25, 0.25, -0.25, 0.5, -0.5], \"sample_half_away_first8\": [0.125, -0.125, 0.25, -0.25, 0.375, -0.375, 0.5, -0.5]}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 120
         },
         "id": "c3.e1",
         "kind": "runtime_probe",
-        "summary": "Runtime confirms total information loss for small-magnitude rows and saturation for large ones, using per-row multipliers 1e-3/1e-2/1/1e3 on rows normalized to absmax 1. Rows with absmax 0.001 and 0.01 come back 100% zeros from the kernel (zero fraction 1.0, relative error vs both x and the contract reference = 1.0), whereas the contract reference reconstructs those same rows to 0.66% and 0.67% relative error with only 1.6%/0.4% zero codes. The absmax=1e3 row is clipped to 4.0 everywhere (relerr 0.9907, max |kernel-ref| = 996.0). Only the row whose absmax happens to be near the hardcoded 4.0 regime (absmax 1) is roughly usable (relerr 0.0386 vs ref, still ~4.5x the reference's own 0.0086). Comparison is against the correctly quantized per-row reference, not raw FP32, so this is a genuine contract violation rather than an int8 lossiness artifact.",
+        "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
         "supports": "confirmed",
-        "tool_event_id": "t12"
+        "tool_event_id": "t14"
       }
     ],
     "id": "c3",
     "raised_by": "skeptic",
-    "rationale": "With a constant scale, rows whose absmax is far below 4.0 use few or zero of the 127 codes; kernel.py has no per-row normalization, so total information loss for small rows is possible while absolute error stays under 0.0157 and could be masked by an atol-based check.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "absmax = max(max(|x_row|), 1e-10) explicitly contemplates arbitrarily small row magnitudes down to 1e-10 and still requires scale = absmax/127."
-      },
-      {
-        "source": "kernel.py:20-22",
-        "summary": "Fixed scale 4/127 means any |x| < ~0.0157 rounds to code 0."
-      }
-    ],
-    "scope_rationale": "problem.txt admits arbitrary-magnitude float rows and requires the row max to map to code +/-127 (absmax floored only at 1e-10), so a row with absmax 0.01 is inside the stated domain and the contract fixes the required output exactly.",
-    "statement": "For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract reference with scale = 0.01/127 preserves the row up to ~0.4% relative error; metric: fraction of entries mapped to code 0 and relative error ||out - ref|| / ||ref|| per row, expected ~1.0 for the kernel.",
+    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
+    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
     "status": "confirmed",
-    "updated_at": "2026-09-08T15:54:47Z"
+    "updated_at": "2026-09-08T15:02:23Z"
   }
 ]

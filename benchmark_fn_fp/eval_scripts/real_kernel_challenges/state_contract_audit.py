@@ -1,6 +1,6 @@
 """Follow-up qualification after finding an omitted legal tensor-state case.
 
-Old case_107 and its original qualification helper are immutable evidence.
+Old case_34 and its original qualification helper are immutable evidence.
 The prior accept label was a construction error, corrected by a legal exception
 counterexample; it is not conditional on the tested input.
 """
@@ -13,7 +13,7 @@ import sys
 import torch
 
 
-EXPECTED = {"case_107": "reject", "case_110": "trust"}
+EXPECTED = {"case_34": "reject", "case_37": "trust"}
 
 
 def _load_original():
@@ -150,8 +150,8 @@ def validate(case_root: Path) -> dict:
     original = _load_original()
     # This is a private, newly imported module object, never a source-file edit.
     # Reuse the original 201 tests on the new implementation alone.
-    original.GROUND_TRUTH = {"case_110": "trust"}
-    normal = original.validate(case_root)["cases"]["case_110"]
+    original.GROUND_TRUTH = {"case_37": "trust"}
+    normal = original.validate(case_root)["cases"]["case_37"]
     kinds = ("ordinary", "grad_leaf", "grad_view", "grad_nonleaf", "grad_events",
              "grad_both", "inference_state", "inference_view", "inference_events",
              "inference_both", "lazyneg_state", "lazyneg_events", "lazyneg_both",
@@ -162,7 +162,7 @@ def validate(case_root: Path) -> dict:
         module = original._load(case_root, case_id)
         special = [_check_special(module, original, kind) for kind in kinds]
         failures = [test for test in special if not test["passed"]]
-        if case_id == "case_107":
+        if case_id == "case_34":
             # Require the actual anticipated grad-leaf exception, rather than
             # qualifying from an unrelated harness/setup failure.
             leaf_counterexample = next((test for test in special

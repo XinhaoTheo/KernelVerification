@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_16`
-- Turns: 10
-- Tool events: 16
+- Entry: `case_17`
+- Turns: 7
+- Tool events: 13
 - Claims: 2
-- Description updates: 2
-- LLM time: 82.904s across 9 calls | tokens: in=155623 out=4088 total=159711
+- Description updates: 1
+- LLM time: 81.379s across 6 calls | tokens: in=99271 out=2858 total=102129
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.98
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_16",
+    "entry": "case_17",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_16"
+    "entry": "case_17"
   }
 
-### Turn 2 - `describer` (11.776123821000056s, in=4669 out=612)
+### Turn 2 - `describer` (18.308758254000054s, in=4059 out=659)
 
 Message:
 
 ```text
-The source and contract are already loaded; the key mismatch is the K-tail handling (or lack of it), so I'll record a structured description.
+I'll describe the contract and kernel, focusing on the seqlen-not-multiple-of-chunk behavior which is the obvious risk surface.
 ```
 
 Tool calls:
@@ -75,357 +75,263 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
-      "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
-      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
+      "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
+      "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
+      "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
+      "Batch dimension is arbitrary; one row per program."
     ],
     "kernel_model": [
-      "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
-      "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
-      "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
-      "M/N tiling is correct: grid uses cdiv and sto
-  ...[truncated 1414 chars]
+      "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
+      "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (lin
+  ...[truncated 1844 chars]
   Output summary:
   {
     "contract_model": [
-      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
-      "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
-      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
+      "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
+      "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
+      "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
+      "Batch dimension is arbitrary; one row per program."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
-      "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
-      "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
-      "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
-      "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides"
+      "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
+      "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
+      "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
+      "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
     ],
     "open_questions": [],
     "resolved_tasks": [],
-    "risk_map": [
-      "K-tail omission: any K not a multiple of 32 silently drops (K mod 32) k-terms from every output element; e.g. K=33 loses the k=32 contribution e
-  ...[truncated 1138 chars]
+    
+  ...[truncated 1568 chars]
 
-### Turn 3 - `skeptic` (5.68143329499992s, in=9974 out=279)
-
-Message:
-
-```text
-The kernel drops the K tail (loop runs only K//32 iterations, no tail handling, no K-mask on loads), directly violating the contract's explicit statement that partial K tiles must contribute. I'll record the two concrete claims.
-```
-
-Tool calls:
-
-- `record_claim -> t6 error`
-  Args:
-  {
-    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
-      }
-    ],
-    "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul."
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (9.863094901999943s, in=10705 out=581)
+### Turn 3 - `skeptic` (10.987346863000084s, in=9807 out=590)
 
 Message:
 
 ```text
-The previous record_claim failed because scope_rationale was missing. I'll re-send it correctly, plus a second claim for the K < 32 sub-case.
+The kernel's floor-division loop bound (`seqlen // CHUNK`) clearly drops the trailing partial chunk, which the contract explicitly requires. I'll record two concrete, in-scope claims: the trailing partial chunk and the case where seqlen < chunk (entire output is zeros).
 ```
 
 Tool calls:
 
-- `record_claim -> t7 ok`
+- `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
+    "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
-    "statement": "For any K with K mod 32 != 0 (e.g. K=33), m
-  ...[truncated 170 chars]
+    "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
+  
+  ...[truncated 269 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
+    "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
-    "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
+    "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
+    "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
     "status": "open"
   }
-- `record_claim -> t8 ok`
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+    "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"M, N and K may each be any positive integer.\""
-      },
-      {
-        "source": "problem.txt",
-        "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in th
-  ...[truncated 207 chars]
+    "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
+    "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, complet
+  ...[truncated 73 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+    "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"M, N and K may each be any positive integer.\""
-      },
-      {
-        "source": "problem.txt",
-        "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+        "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
       }
     ],
-    "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.",
-    "statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
+    "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
+    "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
     "status": "open"
   }
 
-### Turn 5 - `describer` (16.643762896s, in=11633 out=918)
+### Turn 4 - `experimenter` (11.098461283000006s, in=12677 out=636)
 
 Message:
 
 ```text
-The open claims c1 and c2 match the description model exactly. I'll record a refined description update with probe-design notes and residual detail (e.g. K % 32 == 1 losing only one term vs. K=31 losing most of the sum) to help the Experimenter/Skeptic close them with decisive evidence.
+I'll run runtime probes for both open claims in parallel — they're independent (different seqlen cases against the same kernel).
 ```
 
 Tool calls:
 
-- `record_description_update -> t9 ok`
-  Args:
-  {
-    "contract_model": [
-      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
-      "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
-      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
-    ],
-    "kernel_model": [
-      "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
-      "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
-      "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
-      "M/N tiling is correct: grid uses cdiv (line 36) and stores
-  ...[truncated 2403 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-      "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
-      "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
-      "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
-      "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
-      "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
-      "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
-      "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
-      "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
-      "A correct fix would mask the K dimension on the last iteration (offs_k < 
-  ...[truncated 2117 chars]
-
-### Turn 6 - `skeptic` (5.427440388999912s, in=18863 out=205)
-
-Message:
-
-```text
-The two in-scope claims (c1: K-tail omission; c2: K < 32 loop never runs) already cover the entire defect surface of this kernel — M/N tiling and strides are correct, and dtype/precision concerns are out of scope per the contract. I have no additional high-quality in-scope claims to raise.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t10 ok`
-  Args:
-  {
-    "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 9,
-    "turn": 6
-  }
-
-### Turn 7 - `experimenter` (11.04143082600001s, in=19876 out=584)
-
-Message:
-
-```text
-I'll run both probes now: c1 with K=33 (one dropped k-term) and c2 with K=16 (loop never runs). These are independent, so I'm batching them.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t11 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_16\")\nfrom kernel import matmul\n\nM, N, K = 65, 65, 33\ntorch.manual_seed(0)\na = torch.randn(M, K, device=\"cuda\", dtype=torch.float32)\nb = torch.randn(K, N, device=\"cuda\", dtype=torch.float32)\nc = matmul(a, b)\nref = torch.matmul(a, b)\n# expected value if tail dropped: sum over first 32 k\nref_dropped = a[:, :32] @ b[:32, :]\nerr_vs_ref = (c - ref).abs().max().item()\nerr_vs_dropped = (c - ref_dropped).abs().max().item()\nprint(json.dumps({\n    \"M\": M, \"N\": N, \"K\": K,\n    \"max_abs_err_vs_torch_matmul\": err_vs_ref,\n    \"max_abs_err_vs_first32_truncated\": err_vs_dropped,\n    \"tail_dropped_hypothesis_confirmed\": err_vs_ref > 1e-3 and err_vs_dropped < 1e-3\n}))",
-    "expecte
-  ...[truncated 106 chars]
+    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(0)\nx = torch.randn(3, 100, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\ntail = slice(64, 100)  # positions written by full chunk vs. trailing partial chunk\nwritten = slice(0, 64)\nerr_tail = (out[:, tail] - ref[:, tail]).abs()\nprint(json.dumps({\n    \"seqlen\": 100, \"chunk\": 64, \"shape\": list(out.shape), \"dtype\": str(out.dtype),\n    \"tail_indices\": [64, 99],\n    \"max_abs_err_written\": float((out[:, written] - ref[:, written]).abs().max()),\n    \"max_abs_err_tail\": float(err_tail.max()),\n    \"tail_is_all_zero\": bool((out[:, tail] == 0).all()),\n    \"ref_ta
+  ...[truncated 315 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
+        "path": "probes/t8_probe.py",
+        "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
+        "path": "probes/t8_stdout.txt",
+        "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "50f1d3658c869cf2ef11020d4a0afa4958e9a77e2dba8f893f594b4532cf37d6"
+        "path": "probes/t8_json_result.json",
+        "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul
-  ...[truncated 2652 chars]
-- `run_claim_probe -> t12 ok`
+    "claim_statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_lik
+  ...[truncated 4210 chars]
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_16\")\nfrom kernel import matmul\n\nM, N, K = 65, 65, 16\ntorch.manual_seed(0)\na = torch.randn(M, K, device=\"cuda\", dtype=torch.float32)\nb = torch.randn(K, N, device=\"cuda\", dtype=torch.float32)\nc = matmul(a, b)\nref = torch.matmul(a, b)\nerr = (c - ref).abs().max().item()\nall_zero = bool((c == 0).all().item())\nprint(json.dumps({\n    \"M\": M, \"N\": N, \"K\": K,\n    \"max_abs_err_vs_torch_matmul\": err,\n    \"output_all_zeros\": all_zero,\n    \"loop_never_ran_confirmed\": err > 1e-3 or all_zero\n}))",
-    "expected_signal": "K=16: loop runs zero iterations; result is zeros/uninitialized and disagrees with torch.matmul"
-  }
+    "code": "import torch, sys, json\nsys.path.insert(0, \"/root/cases/case_17\")\nfrom kernel import chunked_cumsum\n\ntorch.manual_seed(1)\nx = torch.randn(2, 32, device=\"cuda\", dtype=torch.float32)\nout = chunked_cumsum(x, chunk=64)\nref = torch.cumsum(x, dim=1)\nprint(json.dumps({\n    \"seqlen\": 32, \"chunk\": 64, \"shape\": list(out.shape),\n    \"max_abs_err\": float((out - ref).abs().max()),\n    \"out_is_all_zero\": bool((out == 0).all()),\n    \"ref_nonzero_count\": int((ref != 0).sum()),\n    \"out_nonzero_count\": int((out != 0).sum()),\n    \"allclose\": bool(torch.allclose(out, ref, atol=1e-6)),\n    \"sample_out\": out[0, :4].tolist(),\n    \"sample_ref\": ref[0, :4].tolist(),\n}))",
+    "expected_signal": "entire output tensor is zeros (n_chunks=0, loop
+  ...[truncated 49 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
+        "path": "probes/t9_probe.py",
+        "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "db0ecddfcbbe196ca39abd0d093c0d1c81f0d79f45fccf394097e8e14ac3ddb7"
+        "path": "probes/t9_json_result.json",
+        "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
-    "duration_s": 6.198473,
-    "e
-  ...[truncated 2532 chars]
+    "claim_statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted i
+  ...[truncated 3498 chars]
 
-### Turn 8 - `experimenter` (8.176523326000051s, in=23818 out=338)
+### Turn 5 - `experimenter` (10.526857843000016s, in=18107 out=574)
 
 Message:
 
 ```text
-Both probes returned decisive results; I'll finalize both claims now.
+Both probes ran successfully and decisively show the floor-division bug. I'll finalize both claims now — no further probes needed since both expected signals were observed exactly.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t13 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "K": 33,
-      "M": 65,
-      "N": 65,
-      "max_abs_err_vs_first32_truncated": 0.0,
-      "max_abs_err_vs_torch_matmul": 4.216983795166016,
-      "tail_dropped_hypothesis_confirmed": true
+      "chunk": 64,
+      "max_abs_err_tail": 10.053009033203125,
+      "max_abs_err_written": 1.9073486328125e-06,
+      "sample_out_tail": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sample_ref_tail": [
+        -1.1006591320037842,
+        -2.0740959644317627,
+        -1.1181726455688477,
+        -2.2976255416870117,
+        -3.304033041000366,
+        -3.1880407333374023
+      ],
+      "seqlen": 100,
+      "shape": [
+        3,
+        100
+      ],
+      "tail_allclose": false,
+      "tail_is_all_zero": true
     },
-    "event_id": "t11",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
-    "supports": "confirmed"
-  }
+    "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=t
+  ...[truncated 180 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
+    "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
     "supports": "confirmed",
-    "tool_event_id": "t11"
+    "tool_event_id": "t8"
   }
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "K": 16,
-      "M": 65,
-      "N": 65,
-      "loop_never_ran_confirmed": true,
-      "max_abs_err_vs_torch_matmul": 19.551929473876953,
-      "output_all_zeros": true
+      "allclose": false,
+      "chunk": 64,
+      "max_abs_err": 10.293733596801758,
+      "out_is_all_zero": true,
+      "out_nonzero_count": 0,
+      "ref_nonzero_count": 64,
+      "seqlen": 32,
+      "shape": [
+        2,
+        32
+      ]
     },
-    "event_id": "t12",
+    "event_id": "t9",
     "status": "confirmed",
-    "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
+    "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
     "supports": "confirmed"
   }
   Output summary:
@@ -433,25 +339,25 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
+    "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
     "supports": "confirmed",
-    "tool_event_id": "t12"
+    "tool_event_id": "t9"
   }
 
-### Turn 9 - `skeptic` (5.613102427000058s, in=28023 out=188)
+### Turn 6 - `skeptic` (5.060135264999985s, in=27025 out=146)
 
 Message:
 
 ```text
-The two in-scope claims (c1: K-tail omission; c2: K<32 loop never runs) are both confirmed by decisive runtime evidence, and they fully cover this kernel's only defect surface. No new claims are needed.
+Both in-scope claims are confirmed decisively by runtime probes on contract-admitted inputs; no new issues remain uncovered.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t15 ok`
+- `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
+    "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -460,26 +366,26 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
+    "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 14,
-    "turn": 9
+    "reviewed_tool_event_count": 11,
+    "turn": 6
   }
 
-### Turn 10 - `judge` (8.68086993999998s, in=28062 out=383)
+### Turn 7 - `judge` (25.397543624000036s, in=27596 out=253)
 
 Message:
 
 ```text
-Both in-scope claims are confirmed by decisive runtime probes, the Skeptic has signed off with no new claims, and no open claims remain. The kernel's K loop (line 19) drops the partial K tail entirely, directly violating the problem.txt contract. Recording the verdict.
+The evidence is decisive: the floor-division loop bound drops the trailing partial chunk, exactly violating the explicit contract clause. Reject.
 ```
 
 Tool calls:
 
-- `record_verdict -> t16 ok`
+- `record_verdict -> t13 ok`
   Args:
   {
     "confidence": 0.98,
@@ -487,8 +393,8 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope
-  ...[truncated 412 chars]
+    "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The k
+  ...[truncated 89 chars]
   Output summary:
   {
     "confidence": 0.98,
@@ -496,251 +402,188 @@ Tool calls:
       "c1",
       "c2"
     ],
-    "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
-    "verdict"
-  ...[truncated 12 chars]
+    "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
 {
   "contract_model": [
-    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
-    "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
-    "No tolerance or dtype conversion requirements stated beyond float32 operands/output",
-    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
-    "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum"
+    "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
+    "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
+    "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
+    "Batch dimension is arbitrary; one row per program."
   ],
   "kernel_model": [
-    "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
-    "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
-    "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
-    "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
-    "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides",
-    "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
-    "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
-    "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
-    "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
-    "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
-    "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
-    "A correct fix would mask the K dimension on the last iteration (offs_k < K with other=0) and iterate cdiv(K, 32) times"
+    "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
+    "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
+    "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
+    "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
   ],
-  "open_quest
-...[truncated 2700 chars]
+  "open_questions": [],
+  "risk_map": [
+    "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
+    "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
+    "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
+    "Float carry is a Python float 0.0 that becomes scalar; accumulation order (per-chunk sums) differs from torch.cu
+...[truncated 437 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Kernel is a standard 64x64x32 tiled Triton GEMM, but the K loop runs only K // BLOCK_K iterations with no tail handling, so partial K tiles are dropped — directly violating the stated contract that K may be any positive integer.
-- `du2` tasks=`initial`: Description model refined to align with open claims c1/c2: the 64x64x32 tiled GEMM omits the partial K tail entirely, and for K < 32 the loop never runs at all. Added probe-design detail and fix sketch so the claims can be closed decisively.
+- `du1` tasks=`initial`: Initial description of case_17 chunked cumsum kernel: contract requires correct cumulative sum for any positive seqlen, but kernel iterates only seqlen//CHUNK chunks, leaving trailing partial-chunk outputs unwritten (zeros).
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.
+Statement: When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.
+Scope rationale: problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.
 
 Scope evidence:
-- `problem.txt`: "K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum."
+- `problem.txt`: Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.
 
-Rationale: Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.
+Rationale: The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t11: K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 — the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero — tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.
 
 ### c2 - `confirmed`
 
-Statement: For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.
+Statement: When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.
+Scope rationale: problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.
 
 Scope evidence:
-- `problem.txt`: "M, N and K may each be any positive integer."
-- `problem.txt`: "when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum."
+- `problem.txt`: Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced.
 
-Rationale: When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.
+Rationale: seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros — a more severe subcase of the floor-division bug.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t12: K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul — output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_16"
+  "entry": "case_17"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size",
-    "When K mod BLOCK_K != 0, the final partial K tile must still contribute its first (K mod BLOCK_K) entries to the sum",
-    "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
+    "Operation: chunked cumulative sum along axis 1 of a 2-D float32 tensor, y[b,t] = sum_{s<=t} x[b,s].",
+    "seqlen may be any positive integer, explicitly NOT required to be a multiple of chunk; trailing positions forming a shorter final chunk must still produce correct outputs.",
+    "Numerical behavior should match the mathematical cumulative sum within float32 tolerance.",
+    "Batch dimension is arbitrary; one row per program."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton tiled GEMM with BLOCK_M=64, BLOCK_N=64, BLOCK_K=32 and FP32 accumulator (line 18, 40)",
-    "K loop is range(0, K // BLOCK_K) (line 19) \u2014 the final partial K tile is never loaded or accumulated",
-    "Loads mask only M and N bounds (lines 20-21), with no K-bounds mask, and no tail iteration for K % BLOCK_K",
-    "M/N tiling is correct: grid uses cdiv and stores are masked by M/N bounds (lines 36, 27)",
-    "Strides are taken from the tensors and passed through, so non-contiguous inputs are handled via strides"
+    "Kernel launches one Triton program per batch row; iterates n_chunks = seqlen // CHUNK chunks, computing tl.cumsum within each block and adding a running carry (kernel.py lines 11-19).",
+    "Inputs/outputs assumed contiguous per row: only stride(0) is passed; element stride along the row is assumed 1 (line 26).",
+    "out initialized via torch.zeros_like; every position of a full chunk is stored, masked to offs < seqlen.",
+    "Carry accumulated as float scalar; tl.cumsum and tl.sum handle masked-out tail elements as 0 via other=0.0, so intra-chunk math on the final partial chunk is correct IF that chunk is visited."
   ],
   "open_questions": [],
   "resolved_tasks": [],
   "risk_map": [
-    "K-tail omission: any K not a multiple of 32 silently drops (K mod 32) k-terms from every output element; e.g. K=33 loses the k=32 contribution entirely",
-    "Because inputs are FP32 and not quantized, this is a direct additive error in C proportional to the dropped A[m,k]*B[k,n] terms, easily exposed by comparing to torch.matmul",
-    "If K < 32, K // BLOCK_K == 0 and the loop never runs, leaving C as uninitialized torch.empty memory rather than zeros",
-    "M/N masking looks correct, so errors should appear only in the K dimension, not tile edges of M/N"
-  ],
-  "scope_notes": [
-    "Contract explicitly scopes the interesting failure mode to K not being a multiple of the block size, so probes with K % 32 != 0 (including K < 32) are in scope\", \"K a multiple of 32 falls into a benign-pass region and should not be used alone to confirm correctness\", \"No tests are bundled with the artifact; benchmark/test domain appears to be arb
-...[truncated 338 chars]
+    "Primary bug surface: n_chunks = seqlen // CHUNK uses floor division, so when seqlen is not a multiple of chunk, the final partial chunk (seqlen % chunk elements, i.e. indices n_chunks*CHUNK..seqlen-1) is never processed; those outputs remain 0 from torch.zeros_like. E.g. seqlen=100, chunk=64 -> only 64 elements written, last 36 are zeros.",
+    "Secondary: if chunk <= 0 the loop body never runs; if chunk is not a power of 2, tl.arange(0, CHUNK) requires a power-of-two constexpr in Triton, which can cause a launch/compile failure (default 64 is fine, but the API accepts arbitrary chunk).",
+    "Assumes x is 2-D and row-contiguous; non-contiguous x.stride(1) != 1 would silently use wrong element offsets.",
+    "Float carry is a Python float 0.0 that becomes scalar; accumul
+...[truncated 768 chars]
 
-### t6 - record_claim - error
+### t6 - record_claim - ok
 
 {
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  "id": "c1",
+  "rationale": "The loop bound uses floor division, so the final partial chunk of size seqlen % chunk (e.g. seqlen=100, chunk=64) is never stored; out = torch.zeros_like leaves those positions as 0.0 instead of the correct cumulative sums.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
+    }
+  ],
+  "scope_rationale": "problem.txt explicitly states seqlen is not required to be a multiple of chunk and that trailing positions must still produce correct outputs; seqlen=100, chunk=64 (or any seqlen%64!=0) is a contract-admitted input.",
+  "statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+  "status": "open"
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c1",
-  "rationale": "Line 19 loops only K // BLOCK_K times with BLOCK_K=32 and the loads on lines 20-21 mask only M and N, so the last (K mod 32) k-terms are never loaded or accumulated; this is directly visible in the source.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "\"K is NOT required to be a multiple of the kernel's K block size; when it is not, the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
-    }
-  ],
-  "scope_rationale": "problem.txt explicitly states K may be any positive integer and that when K mod BLOCK_K != 0 the partial K tile must still contribute its entries; inputs like K=33 are admitted by the contract.",
-  "statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
-  "status": "open"
-}
-
-### t8 - record_claim - ok
-
-{
   "id": "c2",
-  "rationale": "When K < 32 the K loop (line 19) runs zero iterations, acc stays zero, and it is stored into c which was allocated with torch.empty (line 35); whether the output is zeros depends on allocator reuse, making the result garbage rather than the required dot product.",
+  "rationale": "seqlen // CHUNK = 0, so range(0) skips the loop entirely and out stays all zeros \u2014 a more severe subcase of the floor-division bug.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"M, N and K may each be any positive integer.\""
-    },
-    {
-      "source": "problem.txt",
-      "summary": "\"when it is not [a multiple], the final K tile is partial and only the first (K mod BLOCK_K) of its entries take part in the sum.\""
+      "summary": "Input domain: `seqlen` may be any positive integer. It is NOT required to be a multiple of `chunk`; when it is not, the trailing positions form a shorter final chunk whose outputs must still be produced."
     }
   ],
-  "scope_rationale": "problem.txt states K may be any positive integer, including K < 32, and requires the partial tile (here the entire sum) to take part in the result.",
-  "statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
+  "scope_rationale": "problem.txt says any positive seqlen; seqlen=32 < chunk=64 gives n_chunks=0, leaving the entire output zero instead of the correct cumsum.",
+  "statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
   "status": "open"
 }
 
-### t9 - record_description_update - ok
-
-{
-  "contract_model": [
-    "C[m,n] = sum_k A[m,k]*B[k,n] for float32 operands",
-    "M, N, K may each be any positive integer; K need not be a multiple of the kernel's K block size (32)",
-    "When K mod 32 != 0, the final partial K tile must still contribute its first (K mod 32) entries to the sum",
-    "No tolerance or dtype conversion requirements stated beyond float32 operands/output"
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Triton tiled GEMM, BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, FP32 accumulator (lines 18, 40)",
-    "K loop runs exactly K // 32 iterations (line 19); the final partial K tile is never loaded or accumulated",
-    "Loads mask only M and N bounds (lines 20-21); there is no K-bounds mask and no tail iteration for K % 32",
-    "M/N tiling is correct: grid uses cdiv (line 36) and stores are masked by M/N bounds (line 27)",
-    "Output C is allocated with torch.empty (line 35), so unexecuted/untouched regions hold allocator-reused memory, not zeros",
-    "Strides are read from the tensors and passed through, so row/col-major and non-contiguous layouts are addressed correctly",
-    "A correct fix would mask the K dimension on the last iteration (offs_k < K with other=0) and iterate cdiv(K, 32) times"
-  ],
-  "open_questions": [],
-  "resolved_tasks": [],
-  "risk_map": [
-    "K-tail omission (claim c1): any K with K % 32 != 0 silently drops the last (K % 32) k-terms from every output element",
-    "K < 32 (claim c2): the loop runs zero iterations and acc=0 is stored over a torch.empty allocation; the result is deterministic zeros for the kernel-written part, but the contract requires the full dot product, so it fails against torch.matmul regardless of allocator behavior",
-    "Decisive probe for c1: use K=33 so exactly one k-column is dropped; the error equals A[:,32] @ B[32,:] and is nonzero for generic inputs",
-    "Alternative isolation probe for c1: set all entries of the final dropped k-slice to 0 (expected identical results) vs nonzero 
-...[truncated 1317 chars]
-
-### t10 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "The kernel's only defect surface is the missing K-tail handling, fully captured by existing claims c1 (K mod 32 != 0 drops tail terms) and c2 (K < 32 loop never runs). M/N masking, grid sizing, and stride handling are correct by source inspection, and dtype/precision/tolerance concerns are out of the stated contract. No further in-scope testable claims found.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 9,
-  "turn": 6
-}
-
-### t11 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
+      "path": "probes/t8_probe.py",
+      "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
+      "path": "probes/t8_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "50f1d3658c869cf2ef11020d4a0afa4958e9a77e2dba8f893f594b4532cf37d6"
+      "path": "probes/t8_json_result.json",
+      "sha256": "ade5e877b36b0c083fdaedfd7eb139c39517ac3c0e8e1115a3ae51d3133e99f2"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For any K with K mod 32 != 0 (e.g. K=33), matmul() drops the final (K mod 32) k-terms from every output element, so C[m,n] equals the sum over only the first 32*(K//32) k-values and disagrees with torch.matmul.",
-  "duration_s": 7.723511,
-  "event_id": "t11",
+  "claim_statement": "When seqlen is not a multiple of chunk (e.g. seqlen=100 with default chunk=64), the final partial chunk's positions seqlen//chunk*chunk .. seqlen-1 are never written by the kernel and remain 0 from torch.zeros_like, violating y[b,t]=sum_{s<=t}x[b,s].",
+  "duration_s": 5.089887,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -748,55 +591,54 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "3d0dda170760d04dddb6e4d679d9dca178713b8670a5821eade764448c7cdf44"
+          "path": "probes/t8_probe.py",
+          "sha256": "f60b49ad3cfad5a68d8ad79b413cb0839bc9f196b7377e5bc8f1045f8902cf4e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "bf1619ff682c12d861dc3064f9506361c72b3f1b759e41b2704eadac757297f6"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "6af1b7ae70eb4449a5c584ea56b89e033c5346ee878544dd0de87e263a3c0701"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t11_stderr.txt",
-          "sha256": 
-...[truncated 1852 chars]
+          "path": "probes/t8_s
+...[truncated 3410 chars]
 
-### t12 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
+      "path": "probes/t9_probe.py",
+      "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "db0ecddfcbbe196ca39abd0d093c0d1c81f0d79f45fccf394097e8e14ac3ddb7"
+      "path": "probes/t9_json_result.json",
+      "sha256": "a1a52f80786a571158628e2f1df949cd760ac32b41a393f658a6aba6a58e14d5"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For K < 32 (e.g. K=16), K // 32 == 0 so the loop never runs and matmul() returns the untouched torch.empty allocation instead of A @ B, producing arbitrary/garbage values in C.",
-  "duration_s": 6.198473,
-  "event_id": "t12",
+  "claim_statement": "When seqlen < chunk (e.g. seqlen=32, chunk=64), n_chunks = seqlen // CHUNK = 0 so the loop never runs and the entire output tensor is zeros, completely failing the cumulative-sum contract for a contract-admitted input.",
+  "duration_s": 4.895248,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -804,58 +646,58 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "7632cdf863dce50e3633fb1f9229f692534e2b45524f4aabf6bf022b6ec7d584"
+          "path": "probes/t9_probe.py",
+          "sha256": "e224633176c1ec019e07d576e7b450dced24c6e777d372199a557199c8b03e81"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "2251ff697eda8a9f47ed1d53ed808b18f91ce20c76e2ce7373c654c4508e2e7b"
+          "path": "probes/t9_stdout.txt",
+          "sha256": "bca21d89e1a3ec96422bb034bfa1da290d3bf14cba2e14e2628010eef13905dc"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t12_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb9242
-...[truncated 1732 chars]
+          "path": "probes/t9_stderr.txt",
+          "sha256": 
+...[truncated 2698 chars]
 
-### t13 - finalize_probe_evidence - ok
+### t10 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "K=33 probe: output matches the first-32-k truncated matmul exactly (max err 0.0) but differs from torch.matmul by max abs err 4.217 \u2014 the k=32 tail term A[:,32]@B[32,:] is never accumulated, confirming c1.",
+  "summary": "seqlen=100, chunk=64: positions 0-63 match reference cumsum (max_abs_err 1.9e-6), but the entire trailing partial chunk (positions 64-99) is all zeros while the reference is nonzero \u2014 tail_is_all_zero=true, max_abs_err_tail=10.05, allclose fails. The floor-division loop bound (seqlen//CHUNK=1) never visits the final partial chunk, exactly as claimed.",
   "supports": "confirmed",
-  "tool_event_id": "t11"
+  "tool_event_id": "t8"
 }
 
-### t14 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "K=16 probe: matmul() returned all zeros (loop ran zero iterations, acc=0 stored), max abs err 19.552 vs torch.matmul \u2014 output is not A@B, confirming c2 (the dropped contribution here is the entire dot product).",
+  "summary": "seqlen=32, chunk=64: n_chunks = 32//64 = 0, the kernel loop never executes, and the entire output tensor is zeros (out_nonzero_count=0) while the reference cumsum is nonzero at all 64 elements (max_abs_err=10.29, allclose=false). Complete failure of the contract for a contract-admitted input, exactly as claimed.",
   "supports": "confirmed",
-  "tool_event_id": "t12"
+  "tool_event_id": "t9"
 }
 
-### t15 - record_no_new_claims - ok
+### t12 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: claims c1 and c2 are confirmed by decisive runtime probes (K=33 matches the first-32-k truncated matmul exactly, err 4.217 vs torch.matmul; K=16 returns all zeros, err 19.552), both in_scope with problem.txt evidence. M/N masking, grid sizing, and strides are correct by source inspection; dtype/precision concerns are out of contract. No material in-scope problem remains uncovered.",
+  "reason": "Final review: the floor-division loop bound bug is fully covered by two confirmed in-scope claims (c1 trailing partial chunk at seqlen=100, c2 entire-output zeros at seqlen=32), each backed by decisive runtime probe evidence from contract-admitted inputs. No additional material, testable in-scope problem is exposed by the new evidence.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 14,
-  "turn": 9
+  "reviewed_tool_event_count": 11,
+  "turn": 6
 }
 
-### t16 - record_verdict - ok
+### t13 - record_verdict - ok
 
 {
   "confidence": 0.98,
@@ -863,7 +705,7 @@ Evidence:
     "c1",
     "c2"
   ],
-  "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
+  "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
   "verdict": "reject"
 }
 
@@ -871,11 +713,11 @@ Evidence:
 
 {
   "confidence": 0.98,
-  "created_at": "2026-09-30T08:27:23Z",
+  "created_at": "2026-09-30T08:27:44Z",
   "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The contract in problem.txt explicitly requires C[m,n] = sum_k A[m,k]*B[k,n] for arbitrary positive K, including K not a multiple of BLOCK_K=32, and states that the partial K tile's first (K mod BLOCK_K) entries must take part in the sum. Source shows the K loop (line 19) runs only K//32 iterations with no K-bounds masking or tail iteration. Confirmed runtime evidence: for K=33, output matches the first-32-k truncated matmul exactly (max err 0.0 vs truncated, 4.217 vs torch.matmul), showing the k=32 tail term is entirely dropped (claim c1). For K=16, the loop never runs and the kernel returns all zeros instead of A@B (max err 19.552 vs torch.matmul, claim c2). Both claims are in_scope with problem.txt scope evidence, the artifact bundles no test.py/get_inputs (so problem.txt is the operative contract), the reference is finite and well-defined, and no contract clause (tolerance, quantization, unspecified ordering) accounts for the deviation. This is a direct violation of the required summation formula. Skeptic reviewed the latest evidence and raised no new claims; no open claims remain.",
+  "reason": "The contract (problem.txt) explicitly requires correct outputs for any positive seqlen, stressing the non-multiple-of-chunk case. Confirmed runtime probes show the kernel's loop bound n_chunks = seqlen // CHUNK never visits the trailing partial chunk: at seqlen=100, chunk=64, positions 64-99 remain 0 while the reference cumsum is nonzero (max_abs_err_tail=10.05); at seqlen=32 the loop never runs and the entire output is zeros. Both are contract-admitted inputs (problem.txt is the operative contract; no test.py/get_inputs exists), both claims are in_scope with scope evidence citing the stated input domain, and the errors are not explained by any declared tolerance, FP ordering, or unspecified behavior. The kernel fails the stated contract for the exact case it stresses.",
   "verdict": "reject"
 }

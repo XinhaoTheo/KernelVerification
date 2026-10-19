@@ -21,19 +21,23 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: round a float32 tensor to the nearest value representable in the FP8
-e4m3 format, the storage step of FP8 inference and training kernels.
+Operation: top-1 expert routing for a Mixture-of-Experts layer. For each token,
+select the expert with the largest router logit.
 
-e4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can
-represent 8 evenly spaced values. Rounding to that grid is the point of the
-format, not an implementation shortcut: the resulting relative error is bounded
-by half a mantissa step, about 2^-4 = 6.25%.
+    expert[t] = argmax over e of logits[t, e]
 
-The contract is that every value is rounded to the nearest representable e4m3
-value. Deviation from the float32 input up to the format's own rounding step is
-the intended behavior of the operation.
+Tie rule: router logits are computed in reduced precision and distinct logits
+routinely round to the same representable value, so ties are a normal
+occurrence rather than a curiosity. When several experts share the largest
+logit, the contract requires the LOWEST expert index to win, so that routing is
+reproducible across runs and across replicas holding the experts in the same
+order.
 
-Does fp8_roundtrip() satisfy this contract?
+The selected expert's output is what the layer returns, and different experts
+are independently trained, so which one wins a tie changes the continuous
+output substantially.
+
+Does route_top1() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -45,28 +49,29 @@ import triton.language as tl
 
 
 @triton.jit
-def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < N
-    x = tl.load(X + offs, mask=mask, other=0.0)
+def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):
+    tok = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    valid = cols < E
+    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float("inf"))
 
-    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
-    ax = tl.abs(x)
-    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
-    step = tl.exp2(e - 3.0)
-    q = tl.floor(x / step + 0.5) * step
-    q = tl.where(ax == 0.0, 0.0, q)
-    tl.store(OUT + offs, q, mask=mask)
+    best = -float("inf")
+    best_i = 0
+    for e in range(E):
+        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)
+        take = v >= best
+        best = tl.where(take, v, best)
+        best_i = tl.where(take, e, best_i)
+    tl.store(Idx + tok, best_i)
 
 
-def fp8_roundtrip(x):
-    # Round a float32 tensor to the nearest value representable in e4m3.
-    n = x.numel()
-    out = torch.empty_like(x)
-    BLOCK = 1024
-    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
-    return out
+def route_top1(logits):
+    # Pick one expert per token from the router logits.
+    n_tokens, n_experts = logits.shape
+    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)
+    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,
+                               BLOCK=triton.next_power_of_2(n_experts))
+    return idx
 
 ```
 
@@ -74,24 +79,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Rounding to nearest with .5 floor — ties-to-even vs ties-away. Nearest representable: ties could round to either? Contract says round to nearest; ties at exact half-step are ambiguous but format typically ties-to-even. Ties-away is arguably a valid nearest rounding? Also mantissa overflow: values just below binade boundary rounding up to 2^(e+1)·step grid — step doubles, but quantizing x/step grid: at the top of a binade, x near 2^(e+1) with step 2^(e-3); values 2^(e+1)-2^(e-4)... rounding up to 2^(e+1) which is representable in next binade. Fine. Also subnormals/limits not covered but generic rounding ok. Main flaw: ties handling — with floor(x/step+0.5), exact half-ulp ties round away from zero; nearest representable is ambiguous at ties, both are equidistant, so ties-any is valid "nearest". Actually two values equidistant — either is nearest. So acceptable.
-
-But another subtlety: x/step+0.5 rounding: for negative x, floor(x/step+0.5) is symmetric round-half-up which equals round-half-away for negatives? floor(-1.5)=-2, so -1.5*step → -2*step: away from zero. Fine.
-
-log2 for ax in (0,1): e negative, step = exp2(e-3) fine. e4m3 min subnormal 2^-9; rounding smaller values to multiples of 2^-9 — this kernel gives finer grids, deviating more than the format's step... wait, contract: round to nearest value representable in e4m3. For tiny values, the grid spacing is 2^-9; this kernel would produce values like 2^-20·(k/8) which are NOT representable in e4m3. Also large values beyond e4m3 max (448) — kernel keeps quantizing to 1/8 binade, but e4m3 can't represent those at all (overflow). Actually for large values the grid 1/8 binade is exactly the e4m3 grid, so representable. For small values, subnormal region grid is coarser (2^-9), so kernel produces non-representable values. Violates "nearest representable e4m3 value". Also e4m3 max is 448 with limited range... values above 448: not representable; e4m3 saturates or NaN. But the problem focuses on relative error bound 6.25% — for subnormals the relative error bound doesn't hold anyway. Hmm, is subnormal handling a real defect? Contract says "every value is rounded to the nearest representable e4m3 value". For x=2^-20, kernel returns 2^-20 rounded to 8·2^-23 grid... e= -20, step=2^-23, q = multiple of 2^-23 near x — likely not representable in e4m3 (subnormal grid 2^-9). So violates. I'd reject.
-
-Also tie-breaking: fine. Main defect: subnormal region (|x| < 2^-6) grid spacing should be 2^-9.
+v >= best updates on ties, so later index wins — violates lowest-index tie rule. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.7, "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."}
+{"verdict": "reject", "confidence": 0.95, "reason": "The update condition `v >= best` replaces the current best on ties, so the HIGHEST expert index wins a tie, contradicting the contract that the lowest index must win (which would require strict `>` instead of `>=`)."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.7,
-  "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."
+  "confidence": 0.95,
+  "reason": "The update condition `v >= best` replaces the current best on ties, so the HIGHEST expert index wins a tie, contradicting the contract that the lowest index must win (which would require strict `>` instead of `>=`)."
 }
 
 ## Usage and stop reason
@@ -101,22 +100,22 @@ Also tie-breaking: fine. Main defect: subnormal region (|x| < 2^-6) grid spacing
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.7,
-    "reason": "The kernel assumes the grid spacing is always 1/8 of the current binade, but e4m3 has subnormals: for |x| < 2^-6 the representable grid is the fixed subnormal spacing 2^-9, so this kernel outputs values (e.g. multiples of 2^-23 near 2^-20) that are not representable in e4m3 at all. It also ignores overflow behavior above the e4m3 maximum, so it does not round to the nearest representable e4m3 value in those regions."
+    "confidence": 0.95,
+    "reason": "The update condition `v >= best` replaces the current best on ties, so the HIGHEST expert index wins a tie, contradicting the contract that the lowest index must win (which would require strict `>` instead of `>=`)."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 737,
-    "output_tokens": 846
+    "input_tokens": 725,
+    "output_tokens": 90
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 14.61638916702941,
-  "kernel_sha256": "c74b7b471be73f5a6cc5577e7566de375ae3723f40008665ccd26cacb9bb417a",
-  "problem_sha256": "f9010893c023707f7a678e52f69878482bd1ef79956fe5b625058ce8c9575acb",
+  "elapsed_s": 5.3169752499088645,
+  "kernel_sha256": "6523442f70b08b014d29eeadbae5002f8f9522406e76e2b5a8871c4a817d680a",
+  "problem_sha256": "3c67266730c308fe8d4edcbccead280476bc1c8d0c2ae1d5e382be59f822411e",
   "prompt_variant": "original",
-  "estimated_usd": 0.0047542,
+  "estimated_usd": 0.001411,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

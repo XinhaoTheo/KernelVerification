@@ -1,39 +1,31 @@
-
-import torch, json, sys
-sys.path.insert(0, "/root/cases/case_20")
-from kernel import layer_norm
+import torch, sys, importlib.util
+spec = importlib.util.spec_from_file_location("kernel", "/root/cases/case_21/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 torch.manual_seed(0)
-dev = 'cuda'
-N = 512
-# row 0: standard random; row 1: small variance; row 2: constant row
-x = torch.randn(2, N, device=dev)
-x_small = (torch.full((N,), 2.0, device=dev) + torch.randn(N, device=dev) * 1e-4).unsqueeze(0)
-x = torch.cat([x, x_small, torch.full((1, N), 3.0, device=dev)], dim=0)
-w = torch.randn(N, device=dev)
-b = torch.randn(N, device=dev)
-eps = 1e-5
+num_pages, page_size, head_dim = 16, 4, 8
+num_seqs, max_blocks = 3, 5
+kv = torch.randn(num_pages, page_size, head_dim, device="cuda")
+# permuted (non-identity) block table, distinct pages
+perm = torch.randperm(num_pages)[:num_seqs*max_blocks] if num_pages >= num_seqs*max_blocks else torch.randperm(num_pages).repeat(2)
+bt = perm[:num_seqs*max_blocks].reshape(num_seqs, max_blocks).to(torch.int32).cuda()
+seq_len = 13  # fits within max_blocks pages
 
-y = layer_norm(x.float(), w.float(), b.float(), eps)
+out = m.paged_gather(kv, bt, seq_len)
 
-def ref(xr):
-    mean = xr.mean(-1, keepdim=True)
-    var = ((xr - mean) ** 2).mean(-1, keepdim=True)
-    rstd = 1.0 / torch.sqrt(var + eps)
-    return (xr - mean) * rstd * w + b
+# contract reference
+t = torch.arange(seq_len, device="cuda")
+phys = bt[:, t // page_size]  # [num_seqs, seq_len]
+ref = kv[phys, t % page_size]
 
-yr = ref(x.float())
-diff = (y - yr).abs()
-rowwise = diff.max(dim=-1).values
-
-# expected relative error for small-variance row: rstd_kernel/rstd_ref
-var_small = ((x_small - x_small.mean())**2).mean()
-ratio = 1.0/(var_small.sqrt() + eps) / (1.0/(var_small + eps).sqrt())
-print(json.dumps({
-    "max_abs_err": diff.max().item(),
-    "rowwise_max_abs_err": rowwise.tolist(),
-    "small_var_row_var": var_small.item(),
-    "small_var_rstd_ratio_kernel_over_ref": ratio.item(),
-    "constant_row_out": y[3, :3].tolist(),
-    "ref_constant_row_out": yr[3, :3].tolist(),
-}))
+mism = (out != ref).any(dim=-1)
+print(torch.cuda.is_available())
+print({"max_abs_err": (out - ref).abs().max().item(),
+       "mismatch_frac": mism.float().mean().item()})
+# also identity-mapping sanity check
+bt_ident = torch.arange(num_seqs*max_blocks, dtype=torch.int32, device="cuda").reshape(num_seqs, max_blocks)
+kv2 = torch.randn(num_seqs*max_blocks, page_size, head_dim, device="cuda")
+out2 = m.paged_gather(kv2, bt_ident, seq_len)
+phys2 = bt_ident[:, t // page_size]
+ref2 = kv2[phys2, t % page_size]
+print("identity_ok", bool(torch.allclose(out2, ref2)))

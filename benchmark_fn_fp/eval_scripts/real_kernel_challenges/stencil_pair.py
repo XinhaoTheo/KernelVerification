@@ -1,4 +1,4 @@
-"""Independent finite-domain diffusion oracle for case_122 and case_123.
+"""Independent finite-domain diffusion oracle for case_49 and case_50.
 
 The numerical reference explicitly applies the public nine-neighbour update
 at every time step. It never uses the candidate's fused coefficients or image
@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_122": "trust", "case_123": "reject"}
+EXPECTED = {"case_49": "trust", "case_50": "reject"}
 ATOL = 2e-5
 
 

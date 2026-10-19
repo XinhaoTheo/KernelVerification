@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_12`
+- Entry: `case_13`
 - Turns: 7
 - Tool events: 13
 - Claims: 2
 - Description updates: 1
-- LLM time: 133.273s across 6 calls | tokens: in=192555 out=10479 total=203034
+- LLM time: 109.132s across 6 calls | tokens: in=196333 out=8453 total=204786
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.94
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_12",
+    "entry": "case_13",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 
-### Turn 2 - `describer` (36.777359685999954s, in=3723 out=2725)
+### Turn 2 - `describer` (29.802427325000053s, in=3063 out=2280)
 
 Message:
 
 ```text
-Reading is done from the provided context; recording the structured description model now.
+Reading is done; the contract and kernel are both short and fully visible, so I'll record the description model now. The central thing to flag is the mapping formula mismatch and the cases where it coincidentally agrees.
 ```
 
 Tool calls:
@@ -76,37 +76,37 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Per row x of a 2D input: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x * rstd (problem.txt, verbatim formula).",
-      "Epsilon is explicitly specified as an inside-the-sqrt stabilizer: problem.txt states it 'must keep the normalizer finite as the row norm approaches zero', i.e. rstd is bounded by 1/sqrt(eps) as ||x||->0.",
-      "No learnable weight/gain term is part of this contract; output is just x * rstd.",
-      "Reference is the Liger-Kernel _rms_norm_forward_kernel, which computes rstd in fp32 and casts the row to fp32 before the sum of squares.",
-      "Only Y is described as the required return value; the RSTD buffer is an internal/auxiliary output in the upstream op."
+      "gqa_gather(kv, num_q_heads) returns a (num_q_heads, dim) tensor where row q equals kv[q // n_rep], with n_rep = num_q_heads // num_kv_heads and kv of shape (num_kv_heads, dim)",
+      "problem.txt states the grouping explicitly: q heads 0..n_rep-1 -> KV head 0, n_rep..2*n_rep-1 -> KV head 1, etc. (consecutive blocks, not round-robin)",
+      "Reference semantics match vllm triton_unified_attention index arithmetic and torch repeat_interleave(kv, n_rep, dim=0); it is NOT kv.repeat(n_rep, 1)",
+      "Output dtype/device expected to match kv; shape (num_q_heads, dim)",
+      "Implicit assumption from the formula: num_q_heads is a multiple of num_kv_heads"
     ],
     "kernel_model": [
-      "kernel.py:35 launches one program pe
-  ...[truncated 4536 chars]
+      "Launch grid is 1-D over query heads: gqa_gather_kernel[(num_q_heads,)]; each program han
+  ...[truncated 4146 chars]
   Output summary:
   {
     "contract_model": [
-      "Per row x of a 2D input: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x * rstd (problem.txt, verbatim formula).",
-      "Epsilon is explicitly specified as an inside-the-sqrt stabilizer: problem.txt states it 'must keep the normalizer finite as the row norm approaches zero', i.e. rstd is bounded by 1/sqrt(eps) as ||x||->0.",
-      "No learnable weight/gain term is part of this contract; output is just x * rstd.",
-      "Reference is the Liger-Kernel _rms_norm_forward_kernel, which computes rstd in fp32 and casts the row to fp32 before the sum of squares.",
-      "Only Y is described as the required return value; the RSTD buffer is an internal/auxiliary output in the upstream op."
+      "gqa_gather(kv, num_q_heads) returns a (num_q_heads, dim) tensor where row q equals kv[q // n_rep], with n_rep = num_q_heads // num_kv_heads and kv of shape (num_kv_heads, dim)",
+      "problem.txt states the grouping explicitly: q heads 0..n_rep-1 -> KV head 0, n_rep..2*n_rep-1 -> KV head 1, etc. (consecutive blocks, not round-robin)",
+      "Reference semantics match vllm triton_unified_attention index arithmetic and torch repeat_interleave(kv, n_rep, dim=0); it is NOT kv.repeat(n_rep, 1)",
+      "Output dtype/device expected to match kv; shape (num_q_heads, dim)",
+      "Implicit assumption from the formula: num_q_heads is a multiple of num_kv_heads"
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "kernel.py:35 launches one program per row (grid = (num_rows,)) with BLOCK_SIZE = next_power_of_2(n_cols), so the whole row is handled in one block; rows wider than the max block size are unsupported.",
-      "kernel.py:19-21 masks col_offsets < n_cols and loads with other=0.0, so padding lanes contribute 0 to the sum of squares - masking logic looks correct.",
-      "kernel.py:22 computes mean_square = tl.sum(X
-  ...[truncated 4226 chars]
+      "Launch grid is 1-D over query heads: gqa_gather_kernel[(num_q_heads,)]; each program handles one output row (kernel.py:18, :8)",
+      "Row selection uses kv_head = q_head % num_kv_heads (kernel.py:9) -- interleaved mapping, equivalent to torch kv.repeat(n_rep, 1), not repeat_interleave",
+      "dim is a tl.constexpr and the full row is addressed with offs_d = tl.arange(0, dim) (kernel.py:10), so it assumes dim is a compile-time power of two and does no masking"
+  ...[truncated 3836 chars]
 
-### Turn 3 - `skeptic` (23.58828852700003s, in=16826 out=1895)
+### Turn 3 - `skeptic` (23.296237938000104s, in=15171 out=1777)
 
 Message:
 
 ```text
-Recording the primary contract-violation hypothesis (eps outside the sqrt) split into two directly testable regimes.
+The contract in problem.txt is explicit about consecutive grouping, and line 9 uses modulo. That's the primary, directly testable claim; I'll also flag the unmasked constexpr `dim` arange as a secondary (scope unknown without a test file).
 ```
 
 Tool calls:
@@ -114,80 +114,63 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The source adds eps after the square root, which mathematically diverges from the stated formula precisely in the near-zero-norm regime the problem text singles out; the discrepancy grows as row RMS approaches sqrt(eps).",
+    "rationale": "kernel.py:9 computes kv_head = q_head % num_kv_heads, which is round-robin/strided assignment (torch's kv.repeat(n_rep,1)), whereas the stated grouping requires floor-division by n_rep. The kernel never computes n_rep at all, so it cannot be implementing the block mapping except in degenerate shapes where the two formulas coincide (num_kv_heads == 1 or n_rep == 1).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Gives the verbatim formula rstd = 1 / sqrt(mean_square + eps) and states the epsilon must keep the normalizer finite as the row norm approaches zero."
+        "summary": "States n_rep = num_q_heads // num_kv_heads and that CONSECUTIVE query heads map to the same KV head (heads 0..n_rep-1 -> KV 0, n_rep..2*n_rep-1 -> KV 1), i.e. kv_head = q_head // n_rep; gqa_gather must return the KV row each query head reads."
       },
       {
-        "source": "kernel.py:23",
-        "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) \u2014 eps added outside the sqrt, contradicting the stated formula."
-      }
-    ],
-    "scope_rationale": "problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that eps
-  ...[truncated 880 chars]
+        "source": "problem.txt",
+        "summary": "Refere
+  ...[truncated 1818 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The source adds eps after the square root, which mathematically diverges from the stated formula precisely in the near-zero-norm regime the problem text singles out; the discrepancy grows as row RMS approaches sqrt(eps).",
+    "rationale": "kernel.py:9 computes kv_head = q_head % num_kv_heads, which is round-robin/strided assignment (torch's kv.repeat(n_rep,1)), whereas the stated grouping requires floor-division by n_rep. The kernel never computes n_rep at all, so it cannot be implementing the block mapping except in degenerate shapes where the two formulas coincide (num_kv_heads == 1 or n_rep == 1).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Gives the verbatim formula rstd = 1 / sqrt(mean_square + eps) and states the epsilon must keep the normalizer finite as the row norm approaches zero."
+        "summary": "States n_rep = num_q_heads // num_kv_heads and that CONSECUTIVE query heads map to the same KV head (heads 0..n_rep-1 -> KV 0, n_rep..2*n_rep-1 -> KV 1), i.e. kv_head = q_head // n_rep; gqa_gather must return the KV row each query head reads."
       },
       {
-        "source": "kernel.py:23",
-        "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) \u2014 eps added outside the sqrt, contradicting the stated formula."
+        "source": "problem.txt",
+        "summary": "References vllm triton_unified_attention index arithmetic, which uses floor-division grouping, confirming the block (not interleaved) mapping is the required semantics."
+      },
+      {
+        "source": "kernel.py:9",
+        "summary": "kv_head = q_head % num_kv_heads \u2014 modulo, not floor-division by n_rep; n_rep is never computed anywhere in the kernel or wrapper."
       }
     ],
-    "scope_rationale": "problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that epsilon \"keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". Near-zero-norm rows are therefore an explicitly contracted case, and there is no test.py narrowing the input domain. A small-magnitude fp32 2D tensor is a representative input the contract admits.",
-    "statement": "kernel.py:23 computes rstd = 1/(sqrt(m
-  ...[truncated 514 chars]
+    "scope_rati
+  ...[truncated 1452 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Isolates whether the defect is detectable without extreme inputs, using only the eps argument the function signature exposes; separates \"hidden by tiny eps\" from \"genuinely wrong formula\".",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Defines rstd = 1/sqrt(mean_square + eps) for arbitrary eps with no restriction on its magnitude."
-      },
-      {
-        "source": "kernel.py:30",
-        "summary": "Public entry rms_norm_forward(X, eps) takes eps as a caller-supplied float with no validation or restriction."
-      }
-    ],
-    "scope_rationale": "eps is a free scalar parameter of the documented API rms_norm_forward(X, eps) and problem.txt fixes its semantics; no artifact file restricts eps to a specific magnitude. Unit-scale 
-  ...[truncated 528 chars]
+    "rationale": "tl.arange requires power-of-two extents in Triton, and dim comes straight from kv.shape[1] with no padding to a BLOCK size and no boundary mask on the load/store.",
+    "scope": "unknown",
+    "scope_rationale": "problem.txt places no constraint on dim and never states head_dim must be a power of two, but it also does not require non-power-of-two support, and there is no test.py or get_inputs to pin the tested head dimension. So this is a real robustness limitation but cannot by itself be decisive; it should be treated as a generalization note unless the contract is clarified.",
+    "statement": "Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error r
+  ...[truncated 223 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Isolates whether the defect is detectable without extreme inputs, using only the eps argument the function signature exposes; separates \"hidden by tiny eps\" from \"genuinely wrong formula\".",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Defines rstd = 1/sqrt(mean_square + eps) for arbitrary eps with no restriction on its magnitude."
-      },
-      {
-        "source": "kernel.py:30",
-        "summary": "Public entry rms_norm_forward(X, eps) takes eps as a caller-supplied float with no validation or restriction."
-      }
-    ],
-    "scope_rationale": "eps is a free scalar parameter of the documented API rms_norm_forward(X, eps) and problem.txt fixes its semantics; no artifact file restricts eps to a specific magnitude. Unit-scale randn 2D fp32 input is the most ordinary admitted input.",
-    "statement": "The same eps-placement defect should also produce a measurable Y error for ordinary unit-scale rows when eps is not tiny: for X = randn(8, 1024) fp32 with eps = 1e-2, the kernel's rstd = 1/(s+1e-2) vs the contractual 1/sqrt(s^2+1e-2) with s\u22481 gives \u22480.99010 vs \u22480.99504, i.e. ~0.5% relative error
-  ...[truncated 162 chars]
+    "rationale": "tl.arange requires power-of-two extents in Triton, and dim comes straight from kv.shape[1] with no padding to a BLOCK size and no boundary mask on the load/store.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt places no constraint on dim and never states head_dim must be a power of two, but it also does not require non-power-of-two support, and there is no test.py or get_inputs to pin the tested head dimension. So this is a real robustness limitation but cannot by itself be decisive; it should be treated as a generalization note unless the contract is clarified.",
+    "statement": "Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error rather than return a result whenever kv.shape[1] is not a power of two (e.g. head_dim = 80, 96, or 192, all common in real GQA models). Decisive metric: does the call complete and return a correct-shaped tensor, or raise.",
+    "status": "open"
+  }
 
-### Turn 4 - `experimenter` (18.990938774999904s, in=22509 out=1863)
+### Turn 4 - `experimenter` (16.229657726999903s, in=21735 out=1441)
 
 Message:
 
 ```text
-Both claims test the same eps-placement defect in two independent input regimes (small-RMS rows with tiny eps; unit-scale rows with eps=1e-2). Neither probe's design depends on the other's outcome, so I'm launching both now. Each probe also checks CUDA availability first so a missing GPU won't be misread as kernel evidence.
+Both claims are independent — c1 tests the mapping formula at power-of-two dims, c2 tests non-power-of-two dim compilation — so I'm launching both probes together.
 ```
 
 Tool calls:
@@ -196,8 +179,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, importlib.util, torch\nout={}\ntry:\n    out[\"cuda\"]=torch.cuda.is_available()\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_12/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    res={}\n    for scale in [1e-3, 1e-2, 1e-1, 1.0]:\n        X=(scale*torch.randn(4,512,device=\"cuda\")).float()\n        eps=1e-6\n        Y=m.rms_norm_forward(X,eps)\n        Xd=X.double()\n        ms=(Xd*Xd).sum(dim=1,keepdim=True)/Xd.shape[1]\n        ref=Xd/torch.sqrt(ms+eps)\n        Yd=Y.double()\n        denom=ref.abs().clamp_min(1e-300)\n        relerr=((Yd-ref).abs()/denom)\n        res[str(scale)]={\n          \"row_rms\":float(torch.sqrt(ms)[0,0]),\n          \"
-  ...[truncated 816 chars]
+    "code": "\nimport json, sys, torch\nsys.path.insert(0, \"/root/cases/case_13\")\nfrom kernel import gqa_gather\n\nres = {}\ntorch.manual_seed(0)\nfor (nkv, dim, nq) in [(2,64,4), (4,128,32), (1,64,8), (8,64,8), (2,32,2)]:\n    kv = torch.randn(nkv, dim, device=\"cuda\", dtype=torch.float32)\n    out = gqa_gather(kv, nq)\n    n_rep = nq // nkv\n    ref_consec = torch.repeat_interleave(kv, n_rep, dim=0)   # contract\n    ref_inter  = kv.repeat(n_rep, 1)                          # modulo mapping\n    row_eq_consec = (out == ref_consec).all(dim=1)\n    row_eq_inter  = (out == ref_inter).all(dim=1)\n    # which kv row did each output row actually come from\n    src = []\n    for q in range(nq):\n        m = [k for k in range(nkv) if torch.equal(out[q], kv[k])]\n        s
+  ...[truncated 850 chars]
   Output summary:
   {
     "artifacts": [
@@ -205,13 +188,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t8_probe.py",
-        "sha256": "4ebdc1b8de5dc08dddfe098b1edd8b8890929142a6e7bb50303ef7326b16083e"
+        "sha256": "6413966263009fa0c04b211364ab8bee6346927941d27699da825cbec1a4deb3"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t8_stdout.txt",
-        "sha256": "04a7c36c256d5fafca956500abdb5cefbc8533f700276cb1ef19ffd3139fc814"
+        "sha256": "de6608c877c9226ef1aa8ac1f72a0bc482aecb9b09a3e676d944a1a21e2d983b"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -223,18 +206,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t8_json_result.json",
-        "sha256": "ee0fea28fe887df759baa964d1652c9283fba5e7f8a855a6fddfc04a737290ce"
+        "sha256": "338754a1a9b51afc7887f1c130001509071c644e302dd553323d81a613094500"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "kernel.py:23 computes rstd = 1/(sqrt(mean_square) + eps) instead of the contractual rstd = 1/sqrt(mean_square + eps). For a 2D fp32 input whose rows have small-but-nonzero RMS (e.g. X = 1e-3 * randn(4, 512), eps =
-  ...[truncated 6172 chars]
+    "claim_statement": "For any kv with num_kv_heads > 1 and num_q_heads = n_rep * num_kv_heads with n_rep > 1 (e.g. kv of shape (2, 64) with num_q_heads=4, or (4, 128) with num_q_heads=32), gqa_gather returns the interleaved mapping out
+  ...[truncated 11739 chars]
 - `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch\nout={}\ntry:\n    out[\"cuda\"]=torch.cuda.is_available()\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_12/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(1)\n    X=torch.randn(8,1024,device=\"cuda\").float()\n    res={}\n    for eps in [1e-6,1e-5,1e-3,1e-2,1e-1]:\n        Y=m.rms_norm_forward(X,eps)\n        Xd=X.double()\n        ms=(Xd*Xd).sum(dim=1,keepdim=True)/Xd.shape[1]\n        ref=Xd/torch.sqrt(ms+eps)\n        Yd=Y.double()\n        rel=((Yd-ref).abs()/ref.abs().clamp_min(1e-300))\n        res[str(eps)]={\n          \"max_rel_err\":float(rel.max()),\n          \"mean_rel_err\":float(rel.mean()),\n          \"max_abs_err\"
-  ...[truncated 613 chars]
+    "code": "\nimport json, sys, torch, traceback\nsys.path.insert(0, \"/root/cases/case_13\")\nfrom kernel import gqa_gather\n\nres = {}\nfor dim in [64, 80, 96, 128, 192, 256]:\n    kv = torch.randn(4, dim, device=\"cuda\", dtype=torch.float32)\n    try:\n        out = gqa_gather(kv, 8)\n        torch.cuda.synchronize()\n        res[str(dim)] = {\"raised\": False, \"shape\": list(out.shape),\n                         \"power_of_two\": dim & (dim-1) == 0}\n    except Exception as e:\n        res[str(dim)] = {\"raised\": True, \"err_type\": type(e).__name__,\n                         \"err_msg\": str(e)[:300],\n                         \"power_of_two\": dim & (dim-1) == 0}\nprint(json.dumps(res))\n",
+    "expected_signal": "gqa_gather raises a Triton compile error for kv.
+  ...[truncated 58 chars]
   Output summary:
   {
     "artifacts": [
@@ -242,13 +226,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "e93e6a296e4a363ef9e9707d2163a2005c1bbe6c1f10443b6fd616c6022b6960"
+        "sha256": "dd2b47433ae183fad45b0742ed8e6c3f57d7e132144a6f77c8a5cf102e39757c"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "eff2542de787d998926ea4bcd580fed8dd103da9c15340801d6b50c0794b418e"
+        "sha256": "d7091ed576f01a25254ac6e896c33b00eb59979060fa9be664db8b0853c58994"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -260,19 +244,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "3f268e4ac03ea0a50a3e085517653152f516cef6e6c3ac7c1481a23ef21b5a9d"
+        "sha256": "23bbed6cdf3b30ac6a31c6155115fae0121dcee5187080720ac5dc7625a7a57d"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "The same eps-placement defect should also produce a measurable Y error for ordinary unit-scale rows when eps is not tiny: for X = randn(8, 1024) fp32 with eps = 1e-2, the kernel's rstd = 1/(s+1e-2) vs the contract
-  ...[truncated 7297 chars]
+    "claim_statement": "Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error rather than return a result wh
+  ...[truncated 7013 chars]
 
-### Turn 5 - `experimenter` (24.12389069799997s, in=34816 out=2024)
+### Turn 5 - `experimenter` (16.974817971999983s, in=35524 out=1548)
 
 Message:
 
 ```text
-Both probes returned decisive data; finalizing both now. No further probes are needed — the eps-placement defect is directly measured in both regimes, and no other open claims remain.
+Both probes returned decisive results. Finalizing c1 (confirmed: interleaved modulo mapping instead of contract's consecutive grouping) and c2 (confirmed: CompilationError for non-power-of-two dim, though scope remains a generalization note). No open claims remain uncovered, so no further probes are needed.
 ```
 
 Tool calls:
@@ -281,32 +265,38 @@ Tool calls:
   Args:
   {
     "data": {
-      "cuda": true,
-      "eps": 1e-06,
-      "metric": "max relative error of Y vs fp64 reference x/sqrt(mean(x^2)+eps)",
-      "scale1_max_rel_err": 6.314316596915503e-07,
-      "scale1e-1_max_rel_err": 4.4780694647624505e-05,
-      "scale1e-2_allclose_rtol1e-3_atol1e-5": false,
-      "scale1e-2_max_rel_err": 0.005094349880841089,
-      "scale1e-3_allclose_rtol1e-3_atol1e-5": false,
-      "scale1e-3_max_abs_err": 1.1162804914138,
-      "scale1e-3_max_rel_err": 0.46128302998318527,
-      "scale1e-3_mean_rel_err": 0.41746013211075206,
-      "scale1e-3_row_rms": 0.0009366227879916501,
-      "shape": "4x512 fp32",
-      "tiny_row_blowup_ratio": 995.6,
-      "tiny_row_kernel_maxabs_Y": 0.09956000000238419,
-      "tiny_row_reference_maxabs_Y": 9.999999999902344e-05
-    },
-    "event_id": "t8",
-    "status": "confirme
-  ...[truncated 790 chars]
+      "case_nkv2_dim64_nq4_actual_src": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "case_nkv2_dim64_nq4_expected_src": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "case_nkv2_dim64_nq4_first_mismatch_row": 1,
+      "case_nkv2_dim64_nq4_matches_contract": false,
+      "case_nkv2_dim64_nq4_matches_modulo": true,
+      "case_nkv2_dim64_nq4_mismatched_rows": 2,
+      "case_nkv4_dim128_nq32_first_mismatch_row": 1,
+      "case_nkv4_dim128_nq32_matches_contract": false,
+      "case_nkv4_dim128_nq32_matches_modulo": true,
+      "case_nkv4_dim128_nq32_mismatched_rows": 24,
+      "case_nkv4_dim128_nq32_total_rows": 32,
+      "degenerate_nkv1_nq8_matches_contract": true,
+      "degenerate_nkv2_nq2_nrep1_matches_contract": true,
+      "degenerate_nkv8_nq8_nrep1_matches_contract": true,
+      "dtype_and_sh
+  ...[truncated 876 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "CUDA available; kernel loaded and ran. For fp32 X = 1e-3*randn(4,512) with eps=1e-6 (row RMS 9.37e-4) the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.4613 (46%) and mean rel err 0.4175, max abs err 1.116 \u2014 allclose(rtol=1e-3,atol=1e-5) False. Error scales exactly as predicted by eps-outside-sqrt: 0.51% at RMS~1e-2, 4.5e-5 at RMS~0.105, 6.3e-7 at RMS~1.07 (hidden at unit scale). Additional near-zero check: a row containing a single 1e-7 element yields max|Y|=0.0996 versus the contractual 1e-4, a ~996x blow-up, directly violating problem.txt's requirement that eps keep the normalizer finite as the row norm approaches zero (kernel rstd -> 1/eps = 1e6 instead of 1/sqrt(eps) = 1e3).",
+    "summary": "Order-sensitive per-row exact equality vs torch.repeat_interleave(kv, n_rep, 0) fails for every non-degenerate GQA config. (nkv=2, dim=64, nq=4): output source rows [0,1,0,1] vs required [0,0,1,1], 2/4 rows wrong, first mismatch at row 1. (nkv=4, dim=128, nq=32): source rows cycle 0,1,2,3 repeating vs required 8x blocks, 24/32 rows wrong, first mismatch at row 1. In both cases output matched kv.repeat(n_rep,1) (interleaved/modulo) exactly. Degenerate shapes where the two formulas coincide passed as predicted: nkv=1/nq=8 and n_rep=1 cases (nkv=8,nq=8; nkv=2,nq=2) all matched the contract. Shapes and dtypes were correct in all cases; the defect is purely the row-index mapping.",
     "supports": "confirmed",
     "tool_event_id": "t8"
   }
@@ -314,41 +304,46 @@ Tool calls:
   Args:
   {
     "data": {
-      "cuda": true,
-      "eps_1e-1_allclose_rtol1e-2_atol1e-2": false,
-      "eps_1e-1_max_abs_err": 0.16865170116036676,
-      "eps_1e-1_max_rel_err": 0.04653723186138095,
-      "eps_1e-2_allclose_rtol1e-2_atol1e-2": true,
-      "eps_1e-2_allclose_rtol1e-3_atol1e-5": false,
-      "eps_1e-2_max_abs_err": 0.018745382371139208,
-      "eps_1e-2_max_rel_err": 0.004962772918466939,
-      "eps_1e-3_max_rel_err": 0.0004996365004183728,
-      "eps_1e-5_max_rel_err": 5.094661087126089e-06,
-      "eps_1e-6_max_rel_err": 5.837299625510236e-07,
-      "metric": "max relative error of Y vs fp64 reference x/sqrt(mean(x^2)+eps)",
-      "row0_rms": 1.0204974394241937,
-      "shape": "8x1024 fp32"
+      "dim_128_raised": false,
+      "dim_192_raised": true,
+      "dim_256_raised": false,
+      "dim_64_raised": false,
+      "dim_80_raised": true,
+      "dim_96_raised": true,
+      "err_msg": "arange's range must be a power of 2",
+      "err_type": "CompilationError",
+      "failing_dims": [
+        80,
+        96,
+        192
+      ],
+      "passing_dims": [
+        64,
+        128,
+        256
+      ],
+      "scope": "unknown - no test.py pins head_dim"
     },
     "event_id": "t9",
     "status": "confirmed",
-    "summary": "For ordinary unit-scale fp32 X = randn(8,1024) (row RMS ~1.0
-  ...[truncated 597 chars]
+    "summary": "gqa_gather raises triton CompilationError (\"arange's range must be a power of 2\", pointing at offs_d = tl.arange(0, dim)) for dim in {80, 96, 192}, and succeeds returning shape (8, dim) for dim in {64, 128, 256}. The behavioral claim is confirmed exactly as stated. Scope caveat unchanged: no 
+  ...[truncated 227 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "For ordinary unit-scale fp32 X = randn(8,1024) (row RMS ~1.02) the eps-placement defect is measurable as soon as eps is not tiny: eps=1e-2 gives max rel err 4.963e-3 and max abs err 1.875e-2, failing allclose(rtol=1e-3,atol=1e-5) (passes only at the loose rtol=1e-2/atol=1e-2); eps=1e-1 gives max rel err 4.654e-2 and fails even rtol=1e-2/atol=1e-2. As predicted, the defect is hidden at eps=1e-6 (5.8e-7) and eps=1e-5 (5.1e-6), and borderline at eps=1e-3 (5.0e-4, just inside rtol=1e-3). Confirms the error is a systematic formula error whose visibility depends only on eps magnitude relative to row RMS, not on exotic inputs.",
+    "summary": "gqa_gather raises triton CompilationError (\"arange's range must be a power of 2\", pointing at offs_d = tl.arange(0, dim)) for dim in {80, 96, 192}, and succeeds returning shape (8, dim) for dim in {64, 128, 256}. The behavioral claim is confirmed exactly as stated. Scope caveat unchanged: no test.py/get_inputs exists to establish that a non-power-of-two head_dim is in the benchmark input domain, so this stands as a robustness/generalization note rather than a decisive in-scope failure.",
     "supports": "confirmed",
     "tool_event_id": "t9"
   }
 
-### Turn 6 - `skeptic` (11.33769908499994s, in=56300 out=673)
+### Turn 6 - `skeptic` (9.666870002999985s, in=59521 out=490)
 
 Message:
 
 ```text
-This is the final review turn. Both recorded claims (c1, c2) are confirmed with decisive runtime evidence for the same root cause — eps added outside the sqrt at kernel.py:23 — measured both in the near-zero-norm regime explicitly called out by problem.txt (~996x normalizer blow-up, 46% max rel err) and in the ordinary unit-scale regime with moderate eps. Remaining risk-map items (fp16/bf16 accumulation precision, BLOCK_SIZE cap, non-contiguous/>2D addressing) are dtype/shape/stride generalization concerns that the stated contract does not require, so they cannot add a decisive in-scope claim and would only delay the verdict.
+This is the final review turn. c1 is confirmed with decisive order-sensitive evidence (modulo instead of floor-division mapping), and c2 is confirmed as a generalization note. No further in-scope hypotheses remain — the mapping bug already covers the core contract violation, and remaining risk-map items (non-contiguous input, non-divisible head counts) are outside the stated contract or unspecified.
 ```
 
 Tool calls:
@@ -356,12 +351,16 @@ Tool calls:
 - `record_no_new_claims -> t12 ok`
   Args:
   {
-    "reason": "Both existing claims are confirmed by direct runtime evidence and jointly cover the single root defect (eps outside the sqrt at kernel.py:23) across both regimes the contract admits: near-zero-norm rows (c1: ~996x blow-up vs contractual 1/sqrt(eps), 46% max rel err at row RMS 9.4e-4) and ordinary unit-scale rows with non-tiny eps (c2: 0.50% max rel err at eps=1e-2, 4.65% at eps=1e-1). No additional claim would change the verdict. The only untested risk-map items \u2014 no fp32 upcast before the sum of squares (fp16/bf16), uncapped BLOCK_SIZE for very wide rows, and stride(0)-only addressing for non-contiguous/>2D inputs \u2014 are dtype, shape, and stride generalizations that problem.txt does not require and that scope policy treats as non-decisive, so they are generalizatio
-  ...[truncated 86 chars]
+    "reason": "c1 is confirmed with decisive, order-sensitive per-row evidence that kernel.py:9 implements kv_head = q_head % num_kv_heads instead of the contract-required q_head // n_rep, failing 2/4 and 24/32 rows in ordinary GQA configs; that fully covers the central contract violation. c2 is confirmed as a robustness/generalization note (non-power-of-two dim raises a Triton CompilationError) with scope still unknown since no test.py pins head_dim. Remaining risk-map items (non-contiguous kv strides, num_q_heads not divisible by num_kv_heads, num_q_heads < num_kv_heads) are either explicitly out of scope per the scope policy or reference-undefined under problem.txt, so none would be decisive and none warrant delaying the verdict.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Both existing claims are confirmed by direct runtime evidence and jointly cover the single root defect (eps outside the sqrt at kernel.py:23) across both regimes the contract admits: near-zero-norm rows (c1: ~996x blow-up vs contractual 1/sqrt(eps), 46% max rel err at row RMS 9.4e-4) and ordinary unit-scale rows with non-tiny eps (c2: 0.50% max rel err at eps=1e-2, 4.65% at eps=1e-1). No additional claim would change the verdict. The only untested risk-map items \u2014 no fp32 upcast before the sum of squares (fp16/bf16), uncapped BLOCK_SIZE for very wide rows, and stride(0)-only addressing for non-contiguous/>2D inputs \u2014 are dtype, shape, and stride generalizations that problem.txt does not require and that scope policy treats as non-decisive, so they are generalization notes rather than in-scope claims.",
+    "reason": "c1 is confirmed with decisive, order-sensitive per-row evidence that kernel.py:9 implements kv_head = q_head % num_kv_heads instead of the contract-required q_head // n_rep, failing 2/4 and 24/32 rows in ordinary GQA configs; that fully covers the central contract violation. c2 is confirmed as a robustness/generalization note (non-power-of-two dim raises a Triton CompilationError) with scope still unknown since no test.py pins head_dim. Remaining risk-map items (non-contiguous kv strides, num_q_heads not divisible by num_kv_heads, num_q_heads < num_kv_heads) are either explicitly out of scope per the scope policy or reference-undefined under problem.txt, so none would be decisive and none warrant delaying the verdict.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -370,12 +369,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `judge` (18.45480898599999s, in=58381 out=1299)
+### Turn 7 - `judge` (13.16192060000003s, in=61319 out=917)
 
 Message:
 
 ```text
-Both claims are confirmed with direct runtime evidence, the Skeptic reviewed the latest evidence and recorded no new claims, and there are no open claims lacking evidence. The artifact contains no test.py, so problem.txt is the operative contract — and it explicitly states both the formula and the near-zero-norm invariant that the kernel violates. Recording a reject verdict.
+Claim coverage is complete and Skeptic has signed off with no new claims. c1 is confirmed with decisive order-sensitive evidence against the only operative contract (problem.txt, since no test.py exists), so a reject verdict is warranted; c2 is a generalization note only.
 ```
 
 Tool calls:
@@ -383,174 +382,165 @@ Tool calls:
 - `record_verdict -> t13 ok`
   Args:
   {
-    "confidence": 0.94,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs narrowing the input domain, so problem.txt is the operative contract. It states the formula verbatim (rstd = 1 / sqrt(mean_square + eps)) and explicitly requires that \"the epsilon ... must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". kernel.py:23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), placing eps outside the square root. This is not a reduction-order, precision, or representation difference the contract tolerates; it is a different formula, and it breaks the one invariant the contract goes out of its way 
-  ...[truncated 1640 chars]
+    "reason": "problem.txt is the sole and therefore operative contract here (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), and it explicitly requires the CONSECUTIVE grouping kv_head = q_head // n_rep with n_rep = num_q_heads // num_kv_heads (\"query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\"). kernel.py:9 instead computes kv_head = q_head % num_kv_heads and never derives n_rep at all. Claim c1 is confirmed by probe t8 using the correct order-sensitive metric (per-row exact equality vs torch.repeat_interleave): for (num_kv_heads=2, dim=64, num_q_heads=4) the output source rows are [0,1,0,1] versus the required [0,0,1,1] (2/4 rows wrong, first mismatch at row 1), and fo
+  ...[truncated 915 chars]
   Output summary:
   {
-    "confidence": 0.94,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs narrowing the input domain, so problem.txt is the operative contract. It states the formula verbatim (rstd = 1 / sqrt(mean_square + eps)) and explicitly requires that \"the epsilon ... must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". kernel.py:23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), placing eps outside the square root. This is not a reduction-order, precision, or representation difference the contract tolerates; it is a different formula, and it breaks the one invariant the contract goes out of its way to require: as ||x||->0 the kernel's normalizer diverges to 1/eps (1e6 at eps=1e-6) instead of being bounded by 1/sqrt(eps) (1e3).\n\nEvidence is decisive and in-scope. c1 (t8, CUDA confirmed): for plain fp32 2D input X = 1e-3*randn(4,512) with eps=1e-6 the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.461 and mean rel err 0.417 (max abs err 1.116),
-  ...[truncated 1240 chars]
+    "reason": "problem.txt is the sole and therefore operative contract here (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), and it explicitly requires the CONSECUTIVE grouping kv_head = q_head // n_rep with n_rep = num_q_heads // num_kv_heads (\"query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\"). kernel.py:9 instead computes kv_head = q_head % num_kv_heads and never derives n_rep at all. Claim c1 is confirmed by probe t8 using the correct order-sensitive metric (per-row exact equality vs torch.repeat_interleave): for (num_kv_heads=2, dim=64, num_q_heads=4) the output source rows are [0,1,0,1] versus the required [0,0,1,1] (2/4 rows wrong, first mismatch at row 1), and for (4,128,32) 24/32 rows are wrong; in both cases the output exactly matches the interleaved kv.repeat(n_rep,1) mapping. These are ordinary, contract-admitted GQA configurations (num_q_heads a multiple of num_kv_heads, contiguous fp32, power-of-two head dim) requiring no stride, dtype, rank, or degenerate-size deviation, so the claim is in_scope with scope evidence tied to the stated contract. This
+  ...[truncated 515 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Per row x of a 2D input: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x * rstd (problem.txt, verbatim formula).",
-    "Epsilon is explicitly specified as an inside-the-sqrt stabilizer: problem.txt states it 'must keep the normalizer finite as the row norm approaches zero', i.e. rstd is bounded by 1/sqrt(eps) as ||x||->0.",
-    "No learnable weight/gain term is part of this contract; output is just x * rstd.",
-    "Reference is the Liger-Kernel _rms_norm_forward_kernel, which computes rstd in fp32 and casts the row to fp32 before the sum of squares.",
-    "Only Y is described as the required return value; the RSTD buffer is an internal/auxiliary output in the upstream op."
+    "gqa_gather(kv, num_q_heads) returns a (num_q_heads, dim) tensor where row q equals kv[q // n_rep], with n_rep = num_q_heads // num_kv_heads and kv of shape (num_kv_heads, dim)",
+    "problem.txt states the grouping explicitly: q heads 0..n_rep-1 -> KV head 0, n_rep..2*n_rep-1 -> KV head 1, etc. (consecutive blocks, not round-robin)",
+    "Reference semantics match vllm triton_unified_attention index arithmetic and torch repeat_interleave(kv, n_rep, dim=0); it is NOT kv.repeat(n_rep, 1)",
+    "Output dtype/device expected to match kv; shape (num_q_heads, dim)",
+    "Implicit assumption from the formula: num_q_heads is a multiple of num_kv_heads"
   ],
   "kernel_model": [
-    "kernel.py:35 launches one program per row (grid = (num_rows,)) with BLOCK_SIZE = next_power_of_2(n_cols), so the whole row is handled in one block; rows wider than the max block size are unsupported.",
-    "kernel.py:19-21 masks col_offsets < n_cols and loads with other=0.0, so padding lanes contribute 0 to the sum of squares - masking logic looks correct.",
-    "kernel.py:22 computes mean_square = tl.sum(X_row*X_row)/n_cols with X_row in the input dtype; there is no explicit .to(tl.float32) cast, unlike upstream Liger.",
-    "kernel.py:23 computes rstd = 1.0 / (_sqrt(mean_square) + eps) - epsilon is added AFTER the square root, not inside it as the contract requires.",
-    "kernel.py:25 stores one fp32 rstd per row into RSTD (allocated at kernel.py:34); kernel.py:26-27 stores Y = X_row * rstd back in X's dtype.",
-    "kernel.py:31 assumes X is exactly 2D and uses X.stride(0) only, i.e. it assumes each row is contiguous along the last dim (stride(1) == 1)."
+    "Launch grid is 1-D over query heads: gqa_gather_kernel[(num_q_heads,)]; each program handles one output row (kernel.py:18, :8)",
+    "Row selection uses kv_head = q_head % num_kv_heads (kernel.py:9) -- interleaved mapping, equivalent to torch kv.repeat(n_rep, 1), not repeat_interleave",
+    "dim is a tl.constexpr and the full row is addressed with offs_d = tl.arange(0, dim) (kernel.py:10), so it assumes dim is a compile-time power of two and does no masking",
+    "Loads/stores are unmasked (kernel.py:11-12) and assume both kv and out are contiguous with row stride exactly dim",
+    "num_kv_heads is passed as a runtime scalar arg; n_rep is never computed, so the kernel never uses the divisor form the contract requires",
+    "Host wrapper derives num_kv_heads, dim from kv.shape and allocates out with kv.dtype/device (kernel.py:16-17), which matches the contract's shape/dtype expectations"
   ],
   "open_questions": [
-    "What tolerance and comparison target does the harness use (Y only, or Y and RSTD)? This decides whether the eps-placement error is detectable at unit scale.",
-    "Which eps values are tested? A test using eps >= 1e-2 would expose t
-...[truncated 2859 chars]
+    "What shapes does the hidden test use? If it only exercises num_kv_heads==1 or n_rep==1, the modulo bug is unobservable at test level even though it contradicts problem.txt",
+    "Does the test compare per-row against torch.repeat_interleave (order-sensitive) or something order-insensitive?",
+    "Is dim in the test a power of two? If not, the failure mod
+...[truncated 2469 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_12 is a Triton RMSNorm forward (Liger-Kernel style). The kernel matches the contract structurally (row-parallel, power-of-2 BLOCK_SIZE, masked load/store, per-row rstd side output) but places epsilon outside the square root: it computes 1/(sqrt(mean_square) + eps) instead of the contractual 1/sqrt(mean_square + eps). Secondary risks are dtype accumulation (no explicit fp32 cast before the sum-of-squares) and the unused/undocumented RSTD output buffer.
+- `du1` tasks=`initial`: case_13 implements a GQA query-head -> KV-head row gather. The problem specifies CONSECUTIVE grouping (kv_head = q_head // n_rep, n_rep = num_q_heads // num_kv_heads), but kernel.py line 9 computes kv_head = q_head % num_kv_heads, which is the interleaved/strided mapping. The two agree only in degenerate shapes (num_kv_heads == 1, or num_kv_heads == num_q_heads i.e. n_rep == 1), so benign single-shape probes can pass while the general contract is violated.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: kernel.py:23 computes rstd = 1/(sqrt(mean_square) + eps) instead of the contractual rstd = 1/sqrt(mean_square + eps). For a 2D fp32 input whose rows have small-but-nonzero RMS (e.g. X = 1e-3 * randn(4, 512), eps = 1e-6), the returned Y should differ from the reference x/sqrt(mean(x^2)+eps) by a large relative amount (predicted ~30-40% for RMS ~1e-3, since 1/(1e-3+1e-6)≈999 vs 1/sqrt(2e-6)≈707), far beyond any plausible allclose tolerance. Metric: max relative error of Y vs the problem.txt formula computed in fp64.
+Statement: For any kv with num_kv_heads > 1 and num_q_heads = n_rep * num_kv_heads with n_rep > 1 (e.g. kv of shape (2, 64) with num_q_heads=4, or (4, 128) with num_q_heads=32), gqa_gather returns the interleaved mapping out[q] == kv[q % num_kv_heads] instead of the contract-required consecutive mapping out[q] == kv[q // n_rep]; e.g. for num_kv_heads=2, num_q_heads=4 the kernel yields rows [kv0, kv1, kv0, kv1] while the contract requires [kv0, kv0, kv1, kv1]. Decisive metric: per-row exact equality (order-sensitive) against torch.repeat_interleave(kv, n_rep, dim=0); report the index of the first mismatching row and which kv row was actually copied. An order-insensitive check (row multiset, sum over head axis) would NOT detect this and must not be used.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that epsilon "keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up". Near-zero-norm rows are therefore an explicitly contracted case, and there is no test.py narrowing the input domain. A small-magnitude fp32 2D tensor is a representative input the contract admits.
+Scope rationale: problem.txt is the operative and only contract source here (no test.py exists), and it states the required mapping in unambiguous prose: "GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1". A claim that the kernel violates this stated behavior is in-scope by the stated-behavior rule. The chosen inputs are ordinary, contract-admitted GQA configurations: num_q_heads a multiple of num_kv_heads, num_kv_heads > 1, power-of-two head dim, contiguous float32 kv on device — no dtype, stride, shape-rank, or degenerate-size deviation is needed to expose it.
 
 Scope evidence:
-- `problem.txt`: Gives the verbatim formula rstd = 1 / sqrt(mean_square + eps) and states the epsilon must keep the normalizer finite as the row norm approaches zero.
-- `kernel.py:23`: rstd = 1.0 / (_sqrt(mean_square) + eps) — eps added outside the sqrt, contradicting the stated formula.
+- `problem.txt`: States n_rep = num_q_heads // num_kv_heads and that CONSECUTIVE query heads map to the same KV head (heads 0..n_rep-1 -> KV 0, n_rep..2*n_rep-1 -> KV 1), i.e. kv_head = q_head // n_rep; gqa_gather must return the KV row each query head reads.
+- `problem.txt`: References vllm triton_unified_attention index arithmetic, which uses floor-division grouping, confirming the block (not interleaved) mapping is the required semantics.
+- `kernel.py:9`: kv_head = q_head % num_kv_heads — modulo, not floor-division by n_rep; n_rep is never computed anywhere in the kernel or wrapper.
 
-Rationale: The source adds eps after the square root, which mathematically diverges from the stated formula precisely in the near-zero-norm regime the problem text singles out; the discrepancy grows as row RMS approaches sqrt(eps).
+Rationale: kernel.py:9 computes kv_head = q_head % num_kv_heads, which is round-robin/strided assignment (torch's kv.repeat(n_rep,1)), whereas the stated grouping requires floor-division by n_rep. The kernel never computes n_rep at all, so it cannot be implementing the block mapping except in degenerate shapes where the two formulas coincide (num_kv_heads == 1 or n_rep == 1).
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: CUDA available; kernel loaded and ran. For fp32 X = 1e-3*randn(4,512) with eps=1e-6 (row RMS 9.37e-4) the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.4613 (46%) and mean rel err 0.4175, max abs err 1.116 — allclose(rtol=1e-3,atol=1e-5) False. Error scales exactly as predicted by eps-outside-sqrt: 0.51% at RMS~1e-2, 4.5e-5 at RMS~0.105, 6.3e-7 at RMS~1.07 (hidden at unit scale). Additional near-zero check: a row containing a single 1e-7 element yields max|Y|=0.0996 versus the contractual 1e-4, a ~996x blow-up, directly violating problem.txt's requirement that eps keep the normalizer finite as the row norm approaches zero (kernel rstd -> 1/eps = 1e6 instead of 1/sqrt(eps) = 1e3).
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Order-sensitive per-row exact equality vs torch.repeat_interleave(kv, n_rep, 0) fails for every non-degenerate GQA config. (nkv=2, dim=64, nq=4): output source rows [0,1,0,1] vs required [0,0,1,1], 2/4 rows wrong, first mismatch at row 1. (nkv=4, dim=128, nq=32): source rows cycle 0,1,2,3 repeating vs required 8x blocks, 24/32 rows wrong, first mismatch at row 1. In both cases output matched kv.repeat(n_rep,1) (interleaved/modulo) exactly. Degenerate shapes where the two formulas coincide passed as predicted: nkv=1/nq=8 and n_rep=1 cases (nkv=8,nq=8; nkv=2,nq=2) all matched the contract. Shapes and dtypes were correct in all cases; the defect is purely the row-index mapping.
 
 ### c2 - `confirmed`
 
-Statement: The same eps-placement defect should also produce a measurable Y error for ordinary unit-scale rows when eps is not tiny: for X = randn(8, 1024) fp32 with eps = 1e-2, the kernel's rstd = 1/(s+1e-2) vs the contractual 1/sqrt(s^2+1e-2) with s≈1 gives ≈0.99010 vs ≈0.99504, i.e. ~0.5% relative error in every output element — above typical 1e-3/1e-5 allclose tolerances. Metric: max relative error of Y vs the fp64 reference formula.
+Statement: Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error rather than return a result whenever kv.shape[1] is not a power of two (e.g. head_dim = 80, 96, or 192, all common in real GQA models). Decisive metric: does the call complete and return a correct-shaped tensor, or raise.
 
-Scope: `in_scope`
+Scope: `unknown`
 
-Scope rationale: eps is a free scalar parameter of the documented API rms_norm_forward(X, eps) and problem.txt fixes its semantics; no artifact file restricts eps to a specific magnitude. Unit-scale randn 2D fp32 input is the most ordinary admitted input.
+Scope rationale: problem.txt places no constraint on dim and never states head_dim must be a power of two, but it also does not require non-power-of-two support, and there is no test.py or get_inputs to pin the tested head dimension. So this is a real robustness limitation but cannot by itself be decisive; it should be treated as a generalization note unless the contract is clarified.
 
-Scope evidence:
-- `problem.txt`: Defines rstd = 1/sqrt(mean_square + eps) for arbitrary eps with no restriction on its magnitude.
-- `kernel.py:30`: Public entry rms_norm_forward(X, eps) takes eps as a caller-supplied float with no validation or restriction.
-
-Rationale: Isolates whether the defect is detectable without extreme inputs, using only the eps argument the function signature exposes; separates "hidden by tiny eps" from "genuinely wrong formula".
+Rationale: tl.arange requires power-of-two extents in Triton, and dim comes straight from kv.shape[1] with no padding to a BLOCK size and no boundary mask on the load/store.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: For ordinary unit-scale fp32 X = randn(8,1024) (row RMS ~1.02) the eps-placement defect is measurable as soon as eps is not tiny: eps=1e-2 gives max rel err 4.963e-3 and max abs err 1.875e-2, failing allclose(rtol=1e-3,atol=1e-5) (passes only at the loose rtol=1e-2/atol=1e-2); eps=1e-1 gives max rel err 4.654e-2 and fails even rtol=1e-2/atol=1e-2. As predicted, the defect is hidden at eps=1e-6 (5.8e-7) and eps=1e-5 (5.1e-6), and borderline at eps=1e-3 (5.0e-4, just inside rtol=1e-3). Confirms the error is a systematic formula error whose visibility depends only on eps magnitude relative to row RMS, not on exotic inputs.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: gqa_gather raises triton CompilationError ("arange's range must be a power of 2", pointing at offs_d = tl.arange(0, dim)) for dim in {80, 96, 192}, and succeeds returning shape (8, dim) for dim in {64, 128, 256}. The behavioral claim is confirmed exactly as stated. Scope caveat unchanged: no test.py/get_inputs exists to establish that a non-power-of-two head_dim is in the benchmark input domain, so this stands as a robustness/generalization note rather than a decisive in-scope failure.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Per row x of a 2D input: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square + eps); y = x * rstd (problem.txt, verbatim formula).",
-    "Epsilon is explicitly specified as an inside-the-sqrt stabilizer: problem.txt states it 'must keep the normalizer finite as the row norm approaches zero', i.e. rstd is bounded by 1/sqrt(eps) as ||x||->0.",
-    "No learnable weight/gain term is part of this contract; output is just x * rstd.",
-    "Reference is the Liger-Kernel _rms_norm_forward_kernel, which computes rstd in fp32 and casts the row to fp32 before the sum of squares.",
-    "Only Y is described as the required return value; the RSTD buffer is an internal/auxiliary output in the upstream op."
+    "gqa_gather(kv, num_q_heads) returns a (num_q_heads, dim) tensor where row q equals kv[q // n_rep], with n_rep = num_q_heads // num_kv_heads and kv of shape (num_kv_heads, dim)",
+    "problem.txt states the grouping explicitly: q heads 0..n_rep-1 -> KV head 0, n_rep..2*n_rep-1 -> KV head 1, etc. (consecutive blocks, not round-robin)",
+    "Reference semantics match vllm triton_unified_attention index arithmetic and torch repeat_interleave(kv, n_rep, dim=0); it is NOT kv.repeat(n_rep, 1)",
+    "Output dtype/device expected to match kv; shape (num_q_heads, dim)",
+    "Implicit assumption from the formula: num_q_heads is a multiple of num_kv_heads"
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "kernel.py:35 launches one program per row (grid = (num_rows,)) with BLOCK_SIZE = next_power_of_2(n_cols), so the whole row is handled in one block; rows wider than the max block size are unsupported.",
-    "kernel.py:19-21 masks col_offsets < n_cols and loads with other=0.0, so padding lanes contribute 0 to the sum of squares - masking logic looks correct.",
-    "kernel.py:22 computes mean_square = tl.sum(X_row*X_row)/n_cols with X_row in the input dtype; there is no explicit .to(tl.float32) cast, unlike upstream Liger.",
-    "kernel.py:23 computes rstd = 1.0 / (_sqrt(mean_square) + eps) - epsilon is added AFTER the square root, not inside it as the contract requires.",
-    "kernel.py:25 stores one fp32 rstd per row into RSTD (allocated at kernel.py:34); kernel.py:26-27 stores Y = X_row * rstd back in X's dtype.",
-    "kernel.py:31 assumes X is exactly 2D and uses X.stride(0) only, i.e. it assumes each row is contiguous along the last dim (stride(1) == 1)."
+    "Launch grid is 1-D over query heads: gqa_gather_kernel[(num_q_heads,)]; each program handles one output row (kernel.py:18, :8)",
+    "Row selection uses kv_head = q_head % num_kv_heads (kernel.py:9) -- interleaved mapping, equivalent to torch kv.repeat(n_rep, 1), not repeat_interleave",
+    "dim is a tl.constexpr and the full row is addressed with offs_d = tl.arange(0, dim) (kernel.py:10), so it assumes dim is a compile-time power of two and does no masking",
+    "Loads/stores are unmasked (kernel.py:11-12) and assume both kv and out are contiguous with row stride exactly dim",
+    "num_kv_heads is passed as a runtime scalar arg; n_rep is never computed, so the kernel never uses the divisor form the contract requires",
+    "Host wrapper derives num_kv_heads, dim from kv.shape and allocates out with kv.dtype/device (kernel.py:16-17), which matches the contract's shape/dtype expectations"
   ],
   "open_questions": [
-    "What tolerance and comparison target does the harness use (Y only, or Y and RSTD)? This decides whether the eps-placement error is detectable at unit scale.",
-    "Which eps values are tested? A test using 
-...[truncated 3426 chars]
+    "What shapes does the hidden test use? If it only exercises num_kv_heads==1 or n_rep==1, the modulo bug is unobservable at test level even though it contradicts problem.txt",
+    "Does the test compare per-row against torch.repeat_interleave (order-sensitive) or something order-insensitive?",
+    "Is dim in the test a power of tw
+...[truncated 3036 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The source adds eps after the square root, which mathematically diverges from the stated formula precisely in the near-zero-norm regime the problem text singles out; the discrepancy grows as row RMS approaches sqrt(eps).",
+  "rationale": "kernel.py:9 computes kv_head = q_head % num_kv_heads, which is round-robin/strided assignment (torch's kv.repeat(n_rep,1)), whereas the stated grouping requires floor-division by n_rep. The kernel never computes n_rep at all, so it cannot be implementing the block mapping except in degenerate shapes where the two formulas coincide (num_kv_heads == 1 or n_rep == 1).",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Gives the verbatim formula rstd = 1 / sqrt(mean_square + eps) and states the epsilon must keep the normalizer finite as the row norm approaches zero."
+      "summary": "States n_rep = num_q_heads // num_kv_heads and that CONSECUTIVE query heads map to the same KV head (heads 0..n_rep-1 -> KV 0, n_rep..2*n_rep-1 -> KV 1), i.e. kv_head = q_head // n_rep; gqa_gather must return the KV row each query head reads."
     },
     {
-      "source": "kernel.py:23",
-      "summary": "rstd = 1.0 / (_sqrt(mean_square) + eps) \u2014 eps added outside the sqrt, contradicting the stated formula."
+      "source": "problem.txt",
+      "summary": "References vllm triton_unified_attention index arithmetic, which uses floor-division grouping, confirming the block (not interleaved) mapping is the required semantics."
+    },
+    {
+      "source": "kernel.py:9",
+      "summary": "kv_head = q_head % num_kv_heads \u2014 modulo, not floor-division by n_rep; n_rep is never computed anywhere in the kernel or wrapper."
     }
   ],
-  "scope_rationale": "problem.txt states the exact formula rstd = 1/sqrt(mean_square + eps) and explicitly requires that epsilon \"keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". Near-zero-norm rows are therefore an explicitly contracted case, and there is no test.py narrowing the input domain. A small-magnitude fp32 2D tensor is a representative input the contract admits.",
-  "statement": "kernel.py:23 computes rstd = 1/(sqrt(mean_square) + eps) instead of the contractual rstd = 1/sqrt(mean_square + eps). For a 2D fp32 input whose rows have small-but-nonzero RMS (e.g. X = 1e-3 * randn(4, 512), eps = 1e-6), the returned Y should differ from the reference x/sqrt(mean(x^2)+eps) by a large relative amount (predicted ~30-40% for RMS ~1e-3, since 1/(1e-3+1e-6)\u2248999 vs 1/sqrt(2e-6)\u2248707), far beyond any plausible allclose tolerance. Metric: max relative error of Y vs the problem.txt formula computed in fp64.",
-  "status": "open"
-}
+  "scope_rationale": "problem.txt is the operative and only contract source here (no test.py exists), and it states the required mapping in unambiguous prose: \"GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\". A claim that the kernel violates this stated behavior is in-scope by the stated-behavior rule. The chosen inputs are ordinary, contract-admitted GQA configurations: num_q_heads a multiple of num_kv_heads, num_kv_heads > 1, power-of-two head dim, contiguous float32 kv on device \u2014 no dtype, stride, shape-rank, or degenerate-size deviation is needed to expose it.",
+  "statement": "For any kv with num_kv_heads > 1 and num_q_heads = n_rep * num_kv_heads with n_rep > 1 (e.g. kv of shape (2, 64) with num_
+...[truncated 652 chars]
 
 ### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Isolates whether the defect is detectable without extreme inputs, using only the eps argument the function signature exposes; separates \"hidden by tiny eps\" from \"genuinely wrong formula\".",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Defines rstd = 1/sqrt(mean_square + eps) for arbitrary eps with no restriction on its magnitude."
-    },
-    {
-      "source": "kernel.py:30",
-      "summary": "Public entry rms_norm_forward(X, eps) takes eps as a caller-supplied float with no validation or restriction."
-    }
-  ],
-  "scope_rationale": "eps is a free scalar parameter of the documented API rms_norm_forward(X, eps) and problem.txt fixes its semantics; no artifact file restricts eps to a specific magnitude. Unit-scale randn 2D fp32 input is the most ordinary admitted input.",
-  "statement": "The same eps-placement defect should also produce a measurable Y error for ordinary unit-scale rows when eps is not tiny: for X = randn(8, 1024) fp32 with eps = 1e-2, the kernel's rstd = 1/(s+1e-2) vs the contractual 1/sqrt(s^2+1e-2) with s\u22481 gives \u22480.99010 vs \u22480.99504, i.e. ~0.5% relative error in every output element \u2014 above typical 1e-3/1e-5 allclose tolerances. Metric: max relative error of Y vs the fp64 reference formula.",
+  "rationale": "tl.arange requires power-of-two extents in Triton, and dim comes straight from kv.shape[1] with no padding to a BLOCK size and no boundary mask on the load/store.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "problem.txt places no constraint on dim and never states head_dim must be a power of two, but it also does not require non-power-of-two support, and there is no test.py or get_inputs to pin the tested head dimension. So this is a real robustness limitation but cannot by itself be decisive; it should be treated as a generalization note unless the contract is clarified.",
+  "statement": "Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error rather than return a result whenever kv.shape[1] is not a power of two (e.g. head_dim = 80, 96, or 192, all common in real GQA models). Decisive metric: does the call complete and return a correct-shaped tensor, or raise.",
   "status": "open"
 }
 
@@ -562,13 +552,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t8_probe.py",
-      "sha256": "4ebdc1b8de5dc08dddfe098b1edd8b8890929142a6e7bb50303ef7326b16083e"
+      "sha256": "6413966263009fa0c04b211364ab8bee6346927941d27699da825cbec1a4deb3"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t8_stdout.txt",
-      "sha256": "04a7c36c256d5fafca956500abdb5cefbc8533f700276cb1ef19ffd3139fc814"
+      "sha256": "de6608c877c9226ef1aa8ac1f72a0bc482aecb9b09a3e676d944a1a21e2d983b"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -580,12 +570,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t8_json_result.json",
-      "sha256": "ee0fea28fe887df759baa964d1652c9283fba5e7f8a855a6fddfc04a737290ce"
+      "sha256": "338754a1a9b51afc7887f1c130001509071c644e302dd553323d81a613094500"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "kernel.py:23 computes rstd = 1/(sqrt(mean_square) + eps) instead of the contractual rstd = 1/sqrt(mean_square + eps). For a 2D fp32 input whose rows have small-but-nonzero RMS (e.g. X = 1e-3 * randn(4, 512), eps = 1e-6), the returned Y should differ from the reference x/sqrt(mean(x^2)+eps) by a large relative amount (predicted ~30-40% for RMS ~1e-3, since 1/(1e-3+1e-6)\u2248999 vs 1/sqrt(2e-6)\u2248707), far beyond any plausible allclose tolerance. Metric: max relative error of Y vs the problem.txt formula computed in fp64.",
-  "duration_s": 7.457751,
+  "claim_statement": "For any kv with num_kv_heads > 1 and num_q_heads = n_rep * num_kv_heads with n_rep > 1 (e.g. kv of shape (2, 64) with num_q_heads=4, or (4, 128) with num_q_heads=32), gqa_gather returns the interleaved mapping out[q] == kv[q % num_kv_heads] instead of the contract-required consecutive mapping out[q] == kv[q // n_rep]; e.g. for num_kv_heads=2, num_q_heads=4 the kernel yields rows [kv0, kv1, kv0, kv1] while the contract requires [kv0, kv0, kv1, kv1]. Decisive metric: per-row exact equality (order-sensitive) against torch.repeat_interleave(kv, n_rep, dim=0); report the index of the first mismatching row and which kv row was actually copied. An order-insensitive check (row multiset, sum over head axis) would NOT detect this and must not be used.",
+  "duration_s": 8.239334,
   "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
@@ -594,13 +584,8 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "4ebdc1b8de5dc08dddfe098b1edd8b8890929142a6e7bb50303ef7326b16083e"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout
-...[truncated 5372 chars]
+          "path": "
+...[truncated 10939 chars]
 
 ### t9 - run_claim_probe - ok
 
@@ -610,13 +595,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "e93e6a296e4a363ef9e9707d2163a2005c1bbe6c1f10443b6fd616c6022b6960"
+      "sha256": "dd2b47433ae183fad45b0742ed8e6c3f57d7e132144a6f77c8a5cf102e39757c"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "eff2542de787d998926ea4bcd580fed8dd103da9c15340801d6b50c0794b418e"
+      "sha256": "d7091ed576f01a25254ac6e896c33b00eb59979060fa9be664db8b0853c58994"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -628,12 +613,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "3f268e4ac03ea0a50a3e085517653152f516cef6e6c3ac7c1481a23ef21b5a9d"
+      "sha256": "23bbed6cdf3b30ac6a31c6155115fae0121dcee5187080720ac5dc7625a7a57d"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The same eps-placement defect should also produce a measurable Y error for ordinary unit-scale rows when eps is not tiny: for X = randn(8, 1024) fp32 with eps = 1e-2, the kernel's rstd = 1/(s+1e-2) vs the contractual 1/sqrt(s^2+1e-2) with s\u22481 gives \u22480.99010 vs \u22480.99504, i.e. ~0.5% relative error in every output element \u2014 above typical 1e-3/1e-5 allclose tolerances. Metric: max relative error of Y vs the fp64 reference formula.",
-  "duration_s": 5.920227,
+  "claim_statement": "Because dim is passed as a tl.constexpr and the row is addressed with offs_d = tl.arange(0, dim) without masking (kernel.py:10-12), gqa_gather will raise a Triton compile/build error rather than return a result whenever kv.shape[1] is not a power of two (e.g. head_dim = 80, 96, or 192, all common in real GQA models). Decisive metric: does the call complete and return a correct-shaped tensor, or raise.",
+  "duration_s": 6.524571,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
@@ -643,14 +628,14 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "e93e6a296e4a363ef9e9707d2163a2005c1bbe6c1f10443b6fd616c6022b6960"
+          "sha256": "dd2b47433ae183fad45b0742ed8e6c3f57d7e132144a6f77c8a5cf102e39757c"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t9_stdout.txt",
-          "sha256": "eff2542de787d
-...[truncated 6497 chars]
+          "sha256": "d7091ed576f01a25254ac6e896c33b00eb59979060fa9be664db8b0853c
+...[truncated 6213 chars]
 
 ### t10 - finalize_probe_evidence - ok
 
@@ -658,7 +643,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "CUDA available; kernel loaded and ran. For fp32 X = 1e-3*randn(4,512) with eps=1e-6 (row RMS 9.37e-4) the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.4613 (46%) and mean rel err 0.4175, max abs err 1.116 \u2014 allclose(rtol=1e-3,atol=1e-5) False. Error scales exactly as predicted by eps-outside-sqrt: 0.51% at RMS~1e-2, 4.5e-5 at RMS~0.105, 6.3e-7 at RMS~1.07 (hidden at unit scale). Additional near-zero check: a row containing a single 1e-7 element yields max|Y|=0.0996 versus the contractual 1e-4, a ~996x blow-up, directly violating problem.txt's requirement that eps keep the normalizer finite as the row norm approaches zero (kernel rstd -> 1/eps = 1e6 instead of 1/sqrt(eps) = 1e3).",
+  "summary": "Order-sensitive per-row exact equality vs torch.repeat_interleave(kv, n_rep, 0) fails for every non-degenerate GQA config. (nkv=2, dim=64, nq=4): output source rows [0,1,0,1] vs required [0,0,1,1], 2/4 rows wrong, first mismatch at row 1. (nkv=4, dim=128, nq=32): source rows cycle 0,1,2,3 repeating vs required 8x blocks, 24/32 rows wrong, first mismatch at row 1. In both cases output matched kv.repeat(n_rep,1) (interleaved/modulo) exactly. Degenerate shapes where the two formulas coincide passed as predicted: nkv=1/nq=8 and n_rep=1 cases (nkv=8,nq=8; nkv=2,nq=2) all matched the contract. Shapes and dtypes were correct in all cases; the defect is purely the row-index mapping.",
   "supports": "confirmed",
   "tool_event_id": "t8"
 }
@@ -669,7 +654,7 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "For ordinary unit-scale fp32 X = randn(8,1024) (row RMS ~1.02) the eps-placement defect is measurable as soon as eps is not tiny: eps=1e-2 gives max rel err 4.963e-3 and max abs err 1.875e-2, failing allclose(rtol=1e-3,atol=1e-5) (passes only at the loose rtol=1e-2/atol=1e-2); eps=1e-1 gives max rel err 4.654e-2 and fails even rtol=1e-2/atol=1e-2. As predicted, the defect is hidden at eps=1e-6 (5.8e-7) and eps=1e-5 (5.1e-6), and borderline at eps=1e-3 (5.0e-4, just inside rtol=1e-3). Confirms the error is a systematic formula error whose visibility depends only on eps magnitude relative to row RMS, not on exotic inputs.",
+  "summary": "gqa_gather raises triton CompilationError (\"arange's range must be a power of 2\", pointing at offs_d = tl.arange(0, dim)) for dim in {80, 96, 192}, and succeeds returning shape (8, dim) for dim in {64, 128, 256}. The behavioral claim is confirmed exactly as stated. Scope caveat unchanged: no test.py/get_inputs exists to establish that a non-power-of-two head_dim is in the benchmark input domain, so this stands as a robustness/generalization note rather than a decisive in-scope failure.",
   "supports": "confirmed",
   "tool_event_id": "t9"
 }
@@ -678,7 +663,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Both existing claims are confirmed by direct runtime evidence and jointly cover the single root defect (eps outside the sqrt at kernel.py:23) across both regimes the contract admits: near-zero-norm rows (c1: ~996x blow-up vs contractual 1/sqrt(eps), 46% max rel err at row RMS 9.4e-4) and ordinary unit-scale rows with non-tiny eps (c2: 0.50% max rel err at eps=1e-2, 4.65% at eps=1e-1). No additional claim would change the verdict. The only untested risk-map items \u2014 no fp32 upcast before the sum of squares (fp16/bf16), uncapped BLOCK_SIZE for very wide rows, and stride(0)-only addressing for non-contiguous/>2D inputs \u2014 are dtype, shape, and stride generalizations that problem.txt does not require and that scope policy treats as non-decisive, so they are generalization notes rather than in-scope claims.",
+  "reason": "c1 is confirmed with decisive, order-sensitive per-row evidence that kernel.py:9 implements kv_head = q_head % num_kv_heads instead of the contract-required q_head // n_rep, failing 2/4 and 24/32 rows in ordinary GQA configs; that fully covers the central contract violation. c2 is confirmed as a robustness/generalization note (non-power-of-two dim raises a Triton CompilationError) with scope still unknown since no test.py pins head_dim. Remaining risk-map items (non-contiguous kv strides, num_q_heads not divisible by num_kv_heads, num_q_heads < num_kv_heads) are either explicitly out of scope per the scope policy or reference-undefined under problem.txt, so none would be decisive and none warrant delaying the verdict.",
   "reviewed_claims": [
     "c1",
     "c2"
@@ -690,22 +675,22 @@ Evidence:
 ### t13 - record_verdict - ok
 
 {
-  "confidence": 0.94,
+  "confidence": 0.95,
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs narrowing the input domain, so problem.txt is the operative contract. It states the formula verbatim (rstd = 1 / sqrt(mean_square + eps)) and explicitly requires that \"the epsilon ... must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". kernel.py:23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), placing eps outside the square root. This is not a reduction-order, precision, or representation difference the contract tolerates; it is a different formula, and it breaks the one invariant the contract goes out of its way to require: as ||x||->0 the kernel's normalizer diverges to 1/eps (1e6 at eps=1e-6) instead of being bounded by 1/sqrt(eps) (1e3).\n\nEvidence is decisive and in-scope. c1 (t8, CUDA confirmed): for plain fp32 2D input X = 1e-3*randn(4,512) with eps=1e-6 the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.461 and mean rel err 0.417 (max abs err 1.116), failing allclose(rtol=1e-3, atol=1e-5); a row containing a single 1e-7 element produces max|Y| = 0.0996 versus the contractual 1e-4, a ~996x blow-up \u2014 exactly the \"blow the output up\" failure problem.txt forbids. The reference here is finite and well-defined, so this is not a reference-undefined case. c2 (t9) shows the same root cause is a systematic formula error, not an exotic-input artifact: for ordinary unit-scale randn(8,1024), max rel err is 4.96e-3 at eps=1e-2 and 4.65e-2 at eps=1e-1, with eps a free parameter of the documented API rms_norm_forward(X, eps) that no artifact file restricts. The probes also show why a single benign randn/tiny-eps check would have hidden the bug (5.8e-7 at eps=1e-6), which is why the passing regime is not exculpatory.\n\nNothing is left unresolv
-...[truncated 440 chars]
+  "reason": "problem.txt is the sole and therefore operative contract here (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), and it explicitly requires the CONSECUTIVE grouping kv_head = q_head // n_rep with n_rep = num_q_heads // num_kv_heads (\"query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\"). kernel.py:9 instead computes kv_head = q_head % num_kv_heads and never derives n_rep at all. Claim c1 is confirmed by probe t8 using the correct order-sensitive metric (per-row exact equality vs torch.repeat_interleave): for (num_kv_heads=2, dim=64, num_q_heads=4) the output source rows are [0,1,0,1] versus the required [0,0,1,1] (2/4 rows wrong, first mismatch at row 1), and for (4,128,32) 24/32 rows are wrong; in both cases the output exactly matches the interleaved kv.repeat(n_rep,1) mapping. These are ordinary, contract-admitted GQA configurations (num_q_heads a multiple of num_kv_heads, contiguous fp32, power-of-two head dim) requiring no stride, dtype, rank, or degenerate-size deviation, so the claim is in_scope with scope evidence tied to the stated contract. This is an exact integer index mapping with no tolerance, tie-breaking, precision-format, or unspecified-ordering allowance the contract could excuse it under; degenerate shapes (num_kv_heads=1 or n_rep=1) pass only because the two formulas coincide there. c2 (Triton CompilationError for non-power-of-two head_dim) is confirmed behaviorally but its scope is unknown since no artifact file pins head_dim; I set it aside as a generalization/robustness note and it plays no part in this verdict.",
+  "verdict": "reject"
+}
 
 ## Verdict
 
 {
-  "confidence": 0.94,
-  "created_at": "2026-09-08T14:58:26Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-08T15:00:30Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs narrowing the input domain, so problem.txt is the operative contract. It states the formula verbatim (rstd = 1 / sqrt(mean_square + eps)) and explicitly requires that \"the epsilon ... must keep the normalizer finite as the row norm approaches zero, so that a row of (near-)zero input does not blow the output up\". kernel.py:23 instead computes rstd = 1.0 / (_sqrt(mean_square) + eps), placing eps outside the square root. This is not a reduction-order, precision, or representation difference the contract tolerates; it is a different formula, and it breaks the one invariant the contract goes out of its way to require: as ||x||->0 the kernel's normalizer diverges to 1/eps (1e6 at eps=1e-6) instead of being bounded by 1/sqrt(eps) (1e3).\n\nEvidence is decisive and in-scope. c1 (t8, CUDA confirmed): for plain fp32 2D input X = 1e-3*randn(4,512) with eps=1e-6 the returned Y deviates from the fp64 contractual reference x/sqrt(mean(x^2)+eps) by max rel err 0.461 and mean rel err 0.417 (max abs err 1.116), failing allclose(rtol=1e-3, atol=1e-5); a row containing a single 1e-7 element produces max|Y| = 0.0996 versus the contractual 1e-4, a ~996x blow-up \u2014 exactly the \"blow the output up\" failure problem.txt forbids. The reference here is finite and well-defined, so this is not a reference-undefined case. c2 (t9) shows the same root cause is a systematic formula error, not an exotic-input artifact: for ordinary unit-scale randn(8,1024), max rel err is 4.96e-3 at eps=1e-2 and 4.65e-2 at eps=1e-1, with eps a free parameter of the documented API rms_norm_forward(X, eps) that no artifact file restricts. The probes also show why a single benign randn/tiny-eps check would have hidden the bug (5.8e-7 at eps=1e-6), which is why the passing regime is not 
-...[truncated 480 chars]
+  "reason": "problem.txt is the sole and therefore operative contract here (artifact_files = kernel.py, meta.json, problem.txt; test_code is empty), and it explicitly requires the CONSECUTIVE grouping kv_head = q_head // n_rep with n_rep = num_q_heads // num_kv_heads (\"query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1\"). kernel.py:9 instead computes kv_head = q_head % num_kv_heads and never derives n_rep at all. Claim c1 is confirmed by probe t8 using the correct order-sensitive metric (per-row exact equality vs torch.repeat_interleave): for (num_kv_heads=2, dim=64, num_q_heads=4) the output source rows are [0,1,0,1] versus the required [0,0,1,1] (2/4 rows wrong, first mismatch at row 1), and for (4,128,32) 24/32 rows are wrong; in both cases the output exactly matches the interleaved kv.repeat(n_rep,1) mapping. These are ordinary, contract-admitted GQA configurations (num_q_heads a multiple of num_kv_heads, contiguous fp32, power-of-two head dim) requiring no stride, dtype, rank, or degenerate-size deviation, so the claim is in_scope with scope evidence tied to the stated contract. This is an exact integer index mapping with no tolerance, tie-breaking, precision-format, or unspecified-ordering allowance the contract could excuse it under; degenerate shapes (num_kv_heads=1 or n_rep=1) pass only because the two formulas coincide there. c2 (Triton CompilationError for non-power-of-two head_dim) is confirmed behaviorally but its scope is unknown since no artifact file pins head_dim; I set it aside as a generalization/robustness note and it plays no part in this verdict.",
+  "verdict": "reject"
+}

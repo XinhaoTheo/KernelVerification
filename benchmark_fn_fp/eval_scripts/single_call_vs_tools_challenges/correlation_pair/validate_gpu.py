@@ -50,12 +50,12 @@ def validate(names):
                            "triton":triton.__version__,"numpy":np.__version__},"cases":results}
 
 @app.local_entrypoint()
-def main(cases: str = "case_36,case_37"):
+def main(cases: str = "case_93,case_94"):
     names = [name.strip() for name in cases.split(",") if name.strip()]
     private = ROOT / PRIVATE
     cpu = json.loads((private / "answer_key_cpu.json").read_text())
     if not names or any(name not in cpu["cases"] for name in names):
-        raise ValueError("Pass validated case_36 and/or case_37 names")
+        raise ValueError("Pass validated case_93 and/or case_94 names")
     result = validate.remote(names)
     for name, row in result["cases"].items():
         assert row["input_sha256"] == cpu["cases"][name]["input_sha256"]

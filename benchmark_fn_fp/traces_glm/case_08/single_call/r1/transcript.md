@@ -21,21 +21,21 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's
-counter-based Philox RNG (tl.rand), as used by low-precision training kernels
-when casting high-precision accumulators down to a storage format.
+Operation: top-1 routing (a gate) over per-expert scores, implemented with the
+bitonic sort network used by Native Sparse Attention's selection branch
+(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).
 
-`stochastic_round_to_grid(x, seed)` must round each element to one of the two
-neighbouring multiples of STEP, choosing the upper one with probability equal
-to the element's fractional distance to it:
+`sorted_topk_indices(scores, k=1)` must return, for each token, the index of
+the highest-scoring expert.
 
-    lower = floor(x / STEP) * STEP
-    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower
+Contract on ties: when two experts have exactly equal scores, the LOWER
+index must be the one kept.
 
-so that E[out] == x. The randomness is drawn from the supplied seed.
+Each token's chosen expert contributes its output vector; the batch is then
+mean-pooled into a single continuous representation.
 
-Input domain: `x` is a 1-D tensor whose length is a power of two and fits in a
-single block.
+Input domain: `scores` has a power-of-two number of columns (the bitonic
+network this kernel family uses is defined only for power-of-two extents).
 
 
 ## Kernel implementation under test (kernel.py)
@@ -45,26 +45,72 @@ import torch
 import triton
 import triton.language as tl
 
-STEP = 0.05
+@triton.jit
+def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
+    n_outer: tl.constexpr = x.numel >> n_dims
+    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
+    y = tl.reshape(x, shape)
+    mask = tl.arange(0, 2)[None, :, None]
+    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
+    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
+    left = tl.reshape(left, x.shape)
+    right = tl.reshape(right, x.shape)
+    y_idx = tl.reshape(ids, shape)
+    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)
+    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)
+    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)
+    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)
+    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    ileft = left.to(idtype, bitcast=True)
+    iright = right.to(idtype, bitcast=True)
+    ix = x.to(idtype, bitcast=True)
+    cond = (left > right) != flip
+    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))
+    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))
+    return ret.to(x.dtype, bitcast=True), new_ids
 
 
 @triton.jit
-def stochastic_round_kernel(x_ptr, out_ptr, seed, N: tl.constexpr, STEP: tl.constexpr):
+def _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):
+    n_outer: tl.constexpr = x.numel >> n_dims
+    tl.static_assert(stage <= n_dims)
+    if order == 2:
+        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)
+    else:
+        flip = order
+    for i in tl.static_range(stage):
+        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)
+    return x, ids
+
+
+@triton.jit
+def _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):
+    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every
+    # Triton version, so N_DIMS is passed in from the (Python-side, so still
+    # compile-time-known) caller instead. The bitonic merge/compare-and-swap
+    # primitives below -- where the actual tie-break mechanism lives -- are
+    # byte-for-byte the real kernel, unchanged.
+    row = tl.program_id(0)
     offs = tl.arange(0, N)
-    x = tl.load(x_ptr + offs)
-    lower = tl.floor(x / STEP) * STEP
-    upper = lower + STEP
-    p_up = (x - lower) / STEP
-    r = tl.rand(seed, offs)  # real Triton Philox RNG
-    out = tl.where(r < p_up, upper, lower)
-    tl.store(out_ptr + offs, out)
+    x = tl.load(X_ptr + row * stride_row + offs)
+    ids = tl.load(IDS_ptr + row * stride_row + offs)
+    for i in tl.static_range(1, N_DIMS + 1):
+        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)
+    tl.store(X_ptr + row * stride_row + offs, x)
+    tl.store(IDS_ptr + row * stride_row + offs, ids)
 
 
-def stochastic_round_to_grid(x: torch.Tensor, seed: int) -> torch.Tensor:
-    N = x.shape[0]
-    out = torch.empty_like(x)
-    stochastic_round_kernel[(1,)](x, out, seed, N=N, STEP=STEP)
-    return out
+def sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:
+    """Host wrapper: real bitonic-sort kernel, launched one program per row."""
+    import math
+    assert scores.is_cuda
+    B, N = scores.shape
+    n_dims = int(math.log2(N))
+    x = scores.clone().contiguous()
+    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()
+    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)
+    return ids[:, :k].long()
 
 ```
 
@@ -72,18 +118,20 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Straightforward; correct. r uniform [0,1), P(upper)=p_up. Correct.
+The original NSA kernel tie-break: this bitonic sort is not stable, so ties could keep either index. The contract requires lower index on ties. In the original NSA utils, ties... the bitonic sort here: cond = (left > right) != flip. With descending final, for equal values cond is False, so no swap — left stays. But positions shuffle through stages; unstable sort means ties order is arbitrary. So tie-break to lower index is not guaranteed. Hence reject.
+
+Indeed the bitonic network is not stable; for equal scores the final arrangement of ids is arbitrary. So violates tie contract.
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.95, "reason": "The kernel computes lower/upper neighbors correctly and uses tl.rand(seed, offsets) as a uniform in [0,1), so P(out = upper) = p_up = (x - lower)/STEP, giving E[out] = x. With N a power of two fitting one block, the single-launch indexing is valid."}
+{"verdict": "reject", "confidence": 0.85, "reason": "A bitonic sort network is not stable: when scores tie, the compare-and-swap (cond = (left > right) != flip) performs no swap for equal values at that step, but earlier stages have already permuted the ids, so the surviving id for tied scores is arbitrary and not guaranteed to be the lower index, violating the stated tie-break contract."}
 
 ## Verdict
 
 {
-  "verdict": "trust",
-  "confidence": 0.95,
-  "reason": "The kernel computes lower/upper neighbors correctly and uses tl.rand(seed, offsets) as a uniform in [0,1), so P(out = upper) = p_up = (x - lower)/STEP, giving E[out] = x. With N a power of two fitting one block, the single-launch indexing is valid."
+  "verdict": "reject",
+  "confidence": 0.85,
+  "reason": "A bitonic sort network is not stable: when scores tie, the compare-and-swap (cond = (left > right) != flip) performs no swap for equal values at that step, but earlier stages have already permuted the ids, so the surviving id for tied scores is arbitrary and not guaranteed to be the lower index, violating the stated tie-break contract."
 }
 
 ## Usage and stop reason
@@ -92,23 +140,23 @@ Straightforward; correct. r uniform [0,1), P(upper)=p_up. Correct.
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "trust",
-    "confidence": 0.95,
-    "reason": "The kernel computes lower/upper neighbors correctly and uses tl.rand(seed, offsets) as a uniform in [0,1), so P(out = upper) = p_up = (x - lower)/STEP, giving E[out] = x. With N a power of two fitting one block, the single-launch indexing is valid."
+    "verdict": "reject",
+    "confidence": 0.85,
+    "reason": "A bitonic sort network is not stable: when scores tie, the compare-and-swap (cond = (left > right) != flip) performs no swap for equal values at that step, but earlier stages have already permuted the ids, so the surviving id for tied scores is arbitrary and not guaranteed to be the lower index, violating the stated tie-break contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 658,
-    "output_tokens": 109
+    "input_tokens": 1420,
+    "output_tokens": 220
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 2.2075597080402076,
-  "kernel_sha256": "91797ea2ef61c88c9b2644e13026f45713bdd30da81d403c6d08d896411bc242",
-  "problem_sha256": "3dbe1fdc2b7b1dde8cf61e3b6048f74d73ec19e0e04c672f695896f5b2d29f31",
+  "elapsed_s": 4.340086125070229,
+  "kernel_sha256": "be3ebf129fa6b22caa1ffb16efd5f394af480df61a429d71420cd0a78d9728df",
+  "problem_sha256": "4109c10ffe123dc172d9fdbd1d58194c4f8b3ef6b0efea89669dcf0215e03ceb",
   "prompt_variant": "original",
-  "estimated_usd": 0.0014008,
+  "estimated_usd": 0.002956,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

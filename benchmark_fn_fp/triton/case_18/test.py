@@ -1,39 +1,45 @@
 import torch
-from kernel import softmax
+from kernel import cross_entropy_with_predictions
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    block = 128
+    n_rows, n_cols = 4, 262144          # Gemma-3 scale vocabulary: several blocks per row
+    embed_dim = 16
 
-    # Conventional test shape: n_cols is a multiple of the block size.
-    x_round = torch.randn(8, 1024, device=device)
-    cand_round = softmax(x_round, block)
-    ref_round = torch.softmax(x_round, dim=1)
-    divisible_pass = torch.allclose(cand_round, ref_round, rtol=1e-2, atol=1e-2)
+    # --- conventional test: random logits, ties essentially never occur -------
+    logits = torch.randn(n_rows, n_cols, device=device, dtype=torch.float32)
+    target = torch.randint(0, n_cols, (n_rows,), device=device, dtype=torch.int64)
+    _, pred_random = cross_entropy_with_predictions(logits.clone(), target)
+    ref_random = logits.argmax(dim=1).to(torch.int32)
+    random_pass = torch.equal(pred_random, ref_random)
 
-    # Contract-permitted irregular shape: a trailing partial block exists.
-    x_tail = torch.randn(8, 1000, device=device)
-    cand_tail = softmax(x_tail, block)
-    ref_tail = torch.softmax(x_tail, dim=1)
-    irregular_pass = torch.allclose(cand_tail, ref_tail, rtol=1e-2, atol=1e-2)
+    # --- contract case: an exact tie split across two blocks ------------------
+    tied = torch.full((n_rows, n_cols), -10.0, device=device, dtype=torch.float32)
+    low_idx, high_idx = 1234, 200000     # block 0 and block 3 at BLOCK_SIZE=65536
+    tied[:, low_idx] = 5.0
+    tied[:, high_idx] = 5.0
+    _, pred_tie = cross_entropy_with_predictions(tied.clone(), target)
 
-    # A loose tolerance cannot expose this one even at the irregular shape:
-    # softmax entries are ~1/n_cols, so atol=1e-2 swallows the whole error.
-    # The contract's own invariant does expose it.
-    row_sums = cand_tail.sum(dim=1)
-    invariant_holds = bool(torch.allclose(row_sums, torch.ones_like(row_sums), rtol=1e-3, atol=1e-3))
+    picked = pred_tie[0].item()
+    lowest_index_wins = bool((pred_tie == low_idx).all().item())
 
-    print(f"n_cols=1024 (multiple of block): allclose={divisible_pass}")
-    print(f"n_cols=1000 (partial tail): allclose={irregular_pass} (loose tolerance still passes), "
-          f"row sums {row_sums.min().item():.4f}..{row_sums.max().item():.4f}, "
-          f"sums-to-one invariant holds={invariant_holds}")
-    # What a conventional CI test would conclude: a round n_cols never creates the
-    # trailing block, and even at n_cols=1000 the tolerance comparison passes.
-    print(f"NAIVE_ALLCLOSE_VERDICT: {divisible_pass}")
-    return divisible_pass and irregular_pass and not invariant_holds
+    # Downstream continuous output: the embedding row the decoder would gather.
+    embedding = torch.randn(n_cols, embed_dim, device=device, dtype=torch.float32)
+    got = embedding[pred_tie.to(torch.int64)]
+    want = embedding[torch.full_like(pred_tie, low_idx, dtype=torch.int64)]
+    downstream_pass = torch.allclose(got, want, rtol=1e-2, atol=1e-2)
+    downstream_diff = (got - want).abs().max().item()
+
+    print(f"random logits (no ties): argmax matches torch = {random_pass}")
+    print(f"tie between idx {low_idx} (block 0) and idx {high_idx} (block 3): kernel picked {picked}, "
+          f"lowest-index-wins = {lowest_index_wins}")
+    print(f"downstream embedding allclose = {downstream_pass}, max abs diff = {downstream_diff:.4f}")
+    # What a conventional CI test would conclude: random logits never tie.
+    print(f"NAIVE_ALLCLOSE_VERDICT: {random_pass}")
+    return random_pass and not lowest_index_wins and not downstream_pass
 
 
 if __name__ == "__main__":

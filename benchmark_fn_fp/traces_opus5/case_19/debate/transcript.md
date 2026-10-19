@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_19`
+- Entry: `case_20`
 - Turns: 7
-- Tool events: 12
-- Claims: 1
-- Description updates: 0
-- LLM time: 128.48s across 6 calls | tokens: in=173843 out=9579 total=183422
+- Tool events: 16
+- Claims: 3
+- Description updates: 1
+- LLM time: 158.052s across 6 calls | tokens: in=235379 out=12772 total=248151
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.94
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,69 +27,85 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_19",
+    "entry": "case_20",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 
-### Turn 2 - `describer` (4.3013587939999525s, in=10122 out=153)
+### Turn 2 - `describer` (49.622504701s, in=4164 out=3776)
 
 Message:
 
 ```text
-I need the truncated remainder of kernel.py (the Python wrapper) to see BLOCK_SIZE selection and how predicted tokens are returned.
+I have the full source and contract; the decisive detail is the epsilon placement on line 26. Recording the description model.
 ```
 
 Tool calls:
 
-- `inspect_kernel_source -> t5 ok`
+- `record_description_update -> t5 ok`
   Args:
   {
-    "end_line": 420,
-    "entry": "case_19",
-    "start_line": 240
-  }
+    "contract_model": [
+      "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
+      "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
+      "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
+      "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
+      "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+    ],
+    "kernel_model": [
+      "One program per row (grid = (n_rows,)), BLOCK=256 fixed, thre
+  ...[truncated 6881 chars]
   Output summary:
   {
-    "entry": "case_19"
-  }
+    "contract_model": [
+      "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
+      "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
+      "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
+      "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
+      "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
+      "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct."
+  ...[truncated 6571 chars]
 
-### Turn 3 - `skeptic` (22.643252216000064s, in=14646 out=1624)
+### Turn 3 - `skeptic` (29.747473533000004s, in=22420 out=2382)
 
 Message:
 
 ```text
-Line 160 uses `block_max >= m` (non-strict), so a later block that merely ties the running maximum overwrites `argmax_idx` with the later block's index — this directly contradicts the contract's lowest-index tie rule when the tie spans blocks.
+Recording the primary epsilon-placement hypotheses, split by regime so probes can distinguish a silently-wrong-scale bug from a tolerance artifact.
 ```
 
 Tool calls:
@@ -97,152 +113,153 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "The running-max update guard uses `>=` rather than `>`. A tie satisfies `>=`, so the stale-but-lower argmax from the earlier block is replaced by the later block's argmax even though the max value did not increase. Within-block tie handling (tl.min over masked offsets) is correct, which makes the cross-block path the specific failure surface.",
+    "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index\" and \"`n_cols` ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
+        "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
       },
       {
-        "source": "kernel.py:152-161",
-        "summary": "Per-block argmax
-  ...[truncated 1256 chars]
+        "source": "kernel.py line 26",
+        "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
+      }
+    ],
+    "sc
+  ...[truncated 958 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The running-max update guard uses `>=` rather than `>`. A tie satisfies `>=`, so the stale-but-lower argmax from the earlier block is replaced by the later block's argmax even though the max value did not increase. Within-block tie handling (tl.min over masked offsets) is correct, which makes the cross-block path the specific failure surface.",
+    "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index\" and \"`n_cols` ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
+        "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
       },
       {
-        "source": "kernel.py:152-161",
-        "summary": "Per-block argmax uses tl.min(masked_offsets) for within-block ties, but the accumulator update guard is `is_new_max = block_max >= m` followed by tl.where(is_new_max, current_block_argmax_idx, argmax_idx), replacing the earlier lower index on an exact tie."
+        "source": "kernel.py line 26",
+        "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
       }
     ],
-    "scope_rationale": "problem.txt is the operative contract and explicitly states (a) `predicted[i]` must be the LOWEST index attaini
-  ...[truncated 890 chars]
+    "scope_rationale": "problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"). No test.py exists, so representative in-contract inputs must be chosen from problem.tx
+  ...[truncated 592 chars]
+- `record_claim -> t7 ok`
+  Args:
+  {
+    "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
+      }
+    ],
+    "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps
+  ...[truncated 550 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
+      }
+    ],
+    "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.",
+    "statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/s
+  ...[truncated 184 chars]
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
+      },
+      {
+        "source": "kernel.py line 36",
+        "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly raises the constant-row case as the motiv
+  ...[truncated 589 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
+      },
+      {
+        "source": "kernel.py line 36",
+        "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.",
+    "statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows 
+  ...[truncated 223 chars]
 
-### Turn 4 - `experimenter` (30.872366961000125s, in=18159 out=2727)
+### Turn 4 - `experimenter` (26.967971000999995s, in=30534 out=2756)
 
 Message:
 
 ```text
-Kernel source and contract are already in hand; the only unknown is the wrapper's entry point and BLOCK_SIZE choice. I'm reading the wrapper tail and, in the same response, launching the cross-block tie probe for c1 (written defensively so it discovers the public entry point and BLOCK_SIZE at runtime, uses V = 65536 > MAX_FUSED_SIZE/2 so the row spans blocks, and duplicates the row max at a low index in block 0 and a high index in block 1). Only one claim is open, so nothing is being held back.
+Launching all three probes together — they are independent (c1 near-constant rows, c2 benign randn tolerance quantification, c3 exactly-constant-row metric-validity check) and none of their input designs depends on another's outcome.
 ```
 
 Tool calls:
 
-- `inspect_kernel_source -> t7 ok`
-  Args:
-  {
-    "end_line": 353,
-    "entry": "case_19",
-    "start_line": 305
-  }
-  Output summary:
-  {
-    "entry": "case_19"
-  }
-- `run_claim_probe -> t8 ok`
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, importlib.util, inspect, traceback\nimport torch\n\nres = {}\ntry:\n    spec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_19/kernel.py\")\n    m = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(m)\n    res[\"public_names\"] = [n for n in dir(m) if not n.startswith(\"_\")]\n    res[\"MAX_FUSED_SIZE\"] = getattr(m, \"MAX_FUSED_SIZE\", None)\n\n    fn = None\n    for cand in [\"cross_entropy_with_predictions\"]:\n        if hasattr(m, cand):\n            fn = getattr(m, cand); res[\"entry\"] = cand\n    if fn is None:\n        cands = [n for n in dir(m) if callable(getattr(m, n)) and \"cross_entropy\" in n and not n.startswith(\"_\")]\n        res[\"cross_entropy_callables\"] = cands\n        if cands
-  ...[truncated 2813 chars]
+    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\ndev='cuda'; M,N=8,512; eps=1e-5\nres={}\nfor noise in [1e-4, 1e-3, 1e-2, 1e-1]:\n    x = (3.0 + noise*torch.randn(M,N,device=dev,dtype=torch.float32)).contiguous()\n    w = torch.randn(N,device=dev,dtype=torch.float32)\n    b = torch.randn(N,device=dev,dtype=torch.float32)\n    y = m.layer_norm(x,w,b,eps)\n    ref = F.layer_norm(x.double(),(N,),w.double(),b.double(),eps).float()\n    var = x.double().var(dim=-1,unbiased=False).mean().item()\n    denom = ref.abs().clamp_min(1e-6)\n    rel = ((y-ref).abs()/denom).max(
+  ...[truncated 583 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "c84561a81db16dec2b43376b4168cc207fd117426918ab10e67d21c1601bd4af"
+        "path": "probes/t9_probe.py",
+        "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "61927b2595f01da0b9dabcae1ef9dd3f5cb08d35cd0fbd0e622b2550ae5ebdac"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233707093"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "60f25f3a71fbd67915cdcc0ca90dd6eabe72b02a1617c0f41e5f06d688ed13de"
+        "path": "probes/t9_json_result.json",
+        "sha256": "2024d784a9c91f2ae89d8adba4f1e707bc60b31abdb7dc67966e0f172c4ef347"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is ove
-  ...[truncated 6162 chars]
-
-### Turn 5 - `experimenter` (38.97525504500004s, in=28793 out=3410)
-
-Message:
-
-```text
-Probe t8 is decisive for c1: with V=65536 and BLOCK_SIZE=32768, an exact fp32 tie at indices 100 (block 0) and 32868 (block 1) yields `predicted[0] = 32868`, the higher index, while torch.argmax gives 100. Control rows with unique maxima match exactly. I'm finalizing c1 as confirmed and, in the same response, launching a follow-up probe on c1 to characterize the failure boundary (within-block tie vs cross-block tie, three-way ties, tie ordering reversed) and to quantify the separate per-row loss scaling factor I noticed (kernel loss = reference/n_rows), which the Judge should see as context.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t9 ok`
-  Args:
-  {
-    "data": {
-      "BLOCK_SIZE": 32768,
-      "MAX_FUSED_SIZE": 32768,
-      "V": 65536,
-      "contract_expected_row0": 100,
-      "control_row1_kernel": 77,
-      "control_row1_torch": 77,
-      "control_row2_kernel": 33323,
-      "control_row2_torch": 33323,
-      "control_rows_match": true,
-      "entry_point": "cross_entropy_with_predictions",
-      "kernel_loss": [
-        3.722567558288574,
-        3.7647933959960938,
-        3.8063580989837646
-      ],
-      "kernel_predicted_row0": 32868,
-      "loss_ratio_ref_over_kernel": 3.0,
-      "max_abs_loss_err": 7.612714767456055,
-      "metric": "exact predicted index vs contractual lowest tied index",
-      "n_rows": 3,
-      "reference_loss": [
-        11.167702674865723,
-        11.294380187988281,
-        11.419073104858398
-      ],
-      "row0_max": 5.0,
-      "row0_tie_bug": true,
-    
-  ...[truncated 1180 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Cross-block argmax tie-break bug reproduced on GPU. Entry point cross_entropy_with_predictions(logits, target) with V=65536 -> BLOCK_SIZE=min(MAX_FUSED_SIZE=32768, 65536)=32768, so each row spans exactly 2 blocks. Row 0 had the row maximum 5.0 duplicated at index 100 (block 0) and index 32868 (block 1), bitwise-equal in fp32 (tie_values_equal=true). Kernel returned predicted[0]=32868 (the HIGHER tied index); contract and torch.argmax require 100. Control rows with a unique maximum in block 0 (index 77) and block 1 (index 33323) both matched torch.argmax, so the defect is specific to the non-strict `block_max >= m` guard at kernel.py:160, not to argmax generally. Secondary observation (not claim c1): returned per-row loss equals the reference per-row cross entropy divided by n_rows=3 (3.72257 vs 11.16770), i.e. reduction=\"mean\" scaling is applied per row, giving max_abs_loss_err=7.61 against the contract's loss[i] = -log softmax(logits[i])[target[i]].",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
-  }
+    "claim_statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's norma
+  ...[truncated 6376 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "\nimport json, importlib.util, traceback\nimport torch, triton\n\nres = {\"cases\": []}\ntry:\n    spec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_19/kernel.py\")\n    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    fn = m.cross_entropy_with_predictions\n    MFS = m.MAX_FUSED_SIZE\n\n    def run(V, tie_idx, label):\n        BLOCK = min(MFS, triton.next_power_of_2(V))\n        torch.manual_seed(1)\n        x = (torch.randn(1, V, device=\"cuda\", dtype=torch.float32) * 0.05) - 4.0\n        for j in tie_idx:\n            x[0, j] = 3.5\n        tgt = torch.tensor([0], device=\"cuda\", dtype=torch.long)\n        ref_pred = int(torch.argmax(x[0]).item())\n        ref_loss = float(torch.nn.functional.cross_entr
-  ...[truncated 2453 chars]
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\ndev='cuda'; M,N=64,512; eps=1e-5\nx=torch.randn(M,N,device=dev,dtype=torch.float32)\nw=torch.randn(N,device=dev); b=torch.randn(N,device=dev)\ny=m.layer_norm(x,w,b,eps)\nref=F.layer_norm(x.double(),(N,),w.double(),b.double(),eps).float()\nrefd=F.layer_norm(x.double(),(N,),w.double(),b.double(),eps)\nvar=x.double().var(dim=-1,unbiased=False)\nrstd_k=1.0/(var.sqrt()+eps); rstd_c=1.0/(var+eps).sqrt()\nrel_rstd=((rstd_k-rstd_c).abs()/rstd_c).max().item()\ndenom=refd.abs().clamp_min(1e-3)\nrel_y=((y.double()-refd).abs()/
+  ...[truncated 897 chars]
   Output summary:
   {
     "artifacts": [
@@ -250,13 +267,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "99ca229ed70696d7f75acd53e964b281c6c2b0fc0d9d6f5e66da6dd1ca46e965"
+        "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "5155490248cd4120070e54316268f95ec6be8efd719d091baef59a956caec885"
+        "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -268,184 +285,420 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "743c0e90284e6d65eb62a479b3d471ec2220a84e30fbc4266ce7e51cd21a6f5f"
+        "sha256": "8338b2675af262ea34c9c7db9ef7dfbe20892d1c57214d7274af23ebac02cda9"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is
-  ...[truncated 13722 chars]
+    "claim_id": "c2",
+    "claim_statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd
+  ...[truncated 4015 chars]
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; M,N=4,512; eps=1e-5\nx=torch.full((M,N),2.0,device=dev,dtype=torch.float32)\ntorch.manual_seed(2)\nw=torch.randn(N,device=dev); b=torch.randn(N,device=dev)\ny=m.layer_norm(x,w,b,eps)\nref=F.layer_norm(x,(N,),w,b,eps)\nout={\"const_row_max_abs_err\":(y-ref).abs().max().item(),\n \"const_row_allclose_1e-6\":bool(torch.allclose(y,ref,rtol=1e-6,atol=1e-6)),\n \"y_equals_bias\":bool(torch.allclose(y,b.expand_as(y))),\n \"ref_equals_bias\":bool(torch.allclose(ref,b.expand_as(ref))),\n \"kernel_rstd_at_var0\":1.0/eps,\"contract_rstd
+  ...[truncated 557 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "ce98323335e9313358970b4b5a826102db9f0a94fb8b9c582bd1d703bd47f7ed"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not b
+  ...[truncated 3355 chars]
 
-### Turn 6 - `skeptic` (15.520614671999965s, in=50171 out=655)
+### Turn 5 - `experimenter` (26.129584178000016s, in=44784 out=2184)
 
 Message:
 
 ```text
-Review turn: the follow-up probe t10 fully characterizes claim c1 (within-block and single-block ties correct; all four cross-block exact ties return an index from the last block containing the max, across 2-block, 3-block, and ragged-vocab cases) and also resolves the earlier loss anomaly — with n_rows=1 the loss ratio is exactly 1.0, so the t8 factor-of-3 was just `reduction="mean"` normalization by n_non_ignore, not a separate defect. Nothing new and in-scope remains.
+All three probes returned; finalizing each. No new probes needed — c1's magnitude sweep, c2's benign-randn tolerance quantification, and c3's metric-validity check together cover the ledger.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t11 ok`
+- `finalize_probe_evidence -> t12 ok`
   Args:
   {
-    "reason": "c1 is already confirmed by two GPU probes (t8, t10) that isolate the non-strict `block_max >= m` guard at kernel.py:160: within-block and single-block ties return the lowest index correctly, while every cross-block exact tie (2-block, adjacent-boundary, 3-block, ragged last block) returns a higher index from the last block containing the max, contradicting problem.txt's lowest-index tie rule. The loss discrepancy seen in t8 is explained, not a new defect: it was mean reduction by n_non_ignore=3, and t10's single-row cases show ref/kernel loss ratio exactly 1.0, so the loss path matches -log softmax(logits[i])[target[i]] up to the documented reduction scaling. No additional in-scope, testable hypothesis is exposed by the new evidence.",
-    "reviewed_claims": [
-      "c1"
-    ]
+    "data": {
+      "N": 512,
+      "all_outputs_finite": true,
+      "dtype": "float32",
+      "eps": 1e-05,
+      "noise_1e-1_allclose_1e-2": true,
+      "noise_1e-1_max_abs_err": 0.002498626708984375,
+      "noise_1e-2_max_abs_err": 0.2952742576599121,
+      "noise_1e-3_max_abs_err": 4.566250324249268,
+      "noise_1e-3_max_rel_err": 747.0294189453125,
+      "noise_1e-4_allclose_1e-2": false,
+      "noise_1e-4_contract_rstd": 316.07390915360946,
+      "noise_1e-4_kernel_rstd": 9201.270845276804,
+      "noise_1e-4_max_abs_err": 6.744071960449219,
+      "noise_1e-4_max_rel_err": 2185.77783203125,
+      "noise_1e-4_row_var": 9.737868619048764e-09
+    },
+    "event_id": "t9",
+    "status": "confirmed",
+    "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm
+  ...[truncated 501 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.",
+    "supports": "confirmed",
+    "tool_event_id": "t9"
   }
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "allclose_rtol1e-3": true,
+      "allclose_rtol1e-5": false,
+      "allclose_rtol1e-6": false,
+      "eps": 1e-05,
+      "eps_0.1_allclose_1e-2": false,
+      "eps_0.1_max_abs_err": 0.4143395534178307,
+      "eps_1.0_allclose_1e-2": false,
+      "eps_1.0_max_abs_err": 1.9161843624620118,
+      "input": "randn(64,512) fp32",
+      "max_abs_err_y": 4.6567964320232136e-05,
+      "max_rel_rstd_err": 4.999962440057259e-06,
+      "predicted_eps_over_2": 5e-06,
+      "var_mean": 0.9963793361763285
+    },
+    "event_id": "t10",
+    "status": "confirmed",
+    "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/ato
+  ...[truncated 299 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).",
+    "supports": "confirmed",
+    "tool_event_id": "t10"
+  }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "const_row_allclose_1e-6": true,
+      "const_row_max_abs_err": 0.0,
+      "contract_rstd_at_var0": 316.2277660168379,
+      "kernel_rstd_at_var0": 99999.99999999999,
+      "nearconst_allclose_1e-2": false,
+      "nearconst_max_abs_err": 6.426322314719196,
+      "ref_equals_bias": true,
+      "rstd_overstatement_factor": 316.2277660168379,
+      "y_equals_bias": true
+    },
+    "event_id": "t11",
+    "status": "confirmed",
+    "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-
+  ...[truncated 269 chars]
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "confirmed",
+    "evidence_id": "c3.e1",
+    "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.",
+    "supports": "confirmed",
+    "tool_event_id": "t11"
+  }
+
+### Turn 6 - `skeptic` (8.563642501999993s, in=65816 out=481)
+
+Message:
+
+```text
+This is a review turn: all three claims are confirmed with direct runtime evidence, and the epsilon-placement defect is fully characterized across the variance sweep. Nothing in the new evidence points to an uncovered in-scope failure mode.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t15 ok`
+  Args:
+  {
+    "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable 
+  ...[truncated 121 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "c1 is already confirmed by two GPU probes (t8, t10) that isolate the non-strict `block_max >= m` guard at kernel.py:160: within-block and single-block ties return the lowest index correctly, while every cross-block exact tie (2-block, adjacent-boundary, 3-block, ragged last block) returns a higher index from the last block containing the max, contradicting problem.txt's lowest-index tie rule. The loss discrepancy seen in t8 is explained, not a new defect: it was mean reduction by n_non_ignore=3, and t10's single-row cases show ref/kernel loss ratio exactly 1.0, so the loss path matches -log softmax(logits[i])[target[i]] up to the documented reduction scaling. No additional in-scope, testable hypothesis is exposed by the new evidence.",
+    "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable hypothesis is left that existing claims do not already cover.",
     "reviewed_claims": [
-      "c1"
+      "c1",
+      "c2",
+      "c3"
     ],
-    "reviewed_tool_event_count": 10,
+    "reviewed_tool_event_count": 14,
     "turn": 6
   }
 
-### Turn 7 - `judge` (16.167066091999914s, in=51952 out=1010)
+### Turn 7 - `judge` (17.02125176299998s, in=67661 out=1193)
 
 Message:
 
 ```text
-Evidence is decisive and skeptic has signed off with no new claims, so I'm finalizing.
+All three claims are confirmed with runtime evidence, the Skeptic has signed off with no new claims, and the artifact contains no test.py — so problem.txt is the operative contract and it states the required formula explicitly. Recording a reject.
 ```
 
 Tool calls:
 
-- `record_verdict -> t12 ok`
+- `record_verdict -> t16 ok`
   Args:
   {
-    "confidence": 0.94,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py narrows the domain), and it explicitly requires two things: `predicted[i]` must be the LOWEST index attaining the row maximum, and the input domain explicitly includes `n_cols` exceeding the kernel block size so \"a tie may fall in different blocks\". Claim c1 is confirmed by source and two GPU probes. Source (kernel.py:152-161) handles within-block ties correctly via tl.min(masked_offsets) but updates the accumulator with the non-strict guard `is_new_max = block_max >= m`, so a later block that merely ties the running max overwrites argmax_idx with the later, higher index. Probe t8 (V=65536, BLOCK_SIZ
-  ...[truncated 1100 chars]
+    "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-
+  ...[truncated 1630 chars]
   Output summary:
   {
-    "confidence": 0.94,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py narrows the domain), and it explicitly requires two things: `predicted[i]` must be the LOWEST index attaining the row maximum, and the input domain explicitly includes `n_cols` exceeding the kernel block size so \"a tie may fall in different blocks\". Claim c1 is confirmed by source and two GPU probes. Source (kernel.py:152-161) handles within-block ties correctly via tl.min(masked_offsets) but updates the accumulator with the non-strict guard `is_new_max = block_max >= m`, so a later block that merely ties the running max overwrites argmax_idx with the later, higher index. Probe t8 (V=65536, BLOCK_SIZE=32768, bitwise-equal max 5.0 at indices 100 and 32868) returned predicted=32868 instead of the contractually required 100, while control rows with unique maxima matched torch.argmax exactly. Probe t10 characterized the boundary: 3/3 within-block or single-block tie cases correct; 4/4 cross-block exact-tie cases wrong (2-block, adjacent boundary 32767/32768, 3-block, and ragged last-block vocab),
-  ...[truncated 700 chars]
+    "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined thr
+  ...[truncated 1230 chars]
 
 ## Description Model
 
-No description model recorded.
+{
+  "contract_model": [
+    "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
+    "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
+    "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
+    "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
+    "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+  ],
+  "kernel_model": [
+    "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
+    "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct.",
+    "Line 26 implements rstd = 1.0 / (tl.sqrt(var) + eps), NOT 1.0 / tl.sqrt(var + eps). Epsilon is added to the standard deviation instead of the variance.",
+    "Consequence at var = 0 (constant row): kernel rstd = 1/eps = 1e5, contract rstd = 1/sqrt(eps) \u2248 316.2 \u2014 a ~316x overstatement. Output is still finite, so a NaN/inf check would not catch it; the numerator (x-mean) is 0 for a truly constant row, so y = bias there and the error can be masked unless weight-scaled residual noise exists (e.g. fp16 input where mean is not exactly representable, or near-constant rather than exactly constant rows).",
+    "Consequence at var ~ 1: sqrt(var)+eps vs sqrt(var+eps) differ by roughly eps/2 \u2248 5e-6 relative, i.e. below typical 1e-2/1e-3 fp16 tolerances and near fp32 rtol=1e-5 \u2014 a randn-only benchmark
+...[truncated 5303 chars]
+
+Recent description updates:
+- `du1` tasks=`initial`: case_20 is a Triton row-wise LayerNorm forward. The contract fixes rstd = 1/sqrt(var + eps), but the kernel computes rstd = 1/(sqrt(var) + eps) (line 26), i.e. epsilon added outside the square root. This is a near-invisible error for well-conditioned rows and a large error for low-variance/constant rows, which is exactly the case the problem text singles out.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is overwritten with the later (higher) index. For a row with n_cols > BLOCK_SIZE containing the row maximum duplicated in two different blocks (e.g. vocab = 2*BLOCK_SIZE, equal max values at index j in block 0 and index j + BLOCK_SIZE in block 1), `predicted` returns the HIGHER index instead of the contractually required LOWEST index.
+Statement: Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt is the operative contract and explicitly states (a) `predicted[i]` must be the LOWEST index attaining the row maximum, and (b) the input domain includes n_cols exceeding the kernel's block size so "a tie may fall in different blocks". No test.py exists, so representative inputs are chosen as the contract admits: a logits row longer than BLOCK_SIZE with the maximum value duplicated across two blocks.
+Scope rationale: problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement ("it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up"). No test.py exists, so representative in-contract inputs must be chosen from problem.txt; a 2-D fp32 tensor with a near-constant row and default eps=1e-5 is squarely within the stated domain (2-D x, 1-D weight/bias, eps stabilizer).
 
 Scope evidence:
-- `problem.txt`: "Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index" and "`n_cols` ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks."
-- `kernel.py:152-161`: Per-block argmax uses tl.min(masked_offsets) for within-block ties, but the accumulator update guard is `is_new_max = block_max >= m` followed by tl.where(is_new_max, current_block_argmax_idx, argmax_idx), replacing the earlier lower index on an exact tie.
+- `problem.txt`: Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract.
+- `kernel.py line 26`: Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root.
 
-Rationale: The running-max update guard uses `>=` rather than `>`. A tie satisfies `>=`, so the stale-but-lower argmax from the earlier block is replaced by the later block's argmax even though the max value did not increase. Within-block tie handling (tl.min over masked offsets) is correct, which makes the cross-block path the specific failure surface.
+Rationale: Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Cross-block argmax tie-break bug reproduced on GPU. Entry point cross_entropy_with_predictions(logits, target) with V=65536 -> BLOCK_SIZE=min(MAX_FUSED_SIZE=32768, 65536)=32768, so each row spans exactly 2 blocks. Row 0 had the row maximum 5.0 duplicated at index 100 (block 0) and index 32868 (block 1), bitwise-equal in fp32 (tie_values_equal=true). Kernel returned predicted[0]=32868 (the HIGHER tied index); contract and torch.argmax require 100. Control rows with a unique maximum in block 0 (index 77) and block 1 (index 33323) both matched torch.argmax, so the defect is specific to the non-strict `block_max >= m` guard at kernel.py:160, not to argmax generally. Secondary observation (not claim c1): returned per-row loss equals the reference per-row cross entropy divided by n_rows=3 (3.72257 vs 11.16770), i.e. reduction="mean" scaling is applied per row, giving max_abs_loss_err=7.61 against the contract's loss[i] = -log softmax(logits[i])[target[i]].
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.
+
+### c2 - `confirmed`
+
+Statement: Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.
+
+Scope evidence:
+- `problem.txt`: Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test.
+
+Rationale: Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).
+
+### c3 - `confirmed`
+
+Statement: For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.
+
+Scope evidence:
+- `problem.txt`: Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up.
+- `kernel.py line 36`: Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd.
+
+Rationale: With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious "constant row" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.
+
+Evidence:
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor — even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
-### t5 - inspect_kernel_source - ok
+### t5 - record_description_update - ok
 
 {
-  "entry": "case_19"
-}
+  "contract_model": [
+    "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
+    "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
+    "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
+    "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
+    "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
+    "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct.",
+    "Line 26 implements rstd = 1.0 / (tl.sqrt(var) + eps), NOT 1.0 / tl.sqrt(var + eps). Epsilon is added to the standard deviation instead of the variance.",
+    "Consequence at var = 0 (constant row): kernel rstd = 1/eps = 1e5, contract rstd = 1/sqrt(eps) \u2248 316.2 \u2014 a ~316x overstatement. Output is still finite, so a NaN/inf check would not catch it; the numerator (x-mean) is 0 for a truly constant row, so y = bias there and the error can be masked unless weight-scaled residual noise exists (e.g. fp16 input where mean is not exactly representable, or near-constant rather than exactly constant rows).",
+    "Consequence at var ~ 1: sqrt(var)+eps vs sqrt(var+eps) differ by roughly eps/2 \u2248 5e-6 relative, i.e. below typical 1e-2/1e-3 fp16 tolerances and near fp32 rtol=1e-5 \u2
+...[truncated 5771 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The running-max update guard uses `>=` rather than `>`. A tie satisfies `>=`, so the stale-but-lower argmax from the earlier block is replaced by the later block's argmax even though the max value did not increase. Within-block tie handling (tl.min over masked offsets) is correct, which makes the cross-block path the specific failure surface.",
+  "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index\" and \"`n_cols` ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
+      "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
     },
     {
-      "source": "kernel.py:152-161",
-      "summary": "Per-block argmax uses tl.min(masked_offsets) for within-block ties, but the accumulator update guard is `is_new_max = block_max >= m` followed by tl.where(is_new_max, current_block_argmax_idx, argmax_idx), replacing the earlier lower index on an exact tie."
+      "source": "kernel.py line 26",
+      "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
     }
   ],
-  "scope_rationale": "problem.txt is the operative contract and explicitly states (a) `predicted[i]` must be the LOWEST index attaining the row maximum, and (b) the input domain includes n_cols exceeding the kernel's block size so \"a tie may fall in different blocks\". No test.py exists, so representative inputs are chosen as the contract admits: a logits row longer than BLOCK_SIZE with the maximum value duplicated across two blocks.",
-  "statement": "Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is overwritten with the later (higher) index. For a row with n_cols > BLOCK_SIZE containing the row maximum duplicated in two different blocks (e.g. vocab = 2*BLOCK_SIZE, equal max values at index j in block 0 and index j + BLOCK_SIZE in block 1), `predicted` returns t
-...[truncated 90 chars]
-
-### t7 - inspect_kernel_source - ok
-
-{
-  "entry": "case_19"
+  "scope_rationale": "problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"). No test.py exists, so representative in-contract inputs must be chosen from problem.txt; a 2-D fp32 tensor with a near-constant row and default eps=1e-5 is squarely within the stated domain (2-D x, 1-D weight/bias, eps stabilizer).",
+  "statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.",
+  "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t7 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
+    }
+  ],
+  "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.",
+  "statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.",
+  "status": "open"
+}
+
+### t8 - record_claim - ok
+
+{
+  "id": "c3",
+  "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
+    },
+    {
+      "source": "kernel.py line 36",
+      "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
+    }
+  ],
+  "scope_rationale": "problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.",
+  "statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.",
+  "status": "open"
+}
+
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "c84561a81db16dec2b43376b4168cc207fd117426918ab10e67d21c1601bd4af"
+      "path": "probes/t9_probe.py",
+      "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "61927b2595f01da0b9dabcae1ef9dd3f5cb08d35cd0fbd0e622b2550ae5ebdac"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233707093"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "60f25f3a71fbd67915cdcc0ca90dd6eabe72b02a1617c0f41e5f06d688ed13de"
+      "path": "probes/t9_json_result.json",
+      "sha256": "2024d784a9c91f2ae89d8adba4f1e707bc60b31abdb7dc67966e0f172c4ef347"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is overwritten with the later (higher) index. For a row with n_cols > BLOCK_SIZE containing the row maximum duplicated in two different blocks (e.g. vocab = 2*BLOCK_SIZE, equal max values at index j in block 0 and index j + BLOCK_SIZE in block 1), `predicted` returns the HIGHER index instead of the contractually required LOWEST index.",
-  "duration_s": 9.47233,
-  "event_id": "t8",
+  "claim_statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.",
+  "duration_s": 6.913119,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -453,24 +706,15 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "c84561a81db16dec2b43376b4168cc207fd117426918ab10e67d21c1601bd4af"
+          "path": "probes/t9_probe.py",
+          "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
         },
         {
           "description": "Captured stdout from the probe process.",
-          "k
-...[truncated 5362 chars]
-
-### t9 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Cross-block argmax tie-break bug reproduced on GPU. Entry point cross_entropy_with_predictions(logits, target) with V=65536 -> BLOCK_SIZE=min(MAX_FUSED_SIZE=32768, 65536)=32768, so each row spans exactly 2 blocks. Row 0 had the row maximum 5.0 duplicated at index 100 (block 0) and index 32868 (block 1), bitwise-equal in fp32 (tie_values_equal=true). Kernel returned predicted[0]=32868 (the HIGHER tied index); contract and torch.argmax require 100. Control rows with a unique maximum in block 0 (index 77) and block 1 (index 33323) both matched torch.argmax, so the defect is specific to the non-strict `block_max >= m` guard at kernel.py:160, not to argmax generally. Secondary observation (not claim c1): returned per-row loss equals the reference per-row cross entropy divided by n_rows=3 (3.72257 vs 11.16770), i.e. reduction=\"mean\" scaling is applied per row, giving max_abs_loss_err=7.61 against the contract's loss[i] = -log softmax(logits[i])[target[i]].",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233
+...[truncated 5576 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -480,13 +724,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "99ca229ed70696d7f75acd53e964b281c6c2b0fc0d9d6f5e66da6dd1ca46e965"
+      "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "5155490248cd4120070e54316268f95ec6be8efd719d091baef59a956caec885"
+      "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -498,59 +742,150 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "743c0e90284e6d65eb62a479b3d471ec2220a84e30fbc4266ce7e51cd21a6f5f"
+      "sha256": "8338b2675af262ea34c9c7db9ef7dfbe20892d1c57214d7274af23ebac02cda9"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "Cross-block argmax tie-breaking is wrong: at kernel.py:160 `is_new_max = block_max >= m` is non-strict, so when a later block's max exactly ties the running max established by an earlier block, `argmax_idx` is overwritten with the later (higher) index. For a row with n_cols > BLOCK_SIZE containing the row maximum duplicated in two different blocks (e.g. vocab = 2*BLOCK_SIZE, equal max values at index j in block 0 and index j + BLOCK_SIZE in block 1), `predicted` returns the HIGHER index instead of the contractually required LOWEST index.",
-  "duration_s": 14.752579,
+  "claim_id": "c2",
+  "claim_statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.",
+  "duration_s": 4.883644,
   "event_id": "t10",
   "evidence_draft": {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "99ca229ed70696d7f75acd53e964b281c6c2b0fc0d9d6f5e66da6dd1ca46e965"
+          "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
         },
         {
           "description": "Captured stdout from the probe process.",
-    
-...[truncated 12922 chars]
+          "kind": "stdout",
+          "path": "probes/t10_stdout.txt",
+          "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
+   
+...[truncated 3215 chars]
 
-### t11 - record_no_new_claims - ok
+### t11 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "ce98323335e9313358970b4b5a826102db9f0a94fb8b9c582bd1d703bd47f7ed"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.",
+  "duration_s": 5.797284,
+  "event_id": "t11",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t11_probe.py",
+          "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t11_stdout.txt",
+          "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
+        },
+        {
+          "descr
+...[truncated 2555 chars]
+
+### t12 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.",
+  "supports": "confirmed",
+  "tool_event_id": "t9"
+}
+
+### t13 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "confirmed",
+  "evidence_id": "c2.e1",
+  "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).",
+  "supports": "confirmed",
+  "tool_event_id": "t10"
+}
+
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "confirmed",
+  "evidence_id": "c3.e1",
+  "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.",
+  "supports": "confirmed",
+  "tool_event_id": "t11"
+}
+
+### t15 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "c1 is already confirmed by two GPU probes (t8, t10) that isolate the non-strict `block_max >= m` guard at kernel.py:160: within-block and single-block ties return the lowest index correctly, while every cross-block exact tie (2-block, adjacent-boundary, 3-block, ragged last block) returns a higher index from the last block containing the max, contradicting problem.txt's lowest-index tie rule. The loss discrepancy seen in t8 is explained, not a new defect: it was mean reduction by n_non_ignore=3, and t10's single-row cases show ref/kernel loss ratio exactly 1.0, so the loss path matches -log softmax(logits[i])[target[i]] up to the documented reduction scaling. No additional in-scope, testable hypothesis is exposed by the new evidence.",
+  "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable hypothesis is left that existing claims do not already cover.",
   "reviewed_claims": [
-    "c1"
+    "c1",
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 10,
+  "reviewed_tool_event_count": 14,
   "turn": 6
 }
 
-### t12 - record_verdict - ok
+### t16 - record_verdict - ok
 
 {
-  "confidence": 0.94,
+  "confidence": 0.95,
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py narrows the domain), and it explicitly requires two things: `predicted[i]` must be the LOWEST index attaining the row maximum, and the input domain explicitly includes `n_cols` exceeding the kernel block size so \"a tie may fall in different blocks\". Claim c1 is confirmed by source and two GPU probes. Source (kernel.py:152-161) handles within-block ties correctly via tl.min(masked_offsets) but updates the accumulator with the non-strict guard `is_new_max = block_max >= m`, so a later block that merely ties the running max overwrites argmax_idx with the later, higher index. Probe t8 (V=65536, BLOCK_SIZE=32768, bitwise-equal max 5.0 at indices 100 and 32868) returned predicted=32868 instead of the contractually required 100, while control rows with unique maxima matched torch.argmax exactly. Probe t10 characterized the boundary: 3/3 within-block or single-block tie cases correct; 4/4 cross-block exact-tie cases wrong (2-block, adjacent boundary 32767/32768, 3-block, and ragged last-block vocab), each returning an index from the last block containing the max. This is not a permitted-unspecified tie-break, a reduction-order artifact, or a precision issue: the tied values are bitwise equal in fp32 and the contract fixes the tie rule and states the downstream embedding gather changes with the reported index. The only other anomaly (t8's factor-of-3 loss gap) was explained as reduction=\"mean\" normalization by n_non_ignore and rebutted as a separate defect by t10's single-row cases (ref/kernel loss ratio exactly 1.0), so it does not affect this verdict. No unresolved claims remain; skeptic_review (t11) confirms review of the latest evidence with no new claims.",
-  "verdict": "reject"
-}
+  "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined throughout (no NaN/Inf or undefined-tie exemption applies). c2 (confirmed, in_scope, t10) shows the deviation is not confined to that regime: even at var~1 the rstd bias is a systematic 4.99996e-6 \u2248 eps/2, matching the analytic prediction, and with eps=0.1 or 1.0 the same randn input is grossly wrong (max_abs_err 0.414 / 1.916, failing allclose 1e-2).\\n\\nThis is not covered by any tolerated-deviation category: it is not FP reduction-order noise, not a representation/layout convention, not a declared-lossy format, and not near-zero-magnitude relative-error inflation \u2014 it is a wrong formula for a quantity the contract writes out in closed form. c3 (confirmed) is a metric note rather than a defect: exactly-constant rows match bit-for-bit because (x-mean)==0 nulls rstd, so that probe 
+...[truncated 430 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.94,
-  "created_at": "2026-09-08T15:05:50Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-08T16:32:59Z",
   "decisive_claims": [
-    "c1"
+    "c1",
+    "c2"
   ],
-  "reason": "problem.txt is the operative contract here (the artifact contains only kernel.py, meta.json, problem.txt; no test.py narrows the domain), and it explicitly requires two things: `predicted[i]` must be the LOWEST index attaining the row maximum, and the input domain explicitly includes `n_cols` exceeding the kernel block size so \"a tie may fall in different blocks\". Claim c1 is confirmed by source and two GPU probes. Source (kernel.py:152-161) handles within-block ties correctly via tl.min(masked_offsets) but updates the accumulator with the non-strict guard `is_new_max = block_max >= m`, so a later block that merely ties the running max overwrites argmax_idx with the later, higher index. Probe t8 (V=65536, BLOCK_SIZE=32768, bitwise-equal max 5.0 at indices 100 and 32868) returned predicted=32868 instead of the contractually required 100, while control rows with unique maxima matched torch.argmax exactly. Probe t10 characterized the boundary: 3/3 within-block or single-block tie cases correct; 4/4 cross-block exact-tie cases wrong (2-block, adjacent boundary 32767/32768, 3-block, and ragged last-block vocab), each returning an index from the last block containing the max. This is not a permitted-unspecified tie-break, a reduction-order artifact, or a precision issue: the tied values are bitwise equal in fp32 and the contract fixes the tie rule and states the downstream embedding gather changes with the reported index. The only other anomaly (t8's factor-of-3 loss gap) was explained as reduction=\"mean\" normalization by n_non_ignore and rebutted as a separate defect by t10's single-row cases (ref/kernel loss ratio exactly 1.0), so it does not affect this verdict. No unresolved claims remain; skeptic_review (t11) confirms review of the latest evidence with no new claims.",
-  "verdict": "reject"
-}
+  "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined throughout (no NaN/Inf or undefined-tie exemption applies). c2 (confirmed, in_scope, t10) shows the deviation is not confined to that regime: even at var~1 the rstd bias is a systematic 4.99996e-6 \u2248 eps/2, matching the analytic prediction, and with eps=0.1 or 1.0 the same randn input is grossly wrong (max_abs_err 0.414 / 1.916, failing allclose 1e-2).\\n\\nThis is not covered by any tolerated-deviation category: it is not FP reduction-order noise, not a representation/layout convention, not a declared-lossy format, and not near-zero-magnitude relative-error inflation \u2014 it is a wrong formula for a quantity the contract writes out in closed form. c3 (confirmed) is a metric note rather than a defect: exactly-constant rows match bit-for-bit becaus
+...[truncated 470 chars]

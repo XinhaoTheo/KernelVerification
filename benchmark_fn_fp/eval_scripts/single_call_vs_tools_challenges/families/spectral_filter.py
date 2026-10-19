@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 
-CASES = ("case_56", "case_57")
+CASES = ("case_113", "case_114")
 TOLERANCE = 0.15
 N, MODES, RETAINED = 64, 16, 6
 CALIBRATION_SEEDS = tuple(range(810000, 810032))
@@ -168,10 +168,10 @@ def build(output_root: Path):
     root = archived_collection(output_root)
     calibration = [_candidate(seed) for seed in CALIBRATION_SEEDS]
     search = [_candidate(seed) for seed in SEARCH_SEEDS]
-    selected = {"case_56": min(search, key=lambda row: row["error"]),
-                "case_57": max(search, key=lambda row: row["error"])}
-    assert selected["case_56"]["error"] <= 0.75 * TOLERANCE
-    assert selected["case_57"]["error"] >= 1.25 * TOLERANCE
+    selected = {"case_113": min(search, key=lambda row: row["error"]),
+                "case_114": max(search, key=lambda row: row["error"])}
+    assert selected["case_113"]["error"] <= 0.75 * TOLERANCE
+    assert selected["case_114"]["error"] >= 1.25 * TOLERANCE
     answer_key = {"family": "spectral_filter", "budget": TOLERANCE, "cases": {}}
     for case, selection in selected.items():
         inputs = _inputs(selection["seed"])

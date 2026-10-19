@@ -1,59 +1,30 @@
-import torch, statistics
-torch.manual_seed(0)
-import importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_08/kernel.py")
+
+import torch, json, sys, importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_09/kernel.py")
 k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-
-N = 1024  # power of two, single block
-# representative in-domain values: random, negatives, grid-aligned
-x = torch.cat([
-    torch.randn(N//2)*0.7,
-    -torch.rand(N//8)*3,
-    (torch.rand(N//8)*10).round()*0.05,
-    torch.linspace(-2, 2, N - N//2 - N//8 - N//8, device='cuda')
-]).cuda().float()
-x = x[:N]
-
-STEP = 0.05
-S = 4000
-acc = torch.zeros(N, device='cuda')
-on_grid_viol = 0
-wrong_dir = 0
-for s in range(S):
-    out = k.stochastic_round_to_grid(x, s)
-    acc += out
-    # grid membership: nearest multiple must match
-    nearest = (out / STEP).round() * STEP
-    if (torch.abs(out - nearest) > 1e-4).any():
-        on_grid_viol += int((torch.abs(out - nearest) > 1e-4).sum())
-    # neighbour check: out must be floor or ceil multiple of x/STEP
-    fl = torch.floor(x/STEP)
-    q = out / STEP
-    if not torch.isin(q.round().long(), torch.stack([fl.long(), fl.long()+1], dim=1).flatten().unique()).all():
-        pass
-mean = acc / S
-err = (mean - x).abs()
-# empirical up-probability vs p_up for a mid element set
-p_up_theory = (x - torch.floor(x/STEP)*STEP) / STEP
-# empirical fraction up across seeds
-frac_up = torch.zeros(N, device='cuda')
-for s in range(400):
-    out = k.stochastic_round_to_grid(x, s+10**6)
-    frac_up += (out > torch.floor(x/STEP)*STEP + 1e-6).float()
-frac_up /= 400
-prob_err = (frac_up - p_up_theory).abs()
-# determinism
-o1 = k.stochastic_round_to_grid(x, 123); o2 = k.stochastic_round_to_grid(x, 123)
-det = torch.equal(o1, o2)
-
-import json
-res = {
- "metric": "mean-over-4000-seeds abs err + empirical P(up) err + grid violations",
- "max_mean_err": err.max().item(), "mean_mean_err": err.mean().item(),
- "max_prob_err": prob_err.max().item(), "mean_prob_err": prob_err.mean().item(),
- "grid_violations_total": on_grid_viol,
- "deterministic_same_seed": det,
- "max_frac_up_err_400seeds": prob_err.max().item(),
- "N": N, "seeds": S,
-}
+dev = "cuda"
+def ref_lowest_tied(row):
+    return int(torch.arange(row.numel())[row == row.max()].min())
+res = {}
+for N in [2,4,8,16,32,64]:
+    B = 2000
+    torch.manual_seed(0)
+    bad = 0; ex = None
+    # random rows, then set the max value at multiple random positions to create ties
+    scores = torch.randn(B, N, device=dev)
+    for b in range(B):
+        idxs = torch.randperm(N)[:2 + (b % (N-1))][:2].cuda()  # pick 2 tied positions
+        scores[b, idxs[0]] = 5.0; scores[b, idxs[1]] = 5.0
+        # sometimes leave another position as unique second
+    out = k.sorted_topk_indices(scores, 1).squeeze(-1)
+    for b in range(B):
+        lo = ref_lowest_tied(scores[b])
+        if out[b].item() != lo:
+            bad += 1
+            if ex is None: ex = (b, scores[b].tolist(), out[b].item(), lo)
+    # also all-equal rows
+    scores_eq = torch.zeros(100, N, device=dev)
+    out_eq = k.sorted_topk_indices(scores_eq, 1).squeeze(-1)
+    eq_bad = (out_eq != 0).sum().item()
+    res[f"N{N}"] = {"tied_rows_bad": bad, "total": B, "all_equal_bad_nonzero": eq_bad, "example": ex}
 print(json.dumps(res))

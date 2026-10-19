@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_29`
+- Entry: `case_30`
 - Turns: 7
 - Tool events: 16
 - Claims: 3
 - Description updates: 1
-- LLM time: 191.111s across 6 calls | tokens: in=270030 out=15050 total=285080
+- LLM time: 157.52s across 6 calls | tokens: in=242651 out=11667 total=254318
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.93
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_29",
+    "entry": "case_30",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_29"
+    "entry": "case_30"
   }
 
-### Turn 2 - `describer` (66.26985498099998s, in=3363 out=4757)
+### Turn 2 - `describer` (44.13290987100004s, in=3349 out=3098)
 
 Message:
 
 ```text
-I have the full source, problem text, and metadata already, so I'll go straight to recording the description model.
+Reading is done — the artifact context is complete, so I'll record the description model directly.
 ```
 
 Tool calls:
@@ -76,27 +76,31 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "problem.txt: given a float32 tensor, return each element rounded to the *nearest value representable in FP8 e4m3*; the output is float32-typed but must land exactly on the e4m3 value grid.",
-      "The contract explicitly licenses deviation from the float32 input 'up to the format's own rounding step' - i.e. quantization error is expected, so a plain allclose-to-input or loose-tolerance check is a weak proxy and not the contract.",
-      "The contract is grid membership + nearest selection, so the natural reference is x.to(torch.float8_e4m3fn).to(torch.float32) (or an explicit e4m3 grid model), not an FP32 identity reference.",
-      "e4m3 (OCP/torch float8_e4m3fn) specifics implied by 'nearest representable value': normals from 2^-6 to 448 with 8 values per binade; 
-  ...[truncated 7011 chars]
+      "For each token row t of `logits` (shape [n_tokens, n_experts]), return expert[t] = argmax_e logits[t, e] as one index per token (problem.txt).",
+      "Tie rule is contractually load-bearing, not incidental: when multiple experts share the maximum logit value, the LOWEST expert index must be returned, for cross-run and cross-replica reproducibility.",
+      "The problem states ties are expected to be common because router logits are computed in reduced precision and distinct real-valued logits round to the same representable value, so tie behavior must be correct on realistic (fp16/bf16-quantized) inputs, not just on exact-duplicate synthetic inputs.",
+      "Choosing the wrong tied index is described as a substantive output error (different experts are independently
+  ...[truncated 5993 chars]
   Output summary:
   {
     "contract_model": [
-      "problem.txt: given a float32 tensor, return each element rounded to the *nearest value representable in FP8 e4m3*; the output is float32-typed but must land exactly on the e4m3 value grid.",
-      "The contract explicitly licenses deviation from the float32 input 'up to the format's own rounding step' - i.e. quantization error is expected, so a plain allclose-to-input or loose-tolerance check is a weak proxy and not the contract.",
-      "The contract is grid membership + nearest selection, so the natural reference is x.to(torch.float8_e4m3fn).to(torch.float32) (or an explicit e4m3 grid model), not an FP32 identity reference.",
-      "e4m3 (OCP/torch float8_e4m3fn) specifics implied by 'nearest representable value': normals from 2^-6 to 448 with 8 values per binade; subnormals in [2^-9, 2^-6) on a *fixed* absolute step of 2^-9; max finite 448; no infinities; values above the overflow threshold either saturate to 448 or become NaN depending on convention.",
-      "Problem text stresses 'within any binade it can represent 8 evenly spaced values' and the 6.25% relative error bound - this framing pre-excuses rounding error and should not be read as excusing out-of-
-  ...[truncated 6701 chars]
+      "For each token row t of `logits` (shape [n_tokens, n_experts]), return expert[t] = argmax_e logits[t, e] as one index per token (problem.txt).",
+      "Tie rule is contractually load-bearing, not incidental: when multiple experts share the maximum logit value, the LOWEST expert index must be returned, for cross-run and cross-replica reproducibility.",
+      "The problem states ties are expected to be common because router logits are computed in reduced precision and distinct real-valued logits round to the same representable value, so tie behavior must be correct on realistic (fp16/bf16-quantized) inputs, not just on exact-duplicate synthetic inputs.",
+      "Choosing the wrong tied index is described as a substantive output error (different experts are independently trained), so an index-level mismatch on ties is a real failure and cannot be dismissed as a harmless boundary swap.",
+      "Reference semantics match torch.argmax(dim=-1), which also returns the first/lowest maximal index."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "`route_top1` (kernel.py:23-29) allocates `idx` of shape [n_tokens] dtype int32, launches one program per token (`grid=(n
+  ...[truncated 5683 chars]
 
-### Turn 3 - `skeptic` (31.305172545999994s, in=21706 out=2549)
+### Turn 3 - `skeptic` (25.869253087999937s, in=18862 out=1933)
 
 Message:
 
 ```text
-Recording the three highest-risk, directly testable hypotheses from the risk map. The contract in problem.txt names e4m3 explicitly ("4 exponent bits and 3 mantissa bits", "nearest representable e4m3 value"), so the format's finite range and subnormal grid are part of the stated contract, and grid membership (`q == q.to(float8_e4m3fn).to(float32)`) is the authoritative metric rather than a 6.25% tolerance the contract already pre-excuses.
+Recording the primary tie-break claims from the `v >= best` acceptance test.
 ```
 
 Tool calls:
@@ -104,95 +108,100 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Lines 15-17 derive step purely from floor(log2|x|) with no lower clamp on the exponent, so the grid keeps refining below the format's smallest normal instead of holding at the 2^-9 subnormal spacing; outputs therefore fall between e4m3 codes.",
+    "rationale": "Line 17 uses `>=` rather than `>`, and the loop scans e = 0..E-1 in ascending order, so each equal-valued later index unconditionally replaces the stored winner. This structurally inverts the tie-break direction the problem names as load-bearing.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\" and \"e4m3 has 4 exponent bits and 3 mantissa bits\" - the named format fixes the representable set, including its subnormals, and no input range restriction is given."
+        "summary": "\"When several experts share the largest logit, the contract requires the LOWEST expert index to win\" \u2014 tie-break direction is an explicit stated requirement, and ties are described as routine rather than exotic."
       },
       {
-        "source": "meta.json / artifact_files",
-        "summary": "Artifact contains only kernel.py, meta.json (status=under_test, passed=null) and problem.txt; there is 
-  ...[truncated 1201 chars]
+        "source": "kernel.py:15-19",
+        "summary": "Ascending loop over e with `take = v >= best`; on equality `best_i` is updated to the larger e, implementing highest-index-wins."
+      }
+    ],
+    "sco
+  ...[truncated 863 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Lines 15-17 derive step purely from floor(log2|x|) with no lower clamp on the exponent, so the grid keeps refining below the format's smallest normal instead of holding at the 2^-9 subnormal spacing; outputs therefore fall between e4m3 codes.",
+    "rationale": "Line 17 uses `>=` rather than `>`, and the loop scans e = 0..E-1 in ascending order, so each equal-valued later index unconditionally replaces the stored winner. This structurally inverts the tie-break direction the problem names as load-bearing.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\" and \"e4m3 has 4 exponent bits and 3 mantissa bits\" - the named format fixes the representable set, including its subnormals, and no input range restriction is given."
+        "summary": "\"When several experts share the largest logit, the contract requires the LOWEST expert index to win\" \u2014 tie-break direction is an explicit stated requirement, and ties are described as routine rather than exotic."
       },
       {
-        "source": "meta.json / artifact_files",
-        "summary": "Artifact contains only kernel.py, meta.json (status=under_test, passed=null) and problem.txt; there is no test.py narrowing the input domain, so the prose contract governs."
+        "source": "kernel.py:15-19",
+        "summary": "Ascending loop over e with `take = v >= best`; on equality `best_i` is updated to the larger e, implementing highest-index-wins."
       }
     ],
-    "scope_rationale": "problem.txt states the contract as \"every value is rounded to the nearest representable e4m3 value\" and names the format by its exponent/mantissa widths; the subnormal region is part of the e4m3 value set, not an exotic extension. No test.py exists, so the prose contract is the o
-  ...[truncated 835 chars]
+    "scope_rationale": "problem.txt is the only contract source and it explicitly states that when several experts share the largest logit the LOWEST expert index must win, and that ties are a normal occurrence. Representative inputs the contract admits are ordinary [n_tokens, n_experts] logit matrices containing duplicated maxima within a row; no test.py exists to narrow the domain further.
+  ...[truncated 497 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Lines 15-17 impose no upper clamp on the exponent, so the code extrapolates the 8-per-binade grid indefinitely past the format's largest binade.",
+    "rationale": "The contract justifies the tie rule by reduced-precision rounding. If a probe only used fp32 randn it would almost never tie and would look clean, so the claim must be tested on fp16/bf16-quantized inputs to show real-world reachability of the `>=` defect.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"round a float32 tensor to the nearest value representable in the FP8 e4m3 format\" - representability is the stated requirement, and e4m3 has no finite values above 448; input magnitudes are not restricted."
+        "summary": "States logits are computed in reduced precision and that distinct logits routinely round to the same representable value, making ties normal \u2014 this defines the expected input distribution."
       }
     ],
-    "scope_rationale": "The contract names e4m3 and requires the output to be a representable e4m3 value; the format's finite range (max 448) is part of that named value set. With no test.py, problem.txt's unrestricted \"a float32 tensor\" admits large-magnitude inputs, which are exactly the regime FP8 storage kern
-  ...[truncated 579 chars]
+    "scope_rationale": "problem.txt states that \"router logits are computed in reduced precision and distinct logits routinely round to the same representable value\", so fp16/bf16 logit matrices are exactly the input 
+  ...[truncated 461 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Lines 15-17 impose no upper clamp on the exponent, so the code extrapolates the 8-per-binade grid indefinitely past the format's largest binade.",
+    "rationale": "The contract justifies the tie rule by reduced-precision rounding. If a probe only used fp32 randn it would almost never tie and would look clean, so the claim must be tested on fp16/bf16-quantized inputs to show real-world reachability of the `>=` defect.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"round a float32 tensor to the nearest value representable in the FP8 e4m3 format\" - representability is the stated requirement, and e4m3 has no finite values above 448; input magnitudes are not restricted."
+        "summary": "States logits are computed in reduced precision and that distinct logits routinely round to the same representable value, making ties normal \u2014 this defines the expected input distribution."
       }
     ],
-    "scope_rationale": "The contract names e4m3 and requires the output to be a representable e4m3 value; the format's finite range (max 448) is part of that named value set. With no test.py, problem.txt's unrestricted \"a float32 tensor\" admits large-magnitude inputs, which are exactly the regime FP8 storage kernels must saturate.",
-    "statement": "For |x| above the e4m3 max finite value 448, the kernel applies no saturation or overflow handling, so it emits magnitudes such as 512, 1024, 4096 that do not exist in e4m3 (e.g. x=1000 -> step 64 -> 1024). Under either overflow convention (OCP saturating cast to 448, or torch.float8_e4m3fn's NaN) the output is wrong. Metric: grid membership q == 
-  ...[truncated 213 chars]
+    "scope_rationale": "problem.txt states that \"router logits are computed in reduced precision and distinct logits routinely round to the same representable value\", so fp16/bf16 logit matrices are exactly the input population the contract describes; correct tie handling on them is required.",
+    "statement": "With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate, and route_top1's returned index will disagree with torch.argmax on those rows \u2
+  ...[truncated 95 chars]
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "tl.log2 is typically a fast approximate device intrinsic on fp32; floor() of an approximate log2 is discontinuous exactly at binade boundaries, so any 1-ULP error flips the selected step by a factor of two. This must be decided by runtime probe, not source reading.",
+    "rationale": "The all-equal row is the maximal-severity instance of the tie rule: the contract's answer is unambiguously index 0, while the kernel's sequential overwrite yields the last expert, so severity of the tie defect can be quantified as an index error of E-1.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"within any binade it can represent 8 evenly spaced values ... the resulting relative error is bounded by half a mantissa step, about 2^-4 = 6.25%\" - a wrong binade breaks both the grid and the stated error bound."
+        "summary": "Tie rule requires the lowest expert index to win whenever multiple experts share the largest logit; an all-equal row is such a case and must return 0."
       }
     ],
-    "scope_rationale": "problem.txt requires every value to round to the nearest representable e4m3 value and explicitly bounds the relative error by half a mantissa step (~6.25%); powers 
-  ...[truncated 869 chars]
+    "scope_rationale": "A constant-valued logit row is an ordinary finite [n_tokens, n_experts] input; problem.txt's tie rule covers \"several experts share the largest logit\", which includes all experts sharing it, and prescribes index 0.",
+    "statement": "For a 
+  ...[truncated 264 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "tl.log2 is typically a fast approximate device intrinsic on fp32; floor() of an approximate log2 is discontinuous exactly at binade boundaries, so any 1-ULP error flips the selected step by a factor of two. This must be decided by runtime probe, not source reading.",
+    "rationale": "The all-equal row is the maximal-severity instance of the tie rule: the contract's answer is unambiguously index 0, while the kernel's sequential overwrite yields the last expert, so severity of the tie defect can be quantified as an index error of E-1.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"within any binade it can represent 8 evenly spaced values ... the resulting relative error is bounded by half a mantissa step, about 2^-4 = 6.25%\" - a wrong binade breaks both the grid and the stated error bound."
+        "summary": "Tie rule requires the lowest expert index to win whenever multiple experts share the largest logit; an all-equal row is such a case and must return 0."
       }
     ],
-    "scope_rationale": "problem.txt requires every value to round to the nearest representable e4m3 value and explicitly bounds the relative error by half a mantissa step (~6.25%); powers of two and their neighbors are ordinary float32 inputs inside the format's normal range, so a mis-selected binade there violates a stated requirement. No test.py exists to narrow the domain.",
-    "statement": "Binade selection via e = floor(tl.log2(|x|)) is a floating-point computation; at or just below exact powers of two (e.g. 2^-6, 1.0, 8.0, 256.0, and nextafter-below values like 7
-  ...[truncated 503 chars]
+    "scope_rationale": "A constant-valued logit row is an ordinary finite [n_tokens, n_experts] input; problem.txt's tie rule covers \"several experts share the largest logit\", which includes all experts sharing it, and prescribes index 0.",
+    "statement": "For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every iteration passes the non-strict `>=` test (kernel.py:13-19).",
+    "status": "open"
+  }
 
-### Turn 4 - `experimenter` (34.29667601799997s, in=30791 out=3384)
+### Turn 4 - `experimenter` (31.429482656000005s, in=25431 out=3251)
 
 Message:
 
 ```text
-Launching all three claim probes together — c1 (subnormal grid), c2 (overflow above 448), and c3 (binade selection near powers of two) each use disjoint input ranges, so no probe's inputs can confound another's.
+I'll launch all three probes together — they are independent (hand-crafted ties, fp16/bf16 quantization ties, and all-equal rows) and none depends on another's outcome.
 ```
 
 Tool calls:
@@ -201,8 +210,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_29/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndev='cuda'\ndef grid_snap(t): return t.to(torch.float8_e4m3fn).to(torch.float32)\n\nres={}\n# 1) explicit small-magnitude sweep in [2^-13, 2^-6]\nxs=[]\nfor e in range(-13,-5):\n    for m in [1.0,1.1,1.3,1.5,1.7,1.9]:\n        xs.append(m*2.0**e)\nxs = xs + [-v for v in xs] + [0.001, 1e-4, 2**-10, 2**-11, 2**-9*1.5]\nx = torch.tensor(xs, dtype=torch.float32, device=dev)\nq = k.fp8_roundtrip(x)\nref = grid_snap(x)\nonehot = grid_snap(q)\noffgrid = (q != onehot)\nres['sweep_n']=x.numel()\nres['sweep_offgrid_count']=int(offgrid.sum())\nres['sweep_mismatch_vs_
-  ...[truncated 1327 chars]
+    "code": "\nimport json, torch, triton, triton.language as tl\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\ndef route_top1(logits):\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, log
+  ...[truncated 1515 chars]
   Output summary:
   {
     "artifacts": [
@@ -210,13 +219,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "f65d6ab09799f119dd2ee067f1195621d4b53721d5e124d889b8a0e1543d2d63"
+        "sha256": "1e6d4d7bc2cbb61b591b4e856619932656d2ec62cedc6bf13cb2bc49d7d5d5b0"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "8dfdf9b9f3e4b7dbc720b0ead02501ebad066ff356e8a0758c914980b49ff0ad"
+        "sha256": "1f9a8d041bdcc17cfdec68adc39e5eb1bcc1058f44d1eb104a75f805184df9f8"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -228,18 +237,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "3c3a5fe45f33f09121bb5de666c5950892945a0d633a0def6820f6125fb600a4"
+        "sha256": "5fc69a5acfeaced8d798a50861a57f3e8ad9a1d4ee8014ccf1ecec1bd3c4f023"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For 0 < |x| < 2^-6 = 0.015625 (the e4m3 subnormal region), the kernel keeps using a relative step 2^(floor(log2|x|)-3) instead of the fixed subnormal step 2^-9, so it returns values that are not representable in e
-  ...[truncated 7938 chars]
+    "claim_statement": "On any token row where the maximum logit value occurs at two or more expert indices (e.g. logits[t] = [2.0, 1.0, 2.0]), `_route_kernel`'s non-strict acceptance test `take = v >= best` (kernel.py:17) lets the later
+  ...[truncated 4901 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_29/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev='cuda'\ndef snap(t): return t.to(torch.float8_e4m3fn).to(torch.float32)\nvals=[416.,448.,449.,460.,464.,500.,512.,1000.,4096.,1e4]\nx=torch.tensor(vals+[-v for v in vals], dtype=torch.float32, device=dev)\nq=k.fp8_roundtrip(x)\nsat = snap(x.clamp(-448.,448.))\ntry:\n    direct = snap(x)\n    direct_l=[float(v) for v in direct]\nexcept Exception as e:\n    direct_l=['err:'+str(e)]\noffgrid = (q != snap(q))\nres={\n 'x':[float(v) for v in x],\n 'kernel':[float(v) for v in q],\n 'saturating_ref':[float(v) for v in sat],\n 'torch_direct_cast':direct_l,\n 'offgrid
-  ...[truncated 626 chars]
+    "code": "\nimport json, torch, triton, triton.language as tl\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\ndef route_top1(logits):\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, log
+  ...[truncated 1537 chars]
   Output summary:
   {
     "artifacts": [
@@ -247,13 +256,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "9f62631674b326306d35219f0aa87711a716e38bb91ffb464cceb508fe11dff2"
+        "sha256": "affa6c816f57c004453fb358b6f3574491619e2c23a8105ca527c2b2bd44dd2b"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "159f9ef3b4e3d5439439cc5b88986f9d592c13f2b02810febc34f090166ed422"
+        "sha256": "a215dceb9327e8ff863277e96f1402f35c3e85df4ad45104165e078c595f4559"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -265,18 +274,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "a9401bed02b5a9e36e464e0d7d3c5816ed8c02f0c02511d446b2d9c9dff7703c"
+        "sha256": "b422a439c0b54f992d83041da72e90d7b1b5ad93e625fd7d75cb864038b324ec"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For |x| above the e4m3 max finite value 448, the kernel applies no saturation or overflow handling, so it emits magnitudes such as 512, 1024, 4096 that do not exist in e4m3 (e.g. x=1000 -> step 64 -> 1024). Un
-  ...[truncated 9604 chars]
+    "claim_statement": "With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate,
+  ...[truncated 5842 chars]
 - `run_claim_probe -> t11 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "\nimport json, math, importlib.util, torch, numpy as np\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_29/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev='cuda'\ndef snap(t): return t.to(torch.float8_e4m3fn).to(torch.float32)\nvals=[]\nfor e in range(-6,9):\n    p=2.0**e\n    vals.append(p)\n    vals.append(float(np.nextafter(np.float32(p), np.float32(0))))\n    vals.append(float(np.nextafter(np.float32(p), np.float32(np.inf))))\nvals=[v for v in vals if abs(v)<=448.0]\nx=torch.tensor(vals+[-v for v in vals], dtype=torch.float32, device=dev)\nq=k.fp8_roundtrip(x); ref=snap(x)\noffgrid=(q!=snap(q))\nrel=((q-x).abs()/x.abs())\nres={\n 'n':int(x.numel()),\n 'offgrid_count':int(offgrid.sum()),\n
-  ...[truncated 1174 chars]
+    "code": "\nimport json, torch, triton, triton.language as tl\n\n@triton.jit\ndef _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):\n    tok = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < E\n    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float(\"inf\"))\n    best = -float(\"inf\")\n    best_i = 0\n    for e in range(E):\n        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)\n        take = v >= best\n        best = tl.where(take, v, best)\n        best_i = tl.where(take, e, best_i)\n    tl.store(Idx + tok, best_i)\n\ndef route_top1(logits):\n    n_tokens, n_experts = logits.shape\n    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)\n    _route_kernel[(n_tokens,)](logits, idx, log
+  ...[truncated 883 chars]
   Output summary:
   {
     "artifacts": [
@@ -284,13 +293,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "4e8853da86ad9ef089bf5f04319e0cebfd93f74b0e31d7ddf4906c1ef25e6d9d"
+        "sha256": "4dab936eb9ae4f2354c3ff6505897cf9726be488b0814fc7dd5f088e3e3e66d6"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "c1805ac2db79ed7a86bcbdaf164ecc61f5ebe6d7114af88aa46fea7e79890e31"
+        "sha256": "39be8a1535b869192571543417c68d89f78360e98c5c9201e4f1e3b627332282"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -302,19 +311,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t11_json_result.json",
-        "sha256": "6f36ecf834f810cdb65e09386c10347bc58b8e90ffb283fe93de39a48f479987"
+        "sha256": "61d375953f5ec16b583d169b5fdee55b5f18f0ab6bcb3780ced744e6bbe0a1d5"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "Binade selection via e = floor(tl.log2(|x|)) is a floating-point computation; at or just below exact powers of two (e.g. 2^-6, 1.0, 8.0, 256.0, and nextafter-below values like 7.9999995) a sub-ULP error in tl.
-  ...[truncated 4095 chars]
+    "claim_statement": "For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every it
+  ...[truncated 12596 chars]
 
-### Turn 5 - `experimenter` (31.022157446999927s, in=50873 out=2601)
+### Turn 5 - `experimenter` (29.097524902000032s, in=45931 out=1744)
 
 Message:
 
 ```text
-All three probes returned; finalizing them together. c1 and c2 confirm off-grid outputs, c3's boundary/normal-range sweep found no binade mis-selection so it is rebutted.
+All three probes returned decisive results; finalizing them together. No further probes are needed — c1, c2, c3 are all directly answered, and the untied/non-power-of-2 controls confirm the mismatch is attributable to the tie-break direction alone.
 ```
 
 Tool calls:
@@ -323,33 +332,38 @@ Tool calls:
   Args:
   {
     "data": {
-      "e4m3_subnormal_step": 0.001953125,
-      "metric": "grid membership q == q.to(float8_e4m3fn).to(float32) plus equality vs x.to(float8_e4m3fn).to(float32)",
-      "randn_max_abs_err_vs_ref": 0.0009765625,
-      "randn_mismatch_vs_ref_count": 45,
-      "randn_n": 4096,
-      "randn_normal_region_mismatch_count": 0,
-      "randn_offgrid_all_in_subnormal_region": true,
-      "randn_offgrid_count": 45,
-      "randn_subnormal_region_count": 65,
-      "sweep_mismatch_vs_ref_count": 75,
-      "sweep_n": 101,
-      "sweep_offgrid_count": 75,
-      "tiny_e4m3_ref_example": 0.0,
-      "tiny_kernel_example": 9.5367431640625e-06,
-      "tiny_nonzero_but_ref_zero": 5,
-      "tiny_x_example": 1e-05
+      "kernel_idx": [
+        2,
+        1,
+        2,
+        0,
+        2
+      ],
+      "kernel_picks_highest_tied_all": true,
+      "metric": "exact_index_equality_vs_torch_argmax",
+      "nonpow2_E5_unique_max_mismatches": 0,
+      "num_tied_mismatch": 3,
+      "num_tied_rows": 3,
+      "ref_idx": [
+        0,
+        0,
+        1,
+        0,
+        2
+      ],
+      "tied_mismatch_rate": 1.0,
+      "untied_mismatches": 0
     },
     "event_id": "t9",
     "status": "confirmed",
-    "summary": "Subnormal region defect confirmed. Explicit sweep of 1
-  ...[truncated 686 chars]
+    "summary": "Hand-crafted tied rows: kernel returns the HIGHEST tied index on all 3 tied rows while torch.argmax returns the lowest ([2,1,2]->kernel 2 vs ref 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1). All untied rows match, and 256 random fp32 rows with E=5 (non-power-of-2) show 0 mismatches, so padding lanes and the per-expert reduction are not imp
+  ...[truncated 110 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Subnormal region defect confirmed. Explicit sweep of 101 magnitudes in [2^-13, 2^-6]: 75/101 kernel outputs are not e4m3-representable (q != q.to(float8_e4m3fn).to(float32)) and all 75 differ from the true e4m3 cast reference. Flush-to-zero is absent: all 5 tiny inputs (1e-5 ... 4e-4) whose e4m3 reference is exactly 0.0 come back nonzero (e.g. x=1e-5 -> 9.5367e-06, ref 0.0). Critically, this fires on a plain benign input: torch.randn(4096) has 65 elements with 0<|x|<2^-6, and 45 of them produce off-grid outputs / mismatch the e4m3 reference (max abs err 9.765625e-04 = half the 2^-9 subnormal step); 0 mismatches in the normal region, so the failure is exactly localized to the subnormal band as claimed.",
+    "summary": "Hand-crafted tied rows: kernel returns the HIGHEST tied index on all 3 tied rows while torch.argmax returns the lowest ([2,1,2]->kernel 2 vs ref 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1). All untied rows match, and 256 random fp32 rows with E=5 (non-power-of-2) show 0 mismatches, so padding lanes and the per-expert reduction are not implicated \u2014 the defect is exactly the non-strict `v >= best` at kernel.py:17.",
     "supports": "confirmed",
     "tool_event_id": "t9"
   }
@@ -357,31 +371,34 @@ Tool calls:
   Args:
   {
     "data": {
-      "count_kernel_exceeds_448": 11,
-      "e4m3_max_finite": 448.0,
-      "first_failing_magnitude": 464.0,
-      "kernel_at_1000": 1024.0,
-      "kernel_at_1e4": 10240.0,
-      "kernel_at_464": 480.0,
-      "kernel_at_500": 512.0,
-      "max_kernel_abs": 10240.0,
-      "metric": "grid membership + equality vs clamp-then-cast and vs torch direct cast",
-      "mismatch_vs_saturating_ref": 11,
-      "n": 20,
-      "offgrid_count": 11,
-      "ref_at_all_overflow": 448.0,
-      "torch_direct_cast_saturates": true
+      "E": 8,
+      "N": 8192,
+      "bf16_max_index_error": 7,
+      "bf16_mismatch_on_tied": 31,
+      "bf16_mismatch_on_untied": 0,
+      "bf16_tied_rate": 0.0037841796875,
+      "bf16_tied_rows": 31,
+      "fp16_max_index_error": 5,
+      "fp16_mismatch_on_tied": 5,
+      "fp16_mismatch_on_untied": 0,
+      "fp16_tied_rate": 0.0006103515625,
+      "fp16_tied_rows": 5,
+      "fp32_tied_rows": 0,
+      "fp32_total_mismatch": 0,
+      "kernel_chosen_value_always_equals_max": true,
+      "metric": "exact_index_equality_vs_torch_argmax_on_reduced_precision_logits",
+      "tied_rows_mismatched_frac_fp16_bf16": 1.0
     },
     "event_id": "t10",
     "status": "confirmed",
-    "summary": "Overflow/no-saturation defect confirmed. On 20 inputs +/-[416,448,449,460,464,500,512,1000,4096,1e4], 11 kernel outputs exceed the e4m3 max finite 448 and are not representable (snap(kernel) collapses each to 448): x=464->480, 500->
-  ...[truncated 450 chars]
+    "summary": "Reduced-precision reachability confirmed without hand-crafted duplicates: 8192x8 random logits cast to bf16 give 31 tied-max rows (0.38
+  ...[truncated 455 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Overflow/no-saturation defect confirmed. On 20 inputs +/-[416,448,449,460,464,500,512,1000,4096,1e4], 11 kernel outputs exceed the e4m3 max finite 448 and are not representable (snap(kernel) collapses each to 448): x=464->480, 500->512, 1000->1024, 4096->4096, 1e4->10240, and negatives. Both candidate references agree and disagree with the kernel on exactly those 11 elements: torch's direct cast x.to(float8_e4m3fn) and the saturating clamp(x,-448,448)-then-cast both give 448/-448 (torch saturates rather than NaN here). Values <=448 (416, 448) are handled correctly, and 449/460 happen to round down to 448 correctly, so the failure begins at 464.",
+    "summary": "Reduced-precision reachability confirmed without hand-crafted duplicates: 8192x8 random logits cast to bf16 give 31 tied-max rows (0.38%) and 31 mismatches (100% of tied rows); fp16 gives 5 tied rows (0.061%) and 5 mismatches; fp32 gives 0 ties and 0 mismatches. Zero mismatches on untied rows in every dtype, and the kernel's chosen value always equals the row max, so the per-expert sum-reduction is bit-exact and the divergence is purely tie-break direction. Max index error 7 (bf16), i.e. the kernel routed to expert 7 where the contract requires expert 0.",
     "supports": "confirmed",
     "tool_event_id": "t10"
   }
@@ -389,39 +406,48 @@ Tool calls:
   Args:
   {
     "data": {
-      "boundary_count_rel_err_gt_0.0625": 0,
-      "boundary_max_rel_err_vs_input": 1.1920927533992653e-07,
-      "boundary_mismatch_vs_ref_count": 0,
-      "boundary_n": 90,
-      "boundary_offgrid_count": 0,
-      "contract_rel_bound": 0.0625,
-      "metric": "grid membership + exact equality vs x.to(float8_e4m3fn).to(float32) over powers of two, nextafter neighbors, and 400k log-uniform normal-range samples",
-      "normal_range_count_rel_gt_bound": 0,
-      "normal_range_max_rel_err": 0.058822792023420334,
-      "normal_range_mismatch_vs_ref": 0,
-      "normal_range_n": 400000,
-      "normal_range_offgrid_count": 0
+      "E_values_tested": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        16
+      ],
+      "configs_returning_E_minus_1": 14,
+      "configs_total": 14,
+      "dtypes_tested": [
+        "fp32",
+        "fp16"
+      ],
+      "expected_contract_index": 0,
+      "index_error_E3": 2,
+      "index_error_E8": 7,
+      "max_index_error_E16": 15,
+      "metric": "all_equal_row_returns_lowest_index_0",
+      "nonpow2_behaves_same": true
     },
     "event_id": "t11",
-    "status": "rebutted",
-    "summary": "Binade-selection risk not realized on this backend. 90 boundary inputs (exact powers of two 2^-6..2^8 within range, plu
-  ...[truncated 763 chars]
+    "status": "confirmed",
+    "summary": "Fully-tied constant rows (value 0.25) return E-1 for every tested E in {2,3,4,5,6,8,16} and both fp32 and fp16, while the contract and torch.argmax require 0. equals_E_minus_1 is true in all 14 configurations; index error scales with E up to 15 at E=16. Non-power-of-2 E (3,5,6) behaves identically, so 
+  ...[truncated 109 chars]
   Output summary:
   {
     "claim_id": "c3",
-    "claim_status": "rebutted",
+    "claim_status": "confirmed",
     "evidence_id": "c3.e1",
-    "summary": "Binade-selection risk not realized on this backend. 90 boundary inputs (exact powers of two 2^-6..2^8 within range, plus float32 nextafter neighbors on both sides, and negatives): 0 off-grid outputs, 0 mismatches vs x.to(float8_e4m3fn).to(float32), max relative deviation from input 1.19e-07 (i.e. exact hits). A dense log-uniform sweep of 400,000 samples covering the pure normal range [2^-6, 448) and its negatives also gave 0 off-grid outputs and 0 mismatches vs the e4m3 cast reference, with max relative error 0.0588 < the 0.0625 contract bound and 0 samples exceeding it. So tl.log2+floor selects the correct exponent everywhere tested, and the normal-range path (including tie behavior encountered by this distribution) matches the e4m3 reference exactly; the confirmed defects are confined to the subnormal band (c1) and above-448 overflow (c2).",
-    "supports": "rebutted",
+    "summary": "Fully-tied constant rows (value 0.25) return E-1 for every tested E in {2,3,4,5,6,8,16} and both fp32 and fp16, while the contract and torch.argmax require 0. equals_E_minus_1 is true in all 14 configurations; index error scales with E up to 15 at E=16. Non-power-of-2 E (3,5,6) behaves identically, so BLOCK padding is not the cause \u2014 it is the -inf init plus non-strict `>=`.",
+    "supports": "confirmed",
     "tool_event_id": "t11"
   }
 
-### Turn 6 - `skeptic` (10.95823924299998s, in=80633 out=551)
+### Turn 6 - `skeptic` (9.181518553000046s, in=73673 out=490)
 
 Message:
 
 ```text
-This is the final review turn. c1 and c2 are both confirmed in-scope defects (subnormal-band off-grid outputs on plain randn input; no 448 saturation), and c3 was cleanly rebutted with a 400k-sample normal-range sweep. Remaining unexplored surfaces (half-up vs half-to-even ties, NaN/Inf, -0.0) are either already-covered generalization notes or contract-undefined, and none would change the verdict given two confirmed failures.
+This is a review turn: all three claims are confirmed with decisive, controlled evidence (tied rows mismatch, untied rows match, non-power-of-2 E behaves identically, reduction shown bit-exact). The tie-break defect is fully characterized and no additional in-scope hypothesis remains untested.
 ```
 
 Tool calls:
@@ -429,13 +455,13 @@ Tool calls:
 - `record_no_new_claims -> t15 ok`
   Args:
   {
-    "reason": "Review turn: the two confirmed claims (c1 subnormal-grid/flush-to-zero failure, firing on plain torch.randn(4096) with 45/4096 off-grid elements; c2 no saturation above 448 producing 480/512/1024/10240) already establish the decisive in-scope contract violations, and c3 was rebutted by a 90-point boundary sweep plus 400k log-uniform normal-range samples with zero off-grid outputs. The only untested surfaces left are tie-breaking (half-up vs half-to-even), NaN/Inf, and -0.0 sign; ties are subsumed by the normal-range sweep that matched the e4m3 cast exactly, and NaN/Inf/-0.0 are reference-undefined or excluded by scope policy, so none of them would add material, decisive evidence beyond what is already confirmed. No new high-quality in-scope claim to raise.",
-    "reviewed_clai
-  ...[truncated 41 chars]
+    "reason": "All three recorded claims (c1 hand-crafted ties, c2 reduced-precision reachability, c3 fully-tied constant rows) are confirmed by runtime probes with proper controls: untied rows match torch.argmax exactly in every dtype, non-power-of-2 E (3,5,6) behaves identically ruling out BLOCK padding, and kernel_chosen_value_always_equals_max=true shows the per-expert sum-reduction is bit-exact, isolating the defect to the non-strict `v >= best` at kernel.py:17. Remaining untested surfaces from the risk map (non-contiguous stride(1)!=1, NaN logits, int32-vs-int64 return dtype, O(E^2) performance) are not required by problem.txt's stated input/output contract and would be out_of_scope generalization notes, not decisive claims. No new in-scope, testable hypothesis remains.",
+    "reviewed
+  ...[truncated 46 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Review turn: the two confirmed claims (c1 subnormal-grid/flush-to-zero failure, firing on plain torch.randn(4096) with 45/4096 off-grid elements; c2 no saturation above 448 producing 480/512/1024/10240) already establish the decisive in-scope contract violations, and c3 was rebutted by a 90-point boundary sweep plus 400k log-uniform normal-range samples with zero off-grid outputs. The only untested surfaces left are tie-breaking (half-up vs half-to-even), NaN/Inf, and -0.0 sign; ties are subsumed by the normal-range sweep that matched the e4m3 cast exactly, and NaN/Inf/-0.0 are reference-undefined or excluded by scope policy, so none of them would add material, decisive evidence beyond what is already confirmed. No new high-quality in-scope claim to raise.",
+    "reason": "All three recorded claims (c1 hand-crafted ties, c2 reduced-precision reachability, c3 fully-tied constant rows) are confirmed by runtime probes with proper controls: untied rows match torch.argmax exactly in every dtype, non-power-of-2 E (3,5,6) behaves identically ruling out BLOCK padding, and kernel_chosen_value_always_equals_max=true shows the per-expert sum-reduction is bit-exact, isolating the defect to the non-strict `v >= best` at kernel.py:17. Remaining untested surfaces from the risk map (non-contiguous stride(1)!=1, NaN logits, int32-vs-int64 return dtype, O(E^2) performance) are not required by problem.txt's stated input/output contract and would be out_of_scope generalization notes, not decisive claims. No new in-scope, testable hypothesis remains.",
     "reviewed_claims": [
       "c1",
       "c2",
@@ -445,12 +471,12 @@ Tool calls:
     "turn": 6
   }
 
-### Turn 7 - `judge` (17.258417972000075s, in=82664 out=1208)
+### Turn 7 - `judge` (17.809623842000065s, in=75405 out=1151)
 
 Message:
 
 ```text
-All three claims have evidence, the Skeptic reviewed the latest probes and recorded no new claims, and the artifact contains no test.py — so problem.txt is the operative contract. Recording the verdict.
+All three claims are confirmed with runtime evidence, the contract (problem.txt, the only operative spec) explicitly requires lowest-index tie-breaking, and the Skeptic has signed off with no new claims. Recording a reject verdict.
 ```
 
 Tool calls:
@@ -458,174 +484,175 @@ Tool calls:
 - `record_verdict -> t16 ok`
   Args:
   {
-    "confidence": 0.93,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The artifact holds only kernel.py, meta.json, and problem.txt \u2014 no test.py or get_inputs narrows the domain \u2014 so problem.txt is the operative contract, and it explicitly requires that \"every value is rounded to the nearest representable e4m3 value,\" naming the format by its 4 exponent / 3 mantissa bits. That fixes the representable set, including the fixed 2^-9 subnormal step below 2^-6 and the 448 max finite. The kernel derives step = 2^(floor(log2|x|)-3) with no lower or upper exponent clamp (lines 15-17), so it implements only the format's normal-range binade grid.\n\nc1 (confirmed, in_scope): probe t9 shows that for 0<|x|<2^-6 the kernel emits values that are not e4m3-representable \u2014 75
-  ...[truncated 1551 chars]
+    "reason": "problem.txt is the only contract artifact (no test.py/get_inputs exists), and it explicitly and emphatically requires that \"when several experts share the largest logit, the contract requires the LOWEST expert index to win,\" stating that ties are a routine consequence of reduced-precision router logits and that the winner materially changes the layer output. The kernel implements the opposite rule: kernel.py:17 uses the non-strict `take = v >= best` inside an ascending loop over e (lines 15-19), so each equal-valued later index overwrites `best_i`, yielding highest-index-wins.\n\nConfirmed evidence: (c1, t9) hand-crafted tied rows return the highest tied index on 3/3 tied rows ([2,1,2]->2 vs req
+  ...[truncated 1674 chars]
   Output summary:
   {
-    "confidence": 0.93,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The artifact holds only kernel.py, meta.json, and problem.txt \u2014 no test.py or get_inputs narrows the domain \u2014 so problem.txt is the operative contract, and it explicitly requires that \"every value is rounded to the nearest representable e4m3 value,\" naming the format by its 4 exponent / 3 mantissa bits. That fixes the representable set, including the fixed 2^-9 subnormal step below 2^-6 and the 448 max finite. The kernel derives step = 2^(floor(log2|x|)-3) with no lower or upper exponent clamp (lines 15-17), so it implements only the format's normal-range binade grid.\n\nc1 (confirmed, in_scope): probe t9 shows that for 0<|x|<2^-6 the kernel emits values that are not e4m3-representable \u2014 75/101 sweep points fail q == q.to(float8_e4m3fn).to(float32) and all 75 differ from the true e4m3 cast; flush-to-zero is absent (x=1e-5 -> 9.5367e-06 where the reference is exactly 0.0). Crucially this is not an exotic stress case: plain torch.randn(4096) put 65 elements in the subnormal band and 45 of them came back off-grid, max abs err 9.765625e-04 = half the 2^-9 step, with 0 mismatches in the 
-  ...[truncated 1151 chars]
+    "reason": "problem.txt is the only contract artifact (no test.py/get_inputs exists), and it explicitly and emphatically requires that \"when several experts share the largest logit, the contract requires the LOWEST expert index to win,\" stating that ties are a routine consequence of reduced-precision router logits and that the winner materially changes the layer output. The kernel implements the opposite rule: kernel.py:17 uses the non-strict `take = v >= best` inside an ascending loop over e (lines 15-19), so each equal-valued later index overwrites `best_i`, yielding highest-index-wins.\n\nConfirmed evidence: (c1, t9) hand-crafted tied rows return the highest tied index on 3/3 tied rows ([2,1,2]->2 vs required 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1), with 0 mismatches on untied rows. (c2, t10) the failure is reachable on exactly the input population the contract describes: 8192x8 random logits cast to bf16 yield 31 tied-max rows and 31 mismatches (100% of tied rows, max index error 7, i.e. expert 7 chosen where expert 0 is required); fp16 yields 5/5; fp32 yields 0 ties and 0 mismatches. (c3, t11) ful
+  ...[truncated 1274 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "problem.txt: given a float32 tensor, return each element rounded to the *nearest value representable in FP8 e4m3*; the output is float32-typed but must land exactly on the e4m3 value grid.",
-    "The contract explicitly licenses deviation from the float32 input 'up to the format's own rounding step' - i.e. quantization error is expected, so a plain allclose-to-input or loose-tolerance check is a weak proxy and not the contract.",
-    "The contract is grid membership + nearest selection, so the natural reference is x.to(torch.float8_e4m3fn).to(torch.float32) (or an explicit e4m3 grid model), not an FP32 identity reference.",
-    "e4m3 (OCP/torch float8_e4m3fn) specifics implied by 'nearest representable value': normals from 2^-6 to 448 with 8 values per binade; subnormals in [2^-9, 2^-6) on a *fixed* absolute step of 2^-9; max finite 448; no infinities; values above the overflow threshold either saturate to 448 or become NaN depending on convention.",
-    "Problem text stresses 'within any binade it can represent 8 evenly spaced values' and the 6.25% relative error bound - this framing pre-excuses rounding error and should not be read as excusing out-of-grid outputs.",
-    "No test_code is supplied in the artifact, so the operative acceptance criterion is the prose contract itself."
+    "For each token row t of `logits` (shape [n_tokens, n_experts]), return expert[t] = argmax_e logits[t, e] as one index per token (problem.txt).",
+    "Tie rule is contractually load-bearing, not incidental: when multiple experts share the maximum logit value, the LOWEST expert index must be returned, for cross-run and cross-replica reproducibility.",
+    "The problem states ties are expected to be common because router logits are computed in reduced precision and distinct real-valued logits round to the same representable value, so tie behavior must be correct on realistic (fp16/bf16-quantized) inputs, not just on exact-duplicate synthetic inputs.",
+    "Choosing the wrong tied index is described as a substantive output error (different experts are independently trained), so an index-level mismatch on ties is a real failure and cannot be dismissed as a harmless boundary swap.",
+    "Reference semantics match torch.argmax(dim=-1), which also returns the first/lowest maximal index."
   ],
   "kernel_model": [
-    "Host wrapper fp8_roundtrip (lines 22-28): flat 1-D launch over x.numel() with BLOCK=1024, out = torch.empty_like(x); assumes x is CUDA, float32, and contiguous (X+offs is flat pointer arithmetic ignoring strides).",
-    "Kernel body (lines 14-18) implements: ax=|x|; e=floor(log2(ax)) with ax==0 remapped to 1.0; step=2^(e-3); q=floor(x/step+0.5)*step; zeros forced back to 0.",
-    "This is a scale-invariant per-binade grid with exactly 8 steps per binade - correct for the *normal* range of e4m3 only.",
-    "No clamping to the e4m3 max finite value: |x|>448 is quantized on an ever-coarsening but unbounded grid (e.g. 1000 -> step 64 
-...[truncated 5288 chars]
+    "`route_top1` (kernel.py:23-29) allocates `idx` of shape [n_tokens] dtype int32, launches one program per token (`grid=(n_tokens,)`), and passes `logits.stride(0)`, E=n_experts, BLOCK=next_power_of_2(n_experts).",
+    "`_route_kernel` loads one padded row: `cols = tl.arange(0, BLOCK)`, `valid = cols < E`, and `tl.load(Logits + tok*stride + cols, mask=valid, other=-inf)` (lines 9-11). This assumes the column stride is exactly 1 (contiguous last dim); only the row stride is passed in.",
+    "The argmax is a sequential Python-unrolled loop over e in range(E) (line 15). Each iteration extracts the scalar logit for expert e by `v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)` (line 16) \u2014 a full BLOCK-wide reduction per expert, i.e. O(E^2) work, but it does isolate lane e exactly since e < E always selects a valid lane.",
+    "Acceptance test is `take = v >= best` (line 17), i.e. NON-strict. On an exact tie the later (higher) index ov
+...[truncated 4526 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_29 is an elementwise FP8 e4m3 round-trip quantizer. The kernel implements a purely relative, per-binade grid (step = 2^(floor(log2|x|)) - 3) with round-half-up, and encodes no part of the e4m3 format's finite dynamic range: no 448 saturation/overflow behavior, no fixed subnormal step below 2^-6, and no NaN/Inf policy. Tie-breaking is half-away-from-zero-on-positives (half-up) rather than IEEE round-half-to-even, and binade selection depends on the numerical accuracy of tl.log2 near powers of two.
+- `du1` tasks=`initial`: case_30 is a Triton top-1 MoE router argmax with an explicit lowest-index-wins tie rule; the kernel's sequential scan uses a `>=` acceptance test, which structurally favors the highest tied index, so tie-breaking direction is the primary bug surface.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For 0 < |x| < 2^-6 = 0.015625 (the e4m3 subnormal region), the kernel keeps using a relative step 2^(floor(log2|x|)-3) instead of the fixed subnormal step 2^-9, so it returns values that are not representable in e4m3 (e.g. x=0.001 stays ~0.001 instead of snapping to a multiple of 2^-9=0.001953125, and |x|<2^-10 is not flushed to 0). Metric: elementwise q != q.to(torch.float8_e4m3fn).to(torch.float32) grid-membership, plus comparison against x.to(torch.float8_e4m3fn).to(torch.float32). Representative in-scope input: torch.randn(4096) on CUDA, where ~1% of elements land below 2^-6, plus an explicit sweep of magnitudes in [2^-12, 2^-6].
+Statement: On any token row where the maximum logit value occurs at two or more expert indices (e.g. logits[t] = [2.0, 1.0, 2.0]), `_route_kernel`'s non-strict acceptance test `take = v >= best` (kernel.py:17) lets the later loop iteration overwrite `best_i`, so route_top1 returns the HIGHEST tied index instead of the contractually required LOWEST index; measured as exact index equality against torch.argmax(logits, dim=-1), the kernel will mismatch on such rows.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the contract as "every value is rounded to the nearest representable e4m3 value" and names the format by its exponent/mantissa widths; the subnormal region is part of the e4m3 value set, not an exotic extension. No test.py exists, so the prose contract is the operative criterion and the input distribution is unrestricted; I use ordinary randn plus a small-magnitude sweep, both admitted by "a float32 tensor".
+Scope rationale: problem.txt is the only contract source and it explicitly states that when several experts share the largest logit the LOWEST expert index must win, and that ties are a normal occurrence. Representative inputs the contract admits are ordinary [n_tokens, n_experts] logit matrices containing duplicated maxima within a row; no test.py exists to narrow the domain further.
 
 Scope evidence:
-- `problem.txt`: "The contract is that every value is rounded to the nearest representable e4m3 value" and "e4m3 has 4 exponent bits and 3 mantissa bits" - the named format fixes the representable set, including its subnormals, and no input range restriction is given.
-- `meta.json / artifact_files`: Artifact contains only kernel.py, meta.json (status=under_test, passed=null) and problem.txt; there is no test.py narrowing the input domain, so the prose contract governs.
+- `problem.txt`: "When several experts share the largest logit, the contract requires the LOWEST expert index to win" — tie-break direction is an explicit stated requirement, and ties are described as routine rather than exotic.
+- `kernel.py:15-19`: Ascending loop over e with `take = v >= best`; on equality `best_i` is updated to the larger e, implementing highest-index-wins.
 
-Rationale: Lines 15-17 derive step purely from floor(log2|x|) with no lower clamp on the exponent, so the grid keeps refining below the format's smallest normal instead of holding at the 2^-9 subnormal spacing; outputs therefore fall between e4m3 codes.
+Rationale: Line 17 uses `>=` rather than `>`, and the loop scans e = 0..E-1 in ascending order, so each equal-valued later index unconditionally replaces the stored winner. This structurally inverts the tie-break direction the problem names as load-bearing.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Subnormal region defect confirmed. Explicit sweep of 101 magnitudes in [2^-13, 2^-6]: 75/101 kernel outputs are not e4m3-representable (q != q.to(float8_e4m3fn).to(float32)) and all 75 differ from the true e4m3 cast reference. Flush-to-zero is absent: all 5 tiny inputs (1e-5 ... 4e-4) whose e4m3 reference is exactly 0.0 come back nonzero (e.g. x=1e-5 -> 9.5367e-06, ref 0.0). Critically, this fires on a plain benign input: torch.randn(4096) has 65 elements with 0<|x|<2^-6, and 45 of them produce off-grid outputs / mismatch the e4m3 reference (max abs err 9.765625e-04 = half the 2^-9 subnormal step); 0 mismatches in the normal region, so the failure is exactly localized to the subnormal band as claimed.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Hand-crafted tied rows: kernel returns the HIGHEST tied index on all 3 tied rows while torch.argmax returns the lowest ([2,1,2]->kernel 2 vs ref 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1). All untied rows match, and 256 random fp32 rows with E=5 (non-power-of-2) show 0 mismatches, so padding lanes and the per-expert reduction are not implicated — the defect is exactly the non-strict `v >= best` at kernel.py:17.
 
 ### c2 - `confirmed`
 
-Statement: For |x| above the e4m3 max finite value 448, the kernel applies no saturation or overflow handling, so it emits magnitudes such as 512, 1024, 4096 that do not exist in e4m3 (e.g. x=1000 -> step 64 -> 1024). Under either overflow convention (OCP saturating cast to 448, or torch.float8_e4m3fn's NaN) the output is wrong. Metric: grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and comparison to the saturating reference clamp(x, -448, 448)-then-cast, over inputs like [448.0, 449.0, 500.0, 1000.0, 1e4] and their negatives.
+Statement: With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate, and route_top1's returned index will disagree with torch.argmax on those rows — i.e. the tie bug is reachable without hand-crafted exact duplicates.
 
 Scope: `in_scope`
 
-Scope rationale: The contract names e4m3 and requires the output to be a representable e4m3 value; the format's finite range (max 448) is part of that named value set. With no test.py, problem.txt's unrestricted "a float32 tensor" admits large-magnitude inputs, which are exactly the regime FP8 storage kernels must saturate.
+Scope rationale: problem.txt states that "router logits are computed in reduced precision and distinct logits routinely round to the same representable value", so fp16/bf16 logit matrices are exactly the input population the contract describes; correct tie handling on them is required.
 
 Scope evidence:
-- `problem.txt`: "round a float32 tensor to the nearest value representable in the FP8 e4m3 format" - representability is the stated requirement, and e4m3 has no finite values above 448; input magnitudes are not restricted.
+- `problem.txt`: States logits are computed in reduced precision and that distinct logits routinely round to the same representable value, making ties normal — this defines the expected input distribution.
 
-Rationale: Lines 15-17 impose no upper clamp on the exponent, so the code extrapolates the 8-per-binade grid indefinitely past the format's largest binade.
+Rationale: The contract justifies the tie rule by reduced-precision rounding. If a probe only used fp32 randn it would almost never tie and would look clean, so the claim must be tested on fp16/bf16-quantized inputs to show real-world reachability of the `>=` defect.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Overflow/no-saturation defect confirmed. On 20 inputs +/-[416,448,449,460,464,500,512,1000,4096,1e4], 11 kernel outputs exceed the e4m3 max finite 448 and are not representable (snap(kernel) collapses each to 448): x=464->480, 500->512, 1000->1024, 4096->4096, 1e4->10240, and negatives. Both candidate references agree and disagree with the kernel on exactly those 11 elements: torch's direct cast x.to(float8_e4m3fn) and the saturating clamp(x,-448,448)-then-cast both give 448/-448 (torch saturates rather than NaN here). Values <=448 (416, 448) are handled correctly, and 449/460 happen to round down to 448 correctly, so the failure begins at 464.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Reduced-precision reachability confirmed without hand-crafted duplicates: 8192x8 random logits cast to bf16 give 31 tied-max rows (0.38%) and 31 mismatches (100% of tied rows); fp16 gives 5 tied rows (0.061%) and 5 mismatches; fp32 gives 0 ties and 0 mismatches. Zero mismatches on untied rows in every dtype, and the kernel's chosen value always equals the row max, so the per-expert sum-reduction is bit-exact and the divergence is purely tie-break direction. Max index error 7 (bf16), i.e. the kernel routed to expert 7 where the contract requires expert 0.
 
-### c3 - `rebutted`
+### c3 - `confirmed`
 
-Statement: Binade selection via e = floor(tl.log2(|x|)) is a floating-point computation; at or just below exact powers of two (e.g. 2^-6, 1.0, 8.0, 256.0, and nextafter-below values like 7.9999995) a sub-ULP error in tl.log2 can pick the neighboring exponent, yielding a step 2x too fine (off-grid output, e.g. 8.5 inside the [8,16) binade) or 2x too coarse (error up to 12.5%, exceeding the contract's stated half-mantissa-step bound). Metric: for a sweep of exact powers of two 2^-9..2^8 and their nextafter neighbors, check grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and max relative deviation from x.to(torch.float8_e4m3fn).to(torch.float32).
+Statement: For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every iteration passes the non-strict `>=` test (kernel.py:13-19).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt requires every value to round to the nearest representable e4m3 value and explicitly bounds the relative error by half a mantissa step (~6.25%); powers of two and their neighbors are ordinary float32 inputs inside the format's normal range, so a mis-selected binade there violates a stated requirement. No test.py exists to narrow the domain.
+Scope rationale: A constant-valued logit row is an ordinary finite [n_tokens, n_experts] input; problem.txt's tie rule covers "several experts share the largest logit", which includes all experts sharing it, and prescribes index 0.
 
 Scope evidence:
-- `problem.txt`: "within any binade it can represent 8 evenly spaced values ... the resulting relative error is bounded by half a mantissa step, about 2^-4 = 6.25%" - a wrong binade breaks both the grid and the stated error bound.
+- `problem.txt`: Tie rule requires the lowest expert index to win whenever multiple experts share the largest logit; an all-equal row is such a case and must return 0.
 
-Rationale: tl.log2 is typically a fast approximate device intrinsic on fp32; floor() of an approximate log2 is discontinuous exactly at binade boundaries, so any 1-ULP error flips the selected step by a factor of two. This must be decided by runtime probe, not source reading.
+Rationale: The all-equal row is the maximal-severity instance of the tie rule: the contract's answer is unambiguously index 0, while the kernel's sequential overwrite yields the last expert, so severity of the tie defect can be quantified as an index error of E-1.
 
 Evidence:
-- `c3.e1` runtime_probe supports `rebutted`, tool_event_id=t11: Binade-selection risk not realized on this backend. 90 boundary inputs (exact powers of two 2^-6..2^8 within range, plus float32 nextafter neighbors on both sides, and negatives): 0 off-grid outputs, 0 mismatches vs x.to(float8_e4m3fn).to(float32), max relative deviation from input 1.19e-07 (i.e. exact hits). A dense log-uniform sweep of 400,000 samples covering the pure normal range [2^-6, 448) and its negatives also gave 0 off-grid outputs and 0 mismatches vs the e4m3 cast reference, with max relative error 0.0588 < the 0.0625 contract bound and 0 samples exceeding it. So tl.log2+floor selects the correct exponent everywhere tested, and the normal-range path (including tie behavior encountered by this distribution) matches the e4m3 reference exactly; the confirmed defects are confined to the subnormal band (c1) and above-448 overflow (c2).
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Fully-tied constant rows (value 0.25) return E-1 for every tested E in {2,3,4,5,6,8,16} and both fp32 and fp16, while the contract and torch.argmax require 0. equals_E_minus_1 is true in all 14 configurations; index error scales with E up to 15 at E=16. Non-power-of-2 E (3,5,6) behaves identically, so BLOCK padding is not the cause — it is the -inf init plus non-strict `>=`.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_29"
+  "entry": "case_30"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "problem.txt: given a float32 tensor, return each element rounded to the *nearest value representable in FP8 e4m3*; the output is float32-typed but must land exactly on the e4m3 value grid.",
-    "The contract explicitly licenses deviation from the float32 input 'up to the format's own rounding step' - i.e. quantization error is expected, so a plain allclose-to-input or loose-tolerance check is a weak proxy and not the contract.",
-    "The contract is grid membership + nearest selection, so the natural reference is x.to(torch.float8_e4m3fn).to(torch.float32) (or an explicit e4m3 grid model), not an FP32 identity reference.",
-    "e4m3 (OCP/torch float8_e4m3fn) specifics implied by 'nearest representable value': normals from 2^-6 to 448 with 8 values per binade; subnormals in [2^-9, 2^-6) on a *fixed* absolute step of 2^-9; max finite 448; no infinities; values above the overflow threshold either saturate to 448 or become NaN depending on convention.",
-    "Problem text stresses 'within any binade it can represent 8 evenly spaced values' and the 6.25% relative error bound - this framing pre-excuses rounding error and should not be read as excusing out-of-grid outputs.",
-    "No test_code is supplied in the artifact, so the operative acceptance criterion is the prose contract itself."
+    "For each token row t of `logits` (shape [n_tokens, n_experts]), return expert[t] = argmax_e logits[t, e] as one index per token (problem.txt).",
+    "Tie rule is contractually load-bearing, not incidental: when multiple experts share the maximum logit value, the LOWEST expert index must be returned, for cross-run and cross-replica reproducibility.",
+    "The problem states ties are expected to be common because router logits are computed in reduced precision and distinct real-valued logits round to the same representable value, so tie behavior must be correct on realistic (fp16/bf16-quantized) inputs, not just on exact-duplicate synthetic inputs.",
+    "Choosing the wrong tied index is described as a substantive output error (different experts are independently trained), so an index-level mismatch on ties is a real failure and cannot be dismissed as a harmless boundary swap.",
+    "Reference semantics match torch.argmax(dim=-1), which also returns the first/lowest maximal index."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Host wrapper fp8_roundtrip (lines 22-28): flat 1-D launch over x.numel() with BLOCK=1024, out = torch.empty_like(x); assumes x is CUDA, float32, and contiguous (X+offs is flat pointer arithmetic ignoring strides).",
-    "Kernel body (lines 14-18) implements: ax=|x|; e=floor(log2(ax)) with ax==0 remapped to 1.0; step=2^(e-3); q=floor(x/step+0.5)*step; zeros forced back to 0.",
-    "This is a scale-invariant per-binade grid with exactly 8 steps per binade - correct for the *normal* range of e4m3 only.",
-    "No clamping to the e4m3 max finite value: |x|>448 is quantized on an ever-coarsening but unbounded g
-...[truncated 5901 chars]
+    "`route_top1` (kernel.py:23-29) allocates `idx` of shape [n_tokens] dtype int32, launches one program per token (`grid=(n_tokens,)`), and passes `logits.stride(0)`, E=n_experts, BLOCK=next_power_of_2(n_experts).",
+    "`_route_kernel` loads one padded row: `cols = tl.arange(0, BLOCK)`, `valid = cols < E`, and `tl.load(Logits + tok*stride + cols, mask=valid, other=-inf)` (lines 9-11). This assumes the column stride is exactly 1 (contiguous last dim); only the row stride is passed in.",
+    "The argmax is a sequential Python-unrolled loop over e in range(E) (line 15). Each iteration extracts the scalar logit for expert e by `v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)` (line 16) \u2014 a full BLOCK-wide reduction per expert, i.e. O(E^2) work, but it does isolate lane e exactly since e < E always selects a valid lane.",
+    "Acceptance test is `take = v >= best` (line 17), i.e. NON-strict. On an exact tie t
+...[truncated 4883 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Lines 15-17 derive step purely from floor(log2|x|) with no lower clamp on the exponent, so the grid keeps refining below the format's smallest normal instead of holding at the 2^-9 subnormal spacing; outputs therefore fall between e4m3 codes.",
+  "rationale": "Line 17 uses `>=` rather than `>`, and the loop scans e = 0..E-1 in ascending order, so each equal-valued later index unconditionally replaces the stored winner. This structurally inverts the tie-break direction the problem names as load-bearing.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"The contract is that every value is rounded to the nearest representable e4m3 value\" and \"e4m3 has 4 exponent bits and 3 mantissa bits\" - the named format fixes the representable set, including its subnormals, and no input range restriction is given."
+      "summary": "\"When several experts share the largest logit, the contract requires the LOWEST expert index to win\" \u2014 tie-break direction is an explicit stated requirement, and ties are described as routine rather than exotic."
     },
     {
-      "source": "meta.json / artifact_files",
-      "summary": "Artifact contains only kernel.py, meta.json (status=under_test, passed=null) and problem.txt; there is no test.py narrowing the input domain, so the prose contract governs."
+      "source": "kernel.py:15-19",
+      "summary": "Ascending loop over e with `take = v >= best`; on equality `best_i` is updated to the larger e, implementing highest-index-wins."
     }
   ],
-  "scope_rationale": "problem.txt states the contract as \"every value is rounded to the nearest representable e4m3 value\" and names the format by its exponent/mantissa widths; the subnormal region is part of the e4m3 value set, not an exotic extension. No test.py exists, so the prose contract is the operative criterion and the input distribution is unrestricted; I use ordinary randn plus a small-magnitude sweep, both admitted by \"a float32 tensor\".",
-  "statement": "For 0 < |x| < 2^-6 = 0.015625 (the e4m3 subnormal region), the kernel keeps using a relative step 2^(floor(log2|x|)-3) instead of the fixed subnormal step 2^-9, so it returns values that are not representable in e4m3 (e.g. x=0.001 stays ~0.001 instead of snapping to a multiple of 2^-9=0.001953125, and |x|<2^-10 is not flushed to 0). Metric: elementwise q != q.to(torch.float8_e4m3fn).to(torch.float32) grid-membership, plus comparison against x.to(torch.float8_e4m3fn).to(torch.float32). Representative in-scope input: torch.randn(4096) on CUDA, where ~1% of elements land below 2^-6, plus an explicit sweep of magnitudes in [2
-...[truncated 35 chars]
+  "scope_rationale": "problem.txt is the only contract source and it explicitly states that when several experts share the largest logit the LOWEST expert index must win, and that ties are a normal occurrence. Representative inputs the contract admits are ordinary [n_tokens, n_experts] logit matrices containing duplicated maxima within a row; no test.py exists to narrow the domain further.",
+  "statement": "On any token row where the maximum logit value occurs at two or more expert indices (e.g. logits[t] = [2.0, 1.0, 2.0]), `_route_kernel`'s non-strict acceptance test `take = v >= best` (kernel.py:17) lets the later loop iteration overwrite `best_i`, so route_top1 returns the HIGHEST tied index instead of the contractually required LOWEST index; measured as exact index equality against torch.argmax(logits, dim=-1), the kernel will mismatch on such rows.",
+  "status": "open"
+}
 
 ### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Lines 15-17 impose no upper clamp on the exponent, so the code extrapolates the 8-per-binade grid indefinitely past the format's largest binade.",
+  "rationale": "The contract justifies the tie rule by reduced-precision rounding. If a probe only used fp32 randn it would almost never tie and would look clean, so the claim must be tested on fp16/bf16-quantized inputs to show real-world reachability of the `>=` defect.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"round a float32 tensor to the nearest value representable in the FP8 e4m3 format\" - representability is the stated requirement, and e4m3 has no finite values above 448; input magnitudes are not restricted."
+      "summary": "States logits are computed in reduced precision and that distinct logits routinely round to the same representable value, making ties normal \u2014 this defines the expected input distribution."
     }
   ],
-  "scope_rationale": "The contract names e4m3 and requires the output to be a representable e4m3 value; the format's finite range (max 448) is part of that named value set. With no test.py, problem.txt's unrestricted \"a float32 tensor\" admits large-magnitude inputs, which are exactly the regime FP8 storage kernels must saturate.",
-  "statement": "For |x| above the e4m3 max finite value 448, the kernel applies no saturation or overflow handling, so it emits magnitudes such as 512, 1024, 4096 that do not exist in e4m3 (e.g. x=1000 -> step 64 -> 1024). Under either overflow convention (OCP saturating cast to 448, or torch.float8_e4m3fn's NaN) the output is wrong. Metric: grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and comparison to the saturating reference clamp(x, -448, 448)-then-cast, over inputs like [448.0, 449.0, 500.0, 1000.0, 1e4] and their negatives.",
+  "scope_rationale": "problem.txt states that \"router logits are computed in reduced precision and distinct logits routinely round to the same representable value\", so fp16/bf16 logit matrices are exactly the input population the contract describes; correct tie handling on them is required.",
+  "statement": "With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate, and route_top1's returned index will disagree with torch.argmax on those rows \u2014 i.e. the tie bug is reachable without hand-crafted exact duplicates.",
   "status": "open"
 }
 
@@ -633,16 +660,16 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "tl.log2 is typically a fast approximate device intrinsic on fp32; floor() of an approximate log2 is discontinuous exactly at binade boundaries, so any 1-ULP error flips the selected step by a factor of two. This must be decided by runtime probe, not source reading.",
+  "rationale": "The all-equal row is the maximal-severity instance of the tie rule: the contract's answer is unambiguously index 0, while the kernel's sequential overwrite yields the last expert, so severity of the tie defect can be quantified as an index error of E-1.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"within any binade it can represent 8 evenly spaced values ... the resulting relative error is bounded by half a mantissa step, about 2^-4 = 6.25%\" - a wrong binade breaks both the grid and the stated error bound."
+      "summary": "Tie rule requires the lowest expert index to win whenever multiple experts share the largest logit; an all-equal row is such a case and must return 0."
     }
   ],
-  "scope_rationale": "problem.txt requires every value to round to the nearest representable e4m3 value and explicitly bounds the relative error by half a mantissa step (~6.25%); powers of two and their neighbors are ordinary float32 inputs inside the format's normal range, so a mis-selected binade there violates a stated requirement. No test.py exists to narrow the domain.",
-  "statement": "Binade selection via e = floor(tl.log2(|x|)) is a floating-point computation; at or just below exact powers of two (e.g. 2^-6, 1.0, 8.0, 256.0, and nextafter-below values like 7.9999995) a sub-ULP error in tl.log2 can pick the neighboring exponent, yielding a step 2x too fine (off-grid output, e.g. 8.5 inside the [8,16) binade) or 2x too coarse (error up to 12.5%, exceeding the contract's stated half-mantissa-step bound). Metric: for a sweep of exact powers of two 2^-9..2^8 and their nextafter neighbors, check grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and max relative deviation from x.to(torch.float8_e4m3fn).to(torch.float32).",
+  "scope_rationale": "A constant-valued logit row is an ordinary finite [n_tokens, n_experts] input; problem.txt's tie rule covers \"several experts share the largest logit\", which includes all experts sharing it, and prescribes index 0.",
+  "statement": "For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every iteration passes the non-strict `>=` test (kernel.py:13-19).",
   "status": "open"
 }
 
@@ -654,13 +681,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "f65d6ab09799f119dd2ee067f1195621d4b53721d5e124d889b8a0e1543d2d63"
+      "sha256": "1e6d4d7bc2cbb61b591b4e856619932656d2ec62cedc6bf13cb2bc49d7d5d5b0"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "8dfdf9b9f3e4b7dbc720b0ead02501ebad066ff356e8a0758c914980b49ff0ad"
+      "sha256": "1f9a8d041bdcc17cfdec68adc39e5eb1bcc1058f44d1eb104a75f805184df9f8"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -672,12 +699,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "3c3a5fe45f33f09121bb5de666c5950892945a0d633a0def6820f6125fb600a4"
+      "sha256": "5fc69a5acfeaced8d798a50861a57f3e8ad9a1d4ee8014ccf1ecec1bd3c4f023"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For 0 < |x| < 2^-6 = 0.015625 (the e4m3 subnormal region), the kernel keeps using a relative step 2^(floor(log2|x|)-3) instead of the fixed subnormal step 2^-9, so it returns values that are not representable in e4m3 (e.g. x=0.001 stays ~0.001 instead of snapping to a multiple of 2^-9=0.001953125, and |x|<2^-10 is not flushed to 0). Metric: elementwise q != q.to(torch.float8_e4m3fn).to(torch.float32) grid-membership, plus comparison against x.to(torch.float8_e4m3fn).to(torch.float32). Representative in-scope input: torch.randn(4096) on CUDA, where ~1% of elements land below 2^-6, plus an explicit sweep of magnitudes in [2^-12, 2^-6].",
-  "duration_s": 8.350818,
+  "claim_statement": "On any token row where the maximum logit value occurs at two or more expert indices (e.g. logits[t] = [2.0, 1.0, 2.0]), `_route_kernel`'s non-strict acceptance test `take = v >= best` (kernel.py:17) lets the later loop iteration overwrite `best_i`, so route_top1 returns the HIGHEST tied index instead of the contractually required LOWEST index; measured as exact index equality against torch.argmax(logits, dim=-1), the kernel will mismatch on such rows.",
+  "duration_s": 5.238095,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -687,9 +714,14 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "f65d6ab09799f119dd2ee067f1195621d4b53721d5e124d889b8a0e1543d2d63"
-  
-...[truncated 7138 chars]
+          "sha256": "1e6d4d7bc2cbb61b591b4e856619932656d2ec62cedc6bf13cb2bc49d7d5d5b0"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "1f9a8d04
+...[truncated 4101 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -699,13 +731,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "9f62631674b326306d35219f0aa87711a716e38bb91ffb464cceb508fe11dff2"
+      "sha256": "affa6c816f57c004453fb358b6f3574491619e2c23a8105ca527c2b2bd44dd2b"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "159f9ef3b4e3d5439439cc5b88986f9d592c13f2b02810febc34f090166ed422"
+      "sha256": "a215dceb9327e8ff863277e96f1402f35c3e85df4ad45104165e078c595f4559"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -717,12 +749,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "a9401bed02b5a9e36e464e0d7d3c5816ed8c02f0c02511d446b2d9c9dff7703c"
+      "sha256": "b422a439c0b54f992d83041da72e90d7b1b5ad93e625fd7d75cb864038b324ec"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For |x| above the e4m3 max finite value 448, the kernel applies no saturation or overflow handling, so it emits magnitudes such as 512, 1024, 4096 that do not exist in e4m3 (e.g. x=1000 -> step 64 -> 1024). Under either overflow convention (OCP saturating cast to 448, or torch.float8_e4m3fn's NaN) the output is wrong. Metric: grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and comparison to the saturating reference clamp(x, -448, 448)-then-cast, over inputs like [448.0, 449.0, 500.0, 1000.0, 1e4] and their negatives.",
-  "duration_s": 6.664871,
+  "claim_statement": "With realistic reduced-precision router logits (fp32 values cast to fp16/bf16, which the problem says routinely collide), a batch of random rows will contain quantization-induced tied maxima at a nonzero rate, and route_top1's returned index will disagree with torch.argmax on those rows \u2014 i.e. the tie bug is reachable without hand-crafted exact duplicates.",
+  "duration_s": 4.917402,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
@@ -732,12 +764,17 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "9f62631674b326306d35219f0aa87711a716e38bb91ffb464cceb508fe11dff2"
+          "sha256": "affa6c816f57c004453fb358b6f3574491619e2c23a8105ca527c2b2bd44dd2b"
         },
         {
           "description": "Captured stdout from the probe process.",
-         
-...[truncated 8804 chars]
+          "kind": "stdout",
+          "path": "probes/t10_stdout.txt",
+          "sha256": "a215dceb9327e8ff863277e96f1402f35c3e85df4ad45104165e078c595f4559"
+        },
+        {
+      
+...[truncated 5042 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -747,13 +784,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "4e8853da86ad9ef089bf5f04319e0cebfd93f74b0e31d7ddf4906c1ef25e6d9d"
+      "sha256": "4dab936eb9ae4f2354c3ff6505897cf9726be488b0814fc7dd5f088e3e3e66d6"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "c1805ac2db79ed7a86bcbdaf164ecc61f5ebe6d7114af88aa46fea7e79890e31"
+      "sha256": "39be8a1535b869192571543417c68d89f78360e98c5c9201e4f1e3b627332282"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -765,12 +802,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t11_json_result.json",
-      "sha256": "6f36ecf834f810cdb65e09386c10347bc58b8e90ffb283fe93de39a48f479987"
+      "sha256": "61d375953f5ec16b583d169b5fdee55b5f18f0ab6bcb3780ced744e6bbe0a1d5"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "Binade selection via e = floor(tl.log2(|x|)) is a floating-point computation; at or just below exact powers of two (e.g. 2^-6, 1.0, 8.0, 256.0, and nextafter-below values like 7.9999995) a sub-ULP error in tl.log2 can pick the neighboring exponent, yielding a step 2x too fine (off-grid output, e.g. 8.5 inside the [8,16) binade) or 2x too coarse (error up to 12.5%, exceeding the contract's stated half-mantissa-step bound). Metric: for a sweep of exact powers of two 2^-9..2^8 and their nextafter neighbors, check grid membership q == q.to(torch.float8_e4m3fn).to(torch.float32) and max relative deviation from x.to(torch.float8_e4m3fn).to(torch.float32).",
-  "duration_s": 7.202635,
+  "claim_statement": "For a degenerate row where all E logits are equal (the fully tied case, e.g. a constant row), route_top1 returns E-1 rather than the contractually required 0, because `best` is initialized to -inf and every iteration passes the non-strict `>=` test (kernel.py:13-19).",
+  "duration_s": 5.786706,
   "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
@@ -780,8 +817,19 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t11_probe.py",
-          "sha256": "4e8853da86ad9ef089bf5f04319e0cebfd93f74b0e31d7
-...[truncated 3295 chars]
+          "sha256": "4dab936eb9ae4f2354c3ff6505897cf9726be488b0814fc7dd5f088e3e3e66d6"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t11_stdout.txt",
+          "sha256": "39be8a1535b869192571543417c68d89f78360e98c5c9201e4f1e3b627332282"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+      
+...[truncated 11796 chars]
 
 ### t12 - finalize_probe_evidence - ok
 
@@ -789,7 +837,7 @@ Evidence:
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Subnormal region defect confirmed. Explicit sweep of 101 magnitudes in [2^-13, 2^-6]: 75/101 kernel outputs are not e4m3-representable (q != q.to(float8_e4m3fn).to(float32)) and all 75 differ from the true e4m3 cast reference. Flush-to-zero is absent: all 5 tiny inputs (1e-5 ... 4e-4) whose e4m3 reference is exactly 0.0 come back nonzero (e.g. x=1e-5 -> 9.5367e-06, ref 0.0). Critically, this fires on a plain benign input: torch.randn(4096) has 65 elements with 0<|x|<2^-6, and 45 of them produce off-grid outputs / mismatch the e4m3 reference (max abs err 9.765625e-04 = half the 2^-9 subnormal step); 0 mismatches in the normal region, so the failure is exactly localized to the subnormal band as claimed.",
+  "summary": "Hand-crafted tied rows: kernel returns the HIGHEST tied index on all 3 tied rows while torch.argmax returns the lowest ([2,1,2]->kernel 2 vs ref 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1). All untied rows match, and 256 random fp32 rows with E=5 (non-power-of-2) show 0 mismatches, so padding lanes and the per-expert reduction are not implicated \u2014 the defect is exactly the non-strict `v >= best` at kernel.py:17.",
   "supports": "confirmed",
   "tool_event_id": "t9"
 }
@@ -800,7 +848,7 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Overflow/no-saturation defect confirmed. On 20 inputs +/-[416,448,449,460,464,500,512,1000,4096,1e4], 11 kernel outputs exceed the e4m3 max finite 448 and are not representable (snap(kernel) collapses each to 448): x=464->480, 500->512, 1000->1024, 4096->4096, 1e4->10240, and negatives. Both candidate references agree and disagree with the kernel on exactly those 11 elements: torch's direct cast x.to(float8_e4m3fn) and the saturating clamp(x,-448,448)-then-cast both give 448/-448 (torch saturates rather than NaN here). Values <=448 (416, 448) are handled correctly, and 449/460 happen to round down to 448 correctly, so the failure begins at 464.",
+  "summary": "Reduced-precision reachability confirmed without hand-crafted duplicates: 8192x8 random logits cast to bf16 give 31 tied-max rows (0.38%) and 31 mismatches (100% of tied rows); fp16 gives 5 tied rows (0.061%) and 5 mismatches; fp32 gives 0 ties and 0 mismatches. Zero mismatches on untied rows in every dtype, and the kernel's chosen value always equals the row max, so the per-expert sum-reduction is bit-exact and the divergence is purely tie-break direction. Max index error 7 (bf16), i.e. the kernel routed to expert 7 where the contract requires expert 0.",
   "supports": "confirmed",
   "tool_event_id": "t10"
 }
@@ -809,10 +857,10 @@ Evidence:
 
 {
   "claim_id": "c3",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c3.e1",
-  "summary": "Binade-selection risk not realized on this backend. 90 boundary inputs (exact powers of two 2^-6..2^8 within range, plus float32 nextafter neighbors on both sides, and negatives): 0 off-grid outputs, 0 mismatches vs x.to(float8_e4m3fn).to(float32), max relative deviation from input 1.19e-07 (i.e. exact hits). A dense log-uniform sweep of 400,000 samples covering the pure normal range [2^-6, 448) and its negatives also gave 0 off-grid outputs and 0 mismatches vs the e4m3 cast reference, with max relative error 0.0588 < the 0.0625 contract bound and 0 samples exceeding it. So tl.log2+floor selects the correct exponent everywhere tested, and the normal-range path (including tie behavior encountered by this distribution) matches the e4m3 reference exactly; the confirmed defects are confined to the subnormal band (c1) and above-448 overflow (c2).",
-  "supports": "rebutted",
+  "summary": "Fully-tied constant rows (value 0.25) return E-1 for every tested E in {2,3,4,5,6,8,16} and both fp32 and fp16, while the contract and torch.argmax require 0. equals_E_minus_1 is true in all 14 configurations; index error scales with E up to 15 at E=16. Non-power-of-2 E (3,5,6) behaves identically, so BLOCK padding is not the cause \u2014 it is the -inf init plus non-strict `>=`.",
+  "supports": "confirmed",
   "tool_event_id": "t11"
 }
 
@@ -820,7 +868,7 @@ Evidence:
 
 {
   "decision": "no_new_claims",
-  "reason": "Review turn: the two confirmed claims (c1 subnormal-grid/flush-to-zero failure, firing on plain torch.randn(4096) with 45/4096 off-grid elements; c2 no saturation above 448 producing 480/512/1024/10240) already establish the decisive in-scope contract violations, and c3 was rebutted by a 90-point boundary sweep plus 400k log-uniform normal-range samples with zero off-grid outputs. The only untested surfaces left are tie-breaking (half-up vs half-to-even), NaN/Inf, and -0.0 sign; ties are subsumed by the normal-range sweep that matched the e4m3 cast exactly, and NaN/Inf/-0.0 are reference-undefined or excluded by scope policy, so none of them would add material, decisive evidence beyond what is already confirmed. No new high-quality in-scope claim to raise.",
+  "reason": "All three recorded claims (c1 hand-crafted ties, c2 reduced-precision reachability, c3 fully-tied constant rows) are confirmed by runtime probes with proper controls: untied rows match torch.argmax exactly in every dtype, non-power-of-2 E (3,5,6) behaves identically ruling out BLOCK padding, and kernel_chosen_value_always_equals_max=true shows the per-expert sum-reduction is bit-exact, isolating the defect to the non-strict `v >= best` at kernel.py:17. Remaining untested surfaces from the risk map (non-contiguous stride(1)!=1, NaN logits, int32-vs-int64 return dtype, O(E^2) performance) are not required by problem.txt's stated input/output contract and would be out_of_scope generalization notes, not decisive claims. No new in-scope, testable hypothesis remains.",
   "reviewed_claims": [
     "c1",
     "c2",
@@ -833,22 +881,24 @@ Evidence:
 ### t16 - record_verdict - ok
 
 {
-  "confidence": 0.93,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The artifact holds only kernel.py, meta.json, and problem.txt \u2014 no test.py or get_inputs narrows the domain \u2014 so problem.txt is the operative contract, and it explicitly requires that \"every value is rounded to the nearest representable e4m3 value,\" naming the format by its 4 exponent / 3 mantissa bits. That fixes the representable set, including the fixed 2^-9 subnormal step below 2^-6 and the 448 max finite. The kernel derives step = 2^(floor(log2|x|)-3) with no lower or upper exponent clamp (lines 15-17), so it implements only the format's normal-range binade grid.\n\nc1 (confirmed, in_scope): probe t9 shows that for 0<|x|<2^-6 the kernel emits values that are not e4m3-representable \u2014 75/101 sweep points fail q == q.to(float8_e4m3fn).to(float32) and all 75 differ from the true e4m3 cast; flush-to-zero is absent (x=1e-5 -> 9.5367e-06 where the reference is exactly 0.0). Crucially this is not an exotic stress case: plain torch.randn(4096) put 65 elements in the subnormal band and 45 of them came back off-grid, max abs err 9.765625e-04 = half the 2^-9 step, with 0 mismatches in the normal region.\n\nc2 (confirmed, in_scope): probe t10 shows no saturation at the format's 448 max finite \u2014 x=464->480, 500->512, 1000->1024, 1e4->10240, and the negatives \u2014 11/20 outputs exceed 448 and are unrepresentable (snap() collapses each to 448). Both candidate references (torch's direct cast and clamp-then-cast) agree on 448/-448, so this is not a convention ambiguity.\n\nThese are not deviations the contract accounts for. The contract's \"deviation from the float32 input up to the format's own rounding step\" clause licenses quantization error, and c3 confirmed the normal-range path stays within the stated 6.25% bound (max 0.0588 over 400k samples, 0 off-grid). But that clause licenses rounding *to* the e4m3 grid; it does not license returning values that are not in the 
-...[truncated 351 chars]
+  "reason": "problem.txt is the only contract artifact (no test.py/get_inputs exists), and it explicitly and emphatically requires that \"when several experts share the largest logit, the contract requires the LOWEST expert index to win,\" stating that ties are a routine consequence of reduced-precision router logits and that the winner materially changes the layer output. The kernel implements the opposite rule: kernel.py:17 uses the non-strict `take = v >= best` inside an ascending loop over e (lines 15-19), so each equal-valued later index overwrites `best_i`, yielding highest-index-wins.\n\nConfirmed evidence: (c1, t9) hand-crafted tied rows return the highest tied index on 3/3 tied rows ([2,1,2]->2 vs required 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1), with 0 mismatches on untied rows. (c2, t10) the failure is reachable on exactly the input population the contract describes: 8192x8 random logits cast to bf16 yield 31 tied-max rows and 31 mismatches (100% of tied rows, max index error 7, i.e. expert 7 chosen where expert 0 is required); fp16 yields 5/5; fp32 yields 0 ties and 0 mismatches. (c3, t11) fully-tied constant rows return E-1 in all 14 tested configurations (E in {2,3,4,5,6,8,16}, fp32 and fp16) instead of 0.\n\nControls rule out benign explanations: untied rows match torch.argmax exactly in every dtype, non-power-of-2 E (3,5,6) behaves identically so BLOCK padding lanes are not implicated, and kernel_chosen_value_always_equals_max=true shows the per-expert `tl.sum(tl.where(...))` extraction is bit-exact \u2014 the selected VALUE is always the true row max, so this is not a reduction/accumulation-order artifact. This is also not a case of unspecified tie-breaking that I should excuse: the contract names the tie-break direction as a required, load-bearing behavior for reproducibility, and the reference (torch.argmax) agrees with the contract by returning the first maximal index.\
+...[truncated 474 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.93,
-  "created_at": "2026-09-08T16:41:17Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-08T16:41:59Z",
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The artifact holds only kernel.py, meta.json, and problem.txt \u2014 no test.py or get_inputs narrows the domain \u2014 so problem.txt is the operative contract, and it explicitly requires that \"every value is rounded to the nearest representable e4m3 value,\" naming the format by its 4 exponent / 3 mantissa bits. That fixes the representable set, including the fixed 2^-9 subnormal step below 2^-6 and the 448 max finite. The kernel derives step = 2^(floor(log2|x|)-3) with no lower or upper exponent clamp (lines 15-17), so it implements only the format's normal-range binade grid.\n\nc1 (confirmed, in_scope): probe t9 shows that for 0<|x|<2^-6 the kernel emits values that are not e4m3-representable \u2014 75/101 sweep points fail q == q.to(float8_e4m3fn).to(float32) and all 75 differ from the true e4m3 cast; flush-to-zero is absent (x=1e-5 -> 9.5367e-06 where the reference is exactly 0.0). Crucially this is not an exotic stress case: plain torch.randn(4096) put 65 elements in the subnormal band and 45 of them came back off-grid, max abs err 9.765625e-04 = half the 2^-9 step, with 0 mismatches in the normal region.\n\nc2 (confirmed, in_scope): probe t10 shows no saturation at the format's 448 max finite \u2014 x=464->480, 500->512, 1000->1024, 1e4->10240, and the negatives \u2014 11/20 outputs exceed 448 and are unrepresentable (snap() collapses each to 448). Both candidate references (torch's direct cast and clamp-then-cast) agree on 448/-448, so this is not a convention ambiguity.\n\nThese are not deviations the contract accounts for. The contract's \"deviation from the float32 input up to the format's own rounding step\" clause licenses quantization error, and c3 confirmed the normal-range path stays within the stated 6.25% bound (max 0.0588 over 400k samples, 0 off-grid). But that clause licenses rounding *to* the e4m3 grid; it does not licen
-...[truncated 391 chars]
+  "reason": "problem.txt is the only contract artifact (no test.py/get_inputs exists), and it explicitly and emphatically requires that \"when several experts share the largest logit, the contract requires the LOWEST expert index to win,\" stating that ties are a routine consequence of reduced-precision router logits and that the winner materially changes the layer output. The kernel implements the opposite rule: kernel.py:17 uses the non-strict `take = v >= best` inside an ascending loop over e (lines 15-19), so each equal-valued later index overwrites `best_i`, yielding highest-index-wins.\n\nConfirmed evidence: (c1, t9) hand-crafted tied rows return the highest tied index on 3/3 tied rows ([2,1,2]->2 vs required 0; [3,3,0]->1 vs 0; [1,5,5]->2 vs 1), with 0 mismatches on untied rows. (c2, t10) the failure is reachable on exactly the input population the contract describes: 8192x8 random logits cast to bf16 yield 31 tied-max rows and 31 mismatches (100% of tied rows, max index error 7, i.e. expert 7 chosen where expert 0 is required); fp16 yields 5/5; fp32 yields 0 ties and 0 mismatches. (c3, t11) fully-tied constant rows return E-1 in all 14 tested configurations (E in {2,3,4,5,6,8,16}, fp32 and fp16) instead of 0.\n\nControls rule out benign explanations: untied rows match torch.argmax exactly in every dtype, non-power-of-2 E (3,5,6) behaves identically so BLOCK padding lanes are not implicated, and kernel_chosen_value_always_equals_max=true shows the per-expert `tl.sum(tl.where(...))` extraction is bit-exact \u2014 the selected VALUE is always the true row max, so this is not a reduction/accumulation-order artifact. This is also not a case of unspecified tie-breaking that I should excuse: the contract names the tie-break direction as a required, load-bearing behavior for reproducibility, and the reference (torch.argmax) agrees with the contrac
+...[truncated 514 chars]

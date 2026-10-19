@@ -1,59 +1,47 @@
 
-import torch, importlib.util, json
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_07/kernel.py")
+import torch, json, importlib.util, sys
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_08/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
 torch.manual_seed(0)
-K, N, group = 128, 64, 32
-G = K // group
-dev = 'cuda'
+dev='cuda'
+STEP=0.05
+results={}
+bad_examples=[]
+tot=0; bad=0
+maxdev=0.0
 
-q  = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)
-zs = torch.randint(0, 16, (G, N), device=dev, dtype=torch.int32)   # stored zero code
-scales = (torch.rand((G, N), device=dev, dtype=torch.float16) * 0.1 + 0.01)
-g_idx = (torch.arange(K, device=dev) // group).to(torch.int32)
+def check(x, seed, tag):
+    global tot,bad,maxdev
+    out = m.stochastic_round_to_grid(x, seed)
+    lower = torch.floor(x/STEP)*STEP
+    upper = lower + STEP
+    ok = (out==lower)|(out==upper)
+    tot += x.numel(); bad += int((~ok).sum())
+    # also measure distance from output to nearest of {lower,upper}
+    d = torch.minimum((out-lower).abs(), (out-upper).abs()).max().item()
+    maxdev = max(maxdev, d)
+    if (~ok).any():
+        idx=(~ok).nonzero()[:5,0]
+        for i in idx.tolist():
+            bad_examples.append(dict(tag=tag,x=float(x[i]),out=float(out[i]),lower=float(lower[i]),upper=float(upper[i])))
+    return float((~ok).float().mean())
 
-# pack weights along K: packed[i, n] holds q[i*8+j, n] at shift 4*j
-qw = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)
-qr = q.reshape(K // 8, 8, N)
-for j in range(8):
-    qw |= (qr[:, j, :] & 0xF) << (4 * j)
+cases={}
+x1 = (torch.rand(1024, device=dev)*4-2)          # random in [-2,2)
+cases['uniform_pm2']=check(x1, 12345, 'uniform_pm2')
+x2 = (torch.arange(1024, device=dev, dtype=torch.float32)-512)*STEP   # exact multiples
+cases['exact_multiples']=check(x2, 777, 'exact_multiples')
+x3 = x2 + 1e-7
+cases['just_above_grid']=check(x3, 778, 'just_above_grid')
+x4 = x2 - 1e-7
+cases['just_below_grid']=check(x4, 779, 'just_below_grid')
+x5 = (torch.rand(256, device=dev)*200-100)
+cases['uniform_pm100']=check(x5, 4242, 'uniform_pm100')
+x6 = torch.zeros(64, device=dev)
+cases['zeros']=check(x6, 5, 'zeros')
 
-# pack zeros along N: qz[g, n//8] holds zs[g, n] at shift 4*(n%8)
-qz = torch.zeros((G, N // 8), device=dev, dtype=torch.int32)
-zr = zs.reshape(G, N // 8, 8)
-for j in range(8):
-    qz |= (zr[:, :, j] & 0xF) << (4 * j)
-
-# references
-z_plus1 = (zs + 1)[g_idx.long()]
-z_raw   = zs[g_idx.long()]
-sc      = scales[g_idx.long()].float()
-deq_p1  = (q.float() - z_plus1.float()) * sc
-deq_raw = (q.float() - z_raw.float()) * sc
-
-out = {}
-for name, adt in [("fp16", torch.float16), ("fp32", torch.float32)]:
-    a = torch.eye(K, device=dev, dtype=adt)
-    try:
-        c = m.gptq_matmul(a, qw, scales, qz, g_idx, bits=4).float()
-    except Exception as e:
-        out[name] = {"error": repr(e)[:300]}
-        continue
-    e1 = (c - deq_p1).abs()
-    e2 = (c - deq_raw).abs()
-    den = deq_p1.abs().clamp_min(1e-6)
-    out[name] = {
-        "max_abs_err_vs_zero_plus1": float(e1.max()),
-        "max_rel_err_vs_zero_plus1": float((e1 / den).max()),
-        "max_abs_err_vs_zero_raw": float(e2.max()),
-        "frac_elems_err_gt_1e-3_p1": float((e1 > 1e-3).float().mean()),
-        "deq_absmax": float(deq_p1.abs().max()),
-    }
-    # per-row / per-col error structure (helps spot axis bugs)
-    rowerr = e1.max(dim=1).values
-    colerr = e1.max(dim=0).values
-    out[name]["rows_bad"] = [int(i) for i in torch.nonzero(rowerr > 1e-3).flatten()[:20]]
-    out[name]["cols_bad"] = [int(i) for i in torch.nonzero(colerr > 1e-3).flatten()[:20]]
-
-print(json.dumps(out, indent=2))
+print(json.dumps(dict(metric="fraction of outputs not in {lower,upper}",
+                      per_case_bad_frac=cases, total=tot, total_bad=bad,
+                      max_dist_to_nearest_bracket=maxdev,
+                      examples=bad_examples[:10]), indent=1))

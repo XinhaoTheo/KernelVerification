@@ -1,4 +1,4 @@
-"""Independent directed-rounding erf oracle for case_126 and case_127.
+"""Independent directed-rounding erf oracle for case_53 and case_54.
 
 Qualification dependencies: gmpy2==2.2.1 and mpmath==1.3.0. The MPFR library
 version is recorded at runtime. Every finite FP16 *bit pattern* is included,
@@ -20,7 +20,7 @@ import mpmath as mp
 import numpy as np
 import torch
 
-EXPECTED = {"case_126": "trust", "case_127": "reject"}
+EXPECTED = {"case_53": "trust", "case_54": "reject"}
 ATOL = 1e-6
 ORACLE_BITS = 320
 MPMATH_DIGITS = 110

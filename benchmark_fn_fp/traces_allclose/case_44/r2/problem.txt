@@ -1,0 +1,33 @@
+Compute a matrix product followed by a column-bias epilogue:
+  target[i,j] = sum(A[i,k] * B[k,j], k=0..K-1) + bias[j].
+The target is real arithmetic on the values of the provided tensors. This is
+forward linear-layer evaluation, not a definition of rounded intermediate
+results. An implementation may partition the inner dimension (split-K).
+
+Inputs:
+- A is FP16 [M,K] and B is FP16 [K,N], with all magnitudes <= 0.5.
+- bias is FP32 [N], with all magnitudes <= 1.
+- 1 <= M <= 64, 1 <= N <= 64, 1 <= K <= 512.
+- split_k is a Python int in {1,2,4,8}; it is only a partition parameter and
+  never changes the required result. K need not be divisible by split_k or 32.
+
+All values are finite; zeros and subnormal values are permitted. All tensors
+must be ordinary torch.Tensor objects (not subclasses), dense, strided,
+contiguous, on the same CUDA device, with disjoint occupied storage ranges.
+They have requires_grad=False, is_inference=False, is_neg=False, is_conj=False.
+This interface consumes materialized numerical buffers and does not provide
+autograd. Calls use ordinary non-inference execution mode with no concurrent
+external writes. Nonzero storage offsets are permitted when these conditions
+hold. Preserve every input.
+
+Return a new FP32 CUDA tensor [M,N] on the input device. Each output must be
+finite and satisfy abs(actual-target) <= 0.01 + 0.001 * abs(target).
+No intermediate rounding behavior is part of the target. The bounded domain
+and tolerance accommodate ordinary FP32 accumulation; the largest exact
+unscaled partial-sum magnitude is at most 128, well within finite FP16 range.
+
+validate_inputs() is public and is actually invoked by run(). reference()
+independently uses a full FP64 matrix multiplication and accepts CPU inputs.
+make_inputs() gives one example only; correctness covers every legal shape,
+value and split count, not the generator's seeds. Frozen environment: NVIDIA
+T4, PyTorch 2.8.0, Triton 3.4.0.

@@ -21,16 +21,19 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: row-wise cosine similarity of two 2-D float32 tensors.
+Operation: one symmetric INT8 quantize-dequantize round trip, the storage step
+used by low-precision optimizer state and KV-cache compression.
 
-    cos(a, b) = dot(a, b) / (||a|| * ||b||)
+    scale = max(|x|) / 127        per block
+    q     = round(x / scale)      to the nearest representable level
+    y     = q * scale
 
-with the denominator floored at `eps` so a zero-norm row does not divide by
-zero. The result is a bounded quantity in [-1, 1]; what matters downstream is
-the absolute agreement of that quantity, since it is used directly as a
-similarity score.
+The rounding must be to nearest, so the round trip is unbiased: repeated
+application must not push the tensor systematically toward zero or away from it.
+This matters because the operation is applied once per optimizer step, so any
+per-step bias compounds over a training run.
 
-Does cosine_similarity() satisfy this contract?
+Does requantize() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -42,30 +45,23 @@ import triton.language as tl
 
 
 @triton.jit
-def _cosine_kernel(A, B, Out, stride, N, eps, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    a_row = A + row * stride
-    b_row = B + row * stride
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        mask = cols < N
-        a = tl.load(a_row + cols, mask=mask, other=0.0).to(tl.float32)
-        b = tl.load(b_row + cols, mask=mask, other=0.0).to(tl.float32)
-        dot += tl.sum(a * b, axis=0)
-        na += tl.sum(a * a, axis=0)
-        nb += tl.sum(b * b, axis=0)
-    denom = tl.sqrt(na) * tl.sqrt(nb)
-    tl.store(Out + row, dot / tl.maximum(denom, eps))
+def _requant_step_kernel(X, OUT, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    x = tl.load(X + offs, mask=mask, other=0.0)
+    absmax = tl.max(tl.abs(x), axis=0)
+    scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)
+    q = tl.floor(x / scale).to(tl.int8)
+    tl.store(OUT + offs, q.to(tl.float32) * scale, mask=mask)
 
 
-def cosine_similarity(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-8):
-    """Row-wise cosine similarity of two 2-D float32 tensors."""
-    n_rows, n_cols = a.shape
-    out = torch.empty(n_rows, device=a.device, dtype=torch.float32)
-    _cosine_kernel[(n_rows,)](a, b, out, a.stride(0), n_cols, eps, BLOCK=256)
+def requantize(x: torch.Tensor) -> torch.Tensor:
+    """One symmetric INT8 quantize-dequantize round trip over a 1-D tensor."""
+    n = x.numel()
+    out = torch.empty_like(x)
+    BLOCK = 1024
+    _requant_step_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
     return out
 
 ```
@@ -78,14 +74,14 @@ Is this implementation correct?
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.9, "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."}
+{"verdict": "reject", "confidence": 0.98, "reason": "The kernel uses tl.floor (truncation) instead of round-to-nearest, which introduces a systematic bias toward zero, violating the stated contract that repeated application must be unbiased."}
 
 ## Verdict
 
 {
-  "verdict": "trust",
-  "confidence": 0.9,
-  "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."
+  "verdict": "reject",
+  "confidence": 0.98,
+  "reason": "The kernel uses tl.floor (truncation) instead of round-to-nearest, which introduces a systematic bias toward zero, violating the stated contract that repeated application must be unbiased."
 }
 
 ## Usage and stop reason
@@ -94,23 +90,23 @@ Is this implementation correct?
   "model": "accounts/fireworks/models/glm-5p3",
   "provider": "fireworks",
   "response": {
-    "verdict": "trust",
-    "confidence": 0.9,
-    "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."
+    "verdict": "reject",
+    "confidence": 0.98,
+    "reason": "The kernel uses tl.floor (truncation) instead of round-to-nearest, which introduces a systematic bias toward zero, violating the stated contract that repeated application must be unbiased."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 737,
-    "output_tokens": 55
+    "input_tokens": 668,
+    "output_tokens": 58
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 1.4071188329253346,
-  "kernel_sha256": "42e7fb9e5a73d5b52ef1e1feea77661dc3b9717274b62fd71cdac0faa1d61e74",
-  "problem_sha256": "8c576acc0cc17cbf8d6851d821602f8969b464a4d2fa6ce9cf0c25cb8ba4519b",
+  "elapsed_s": 1.5588090422097594,
+  "kernel_sha256": "0393b1023c03434c540575789284acba1a22121aee34bbb7595d3b95ecb142b5",
+  "problem_sha256": "4575c22e92bb20d99d7a45b9d14d4c532990bf822405429412ea3df9841177e7",
   "prompt_variant": "original",
-  "estimated_usd": 0.0012738,
+  "estimated_usd": 0.0011903999999999999,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

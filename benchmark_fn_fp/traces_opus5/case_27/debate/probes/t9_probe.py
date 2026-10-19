@@ -1,48 +1,43 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_27/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_28/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+
+torch.manual_seed(0)
 dev = "cuda"
+R, C = 8, 512
+x = torch.randn(R, C, device=dev, dtype=torch.float32)
+# inject 3 heavy-tail outlier channels per row at 30x-100x the bulk
+for r in range(R):
+    cols = torch.randperm(C, device=dev)[:3]
+    mags = torch.tensor([30.0, 60.0, 100.0], device=dev)
+    signs = torch.tensor([1.0, -1.0, 1.0], device=dev)
+    x[r, cols] = mags * signs
 
-def ref_spec(x, mask):
-    neg = torch.full_like(x, -float("inf"))
-    mx = torch.where(mask, x, neg).max(1, keepdim=True).values
-    e = torch.where(mask, torch.exp(x - mx), torch.zeros_like(x))
-    den = e.sum(1, keepdim=True)
-    return torch.where(den > 0, e / torch.where(den > 0, den, torch.ones_like(den)), torch.zeros_like(e))
+y = k.quant_dequant(x)   # default pctl_levels=2
 
-results = {}
-worst = 0.0
-bad_drop = 0
-nonfinite = 0
-torch.manual_seed(1)
-for (R, C) in [(4,5),(8,7),(16,33),(3,1),(5,64),(6,129),(7,1000)]:
-    x = (torch.randn(R, C, device=dev, dtype=torch.float32) * 5.0)
-    mask = torch.rand(R, C, device=dev) > 0.4
-    # force every row to keep >= 1 position
-    idx = torch.randint(0, C, (R,), device=dev)
-    mask[torch.arange(R, device=dev), idx] = True
-    y = m.masked_softmax(x, mask); torch.cuda.synchronize()
-    r = ref_spec(x, mask)
-    err = float((y - r).abs().max())
-    dz = int((y[~mask] != 0).sum())
-    nf = int((~torch.isfinite(y)).sum())
-    rowsum = y.sum(1)
-    results[f"{R}x{C}"] = {"max_abs_err": err, "dropped_nonzero": dz, "nonfinite": nf,
-                            "max_rowsum_dev": float((rowsum - 1).abs().max())}
-    worst = max(worst, err); bad_drop += dz; nonfinite += nf
+def rel(y, x):
+    return ((y - x).norm(dim=1) / x.norm(dim=1))
 
-# adversarial: identical logits, very negative logits, ties
-x = torch.full((3, 16), -1e30, device=dev); x[1] = 0.0; x[2] = 1e2
-mask = torch.zeros(3, 16, dtype=torch.bool, device=dev); mask[:, :4] = True
-y = m.masked_softmax(x, mask); torch.cuda.synchronize()
-r = ref_spec(x, mask)
-extreme = {"max_abs_err": float((y - r).abs().max()),
-           "nonfinite": int((~torch.isfinite(y)).sum()),
-           "dropped_nonzero": int((y[~mask] != 0).sum()),
-           "row_examples": [[float(v) for v in y[i, :5].tolist()] for i in range(3)]}
+rel_k = rel(y, x)
 
-print(json.dumps({"metric": "max abs err vs spec reference on rows keeping >=1 position; dropped entries exactly 0",
-                  "per_shape": results, "worst_max_abs_err": worst,
-                  "total_dropped_nonzero": bad_drop, "total_nonfinite": nonfinite,
-                  "extreme_case": extreme}))
+# absmax reference (contract-correct calibration)
+scale_ref = x.abs().amax(dim=1, keepdim=True) / 127.0
+q_ref = torch.clamp(torch.round(x / scale_ref), -127, 127)
+y_ref = q_ref * scale_ref
+rel_ref = rel(y_ref, x)
+
+# how many entries got clamped by the kernel
+ax = x.abs()
+srt = ax.sort(dim=1, descending=True).values
+out = {
+  "shape": list(x.shape), "dtype": "float32", "pctl_levels": 2,
+  "kernel_rel_l2_per_row": [round(v,5) for v in rel_k.tolist()],
+  "kernel_rel_l2_max": round(rel_k.max().item(),5),
+  "absmax_ref_rel_l2_max": round(rel_ref.max().item(),6),
+  "tolerance": 0.05,
+  "rows_exceeding_tolerance": int((rel_k > 0.05).sum().item()),
+  "max_abs_out_over_max_abs_in_row0": round((y[0].abs().max()/x[0].abs().max()).item(),5),
+  "top3_absmag_row0": [round(v,3) for v in srt[0,:3].tolist()],
+}
+print(json.dumps(out))

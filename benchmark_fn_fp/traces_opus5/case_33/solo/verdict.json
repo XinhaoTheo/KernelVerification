@@ -1,9 +1,0 @@
-{
-  "confidence": 0.93,
-  "created_at": "2026-09-08T18:00:15Z",
-  "decisive_claims": [
-    "c1"
-  ],
-  "reason": "The contract (problem.txt) explicitly requires that \"every column must be dequantized with the scale and zero-point of the group it actually belongs to, for any K -- including a K that is not an exact multiple of group_size\", with scales/zeros supplied as ceil(K/group_size) rows. The host wrapper (kernel.py:69-73) instead builds the group table with num_groups = K // group_size (floor) and clamps g_idx to num_groups-1, so a short trailing group is never addressed.\n\nProbe t6 tested this on the real kernel. Control case K=64, group_size=32 (exact multiple, 2 rows): kernel matches the contract reference to max_abs_err 4.8e-6 (rel 2.9e-7), confirming the packing/zero+1/scale conventions and the reference harness are consistent. Violating case K=48, group_size=32 with the contract-mandated ceil(48/32)=2 scale/zero rows: kernel deviates from the contract reference by max_abs_err 9.256 against ref_absmax 14.25 (rel error 0.65), while matching a floor-clamp reference (g = clamp(k//gs, max=K//gs-1)) to 2.9e-6. That pins the cause exactly: the trailing 16 columns (k>=32) are dequantized with group 0's scale/zero rather than their own group-1 row, and the supplied group-1 row is never read.\n\nThis is a violation of an explicitly stated required behaviour on an input the contract expressly admits, so it is a defect rather than tolerable numeric deviation.",
-  "verdict": "reject"
-}

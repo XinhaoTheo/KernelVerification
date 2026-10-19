@@ -1,0 +1,765 @@
+{
+  "artifact": {
+    "artifact_files": [
+      "kernel.py",
+      "meta.json",
+      "problem.txt"
+    ],
+    "entry": "case_04",
+    "has_error": null,
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+    "passed": null,
+    "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+    "rounds": null,
+    "session_dir": "/root/cases/case_04",
+    "status": "under_test",
+    "test_code": ""
+  },
+  "claims": [
+    {
+      "created_at": "2026-09-10T05:20:02Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-10T05:20:14Z",
+          "data": {
+            "bf16_roundtrip": {
+              "max_abs_err": 4.76837158203125e-07,
+              "max_rel_err": 2.2695842005759914e-07
+            },
+            "fp32_randn": {
+              "max_abs_err": 4.76837158203125e-07,
+              "max_rel_err": 2.273527854868007e-07
+            },
+            "fp32_small": {
+              "max_abs_err": 0.0
+            },
+            "fp32_tiny": {
+              "max_abs_err": 0.0
+            },
+            "metric": "elementwise max abs/rel error vs fp32 reference",
+            "n_1024": {
+              "max_abs_err": 4.76837158203125e-07
+            },
+            "n_128": {
+              "max_abs_err": 4.76837158203125e-07
+            },
+            "n_4096": {
+              "max_abs_err": 4.76837158203125e-07
+            },
+            "n_7": {
+              "max_abs_err": 1.1920928955078125e-07
+            },
+            "near_zero_row": {
+              "finite": true,
+              "max_abs_err": 4.76837158203125e-07,
+              "max_rel_err": 2.283109523659732e-07
+            }
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
+          "supports": "rebutted",
+          "tool_event_id": "t6"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "solo",
+      "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+      "scope": "unknown",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+        }
+      ],
+      "scope_rationale": "",
+      "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+      "status": "rebutted",
+      "updated_at": "2026-09-10T05:20:14Z"
+    }
+  ],
+  "convergence": null,
+  "description_model": {
+    "contract_model": [],
+    "kernel_model": [],
+    "open_questions": [],
+    "risk_map": [],
+    "scope_notes": []
+  },
+  "description_tasks": [],
+  "description_updates": [],
+  "entry": "case_04",
+  "history": [
+    {
+      "duration_s": null,
+      "role": "orchestrator",
+      "round": 1,
+      "text": "Loading artifact context for the agent.",
+      "tool_calls": [
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "load_artifact"
+        },
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "inspect_problem"
+        },
+        {
+          "args": {
+            "entry": "case_04"
+          },
+          "tool": "list_artifact_files"
+        },
+        {
+          "args": {
+            "entry": "case_04",
+            "path": "meta.json"
+          },
+          "tool": "read_artifact_file"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "duration_s": 18.223921021000002,
+      "role": "solo",
+      "round": 2,
+      "text": "The kernel looks correct. One suspicion: mean_square when a row is near zero \u2014 rsqrt(mean_square+eps) fine. Precision: contract says fp32 accumulation \u2014 ok. Note: Liger original uses tl.rsqrt fine. The bf16 round-trip: X.float() handles it. Potential issue: tl.sum masked with other=0.0 fine.\n\nActually the original Liger kernel stores RSTD and computes Y in fp32 \u2014 matches. Potential difference: original uses rsqrt approximations? Fine. Run a probe comparing against reference across fp32, bf16 round-trip, near-zero rows.The kernel matches the contract formula; my main risk hypotheses are numerical behavior on near-zero rows and on bf16 round-trip inputs. Let me record a claim and run a probe comparing it against an fp32 reference.",
+      "tool_calls": [
+        {
+          "args": {
+            "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+              }
+            ],
+            "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "code": "import torch, json\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev == 'cpu':\n    print(json.dumps({\"error\": \"no cuda\"}))\nelse:\n    import importlib.util, sys\n    spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_04/kernel.py\")\n    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\n    def ref(X, eps):\n        X32 = X.float()\n        ms = (X32 * X32).sum(-1) / X32.shape[-1]\n        rstd = torch.rsqrt(ms + eps)\n        return X32 * rstd.unsqueeze(-1), rstd\n\n    results = {}\n    cases = {\n        \"fp32_randn\": torch.randn(64, 256, device=dev),\n        \"fp32_small\": torch.randn(64, 256, device=dev) * 1e-6,\n        \"fp32_tiny\": torch.randn(64, 256, device=dev) * 1e-30,\n        \"bf16_roundtrip\": torch.randn(64, 256, device=dev).bfloat16().float(),\n        \"near_zero_row\": None,\n    }\n    nz = torch.randn(64, 256, device=dev); nz[10] = 0.0; nz[20] = 1e-40\n    cases[\"near_zero_row\"] = nz\n    eps = 1e-6\n    for name, X in cases.items():\n        Y, R = mod.rms_norm_forward(X, eps), None\n        Yk = Y; Yr, Rr = ref(X, eps)\n        # rstd not returned by wrapper; compare y only\n        dy = (Yk - Yr)\n        results[name] = {\n            \"max_abs_err\": dy.abs().max().item(),\n            \"max_rel_err\": (dy.abs() / (Yr.abs() + 1e-12)).max().item(),\n            \"finite\": bool(torch.isfinite(Yk).all().item()),\n        }\n    # larger sizes\n    for n in [7, 128, 1024, 4096]:\n        X = torch.randn(8, n, device=dev)\n        Yr, _ = ref(X, eps)\n        Yk = mod.rms_norm_forward(X, eps)\n        results[f\"n_{n}\"] = {\"max_abs_err\": (Yk - Yr).abs().max().item()}\n    print(json.dumps(results))",
+            "expected_signal": "max errors at fp32 rounding level, finite outputs including near-zero rows"
+          },
+          "tool": "run_claim_probe"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 18.224,
+        "input_tokens": 6699,
+        "output_tokens": 976
+      }
+    },
+    {
+      "duration_s": 3.0556795590000014,
+      "role": "solo",
+      "round": 3,
+      "text": "The probe (t6) already answered claim c1: max abs/rel errors are at fp32 rounding level (~4.8e-07, ~2.3e-07) across fp32, bf16 round-trip, near-zero rows, and multiple sizes, all finite. I'll record the evidence, mark the claim rebutted (kernel matches contract), and give the verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "claim_id": "c1",
+            "data": {
+              "bf16_roundtrip": {
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.2695842005759914e-07
+              },
+              "fp32_randn": {
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.273527854868007e-07
+              },
+              "fp32_small": {
+                "max_abs_err": 0.0
+              },
+              "fp32_tiny": {
+                "max_abs_err": 0.0
+              },
+              "metric": "elementwise max abs/rel error vs fp32 reference",
+              "n_1024": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_128": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_4096": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_7": {
+                "max_abs_err": 1.1920928955078125e-07
+              },
+              "near_zero_row": {
+                "finite": true,
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.283109523659732e-07
+              }
+            },
+            "kind": "runtime_probe",
+            "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
+            "supports": "rebutted",
+            "tool_event_id": "t6"
+          },
+          "tool": "append_evidence"
+        },
+        {
+          "args": {
+            "claim_id": "c1",
+            "status": "rebutted"
+          },
+          "tool": "update_claim_status"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 3.056,
+        "input_tokens": 11963,
+        "output_tokens": 556
+      }
+    },
+    {
+      "duration_s": 2.441901749000003,
+      "role": "solo",
+      "round": 4,
+      "text": "The single claim c1 is fully resolved as rebutted \u2014 the kernel matches the contract on all admitted inputs. I'll record the final verdict.",
+      "tool_calls": [
+        {
+          "args": {
+            "confidence": 0.92,
+            "decisive_claims": [
+              "c1"
+            ],
+            "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+            "verdict": "trust"
+          },
+          "tool": "record_verdict"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "duration_s": 2.442,
+        "input_tokens": 15023,
+        "output_tokens": 253
+      }
+    }
+  ],
+  "skeptic_review": null,
+  "skills": [
+    "kernel-verification.md",
+    "evidence-driven-review.md",
+    "claim-lifecycle.md",
+    "experiment-design.md",
+    "adversarial-precision.md",
+    "metric-selection.md",
+    "scope-policy.md",
+    "convergence.md"
+  ],
+  "tool_events": [
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-10T05:19:42Z",
+      "id": "t1",
+      "output": {
+        "artifact_files": [
+          "kernel.py",
+          "meta.json",
+          "problem.txt"
+        ],
+        "entry": "case_04",
+        "has_error": null,
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\ntry:\n    from triton.language.extra.libdevice import rsqrt\nexcept ModuleNotFoundError:\n    from triton.language.extra.cuda.libdevice import rsqrt\n\n\n@triton.jit\ndef _rms_norm_forward_kernel(\n    Y_ptr, Y_row_stride, X_ptr, X_row_stride, RSTD_ptr, RSTD_row_stride,\n    n_cols, eps,\n    BLOCK_SIZE: tl.constexpr,\n):\n    row_idx = tl.program_id(0).to(tl.int64)\n    col_offsets = tl.arange(0, BLOCK_SIZE)\n    mask = col_offsets < n_cols\n    X_row = tl.load(X_ptr + row_idx * X_row_stride + col_offsets, mask=mask, other=0.0).to(tl.float32)\n    mean_square = tl.sum(X_row * X_row, axis=0) / n_cols\n    rstd = rsqrt(mean_square + eps)\n    tl.store(RSTD_ptr + row_idx * RSTD_row_stride, rstd)\n    Y_row = X_row * rstd\n    tl.store(Y_ptr + row_idx * Y_row_stride + col_offsets, Y_row, mask=mask)\n\n\ndef rms_norm_forward(X: torch.Tensor, eps: float) -> torch.Tensor:\n    num_rows, n_cols = X.shape\n    BLOCK_SIZE = triton.next_power_of_2(n_cols)\n    X32 = X.float()\n    Y = torch.empty(num_rows, n_cols, device=X.device, dtype=torch.float32)\n    RSTD = torch.empty(num_rows, dtype=torch.float32, device=X.device)\n    _rms_norm_forward_kernel[(num_rows,)](Y, Y.stride(0), X32, X32.stride(0), RSTD, RSTD.stride(0), n_cols, eps, BLOCK_SIZE=BLOCK_SIZE)\n    return Y\n",
+        "passed": null,
+        "problem_text": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+        "rounds": null,
+        "session_dir": "/root/cases/case_04",
+        "status": "under_test",
+        "test_code": ""
+      },
+      "status": "ok",
+      "tool": "load_artifact"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-10T05:19:42Z",
+      "id": "t2",
+      "output": {
+        "content": "Operation: RMSNorm forward\n(linkedin/Liger-Kernel, src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel).\n\nFor each row x:\n\n    mean_square = sum(x * x) / n_cols\n    rstd        = 1 / sqrt(mean_square + eps)\n    y           = x * rstd\n\ncomputed with float32 accumulation. The kernel is expected to be run on inputs\nthat may arrive at different storage precisions (e.g. an fp32 tensor, or the\nsame tensor after a bf16 round-trip), and on rows whose magnitude is close to\nzero.\n",
+        "entry": "case_04",
+        "exists": true,
+        "path": "problem.txt"
+      },
+      "status": "ok",
+      "tool": "inspect_problem"
+    },
+    {
+      "args": {
+        "entry": "case_04"
+      },
+      "created_at": "2026-09-10T05:19:42Z",
+      "id": "t3",
+      "output": {
+        "entry": "case_04",
+        "files": [
+          {
+            "kind": "kernel_source",
+            "path": "kernel.py",
+            "size_bytes": 1308
+          },
+          {
+            "kind": "metadata",
+            "path": "meta.json",
+            "size_bytes": 68
+          },
+          {
+            "kind": "problem",
+            "path": "problem.txt",
+            "size_bytes": 482
+          }
+        ]
+      },
+      "status": "ok",
+      "tool": "list_artifact_files"
+    },
+    {
+      "args": {
+        "entry": "case_04",
+        "path": "meta.json"
+      },
+      "created_at": "2026-09-10T05:19:42Z",
+      "id": "t4",
+      "output": {
+        "content": "{\n  \"name\": \"case_04\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_04",
+        "kind": "metadata",
+        "path": "meta.json",
+        "size_chars": 68,
+        "truncated": false
+      },
+      "status": "ok",
+      "tool": "read_artifact_file"
+    },
+    {
+      "args": {
+        "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+          }
+        ],
+        "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero."
+      },
+      "created_at": "2026-09-10T05:20:02Z",
+      "id": "t5",
+      "output": {
+        "created_at": "2026-09-10T05:20:02Z",
+        "evidence": [],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+          }
+        ],
+        "scope_rationale": "",
+        "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+        "status": "open",
+        "updated_at": "2026-09-10T05:20:02Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "code": "import torch, json\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev == 'cpu':\n    print(json.dumps({\"error\": \"no cuda\"}))\nelse:\n    import importlib.util, sys\n    spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_04/kernel.py\")\n    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\n    def ref(X, eps):\n        X32 = X.float()\n        ms = (X32 * X32).sum(-1) / X32.shape[-1]\n        rstd = torch.rsqrt(ms + eps)\n        return X32 * rstd.unsqueeze(-1), rstd\n\n    results = {}\n    cases = {\n        \"fp32_randn\": torch.randn(64, 256, device=dev),\n        \"fp32_small\": torch.randn(64, 256, device=dev) * 1e-6,\n        \"fp32_tiny\": torch.randn(64, 256, device=dev) * 1e-30,\n        \"bf16_roundtrip\": torch.randn(64, 256, device=dev).bfloat16().float(),\n        \"near_zero_row\": None,\n    }\n    nz = torch.randn(64, 256, device=dev); nz[10] = 0.0; nz[20] = 1e-40\n    cases[\"near_zero_row\"] = nz\n    eps = 1e-6\n    for name, X in cases.items():\n        Y, R = mod.rms_norm_forward(X, eps), None\n        Yk = Y; Yr, Rr = ref(X, eps)\n        # rstd not returned by wrapper; compare y only\n        dy = (Yk - Yr)\n        results[name] = {\n            \"max_abs_err\": dy.abs().max().item(),\n            \"max_rel_err\": (dy.abs() / (Yr.abs() + 1e-12)).max().item(),\n            \"finite\": bool(torch.isfinite(Yk).all().item()),\n        }\n    # larger sizes\n    for n in [7, 128, 1024, 4096]:\n        X = torch.randn(8, n, device=dev)\n        Yr, _ = ref(X, eps)\n        Yk = mod.rms_norm_forward(X, eps)\n        results[f\"n_{n}\"] = {\"max_abs_err\": (Yk - Yr).abs().max().item()}\n    print(json.dumps(results))",
+        "expected_signal": "max errors at fp32 rounding level, finite outputs including near-zero rows"
+      },
+      "created_at": "2026-09-10T05:20:11Z",
+      "id": "t6",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t6_probe.py",
+            "sha256": "434d1a4dbe3b3e53bb925eace841a3854e887bd74a0f9007c906e53a13bbc7c8"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t6_stdout.txt",
+            "sha256": "4b12a26d297046248fb44a60f0fce7dc86efb6c1953abc2ae65ce70479a29a70"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t6_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t6_json_result.json",
+            "sha256": "cb379370543954c50dfca19c7837a021e68b6dfbbf29a35809b9015620420301"
+          }
+        ],
+        "claim_id": "c1",
+        "claim_statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+        "cwd": "/root/cases/case_04",
+        "duration_s": 8.759567,
+        "event_id": "t6",
+        "evidence_draft": {
+          "claim_id": "c1",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t6_probe.py",
+                "sha256": "434d1a4dbe3b3e53bb925eace841a3854e887bd74a0f9007c906e53a13bbc7c8"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t6_stdout.txt",
+                "sha256": "4b12a26d297046248fb44a60f0fce7dc86efb6c1953abc2ae65ce70479a29a70"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t6_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t6_json_result.json",
+                "sha256": "cb379370543954c50dfca19c7837a021e68b6dfbbf29a35809b9015620420301"
+              }
+            ],
+            "duration_s": 8.759567,
+            "exit_code": 0,
+            "expected_signal": "max errors at fp32 rounding level, finite outputs including near-zero rows",
+            "json_parse_error": null,
+            "json_result": {
+              "bf16_roundtrip": {
+                "finite": true,
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.2695842005759914e-07
+              },
+              "fp32_randn": {
+                "finite": true,
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.273527854868007e-07
+              },
+              "fp32_small": {
+                "finite": true,
+                "max_abs_err": 0.0,
+                "max_rel_err": 0.0
+              },
+              "fp32_tiny": {
+                "finite": true,
+                "max_abs_err": 0.0,
+                "max_rel_err": 0.0
+              },
+              "n_1024": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_128": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_4096": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_7": {
+                "max_abs_err": 1.1920928955078125e-07
+              },
+              "near_zero_row": {
+                "finite": true,
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.283109523659732e-07
+              }
+            },
+            "stderr": "",
+            "stdout": "{\"fp32_randn\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.273527854868007e-07, \"finite\": true}, \"fp32_small\": {\"max_abs_err\": 0.0, \"max_rel_err\": 0.0, \"finite\": true}, \"fp32_tiny\": {\"max_abs_err\": 0.0, \"max_rel_err\": 0.0, \"finite\": true}, \"bf16_roundtrip\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.2695842005759914e-07, \"finite\": true}, \"near_zero_row\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.283109523659732e-07, \"finite\": true}, \"n_7\": {\"max_abs_err\": 1.1920928955078125e-07}, \"n_128\": {\"max_abs_err\": 4.76837158203125e-07}, \"n_1024\": {\"max_abs_err\": 4.76837158203125e-07}, \"n_4096\": {\"max_abs_err\": 4.76837158203125e-07}}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t6"
+        },
+        "exit_code": 0,
+        "expected_signal": "max errors at fp32 rounding level, finite outputs including near-zero rows",
+        "json_parse_error": null,
+        "json_result": {
+          "bf16_roundtrip": {
+            "finite": true,
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.2695842005759914e-07
+          },
+          "fp32_randn": {
+            "finite": true,
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.273527854868007e-07
+          },
+          "fp32_small": {
+            "finite": true,
+            "max_abs_err": 0.0,
+            "max_rel_err": 0.0
+          },
+          "fp32_tiny": {
+            "finite": true,
+            "max_abs_err": 0.0,
+            "max_rel_err": 0.0
+          },
+          "n_1024": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_128": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_4096": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_7": {
+            "max_abs_err": 1.1920928955078125e-07
+          },
+          "near_zero_row": {
+            "finite": true,
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.283109523659732e-07
+          }
+        },
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\"fp32_randn\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.273527854868007e-07, \"finite\": true}, \"fp32_small\": {\"max_abs_err\": 0.0, \"max_rel_err\": 0.0, \"finite\": true}, \"fp32_tiny\": {\"max_abs_err\": 0.0, \"max_rel_err\": 0.0, \"finite\": true}, \"bf16_roundtrip\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.2695842005759914e-07, \"finite\": true}, \"near_zero_row\": {\"max_abs_err\": 4.76837158203125e-07, \"max_rel_err\": 2.283109523659732e-07, \"finite\": true}, \"n_7\": {\"max_abs_err\": 1.1920928955078125e-07}, \"n_128\": {\"max_abs_err\": 4.76837158203125e-07}, \"n_1024\": {\"max_abs_err\": 4.76837158203125e-07}, \"n_4096\": {\"max_abs_err\": 4.76837158203125e-07}}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "data": {
+          "bf16_roundtrip": {
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.2695842005759914e-07
+          },
+          "fp32_randn": {
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.273527854868007e-07
+          },
+          "fp32_small": {
+            "max_abs_err": 0.0
+          },
+          "fp32_tiny": {
+            "max_abs_err": 0.0
+          },
+          "metric": "elementwise max abs/rel error vs fp32 reference",
+          "n_1024": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_128": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_4096": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_7": {
+            "max_abs_err": 1.1920928955078125e-07
+          },
+          "near_zero_row": {
+            "finite": true,
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.283109523659732e-07
+          }
+        },
+        "kind": "runtime_probe",
+        "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
+        "supports": "rebutted",
+        "tool_event_id": "t6"
+      },
+      "created_at": "2026-09-10T05:20:14Z",
+      "id": "t7",
+      "output": {
+        "artifacts": [],
+        "created_at": "2026-09-10T05:20:14Z",
+        "data": {
+          "bf16_roundtrip": {
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.2695842005759914e-07
+          },
+          "fp32_randn": {
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.273527854868007e-07
+          },
+          "fp32_small": {
+            "max_abs_err": 0.0
+          },
+          "fp32_tiny": {
+            "max_abs_err": 0.0
+          },
+          "metric": "elementwise max abs/rel error vs fp32 reference",
+          "n_1024": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_128": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_4096": {
+            "max_abs_err": 4.76837158203125e-07
+          },
+          "n_7": {
+            "max_abs_err": 1.1920928955078125e-07
+          },
+          "near_zero_row": {
+            "finite": true,
+            "max_abs_err": 4.76837158203125e-07,
+            "max_rel_err": 2.283109523659732e-07
+          }
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
+        "supports": "rebutted",
+        "tool_event_id": "t6"
+      },
+      "status": "ok",
+      "tool": "append_evidence"
+    },
+    {
+      "args": {
+        "claim_id": "c1",
+        "status": "rebutted"
+      },
+      "created_at": "2026-09-10T05:20:14Z",
+      "id": "t8",
+      "output": {
+        "created_at": "2026-09-10T05:20:02Z",
+        "evidence": [
+          {
+            "artifacts": [],
+            "created_at": "2026-09-10T05:20:14Z",
+            "data": {
+              "bf16_roundtrip": {
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.2695842005759914e-07
+              },
+              "fp32_randn": {
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.273527854868007e-07
+              },
+              "fp32_small": {
+                "max_abs_err": 0.0
+              },
+              "fp32_tiny": {
+                "max_abs_err": 0.0
+              },
+              "metric": "elementwise max abs/rel error vs fp32 reference",
+              "n_1024": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_128": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_4096": {
+                "max_abs_err": 4.76837158203125e-07
+              },
+              "n_7": {
+                "max_abs_err": 1.1920928955078125e-07
+              },
+              "near_zero_row": {
+                "finite": true,
+                "max_abs_err": 4.76837158203125e-07,
+                "max_rel_err": 2.283109523659732e-07
+              }
+            },
+            "id": "c1.e1",
+            "kind": "runtime_probe",
+            "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
+            "supports": "rebutted",
+            "tool_event_id": "t6"
+          }
+        ],
+        "id": "c1",
+        "raised_by": "solo",
+        "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+        "scope": "unknown",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+          }
+        ],
+        "scope_rationale": "",
+        "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+        "status": "rebutted",
+        "updated_at": "2026-09-10T05:20:14Z"
+      },
+      "status": "ok",
+      "tool": "update_claim_status"
+    },
+    {
+      "args": {
+        "confidence": 0.92,
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-10T05:20:17Z",
+      "id": "t9",
+      "output": {
+        "confidence": 0.92,
+        "created_at": "2026-09-10T05:20:17Z",
+        "decisive_claims": [
+          "c1"
+        ],
+        "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+        "verdict": "trust"
+      },
+      "status": "ok",
+      "tool": "record_verdict"
+    }
+  ],
+  "verdict": {
+    "confidence": 0.92,
+    "created_at": "2026-09-10T05:20:17Z",
+    "decisive_claims": [
+      "c1"
+    ],
+    "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+    "verdict": "trust"
+  }
+}

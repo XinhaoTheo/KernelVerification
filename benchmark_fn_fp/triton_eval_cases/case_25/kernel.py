@@ -4,21 +4,28 @@ import triton.language as tl
 
 
 @triton.jit
-def _requant_step_kernel(X, OUT, N, BLOCK: tl.constexpr):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK + tl.arange(0, BLOCK)
-    mask = offs < N
-    x = tl.load(X + offs, mask=mask, other=0.0)
-    absmax = tl.max(tl.abs(x), axis=0)
-    scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)
-    q = tl.floor(x / scale).to(tl.int8)
-    tl.store(OUT + offs, q.to(tl.float32) * scale, mask=mask)
+def _threshold_kernel(Scores, Out, stride, K, N: tl.constexpr, BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    cols = tl.arange(0, BLOCK)
+    valid = cols < N
+    x = tl.load(Scores + row * stride + cols, mask=valid, other=-float("inf"))
+
+    lo = tl.min(tl.where(valid, x, float("inf")), axis=0)
+    hi = tl.max(x, axis=0)
+    for _ in range(40):
+        mid = (lo + hi) * 0.5
+        count = tl.sum(tl.where(valid & (x >= mid), 1, 0), axis=0)
+        lo = tl.where(count >= K, mid, lo)
+        hi = tl.where(count >= K, hi, mid)
+    # Ties at the cutoff are all admitted.
+    keep = valid & (x >= lo)
+    tl.store(Out + row * stride + cols, tl.where(keep, x, 0.0), mask=valid)
 
 
-def requantize(x: torch.Tensor) -> torch.Tensor:
-    """One symmetric INT8 quantize-dequantize round trip over a 1-D tensor."""
-    n = x.numel()
-    out = torch.empty_like(x)
-    BLOCK = 1024
-    _requant_step_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
+def topk_mask(scores, k: int):
+    # Zero out everything below the top-k cutoff, keeping ties at the cutoff.
+    n_rows, n_cols = scores.shape
+    out = torch.empty_like(scores)
+    _threshold_kernel[(n_rows,)](scores, out, scores.stride(0), k, N=n_cols,
+                                 BLOCK=triton.next_power_of_2(n_cols))
     return out

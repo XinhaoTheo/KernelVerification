@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_09`
-- Turns: 10
-- Tool events: 17
+- Entry: `case_10`
+- Turns: 13
+- Tool events: 18
 - Claims: 2
 - Description updates: 2
-- LLM time: 136.461s across 9 calls | tokens: in=215390 out=6655 total=222045
+- LLM time: 197.107s across 12 calls | tokens: in=381401 out=9686 total=391087
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.9
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_09",
+    "entry": "case_10",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 
-### Turn 2 - `describer` (29.166566703s, in=5743 out=1540)
+### Turn 2 - `describer` (33.65037580300003s, in=5725 out=1583)
 
 Message:
 
 ```text
-I have the full problem text, kernel source, and metadata already loaded, so I'll analyze the sort/tie-breaking behavior and record the structured description model directly.
+I have full source and problem context already; I'll record the structured description of this bitonic top-k kernel and its risk surfaces.
 ```
 
 Tool calls:
@@ -75,37 +75,37 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "sorted_topk_indices(scores, k) must return, per token row, indices of the highest-scoring experts, with k=1 as the operative case (top-1 routing gate).",
-      "Tie contract: when two experts have exactly equal scores, the LOWER index must be kept.",
-      "Scores shape is (B, N) with N a power of two; the bitonic network family is only defined for power-of-two extents.",
-      "Downstream, each chosen expert contributes an output vector and the batch is mean-pooled, so a wrong index changes the pooled representation directly.",
-      "Only index output is contracted (ids[:, :k].long()); the sorted scores are internal state."
+      "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+      "Tie contract: for exactly equal scores, the LOWER index must be kept (kept when the tie straddles the k cutoff, and earlier position when ties appear inside the sorted output).",
+      "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so selected-index mistakes propagate into output error.",
+      "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just final sorted values.",
+      "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set and downstream average."
     ],
     "kernel_model": [
-      "Host wrapper sorted_topk_indices clones scores, builds per-row ids = arange(N) as int32, and launches _row_argsort_
-  ...[truncated 3233 chars]
+      "Host wrapper (kernel.py:61-7
+  ...[truncated 4105 chars]
   Output summary:
   {
     "contract_model": [
-      "sorted_topk_indices(scores, k) must return, per token row, indices of the highest-scoring experts, with k=1 as the operative case (top-1 routing gate).",
-      "Tie contract: when two experts have exactly equal scores, the LOWER index must be kept.",
-      "Scores shape is (B, N) with N a power of two; the bitonic network family is only defined for power-of-two extents.",
-      "Downstream, each chosen expert contributes an output vector and the batch is mean-pooled, so a wrong index changes the pooled representation directly.",
-      "Only index output is contracted (ids[:, :k].long()); the sorted scores are internal state."
+      "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+      "Tie contract: for exactly equal scores, the LOWER index must be kept (kept when the tie straddles the k cutoff, and earlier position when ties appear inside the sorted output).",
+      "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so selected-index mistakes propagate into output error.",
+      "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just final sorted values.",
+      "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set and downstream average."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Host wrapper sorted_topk_indices clones scores, builds per-row ids = arange(N) as int32, and launches _row_argsort_kernel with one program per row (grid (B,)), N as constexpr, N_DIMS = log2(N), DESCENDING=True; returns ids[:, :k].long().",
-      "The kernel is a full bitonic sort over each row: for stages 1..N_DIMS it calls _bitonic_merge; intermediate stages use order=2 (alternating flip pattern), the final stage uses DESCENDING=True.",
-      "_compare_and_swap selects pair members via m
-  ...[truncated 2957 chars]
+      "Host wrapper (kernel.py:61-70): clones scores, builds ids = arange(N) tiled per row (int32), launches one Triton program per row doing a full bitonic sort of the row (values and ids moved together), then returns ids[:, :k].long().",
+      "n_dims = int(math.log2(N)) is computed host-side and passed as constexpr; N must be a power of two or the reshape shapes in _compare_and_swap break.",
+      "Tie-brea
+  ...[truncated 3805 chars]
 
-### Turn 3 - `skeptic` (12.190720269999986s, in=13300 out=464)
+### Turn 3 - `skeptic` (19.92931593200001s, in=14270 out=1004)
 
 Message:
 
 ```text
-The tie-break contract is the core risk here: the bitonic network swaps equal pairs in flip=True stages but not in flip=0 stages, so under exact ties the final ids[:, :1] may not be the lowest index. I'll record the two highest-risk in-scope claims.
+The key attack surface here is the tie-break contract. The kernel model's stability argument ("strict > means equal values never swap, so order is preserved") is unsound for a bitonic network: non-adjacent tied elements never swap with each other directly, but they can swap with intermediate elements in earlier stages, changing their relative order. That directly threatens the stated lower-index tie contract, especially at the k cutoff. I'll record that as the top in-scope claim, plus a secondary NaN claim with unknown scope.
 ```
 
 Tool calls:
@@ -113,350 +113,316 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "The swap condition uses strict > only, so equal-valued pairs swap in flip=True sub-stages but not flip=0 sub-stages; the composite multi-stage behavior under exact ties does not obviously preserve the lower-index element at the head of the descending order, so the returned top-1 index can be the higher of two tied experts.",
+    "rationale": "The kernel model assumes strict comparisons make the network stable, but bitonic sorts compare distant pairs across stages; two equal-scored candidates can be separated and re-crossed via swaps with other elements, so equal scores can end up out of original index order, including at the k cutoff. This violates the explicit contract that the LOWER index is kept for exactly equal scores.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\""
-      }
-    ],
-    "statement": "For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the lowest index a
-  ...[truncated 53 chars]
+        "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Input domain: scores has a power-of-two number of columns; the kernel is required to return indices of the k highest in d
+  ...[truncated 343 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
-- `record_claim -> t7 error`
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "The whole sort's direction depends on this single (left > right) != flip test; if flip semantics are inverted the first element is the minimum instead of the maximum, which would be a catastrophic index failure on ordinary inputs.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"must return, for each token, the index of the highest-scoring expert.\""
-      }
-    ],
-    "statement": "The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last stage, and an off-by-one in how flip propagates through intermediate stages could leave ids[:, :1] pointing at the lowest score."
+    "rationale": "In _compare_and_swap, left/right are computed as sums including NaN*0=NaN terms, so any row containing NaN has NaN comparisons always False; NaN candidates are never swapped with anyone and can remain displaced from a torch.topk-consistent ordering. If the benchmark feeds NaN scores this produces an incorrect selection; NaN is not addressed by the contract.",
+    "scope": "unknown",
+    "statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position)."
   }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-  }
-
-### Turn 4 - `skeptic` (9.415733252999985s, in=14587 out=540)
-
-Message:
-
-```text
-Both prior claim records failed for missing `scope_rationale`; I'll re-send them properly now.
-```
-
-Tool calls:
-
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "The swap condition uses strict > only, so equal-valued pairs swap in flip=True sub-stages but not flip=0 sub-stages; the composite multi-stage behavior under exact ties does not obviously preserve the lower-index element at the head of the descending order, so the returned top-1 index can be the higher of two tied experts.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\""
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly states the tie rule: \"when two experts have exactly equal scores, the LOWER index must be the one kept.\" A row with exactly tied maximum scores is admitted by the contract (N power-of-two, any
-  ...[truncated 378 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The swap condition uses strict > only, so equal-valued pairs swap in flip=True sub-stages but not flip=0 sub-stages; the composite multi-stage behavior under exact ties does not obviously preserve the lower-index element at the head of the descending order, so the returned top-1 index can be the higher of two tied experts.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\""
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly states the tie rule: \"when two experts have exactly equal scores, the LOWER index must be the one kept.\" A row with exactly tied maximum scores is admitted by the contract (N power-of-two, any float scores), so a returned non-lowest tied index is a direct contract violation.",
-    "statement": "For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the lowest index among the tied maximum, violating the tie contract.",
-    "statu
-  ...[truncated 12 chars]
-- `record_claim -> t9 ok`
-  Args:
-  {
-    "rationale": "The whole sort's direction depends on this single (left > right) != flip test; if flip semantics are inverted the first element is the minimum instead of the maximum, which would be a catastrophic index failure on ordinary inputs.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"`sorted_topk_indices(scores, k=1)` must return, for each token, the index of the highest-scoring expert.\""
-      }
-    ],
-    "scope_rationale": "problem.txt requires returning \"the index of the highest-scoring expert\"; any row of float scores with a unique max is in the contracted domain, so a returned min-index (or otherwise wrong index) would directly violate this requirement.",
-    "statement": "The kernel may return the minimum-scoring expert'
-  ...[truncated 290 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "The whole sort's direction depends on this single (left > right) != flip test; if flip semantics are inverted the first element is the minimum instead of the maximum, which would be a catastrophic index failure on ordinary inputs.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"`sorted_topk_indices(scores, k=1)` must return, for each token, the index of the highest-scoring expert.\""
-      }
-    ],
-    "scope_rationale": "problem.txt requires returning \"the index of the highest-scoring expert\"; any row of float scores with a unique max is in the contracted domain, so a returned min-index (or otherwise wrong index) would directly violate this requirement.",
-    "statement": "The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last stage, and an off-by-one in how flip propagates through intermediate stages could leave ids[:, :1] pointing at the lowest score.",
+    "rationale": "In _compare_and_swap, left/right are computed as sums including NaN*0=NaN terms, so any row containing NaN has NaN comparisons always False; NaN candidates are never swapped with anyone and can remain displaced from a torch.topk-consistent ordering. If the benchmark feeds NaN scores this produces an incorrect selection; NaN is not addressed by the contract.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "",
+    "statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).",
     "status": "open"
   }
 
-### Turn 5 - `describer` (29.001017578000017s, in=15451 out=1485)
+### Turn 4 - `experimenter` (14.731471847999956s, in=16274 out=778)
 
 Message:
 
 ```text
-The description model for case_09 is already recorded and the two open claims (c1 tie-breaking, c2 order direction) match the risks I identified. I'll record one refinement update that sharpens the tie-break mechanics relevant to c1/c2 and flags remaining unknowns for the Experimenter, rather than re-reading the artifact.
+The only open claim is c1 (NaN handling in the bitonic network). I'll run a runtime probe feeding rows with NaN scores to see where NaN candidates land in the kernel's output versus torch.topk, since torch.topk treats NaN as maximal.
 ```
 
 Tool calls:
 
-- `record_description_update -> t10 ok`
-  Args:
-  {
-    "contract_model": [
-      "Unchanged from du1: per-token top-1 index of highest-scoring expert; exact-tie rule keeps the LOWER index; N power-of-two; only ids[:, :k].long() is contracted.",
-      "Refinement for c1/c2 probing: the contract makes exact-index equality the deciding metric, so evidence should compare the returned index to torch.argmax-equivalent selection (argmax also returns the first/lowest index on ties), not to a value-only top-k comparison."
-    ],
-    "kernel_model": [
-      "Confirms du1 kernel model: _compare_and_swap swaps iff (left > right) != flip; flip=1 means swap on left <= right (ties swap), flip=0 means swap on left > right (ties do not swap).",
-      "Tie mechanics relevant to c1: at the final merge stage (stage=N_DIMS, i runs over all N_DIMS sub-steps with flip=DESCE
-  ...[truncated 4520 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "Unchanged from du1: per-token top-1 index of highest-scoring expert; exact-tie rule keeps the LOWER index; N power-of-two; only ids[:, :k].long() is contracted.",
-      "Refinement for c1/c2 probing: the contract makes exact-index equality the deciding metric, so evidence should compare the returned index to torch.argmax-equivalent selection (argmax also returns the first/lowest index on ties), not to a value-only top-k comparison."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Confirms du1 kernel model: _compare_and_swap swaps iff (left > right) != flip; flip=1 means swap on left <= right (ties swap), flip=0 means swap on left > right (ties do not swap).",
-      "Tie mechanics relevant to c1: at the final merge stage (stage=N_DIMS, i runs over all N_DIMS sub-steps with flip=DESCENDING=True uniformly), any exactly-tied pair compared in a flip=1 sub-step WILL swap, moving the higher-index element leftward; only flip=0 sub-steps (which occur only in intermediate order=2 stages, never in the final stage when DESCENDING=True) preserve tied order. So within the final stage there is no tie-stability at all: the head position after the final stage is det
-  ...[truncated 4210 chars]
-
-### Turn 6 - `skeptic` (10.600561572000004s, in=25531 out=494)
-
-Message:
-
-```text
-The two highest-risk in-scope hypotheses (c1 tie-break on exactly-tied maxima, c2 order direction on unique maxima) are already in the ledger and await probes. Other candidate risks (NaN rows, non-power-of-two N, k>1) are outside the stated contract, and the source inspection already covered the flip construction. No new evidence warrants a third claim.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t11 ok`
-  Args:
-  {
-    "reason": "Both decisive in-scope failure modes for this contract (lower-index tie-break on exactly-tied maxima, and argmax correctness/order direction) are already recorded as c1 and c2 and await runtime probes; remaining candidate risks (NaN rows, non-power-of-two N, k>1 slicing) fall outside the stated problem.txt contract, so no additional high-quality in-scope claims are warranted this round.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "Both decisive in-scope failure modes for this contract (lower-index tie-break on exactly-tied maxima, and argmax correctness/order direction) are already recorded as c1 and c2 and await runtime probes; remaining candidate risks (NaN rows, non-power-of-two N, k>1 slicing) fall outside the stated problem.txt contract, so no additional high-quality in-scope claims are warranted this round.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 10,
-    "turn": 6
-  }
-
-### Turn 7 - `experimenter` (14.918202292999979s, in=26541 out=872)
-
-Message:
-
-```text
-I'll launch two independent runtime probes: c1 tests exactly-tied maxima (all-equal rows, duplicated max) across several power-of-two N, and c2 tests unique-max rows (reversed-range, random) to check order direction. Both compare the returned index to torch.argmax (which keeps the lowest index on ties).
-```
-
-Tool calls:
-
-- `run_claim_probe -> t12 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_09\")\nfrom kernel import sorted_topk_indices\n\nres = {}\ndev = \"cuda\"\nfor N in [2, 4, 8, 16, 64]:\n    B = 8\n    rows = []\n    # all-equal row\n    rows.append(torch.full((N,), 0.5, device=dev))\n    # duplicated max at various pairs\n    for (i, j) in [(0, N // 2), (1, N - 2), (N // 2, N - 1)]:\n        r = torch.randn(N, device=dev)\n        m = r.max()\n        r[i] = m; r[j] = m\n        rows.append(r)\n    # max repeated 3 times\n    r = torch.randn(N, device=dev)\n    m = r.max()\n    for t in [0, N // 3, N - 1]:\n        r[t] = m\n    rows.append(r)\n    scores = torch.stack(rows)\n    got = sorted_topk_indices(scores, 1).squeeze(1)\n    want = scores.argmax(1)\n    mism = (got != 
-  ...[truncated 419 chars]
+    "code": "import torch, json, math, sys\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nN = 16  # power of two\nk = 8\n# Row 0: one NaN among normal scores; Row 1: NaN at low index; Row 2: all normal control\nscores = torch.randn(3, N, device=dev, dtype=torch.float32)\nscores[0, 5] = float(\"nan\")\nscores[1, 0] = float(\"nan\")\nscores[1, 7] = float(\"nan\")\n\nout = sorted_topk_indices(scores, k)\ntorch.cuda.synchronize()\nref = torch.topk(scores, k, dim=-1).indices\n\n# also inspect the sorted values returned implicitly: reconstruct values of selected idxs\nsel_vals = torch.gather(scores, 1, out.to(scores.device))\n# check whether any NaN index is selected and where\nnan_pos_kernel = []\
+  ...[truncated 1414 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "5811a0bafe82b0490ef897d815bf26ae2b76c8bb8287b1dd8803c13a2b8b3bbf"
+        "path": "probes/t8_probe.py",
+        "sha256": "2581c0957674f55d7e28f9509c6a982b901220e292683ea8eec394b8bf49a533"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "7f0931ad70e83fed14301ce39aaf0012a67790a0805eba06bf41de4dc95a42da"
+        "path": "probes/t8_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "8d73b3401346c790cacda1c8960970845bee55bf8606759c9869504c9d7f5b20"
+        "path": "probes/t8_stderr.txt",
+        "sha256": "4af5f09a87dba5123147ff81dfacae22507970d68209f797360ebd674c8578c8"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the 
-  ...[truncated 6872 chars]
-- `run_claim_probe -> t13 ok`
+    "claim_statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).",
+    "duration_s": 7.97734,
+    "event_id": "t8",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "descript
+  ...[truncated 2757 chars]
+
+### Turn 5 - `experimenter` (10.129722148000042s, in=19032 out=450)
+
+Message:
+
+```text
+The previous c1 probe crashed on a malformed torch.equal line before printing anything, so I'll rerun a corrected version that reports kernel vs torch.topk selections for NaN-containing rows.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t9 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_09\")\nfrom kernel import sorted_topk_indices\n\nres = {}\ndev = \"cuda\"\nfor N in [2, 4, 8, 16, 64]:\n    B = 16\n    # reversed-range rows: max at 0, min at N-1 (descending unique values)\n    desc = torch.arange(N, 0, -1, device=dev, dtype=torch.float32).unsqueeze(0).expand(B // 2, N)\n    # ascending-range: max at N-1, min at 0\n    asc = torch.arange(1, N + 1, device=dev, dtype=torch.float32).unsqueeze(0).expand(B // 2, N)\n    rand = torch.randn(B, N, device=dev)\n    scores = torch.cat([desc, asc, rand])[:B]\n    got = sorted_topk_indices(scores, 1).squeeze(1)\n    want = scores.argmax(1)\n    mism = (got != want).nonzero().flatten().tolist()\n    res[f\"N={N}\"] = {\"mismatch_rows\": mi
-  ...[truncated 484 chars]
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nN, k = 16, 8\nscores = torch.randn(4, N, device=dev, dtype=torch.float32)\nscores[0, 5] = float(\"nan\")\nscores[1, 0] = float(\"nan\"); scores[1, 7] = float(\"nan\")\nscores[2, 15] = float(\"nan\")  # NaN at last index\n# row 3: all normal control\n\nout = sorted_topk_indices(scores, k)\ntorch.cuda.synchronize()\nref = torch.topk(scores, k, dim=-1).indices\n\nsel_vals = torch.gather(scores, 1, out.to(dev))\nres = {\n  \"kernel_selected\": out.tolist(),\n  \"torch_topk_selected\": ref.tolist(),\n  \"kernel_selected_values\": sel_vals.tolist(),\n  \"nan_in_kernel_selection\": bool(torch.isnan(sel_vals).any().it
+  ...[truncated 598 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t13_probe.py",
-        "sha256": "b0682f77437ddc45fbafd4ed47eef4a6d7edf79dddddda7c74ac65db4feedc5d"
+        "path": "probes/t9_probe.py",
+        "sha256": "6ffff5665ac2790d607683bf4a17c384f860dac4b31fc744c6fc86f502c0dd04"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t13_stdout.txt",
-        "sha256": "c0f451401f0f0379fdf15bf6dedb536442c37ccec83cb4936ff281484b6fcf88"
+        "path": "probes/t9_stdout.txt",
+        "sha256": "b6ffafb974448fd373beb109cf162adafad8a9369b4d309661616096787c1eb2"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t13_stderr.txt",
+        "path": "probes/t9_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "cabd59336c423e750681f59b645cc2bf160c769856695856dc4380920c353320"
+        "path": "probes/t9_json_result.json",
+        "sha256": "ba47082fe78d2528a153b226ffeda0f364381b97852d4c21b500d589b8e43512"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last s
-  ...[truncated 5681 chars]
+    "claim_id": "c1",
+    "claim_statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary pos
+  ...[truncated 8919 chars]
 
-### Turn 8 - `experimenter` (13.847874607999984s, in=32107 out=559)
+### Turn 6 - `experimenter` (30.32312775700001s, in=24328 out=1801)
 
 Message:
 
 ```text
-Both probes have returned. I'll finalize the evidence: c1 (tie-break) shows clear mismatches on exactly-tied maxima (e.g. all-equal row returns N/2 instead of 0, N=2 duplicated max returns 1 instead of 0), confirming the tie contract is violated; c2 shows perfect argmax agreement on all unique-max rows, rebutting the order-direction hypothesis.
+The t9 probe gives a decisive answer for c1: rows with NaN produce a completely corrupted sort — even the non-NaN values come back out of order (row 0 selected values [2.26, -0.36, 1.18, ...] are not descending), and NaN sometimes gets selected at position 0 (row 2) while torch.topk would also put NaN first, but rows 0–1 differ entirely. The NaN-free control row matches torch.topk exactly. This confirms the NaN mechanism in c1, though scope (whether the benchmark ever feeds NaN) remains unknown.
+
+Separately, the skeptic's in-scope tie-break claim failed to record (t6 LedgerError), so it isn't in the ledger — I'll run an exploratory tie-break probe now so the Judge has the data even without a claim id.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t14 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "all_equal_row_got_N64": 32,
-      "all_equal_row_want": 0,
-      "mismatch_counts_by_N": {
-        "N=16": 1,
-        "N=2": 5,
-        "N=4": 2,
-        "N=64": 3,
-        "N=8": 2
-      },
-      "n_rows_per_N": 5,
-      "rows_tested": [
-        "all-equal row",
-        "duplicated max pairs",
-        "3x repeated max"
-      ],
-      "tie_violation_example": "N=2 tied max at indices 0,1 -> returned 1, want 0"
+      "kernel_nan_selected_pos_row2": 0,
+      "nan_rows_fully_unsorted": true,
+      "nan_rows_with_full_output_corruption": 3,
+      "row0_kernel_selected_values_descending": false,
+      "row3_no_nan_control_match": true,
+      "topk_nan_selected_pos": [
+        0,
+        [
+          1,
+          0
+        ],
+        0
+      ]
     },
-    "event_id": "t12",
+    "event_id": "t9",
     "status": "confirmed",
-    "summary": "Exactly-tied maxima violate the lower-index tie contract at every tested power-of-two N (2,4,8,16,64): all-equal rows return index N/2 (e.g. 32 of 64) instead of 0; N=2 duplicated max returns index 1 instead of 0; duplicated/triplicated max rows return the higher tied index in multiple configurations. torch.argmax (lowest tied ind
-  ...[truncated 51 chars]
+    "summary": "Confirmed: rows containing NaN come back fully unsorted \u2014 not merely NaN displaced. Row 0 (NaN at idx 5) returned ids [11,9,15,12,3,6,14,13] with selected values [2.26,-0.36,1.18,0.31,0.14,-0.62,1.28,-0.18], i.e. even the finite values are not in descending order, and NaN idx 5 was excluded from top-8 while torch.topk ranks NaN first. Row 1 (two NaN) also fully mismatched. Row 2 (NaN at idx 15) selected NaN
+  ...[truncated 344 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Exactly-tied maxima violate the lower-index tie contract at every tested power-of-two N (2,4,8,16,64): all-equal rows return index N/2 (e.g. 32 of 64) instead of 0; N=2 duplicated max returns index 1 instead of 0; duplicated/triplicated max rows return the higher tied index in multiple configurations. torch.argmax (lowest tied index) is the reference.",
+    "summary": "Confirmed: rows containing NaN come back fully unsorted \u2014 not merely NaN displaced. Row 0 (NaN at idx 5) returned ids [11,9,15,12,3,6,14,13] with selected values [2.26,-0.36,1.18,0.31,0.14,-0.62,1.28,-0.18], i.e. even the finite values are not in descending order, and NaN idx 5 was excluded from top-8 while torch.topk ranks NaN first. Row 1 (two NaN) also fully mismatched. Row 2 (NaN at idx 15) selected NaN first at position 0. NaN-free control row 3 matched torch.topk exactly. Mechanism consistent with c1: NaN*0=NaN poisons left/right lanes, all comparisons False, network produces garbage ordering. Note: contract/problem.txt does not mention NaN, so this claim's scope (whether benchmark feeds NaN) remains unknown.",
     "supports": "confirmed",
-    "tool_event_id": "t12"
+    "tool_event_id": "t9"
   }
-- `finalize_probe_evidence -> t15 ok`
+- `run_python_probe -> t11 ok`
   Args:
   {
-    "data": {
-      "mismatch_rows_all_N": [],
-      "n_rows_per_N": 16,
-      "n_tested": [
-        2,
-        4,
-        8,
-        16,
-        64
-      ],
-      "row_types": [
-        "descending-range (max at 0, min at N-1)",
-        "ascending-range (max at N-1)",
-        "randn"
-      ],
-      "total_mismatch_rows": 0
-    },
-    "event_id": "t13",
-    "status": "rebutted",
-    "summary": "Order direction is correct: across N in {2,4,8,16,64} with 16 rows each (descending-range, ascending-range, randn), the returned top-1 index matched torch.argmax exactly in all 80 rows, including known-max-position rows (desc max at 0, asc max at N-1). No evidence of min-index or inverted ordering on unique-max inputs.",
-    "supports": "rebutted"
-  }
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nN, k = 16, 8\nrows = []\n# Row 0: ties straddling the k cutoff (values equal at boundary), lower index should be kept\nr = torch.tensor([5.0,1.0,4.0,1.0,3.0,1.0,2.0,1.0, 1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device=dev)\nrows.append(r)\n# Row 1: many duplicated values, heavier tie clustering\nr = torch.tensor([2.0,2.0,1.0,1.0,1.0,1.0,0.5,0.5, 0.5,0.5,0.25,0.25,0.25,0.25,0.25,0.25], device=dev)\nrows.append(r)\n# Row 2: two-way tie at cutoff exactly\nr = torch.tensor([9.0,8.0,7.0,6.0,5.0,4.0,3.0,3.0, 2.0,1.0,0.0,-1.0,-2.0,-3.0,-4.0,-5.0], device=dev)\nrows.append(r)\nscores = torch.stack(rows)\n\nout = sorted_topk_indices(scores, k)\n
+  ...[truncated 540 chars]
   Output summary:
   {
-    "claim_id": "c2",
-    "claim_status": "rebutted",
-    "evidence_id": "c2.e1",
-    "summary": "Order direction is correct: across N in {2,4,8,16,64} with 16 rows each (descending-range, ascending-range, randn), the returned top-1 index matched torch.argmax exactly in all 80 rows, including known-max-position rows (desc max at 0, asc max at N-1). No evidence of min-index or inverted ordering on unique-max inputs.",
-    "supports": "rebutted",
-    "tool_event_id": "t13"
-  }
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "18e28fec44b0aed068d871788f8a9afc48d065b64b886d635c09cba5d31cabff"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "214a1435aebce3e150caca692592423b63b7d9db80ea974ff6bbde91523d6d33"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "11550d9a1a1ed618561eab9bbcd9df25e2be072bb0cc15068ef212956507b24d"
+      }
+    ],
+    "duration_s": 8.238186,
+    "event_id": "t11",
+    "exit_code": 0,
+    "json_result": {
+      "kernel_matches_stable_ref": false,
+      "kernel_matches_topk": false,
+      "kernel_selected": [
+        [
+          0,
+          2,
+          4,
+          6,
+          5,
+       
+  ...[truncated 1412 chars]
 
-### Turn 9 - `skeptic` (7.855091322000021s, in=40988 out=256)
+### Turn 7 - `skeptic` (13.897732294000036s, in=34763 out=759)
 
 Message:
 
 ```text
-The evidence is decisive: c1 (tie-break violation on exactly-tied maxima) is confirmed with in-scope contract evidence across all tested power-of-two N, and c2 (order direction) is rebutted with clean argmax agreement on 80 unique-max rows. No new in-scope problems are exposed, so I'll close out the review.
+The t11 tie-break probe exposes a material in-scope failure the ledger doesn't cover: the earlier in-scope tie claim (t6) failed to record due to a LedgerError, and c1 only covers NaN. In t11 row 0, four candidates tie at value 1.0 (indices 1, 3, 5, 8) around the k=8 cutoff; the kernel kept higher index 8 while dropping lower index 1, directly violating the explicit lower-index tie contract in problem.txt. Row 1 similarly picks index 8 (0.5) over lower-indexed 6/7. I'll record this claim now.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t16 ok`
+- `record_claim -> t12 ok`
   Args:
   {
-    "reason": "Final review: the confirmed in-scope tie-break claim c1 already captures the material contract violation (exact-tied maxima return non-lowest index, e.g. N=2 returns 1 instead of 0, verified by runtime probe t12 at every power-of-two N tested), and c2 (order direction) is rebutted by t13 with 0 mismatches across 80 unique-max rows. The new evidence does not expose any additional material, testable, in-scope problem not covered by c1; remaining risks (NaN rows, non-power-of-two N, k>1, dtype) are outside the stated problem.txt contract.",
+    "rationale": "The t11 runtime probe (exit 0, tied/clustered values in a power-of-two N=16, k=8 row) shows the kernel violating the explicit tie contract: row 0 with tied 1.0 values at indices 1,3,5,8 straddling the cutoff returned [0,2,4,6,5,7,3,8] \u2014 it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 similarly selected index 8 (0.5) over lower indices 6/7 (0.5), and kernel_matches_stable_ref was False for all rows. This matches the mechanism that a bitonic network with strict > compares is not stable: tied candidates can be re-crossed via swaps with other elements across stages. The earlier in-scope version of this claim failed to record (t6 LedgerError), so it is not yet in the ledger.",
+    "scope": "in_scope",
+    "sc
+  ...[truncated 1285 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "The t11 runtime probe (exit 0, tied/clustered values in a power-of-two N=16, k=8 row) shows the kernel violating the explicit tie contract: row 0 with tied 1.0 values at indices 1,3,5,8 straddling the cutoff returned [0,2,4,6,5,7,3,8] \u2014 it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 similarly selected index 8 (0.5) over lower indices 6/7 (0.5), and kernel_matches_stable_ref was False for all rows. This matches the mechanism that a bitonic network with strict > compares is not stable: tied candidates can be re-crossed via swaps with other elements across stages. The earlier in-scope version of this claim failed to record (t6 LedgerError), so it is not yet in the ledger.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\""
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Input domain: scores has a power-of-two number of columns; the kernel must return indices of the k highest in descending order \u2014 the probe 
+  ...[truncated 919 chars]
+
+### Turn 8 - `describer` (21.926867458999993s, in=35461 out=1226)
+
+Message:
+
+```text
+The new t11 evidence invalidates a key assumption in my earlier kernel model (that strict > comparisons preserve tied-element order in a bitonic network). I'll correct the description model so downstream reasoning doesn't rely on the unsound stability argument.
+```
+
+Tool calls:
+
+- `record_description_update -> t13 ok`
+  Args:
+  {
+    "contract_model": [
+      "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+      "Tie contract: for exactly equal scores, the LOWER index must be kept (both when the tie straddles the k cutoff and in ordering inside the returned slice).",
+      "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so wrong selected indices change the final output.",
+      "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just sorted values.",
+      "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set."
+    ],
+    "impact_on_claims": [
+      "Supersedes the unsound 'strict > implies tied-order stability' assumption in du1
+  ...[truncated 4242 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+      "Tie contract: for exactly equal scores, the LOWER index must be kept (both when the tie straddles the k cutoff and in ordering inside the returned slice).",
+      "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so wrong selected indices change the final output.",
+      "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just sorted values.",
+      "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set."
+    ],
+    "impact_on_claims": [
+      "Supersedes the unsound 'strict > implies tied-order stability' assumption in du1; t11/t12 evidence supports open claim c2 (in-scope tie-contract violation) and the mechanism that the bitonic network is not stable under ties.",
+      "c1 (NaN full-row corruption, confirmed) remains as previously described; NaN scope vs the benchmark is still unknown."
+    ],
+    "kernel_model": [
+      "Host wrapper (kernel.py:61-70): clones scores, builds ids = arange(N) per row (int32), launches one
+  ...[truncated 3906 chars]
+
+### Turn 9 - `skeptic` (10.702276708s, in=42420 out=235)
+
+Message:
+
+```text
+This is the final review turn. The evidence is already well covered: c2 (in-scope tie-contract violation, backed by the t11 probe showing higher-index tied candidates kept over lower-index ones at the k cutoff) is the decisive open claim, and c1 (NaN full-row corruption, confirmed but unknown scope) is already recorded. The describer's correction (du2) aligns the kernel model with this evidence. No material in-scope problem remains uncovered by existing claims.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t14 ok`
+  Args:
+  {
+    "reason": "Final review: the t11 probe evidence is fully captured by open in-scope claim c2 (bitonic network instability under ties violating the explicit lower-index tie contract at the k cutoff), and the t9 NaN evidence by confirmed claim c1 (scope unknown). The describer correction du2 has already incorporated the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -465,150 +431,318 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: the confirmed in-scope tie-break claim c1 already captures the material contract violation (exact-tied maxima return non-lowest index, e.g. N=2 returns 1 instead of 0, verified by runtime probe t12 at every power-of-two N tested), and c2 (order direction) is rebutted by t13 with 0 mismatches across 80 unique-max rows. The new evidence does not expose any additional material, testable, in-scope problem not covered by c1; remaining risks (NaN rows, non-power-of-two N, k>1, dtype) are outside the stated problem.txt contract.",
+    "reason": "Final review: the t11 probe evidence is fully captured by open in-scope claim c2 (bitonic network instability under ties violating the explicit lower-index tie contract at the k cutoff), and the t9 NaN evidence by confirmed claim c1 (scope unknown). The describer correction du2 has already incorporated the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
-    "reviewed_tool_event_count": 15,
+    "reviewed_tool_event_count": 13,
     "turn": 9
   }
 
-### Turn 10 - `judge` (9.465723030999982s, in=41142 out=445)
+### Turn 10 - `experimenter` (10.943022302000031s, in=42616 out=618)
 
 Message:
 
 ```text
-The evidence is decisive: c1 is confirmed in-scope — runtime probe t12 shows exactly-tied maxima return a non-lowest index at every tested power-of-two N (e.g. N=2 tied max returns 1 instead of 0), directly violating problem.txt's explicit tie rule that the LOWER index must be kept. c2 (order direction) is rebutted cleanly. The artifact has no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires the lower-index tie-break — this is a declared behavior the kernel fails to implement. Skeptic has signed off with no new claims.
+The only open claim is c2 (tie-contract violation at the k cutoff), which has no direct evidence yet. I'll run a claim probe reproducing the tied-score case against the kernel.
 ```
 
 Tool calls:
 
-- `record_verdict -> t17 ok`
+- `run_claim_probe -> t15 ok`
   Args:
   {
-    "confidence": 0.95,
-    "decisive_claims": [
-      "c1"
-    ],
-    "reason": "Confirmed in-scope claim c1: the kernel violates problem.txt's explicit tie contract (\"when two experts have exactly equal scores, the LOWER index must be one kept\"). Runtime probe t12 shows exactly-tied maxima return a non-lowest tied index at every tested power-of-two N in {2,4,8,16,64} (e.g. N=2 tied max returns 1 instead of 0; an all-equal 64-wide row returns index 32 instead of 0), against the torch.argmax reference which keeps the lowest tied index. The artifact contains no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires this tie-break behavior \u2014 the bitonic network's flip=1 sub-stages swap exactly-tied pairs, so no lower-index stability is ev
-  ...[truncated 347 chars]
+    "claim_id": "c2",
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_10\")\nfrom kernel import sorted_topk_indices\n\ndev = \"cuda\"\nN, k = 16, 8\nrows = []\n# Row 0: ties straddling k cutoff (idxs 1,3,5,8 tied at 1.0)\nrows.append(torch.tensor([5.0,1.0,4.0,1.0,3.0,1.0,2.0,1.0, 1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0], device=dev))\n# Row 1: clustered ties at cutoff (idxs 6,7,8,9 tied at 0.5)\nrows.append(torch.tensor([2.0,2.0,1.0,1.0,1.0,1.0,0.5,0.5, 0.5,0.5,0.25,0.25,0.25,0.25,0.25,0.25], device=dev))\n# Row 2: two-way tie at cutoff exactly (idxs 6,7 tied at 3.0)\nrows.append(torch.tensor([9.0,8.0,7.0,6.0,5.0,4.0,3.0,3.0, 2.0,1.0,0.0,-1.0,-2.0,-3.0,-4.0,-5.0], device=dev))\nscores = torch.stack(rows)\n\nout = sorted_topk_indices(scores, k)\ntorch.cuda.synchronize()\nr
+  ...[truncated 602 chars]
   Output summary:
   {
-    "confidence": 0.95,
-    "decisive_claims": [
-      "c1"
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "ba8d9ca2be2c7082ab2bcb4b6e579992c484b8bd0e3561a08f26ae8b8a0ac21c"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "10069f2dcf84667655beb0b694f2624f6dee4cae3493a861c2b4d1a42160be08"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "a605a38b69a29112432cf478912ee4856c37a9f692cab51901fc479880ab2b6d"
+      }
     ],
-    "reason": "Confirmed in-scope claim c1: the kernel violates problem.txt's explicit tie contract (\"when two experts have exactly equal scores, the LOWER index must be one kept\"). Runtime probe t12 shows exactly-tied maxima return a non-lowest tied index at every tested power-of-two N in {2,4,8,16,64} (e.g. N=2 tied max returns 1 instead of 0; an all-equal 64-wide row returns index 32 instead of 0), against the torch.argmax reference which keeps the lowest tied index. The artifact contains no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires this tie-break behavior \u2014 the bitonic network's flip=1 sub-stages swap exactly-tied pairs, so no lower-index stability is ever preserved. The reference (argmax) is well-defined here (not NaN/undefined), so this is not a reference-undefined artifact. c2 (order direction on unique maxima) is rebutted by probe t13 with zero mismatches across 80 unique-max rows. No unresolved claims remain; Skeptic signed off after reviewing the latest evidence.",
-    "verdict": "reject"
+    "claim_id": "c2",
+    "claim_statement": "For rows containing exactly tied scores around the k cutoff (power-of-two N), sorted_topk_indices keeps a HIGHER original index over a LOWER-index tied candidate (t11 row 0 kept idx 8 and dropped idx 1 among t
+  ...[truncated 6280 chars]
+
+### Turn 11 - `experimenter` (10.867386651000004s, in=45843 out=524)
+
+Message:
+
+```text
+The t15 claim probe for c2 reproduced the tie-contract violation exactly, so I'll finalize it as confirmed evidence and mark the claim confirmed.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t16 ok`
+  Args:
+  {
+    "data": {
+      "kernel_matches_stable_ref": false,
+      "row0_dropped_lower_tied_idx": 1,
+      "row0_kept_higher_tied_idx": 8,
+      "row0_kernel": [
+        0,
+        2,
+        4,
+        6,
+        5,
+        7,
+        3,
+        8
+      ],
+      "row0_ref": [
+        0,
+        2,
+        4,
+        6,
+        1,
+        3,
+        5,
+        7
+      ],
+      "row1_kept_higher_tied_idxs": [
+        8,
+        9
+      ],
+      "row1_kernel": [
+        1,
+        0,
+        4,
+        5,
+        2,
+        3,
+        8,
+        9
+      ],
+      "row1_ref": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "row2_kernel": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        6
+      ],
+      "row2_ref": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "tie_contract": "lower 
+  ...[truncated 741 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "Confirmed c2: with tied scores around the k=8 cutoff in power-of-two N=16 rows, the kernel violates the explicit lower-index tie contract. Row 0 (tied 1.0s at idxs 1,3,5,8) returned [0,2,4,6,5,7,3,8]: it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 (0.5-tied at idxs 6,7,8,9) kept idxs 8 and 9 over idxs 6 and 7 at the cutoff. Row 2 (3.0-tied at idxs 6,7) returned tied idx 7 before 6 inside the slice. kernel_matches_stable_ref=False on all rows. Consistent with the bitonic network being unstable under ties even with strict > comparisons.",
+    "supports": "confirmed",
+    "tool_event_id": "t15"
   }
+
+### Turn 12 - `skeptic` (7.7202937529999645s, in=52230 out=211)
+
+Message:
+
+```text
+This is the final review turn. The decisive in-scope claim c2 (tie-contract violation at the k cutoff) is confirmed by the t15 probe, and the NaN mechanism is captured by c1. The new t15 evidence does not expose any problem beyond existing claims.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t17 ok`
+  Args:
+  {
+    "reason": "Final review: the t15 claim probe independently reproduced and confirmed in-scope claim c2 (bitonic network instability under ties: higher-index tied candidates kept over lower-index ones at the k=8 cutoff in N=16 power-of-two rows, kernel_matches_stable_ref=false on all rows). The NaN full-row corruption mechanism remains captured by confirmed claim c1 (scope unknown, contract silent on NaN). The describer correction du2 already reflects the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Final review: the t15 claim probe independently reproduced and confirmed in-scope claim c2 (bitonic network instability under ties: higher-index tied candidates kept over lower-index ones at the k=8 cutoff in N=16 power-of-two rows, kernel_matches_stable_ref=false on all rows). The NaN full-row corruption mechanism remains captured by confirmed claim c1 (scope unknown, contract silent on NaN). The describer correction du2 already reflects the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 16,
+    "turn": 12
+  }
+
+### Turn 13 - `judge` (12.285375504000001s, in=48439 out=497)
+
+Message:
+
+```text
+The evidence is decisive: claim c2 is confirmed, in-scope (probe inputs squarely inside the power-of-two domain), and shows the kernel violating the explicit tie contract — keeping higher-index tied candidates (e.g., idx 8) over lower-index ones (e.g., idx 1) at the k cutoff. The contract explicitly requires the LOWER index kept on exactly equal scores. c1 (NaN corruption) is confirmed but scope-unknown and not needed for the verdict. Skeptic signed off with no new claims.
+```
+
+Tool calls:
+
+- `record_verdict -> t18 ok`
+  Args:
+  {
+    "confidence": 0.9,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the stated input domain. The operative contract (problem.txt; no test.py/get_inputs exists in the artifact) explicitly states: \"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" Runtime probe t15 (exit 0, GPU, N=16 power-of-two rows, k=8, tied scores straddling the cutoff) shows the kernel keeps a HIGHER-index tied candidate over a LOWER-index one: row 0 returned [0,2,4,6,5,7,3,8], keeping tied idx 8 and dropping tied idx 1 among four 1.0-tied candidates, while the stable descending reference is [0,2,4,6,1,3,5,7]; row 1 kept idxs 8,9 over idxs 6,7 among tied 0.5s; kernel_matches_stable_ref=fals
+  ...[truncated 583 chars]
+  Output summary:
+  {
+    "confidence": 0.9,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the stated input domain. The operative contract (problem.txt; no test.py/get_inputs exists in the artifact) explicitly states: \"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" Runtime probe t15 (exit 0, GPU, N=16 power-of-two rows, k=8, tied scores straddling the cutoff) shows the kernel keeps a HIGHER-index tied candidate over a LOWER-index one: row 0 returned [0,2,4,6,5,7,3,8], keeping tied idx 8 and dropping tied idx 1 among four 1.0-tied candidates, while the stable descending reference is [0,2,4,6,1,3,5,7]; row 1 kept idxs 8,9 over idxs 6,7 among tied 0.5s; kernel_matches_stable_ref=false on all rows. The mechanism is structural: a bitonic network with strict > compares is not stable, so tied candidates are re-crossed across stages. This violates an explicitly required tie-break rule, which is a defect regardless of how small the deviation looks on random inputs. c1 (NaN rows return fully unsorted output) is confirmed but of unknown scope since the contract is silent on NaN; it i
+  ...[truncated 183 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "sorted_topk_indices(scores, k) must return, per token row, indices of the highest-scoring experts, with k=1 as the operative case (top-1 routing gate).",
-    "Tie contract: when two experts have exactly equal scores, the LOWER index must be kept.",
-    "Scores shape is (B, N) with N a power of two; the bitonic network family is only defined for power-of-two extents.",
-    "Downstream, each chosen expert contributes an output vector and the batch is mean-pooled, so a wrong index changes the pooled representation directly.",
-    "Only index output is contracted (ids[:, :k].long()); the sorted scores are internal state.",
-    "Unchanged from du1: per-token top-1 index of highest-scoring expert; exact-tie rule keeps the LOWER index; N power-of-two; only ids[:, :k].long() is contracted.",
-    "Refinement for c1/c2 probing: the contract makes exact-index equality the deciding metric, so evidence should compare the returned index to torch.argmax-equivalent selection (argmax also returns the first/lowest index on ties), not to a value-only top-k comparison."
+    "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+    "Tie contract: for exactly equal scores, the LOWER index must be kept (kept when the tie straddles the k cutoff, and earlier position when ties appear inside the sorted output).",
+    "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so selected-index mistakes propagate into output error.",
+    "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just final sorted values.",
+    "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set and downstream average.",
+    "Tie contract: for exactly equal scores, the LOWER index must be kept (both when the tie straddles the k cutoff and in ordering inside the returned slice).",
+    "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so wrong selected indices change the final output.",
+    "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just sorted values.",
+    "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set."
   ],
   "kernel_model": [
-    "Host wrapper sorted_topk_indices clones scores, builds per-row ids = arange(N) as int32, and launches _row_argsort_kernel with one program per row (grid (B,)), N as constexpr, N_DIMS = log2(N), DESCENDING=True; returns ids[:, :k].long().",
-    "The kernel is a full bitonic sort over each row: for stages 1..N_DIMS it calls _bitonic_merge; intermediate stages use order=2 (alternating flip pattern), the final stage uses DESCENDING=True.",
-    "_compare_and_swap selects pair members via masked sum/broadcast, swaps via XOR bitcast, and swaps iff cond = (left > right) != flip, where flip=True (final stage) means swap when left <= right, i.e. descending order.",
-    "The swap condition uses > strictly, so ties are handled only through the (left > right) != flip path: with flip=True, equal elements DO swap; with flip=0 (ascending sub-stages) equal elements do NOT swap."
-...[truncated 6554 chars]
+    "Host wrapper (kernel.py:61-70): clones scores, builds ids = arange(N) tiled per row (int32), launches one Triton program per row doing a full bitonic sort of the row (values and ids moved together), then returns ids[:, :k].long().",
+    "n_dims = int(math.log2(N)) is computed host-side and passed as constexpr; N must be a power of two or the reshape shapes in _compare_and_swap break.",
+    "Tie-break mechanism is implicit: _compare_and_swap swaps only when (left > right) != flip, i.e. strict comparison, so exactly-equal values are never swapped; with initial ids in ascending order, equal-score candidates retain original relative order through the network.",
+    "DESC
+...[truncated 6528 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Description of case_09: bitonic-sort-based top-k index selection (top-1 MoE routing gate) with a strict lower-index tie-break contract; the Triton kernel implements the NSA-style bitonic network per row and returns the first k indices of a descending sort.
-- `du2` tasks=`initial`: Refinement of the case_09 description model: sharpened tie-break and order-direction mechanics relevant to open claims c1 and c2 — the final merge stage applies flip=1 uniformly so ties always swap there, and the comparator direction is descending-consistent on paper with residual risk concentrated in the intermediate order=2 flip construction; also flagged that the 'byte-for-byte real kernel' comment is unverified.
+- `du1` tasks=`initial`: Case 10: bitonic-sort-based row-wise top-k selection (NSA selection-branch style). Kernel sorts each row descending with a full bitonic network carrying indices alongside scores, then slices the first k. Tie behavior follows from strict (>) comparisons; correctness under ties, NaN, and fp16-quantized clustered scores are the main risk surfaces.
+- `du2` tasks=`initial`: Correction update after t11: the bitonic network with strict > comparisons is NOT stable under ties. Tied candidates can be re-crossed via swaps with other elements across stages, so a higher-index tied candidate can be kept over a lower-index one at the k cutoff, violating the explicit lower-index tie contract (open in-scope claim c2). Also records the confirmed NaN mechanism (c1): any row with NaN returns fully unsorted output.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the lowest index among the tied maximum, violating the tie contract.
+Statement: A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).
+
+Scope: `unknown`
+
+Rationale: In _compare_and_swap, left/right are computed as sums including NaN*0=NaN terms, so any row containing NaN has NaN comparisons always False; NaN candidates are never swapped with anyone and can remain displaced from a torch.topk-consistent ordering. If the benchmark feeds NaN scores this produces an incorrect selection; NaN is not addressed by the contract.
+
+Evidence:
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Confirmed: rows containing NaN come back fully unsorted — not merely NaN displaced. Row 0 (NaN at idx 5) returned ids [11,9,15,12,3,6,14,13] with selected values [2.26,-0.36,1.18,0.31,0.14,-0.62,1.28,-0.18], i.e. even the finite values are not in descending order, and NaN idx 5 was excluded from top-8 while torch.topk ranks NaN first. Row 1 (two NaN) also fully mismatched. Row 2 (NaN at idx 15) selected NaN first at position 0. NaN-free control row 3 matched torch.topk exactly. Mechanism consistent with c1: NaN*0=NaN poisons left/right lanes, all comparisons False, network produces garbage ordering. Note: contract/problem.txt does not mention NaN, so this claim's scope (whether benchmark feeds NaN) remains unknown.
+
+### c2 - `confirmed`
+
+Statement: For rows containing exactly tied scores around the k cutoff (power-of-two N), sorted_topk_indices keeps a HIGHER original index over a LOWER-index tied candidate (t11 row 0 kept idx 8 and dropped idx 1 among tied 1.0s; row 1 picked idx 8 over idxs 6/7 among tied 0.5s), violating the stated lower-index tie contract; tied elements also appear out of lower-index-first order inside the returned slice.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly states the tie rule: "when two experts have exactly equal scores, the LOWER index must be the one kept." A row with exactly tied maximum scores is admitted by the contract (N power-of-two, any float scores), so a returned non-lowest tied index is a direct contract violation.
+Scope rationale: problem.txt states an explicit tie contract ("when two candidates have exactly equal scores, the LOWER index must be the one kept") and a power-of-two input domain; the probe inputs (N=16, tied values around the k cutoff) are exactly the contract-admitted cases, and the kernel demonstrably kept a higher-index tied candidate over a lower-index one at the cutoff.
 
 Scope evidence:
-- `problem.txt`: "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept."
+- `problem.txt`: "Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept."
+- `problem.txt`: Input domain: scores has a power-of-two number of columns; the kernel must return indices of the k highest in descending order — the probe used N=16 (power of two) with tied scores, squarely inside the stated domain.
 
-Rationale: The swap condition uses strict > only, so equal-valued pairs swap in flip=True sub-stages but not flip=0 sub-stages; the composite multi-stage behavior under exact ties does not obviously preserve the lower-index element at the head of the descending order, so the returned top-1 index can be the higher of two tied experts.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Exactly-tied maxima violate the lower-index tie contract at every tested power-of-two N (2,4,8,16,64): all-equal rows return index N/2 (e.g. 32 of 64) instead of 0; N=2 duplicated max returns index 1 instead of 0; duplicated/triplicated max rows return the higher tied index in multiple configurations. torch.argmax (lowest tied index) is the reference.
-
-### c2 - `rebutted`
-
-Statement: The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last stage, and an off-by-one in how flip propagates through intermediate stages could leave ids[:, :1] pointing at the lowest score.
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt requires returning "the index of the highest-scoring expert"; any row of float scores with a unique max is in the contracted domain, so a returned min-index (or otherwise wrong index) would directly violate this requirement.
-
-Scope evidence:
-- `problem.txt`: "`sorted_topk_indices(scores, k=1)` must return, for each token, the index of the highest-scoring expert."
-
-Rationale: The whole sort's direction depends on this single (left > right) != flip test; if flip semantics are inverted the first element is the minimum instead of the maximum, which would be a catastrophic index failure on ordinary inputs.
+Rationale: The t11 runtime probe (exit 0, tied/clustered values in a power-of-two N=16, k=8 row) shows the kernel violating the explicit tie contract: row 0 with tied 1.0 values at indices 1,3,5,8 straddling the cutoff returned [0,2,4,6,5,7,3,8] — it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 similarly selected index 8 (0.5) over lower indices 6/7 (0.5), and kernel_matches_stable_ref was False for all rows. This matches the mechanism that a bitonic network with strict > compares is not stable: tied candidates can be re-crossed via swaps with other elements across stages. The earlier in-scope version of this claim failed to record (t6 LedgerError), so it is not yet in the ledger.
 
 Evidence:
-- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t13: Order direction is correct: across N in {2,4,8,16,64} with 16 rows each (descending-range, ascending-range, randn), the returned top-1 index matched torch.argmax exactly in all 80 rows, including known-max-position rows (desc max at 0, asc max at N-1). No evidence of min-index or inverted ordering on unique-max inputs.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t15: Confirmed c2: with tied scores around the k=8 cutoff in power-of-two N=16 rows, the kernel violates the explicit lower-index tie contract. Row 0 (tied 1.0s at idxs 1,3,5,8) returned [0,2,4,6,5,7,3,8]: it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 (0.5-tied at idxs 6,7,8,9) kept idxs 8 and 9 over idxs 6 and 7 at the cutoff. Row 2 (3.0-tied at idxs 6,7) returned tied idx 7 before 6 inside the slice. kernel_matches_stable_ref=False on all rows. Consistent with the bitonic network being unstable under ties even with strict > comparisons.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "sorted_topk_indices(scores, k) must return, per token row, indices of the highest-scoring experts, with k=1 as the operative case (top-1 routing gate).",
-    "Tie contract: when two experts have exactly equal scores, the LOWER index must be kept.",
-    "Scores shape is (B, N) with N a power of two; the bitonic network family is only defined for power-of-two extents.",
-    "Downstream, each chosen expert contributes an output vector and the batch is mean-pooled, so a wrong index changes the pooled representation directly.",
-    "Only index output is contracted (ids[:, :k].long()); the sorted scores are internal state."
+    "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+    "Tie contract: for exactly equal scores, the LOWER index must be kept (kept when the tie straddles the k cutoff, and earlier position when ties appear inside the sorted output).",
+    "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so selected-index mistakes propagate into output error.",
+    "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just final sorted values.",
+    "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set and downstream average."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Host wrapper sorted_topk_indices clones scores, builds per-row ids = arange(N) as int32, and launches _row_argsort_kernel with one program per row (grid (B,)), N as constexpr, N_DIMS = log2(N), DESCENDING=True; returns ids[:, :k].long().",
-    "The kernel is a full bitonic sort over each row: for stages 1..N_DIMS it calls _bitonic_merge; intermediate stages use order=2 (alternating flip pattern), the final stage uses DESCENDING=True.",
-    "_compare_and_swap selects pair members via masked sum/broadcast, swaps via XOR bitcast, and swaps iff cond = (left > right) != flip, where flip=True (final stage) means swap when left <= right, i.e. descending order.",
-    "The swap condition uses > strictly, so ties are handled only through the (left > right) != flip path: with flip=True, equal elements DO swap; with flip=0 (ascending sub-stages) equal elements do NOT swap.",
-    "Comment in source claims the compare-and-swap/merge primitives are byte-for-byte the real NSA kernel; N_DIMS is computed host-side because tl.log2 of a shape is not constexpr-stable."
+    "Host wrapper (kernel.py:61-70): clones scores, builds ids = arange(N) tiled per row (int32), launches one Triton program per row doing a full bitonic sort of the row (values and ids moved together), then returns ids[:, :k].long().",
+    "n_dims = int(math.log2(N)) is computed host-side and passed as constexpr; N must be a power of two or the reshape shapes in _compare_and_swap break.",
+    "Tie-break mechanism is implicit: _compare_and_swap swaps only when (left > right) != flip, i.e. strict comparison, so exactly-equal values are never swapped; with initial ids in ascending order, equal-score candidates retain original relative order through the network.",
+    "DESCENDING=True is applied only at the final merge stage (i<N_DIMS uses order=2, i.e. the half-ascending/half-descending pattern); final stage passes DESCENDING directly, giving fully descending output.",
+    "ids are carried through the same swaps as values (kernel.py:26-27), so ids track the sorted values.",
+    "Output is the first k indices of the descending-sorted row; values themselves are stored back to the (cloned) x buffer and discarded."
   ],
-  "open_questions": [],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Tie-breaking: bitonic sort is not stable, and the tie behavior differs between flip=True stages (equal pairs swap) and flip=0 stages (equal pairs do n
-...[truncated 2157 chars]
+  "open_questions": [
+    "Is the true NSA bitonic network's compare-and-s
+...[truncated 3005 chars]
 
 ### t6 - record_claim - error
 
@@ -617,108 +751,45 @@ Evidence:
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t7 - record_claim - error
-
-{
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
-}
-
-### t8 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The swap condition uses strict > only, so equal-valued pairs swap in flip=True sub-stages but not flip=0 sub-stages; the composite multi-stage behavior under exact ties does not obviously preserve the lower-index element at the head of the descending order, so the returned top-1 index can be the higher of two tied experts.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\""
-    }
-  ],
-  "scope_rationale": "problem.txt explicitly states the tie rule: \"when two experts have exactly equal scores, the LOWER index must be the one kept.\" A row with exactly tied maximum scores is admitted by the contract (N power-of-two, any float scores), so a returned non-lowest tied index is a direct contract violation.",
-  "statement": "For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the lowest index among the tied maximum, violating the tie contract.",
+  "rationale": "In _compare_and_swap, left/right are computed as sums including NaN*0=NaN terms, so any row containing NaN has NaN comparisons always False; NaN candidates are never swapped with anyone and can remain displaced from a torch.topk-consistent ordering. If the benchmark feeds NaN scores this produces an incorrect selection; NaN is not addressed by the contract.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "",
+  "statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).",
   "status": "open"
 }
 
-### t9 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "The whole sort's direction depends on this single (left > right) != flip test; if flip semantics are inverted the first element is the minimum instead of the maximum, which would be a catastrophic index failure on ordinary inputs.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "\"`sorted_topk_indices(scores, k=1)` must return, for each token, the index of the highest-scoring expert.\""
-    }
-  ],
-  "scope_rationale": "problem.txt requires returning \"the index of the highest-scoring expert\"; any row of float scores with a unique max is in the contracted domain, so a returned min-index (or otherwise wrong index) would directly violate this requirement.",
-  "statement": "The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last stage, and an off-by-one in how flip propagates through intermediate stages could leave ids[:, :1] pointing at the lowest score.",
-  "status": "open"
-}
-
-### t10 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Unchanged from du1: per-token top-1 index of highest-scoring expert; exact-tie rule keeps the LOWER index; N power-of-two; only ids[:, :k].long() is contracted.",
-    "Refinement for c1/c2 probing: the contract makes exact-index equality the deciding metric, so evidence should compare the returned index to torch.argmax-equivalent selection (argmax also returns the first/lowest index on ties), not to a value-only top-k comparison."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Confirms du1 kernel model: _compare_and_swap swaps iff (left > right) != flip; flip=1 means swap on left <= right (ties swap), flip=0 means swap on left > right (ties do not swap).",
-    "Tie mechanics relevant to c1: at the final merge stage (stage=N_DIMS, i runs over all N_DIMS sub-steps with flip=DESCENDING=True uniformly), any exactly-tied pair compared in a flip=1 sub-step WILL swap, moving the higher-index element leftward; only flip=0 sub-steps (which occur only in intermediate order=2 stages, never in the final stage when DESCENDING=True) preserve tied order. So within the final stage there is no tie-stability at all: the head position after the final stage is determined by tie-swap behavior, not by preservation of a prior stable order.",
-    "Order mechanics relevant to c2: flip=1 with swap-iff (left > right) == False, i.e. swap iff left <= right, places the larger value on the left \u2014 this is a descending comparator, so DESCENDING=True at the final stage is directionally consistent with the intended maximum-at-position-0; the residual risk is not an obvious inversion but a subtle propagation error in the intermediate order=2 flip tensor (tl.arange(0,2) pattern reshaped per sub-stage).",
-    "The comment block at kernel.py lines 46-50 asserts the compare-and-swap/merge primitives are 'byte-for-byte the real kernel' from NSA; this is an unverified self-description, and the source itself flags the caller path (N_DIMS computation) as modified fro
-...[truncated 3410 chars]
-
-### t11 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "Both decisive in-scope failure modes for this contract (lower-index tie-break on exactly-tied maxima, and argmax correctness/order direction) are already recorded as c1 and c2 and await runtime probes; remaining candidate risks (NaN rows, non-power-of-two N, k>1 slicing) fall outside the stated problem.txt contract, so no additional high-quality in-scope claims are warranted this round.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 10,
-  "turn": 6
-}
-
-### t12 - run_claim_probe - ok
+### t8 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "5811a0bafe82b0490ef897d815bf26ae2b76c8bb8287b1dd8803c13a2b8b3bbf"
+      "path": "probes/t8_probe.py",
+      "sha256": "2581c0957674f55d7e28f9509c6a982b901220e292683ea8eec394b8bf49a533"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "7f0931ad70e83fed14301ce39aaf0012a67790a0805eba06bf41de4dc95a42da"
+      "path": "probes/t8_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "8d73b3401346c790cacda1c8960970845bee55bf8606759c9869504c9d7f5b20"
+      "path": "probes/t8_stderr.txt",
+      "sha256": "4af5f09a87dba5123147ff81dfacae22507970d68209f797360ebd674c8578c8"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For a row where the maximum score is attained by two or more experts with exactly equal values (e.g. duplicated max values or an all-equal row), sorted_topk_indices(scores, 1) returns an index that is not the lowest index among the tied maximum, violating the tie contract.",
-  "duration_s": 8.963615,
-  "event_id": "t12",
+  "claim_statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).",
+  "duration_s": 7.97734,
+  "event_id": "t8",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -726,54 +797,298 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "5811a0bafe82b0490ef897d815bf26ae2b76c8bb8287b1dd8803c13a2b8b3bbf"
+          "path": "probes/t8_probe.py",
+          "sha256": "2581c0957674f55d7e28f9509c6a982b901220e292683ea8eec394b8bf49a533"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "7f0931ad70e83fed14301ce39aaf0012a67790a0805eba06bf41de4dc95a42da"
+          "path": "probes/t8_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
+          "path": "probes/t8_stderr.txt",
+          "sha256": "4af5f09a87dba5123147ff81dfacae22507970d68209f797360ebd674c8578c8"
+        }
+      ],
+      "duration_s": 7.97734,
+      "exit_code": 1,
+      "expected_signal": 
+...[truncated 1957 chars]
 
-...[truncated 6072 chars]
-
-### t13 - run_claim_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t13_probe.py",
-      "sha256": "b0682f77437ddc45fbafd4ed47eef4a6d7edf79dddddda7c74ac65db4feedc5d"
+      "path": "probes/t9_probe.py",
+      "sha256": "6ffff5665ac2790d607683bf4a17c384f860dac4b31fc744c6fc86f502c0dd04"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t13_stdout.txt",
-      "sha256": "c0f451401f0f0379fdf15bf6dedb536442c37ccec83cb4936ff281484b6fcf88"
+      "path": "probes/t9_stdout.txt",
+      "sha256": "b6ffafb974448fd373beb109cf162adafad8a9369b4d309661616096787c1eb2"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t13_stderr.txt",
+      "path": "probes/t9_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "cabd59336c423e750681f59b645cc2bf160c769856695856dc4380920c353320"
+      "path": "probes/t9_json_result.json",
+      "sha256": "ba47082fe78d2528a153b226ffeda0f364381b97852d4c21b500d589b8e43512"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "A NaN score in a row causes both 'left' and 'right' reduce lanes to become NaN (NaN*0=NaN in the mask multiply), so comparisons are always False and NaN elements never swap, placing NaN candidates at arbitrary positions in the descending output rather than at the end (or the reference-specified position).",
+  "duration_s": 7.482727,
+  "event_id": "t9",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t9_probe.py",
+          "sha256": "6ffff5665ac2790d607683bf4a17c384f860dac4b31fc744c6fc86f502c0dd04"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "b6ffafb974448fd373beb109cf162adafad8a9369b4d309661616096787c1eb2"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+  
+...[truncated 8119 chars]
+
+### t10 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "Confirmed: rows containing NaN come back fully unsorted \u2014 not merely NaN displaced. Row 0 (NaN at idx 5) returned ids [11,9,15,12,3,6,14,13] with selected values [2.26,-0.36,1.18,0.31,0.14,-0.62,1.28,-0.18], i.e. even the finite values are not in descending order, and NaN idx 5 was excluded from top-8 while torch.topk ranks NaN first. Row 1 (two NaN) also fully mismatched. Row 2 (NaN at idx 15) selected NaN first at position 0. NaN-free control row 3 matched torch.topk exactly. Mechanism consistent with c1: NaN*0=NaN poisons left/right lanes, all comparisons False, network produces garbage ordering. Note: contract/problem.txt does not mention NaN, so this claim's scope (whether benchmark feeds NaN) remains unknown.",
+  "supports": "confirmed",
+  "tool_event_id": "t9"
+}
+
+### t11 - run_python_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "18e28fec44b0aed068d871788f8a9afc48d065b64b886d635c09cba5d31cabff"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "214a1435aebce3e150caca692592423b63b7d9db80ea974ff6bbde91523d6d33"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "11550d9a1a1ed618561eab9bbcd9df25e2be072bb0cc15068ef212956507b24d"
+    }
+  ],
+  "duration_s": 8.238186,
+  "event_id": "t11",
+  "exit_code": 0,
+  "json_result": {
+    "kernel_matches_stable_ref": false,
+    "kernel_matches_topk": false,
+    "kernel_selected": [
+      [
+        0,
+        2,
+        4,
+        6,
+        5,
+        7,
+        3,
+        8
+      ],
+      [
+        1,
+        0,
+        4,
+        5,
+        2,
+        3,
+        8,
+        9
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7,
+        6
+      ]
+    ],
+    "stable_argsort_desc_ref": [
+      [
+        0,
+        2,
+        4,
+        6,
+        1,
+        3,
+        5,
+        7
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    ],
+    "torch_topk_selected": [
+      [
+        0,
+        2,
+        4,
+        6,
+        7,
+        5,
+        1,
+        3
+      ],
+      [
+        1,
+        0,
+        4,
+        5,
+        2,
+   
+...[truncated 612 chars]
+
+### t12 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "The t11 runtime probe (exit 0, tied/clustered values in a power-of-two N=16, k=8 row) shows the kernel violating the explicit tie contract: row 0 with tied 1.0 values at indices 1,3,5,8 straddling the cutoff returned [0,2,4,6,5,7,3,8] \u2014 it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 similarly selected index 8 (0.5) over lower indices 6/7 (0.5), and kernel_matches_stable_ref was False for all rows. This matches the mechanism that a bitonic network with strict > compares is not stable: tied candidates can be re-crossed via swaps with other elements across stages. The earlier in-scope version of this claim failed to record (t6 LedgerError), so it is not yet in the ledger.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\""
+    },
+    {
+      "source": "problem.txt",
+      "summary": "Input domain: scores has a power-of-two number of columns; the kernel must return indices of the k highest in descending order \u2014 the probe used N=16 (power of two) with tied scores, squarely inside the stated domain."
+    }
+  ],
+  "scope_rationale": "problem.txt states an explicit tie contract (\"when two candidates have exactly equal scores, the LOWER index must be the one kept\") and a power-of-two input domain; the probe inputs (N=16, tied values around the k cutoff) are exactly the contract-admitted cases, and the kernel demonstrably kept a higher-index tied candidate over a lower-index one at the cutoff.",
+  "statement": "For rows containing exactly tied scores around the k cutoff (power-of-two N), sorted_topk_indices keeps a HIGHER original index over a LOWER-index tied candidate (t11 row 0 kept idx 8 and dropped idx 1 among tied 1.0s; row 1 picked idx 8 over idxs 6/7 among tied 0.5s), violating the stated lower-index t
+...[truncated 119 chars]
+
+### t13 - record_description_update - ok
+
+{
+  "contract_model": [
+    "sorted_topk_indices(scores, k) must return indices of the k highest scores, in descending score order.",
+    "Tie contract: for exactly equal scores, the LOWER index must be kept (both when the tie straddles the k cutoff and in ordering inside the returned slice).",
+    "Scores are 2-D (B, N) with N a power of two; downstream output is a continuous average of gathered value vectors, so wrong selected indices change the final output.",
+    "Selection metric of interest: index set/order under ties and cutoff-clustered values, not just sorted values.",
+    "Ties at the k-boundary matter most: keeping the wrong tied candidate changes the gathered set."
+  ],
+  "impact_on_claims": [
+    "Supersedes the unsound 'strict > implies tied-order stability' assumption in du1; t11/t12 evidence supports open claim c2 (in-scope tie-contract violation) and the mechanism that the bitonic network is not stable under ties.",
+    "c1 (NaN full-row corruption, confirmed) remains as previously described; NaN scope vs the benchmark is still unknown."
+  ],
+  "kernel_model": [
+    "Host wrapper (kernel.py:61-70): clones scores, builds ids = arange(N) per row (int32), launches one Triton program per row doing a full bitonic sort (values and ids swapped together), returns ids[:, :k].long().",
+    "n_dims = int(math.log2(N)) host-side; N must be a power of two or reshapes break.",
+    "Tie mechanism: _compare_and_swap swaps only when (left > right) != flip, so exactly-equal PAIRS never swap directly; however (corrected after t11) a bitonic network is NOT stable: tied elements can cross via swaps with other elements across stages, so tied candidates can end up out of original index order, including higher-index tied candidates surviving the k cutoff.",
+    "The earlier assumption that strict > comparisons preserve tied relative order through the network is refuted by t11 (rows with tied values around the k=8 cutoff of N=16 returned e.g. [0,2,4,6,5,7,3,8] keeping highe
+...[truncated 3106 chars]
+
+### t14 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Final review: the t11 probe evidence is fully captured by open in-scope claim c2 (bitonic network instability under ties violating the explicit lower-index tie contract at the k cutoff), and the t9 NaN evidence by confirmed claim c1 (scope unknown). The describer correction du2 has already incorporated the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 13,
+  "turn": 9
+}
+
+### t15 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t15_probe.py",
+      "sha256": "ba8d9ca2be2c7082ab2bcb4b6e579992c484b8bd0e3561a08f26ae8b8a0ac21c"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t15_stdout.txt",
+      "sha256": "10069f2dcf84667655beb0b694f2624f6dee4cae3493a861c2b4d1a42160be08"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t15_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t15_json_result.json",
+      "sha256": "a605a38b69a29112432cf478912ee4856c37a9f692cab51901fc479880ab2b6d"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "The kernel may return the minimum-scoring expert's index instead of the maximum's due to inverted final-stage ordering: with DESCENDING=True the flip condition swap-iff (left <= right) is applied at the last stage, and an off-by-one in how flip propagates through intermediate stages could leave ids[:, :1] pointing at the lowest score.",
-  "duration_s": 4.67203,
-  "event_id": "t13",
+  "claim_statement": "For rows containing exactly tied scores around the k cutoff (power-of-two N), sorted_topk_indices keeps a HIGHER original index over a LOWER-index tied candidate (t11 row 0 kept idx 8 and dropped idx 1 among tied 1.0s; row 1 picked idx 8 over idxs 6/7 among tied 0.5s), violating the stated lower-index tie contract; tied elements also appear out of lower-index-first order inside the returned slice.",
+  "duration_s": 8.812051,
+  "event_id": "t15",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -781,73 +1096,59 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t13_probe.py",
-          "sha256": "b0682f77437ddc45fbafd4ed47eef4a6d7edf79dddddda7c74ac65db4feedc5d"
+          "path": "probes/t15_probe.py",
+          "sha256": "ba8d9ca2be2c7082ab2bcb4b6e579992c484b8bd0e3561a08f26ae8b8a0ac21c"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t13_stdout.txt",
-          "sha256": "c0f451401f0f0379fdf15bf6dedb536442c37ccec83cb4936ff281484b6fcf88"
-        },
-        {
-          "description": "Captured
-...[truncated 4881 chars]
+          "path": "probes/t15_stdout.txt",
+          "sha256": "10069f2dcf84667655beb0b694f2624f6dee4cae3493a861c2b4d1a4
+...[truncated 5480 chars]
 
-### t14 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Exactly-tied maxima violate the lower-index tie contract at every tested power-of-two N (2,4,8,16,64): all-equal rows return index N/2 (e.g. 32 of 64) instead of 0; N=2 duplicated max returns index 1 instead of 0; duplicated/triplicated max rows return the higher tied index in multiple configurations. torch.argmax (lowest tied index) is the reference.",
-  "supports": "confirmed",
-  "tool_event_id": "t12"
-}
-
-### t15 - finalize_probe_evidence - ok
+### t16 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
-  "claim_status": "rebutted",
+  "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Order direction is correct: across N in {2,4,8,16,64} with 16 rows each (descending-range, ascending-range, randn), the returned top-1 index matched torch.argmax exactly in all 80 rows, including known-max-position rows (desc max at 0, asc max at N-1). No evidence of min-index or inverted ordering on unique-max inputs.",
-  "supports": "rebutted",
-  "tool_event_id": "t13"
+  "summary": "Confirmed c2: with tied scores around the k=8 cutoff in power-of-two N=16 rows, the kernel violates the explicit lower-index tie contract. Row 0 (tied 1.0s at idxs 1,3,5,8) returned [0,2,4,6,5,7,3,8]: it kept higher index 8 and dropped lower index 1, while the stable descending reference is [0,2,4,6,1,3,5,7]. Row 1 (0.5-tied at idxs 6,7,8,9) kept idxs 8 and 9 over idxs 6 and 7 at the cutoff. Row 2 (3.0-tied at idxs 6,7) returned tied idx 7 before 6 inside the slice. kernel_matches_stable_ref=False on all rows. Consistent with the bitonic network being unstable under ties even with strict > comparisons.",
+  "supports": "confirmed",
+  "tool_event_id": "t15"
 }
 
-### t16 - record_no_new_claims - ok
+### t17 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: the confirmed in-scope tie-break claim c1 already captures the material contract violation (exact-tied maxima return non-lowest index, e.g. N=2 returns 1 instead of 0, verified by runtime probe t12 at every power-of-two N tested), and c2 (order direction) is rebutted by t13 with 0 mismatches across 80 unique-max rows. The new evidence does not expose any additional material, testable, in-scope problem not covered by c1; remaining risks (NaN rows, non-power-of-two N, k>1, dtype) are outside the stated problem.txt contract.",
+  "reason": "Final review: the t15 claim probe independently reproduced and confirmed in-scope claim c2 (bitonic network instability under ties: higher-index tied candidates kept over lower-index ones at the k=8 cutoff in N=16 power-of-two rows, kernel_matches_stable_ref=false on all rows). The NaN full-row corruption mechanism remains captured by confirmed claim c1 (scope unknown, contract silent on NaN). The describer correction du2 already reflects the refuted stability assumption. No new material, testable, in-scope problem exists beyond these claims.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 15,
-  "turn": 9
+  "reviewed_tool_event_count": 16,
+  "turn": 12
 }
 
-### t17 - record_verdict - ok
+### t18 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.9,
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "Confirmed in-scope claim c1: the kernel violates problem.txt's explicit tie contract (\"when two experts have exactly equal scores, the LOWER index must be one kept\"). Runtime probe t12 shows exactly-tied maxima return a non-lowest tied index at every tested power-of-two N in {2,4,8,16,64} (e.g. N=2 tied max returns 1 instead of 0; an all-equal 64-wide row returns index 32 instead of 0), against the torch.argmax reference which keeps the lowest tied index. The artifact contains no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires this tie-break behavior \u2014 the bitonic network's flip=1 sub-stages swap exactly-tied pairs, so no lower-index stability is ever preserved. The reference (argmax) is well-defined here (not NaN/undefined), so this is not a reference-undefined artifact. c2 (order direction on unique maxima) is rebutted by probe t13 with zero mismatches across 80 unique-max rows. No unresolved claims remain; Skeptic signed off after reviewing the latest evidence.",
+  "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the stated input domain. The operative contract (problem.txt; no test.py/get_inputs exists in the artifact) explicitly states: \"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" Runtime probe t15 (exit 0, GPU, N=16 power-of-two rows, k=8, tied scores straddling the cutoff) shows the kernel keeps a HIGHER-index tied candidate over a LOWER-index one: row 0 returned [0,2,4,6,5,7,3,8], keeping tied idx 8 and dropping tied idx 1 among four 1.0-tied candidates, while the stable descending reference is [0,2,4,6,1,3,5,7]; row 1 kept idxs 8,9 over idxs 6,7 among tied 0.5s; kernel_matches_stable_ref=false on all rows. The mechanism is structural: a bitonic network with strict > compares is not stable, so tied candidates are re-crossed across stages. This violates an explicitly required tie-break rule, which is a defect regardless of how small the deviation looks on random inputs. c1 (NaN rows return fully unsorted output) is confirmed but of unknown scope since the contract is silent on NaN; it is a generalization note, not the basis for this verdict. The Skeptic reviewed the latest evidence (t17) and recorded no new claims; all claims have evidence.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-30T08:22:04Z",
+  "confidence": 0.9,
+  "created_at": "2026-09-30T08:23:54Z",
   "decisive_claims": [
-    "c1"
+    "c2"
   ],
-  "reason": "Confirmed in-scope claim c1: the kernel violates problem.txt's explicit tie contract (\"when two experts have exactly equal scores, the LOWER index must be one kept\"). Runtime probe t12 shows exactly-tied maxima return a non-lowest tied index at every tested power-of-two N in {2,4,8,16,64} (e.g. N=2 tied max returns 1 instead of 0; an all-equal 64-wide row returns index 32 instead of 0), against the torch.argmax reference which keeps the lowest tied index. The artifact contains no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract, and it explicitly requires this tie-break behavior \u2014 the bitonic network's flip=1 sub-stages swap exactly-tied pairs, so no lower-index stability is ever preserved. The reference (argmax) is well-defined here (not NaN/undefined), so this is not a reference-undefined artifact. c2 (order direction on unique maxima) is rebutted by probe t13 with zero mismatches across 80 unique-max rows. No unresolved claims remain; Skeptic signed off after reviewing the latest evidence.",
+  "reason": "Claim c2 is confirmed, in_scope, and backed by scope evidence tied to the stated input domain. The operative contract (problem.txt; no test.py/get_inputs exists in the artifact) explicitly states: \"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" Runtime probe t15 (exit 0, GPU, N=16 power-of-two rows, k=8, tied scores straddling the cutoff) shows the kernel keeps a HIGHER-index tied candidate over a LOWER-index one: row 0 returned [0,2,4,6,5,7,3,8], keeping tied idx 8 and dropping tied idx 1 among four 1.0-tied candidates, while the stable descending reference is [0,2,4,6,1,3,5,7]; row 1 kept idxs 8,9 over idxs 6,7 among tied 0.5s; kernel_matches_stable_ref=false on all rows. The mechanism is structural: a bitonic network with strict > compares is not stable, so tied candidates are re-crossed across stages. This violates an explicitly required tie-break rule, which is a defect regardless of how small the deviation looks on random inputs. c1 (NaN rows return fully unsorted output) is confirmed but of unknown scope since the contract is silent on NaN; it is a generalization note, not the basis for this verdict. The Skeptic reviewed the latest evidence (t17) and recorded no new claims; all claims have evidence.",
   "verdict": "reject"
 }

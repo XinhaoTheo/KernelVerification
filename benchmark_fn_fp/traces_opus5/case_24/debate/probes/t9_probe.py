@@ -1,29 +1,24 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_24/kernel.py")
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_25/kernel.py")
 k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+dev="cuda"
 torch.manual_seed(1)
-dev='cuda'
-res=[]
-for (M,N) in [(128,4096),(64,8192),(32,1000),(16,257),(8,1),(8,255),(8,256),(64,4095)]:
-    A=torch.randn(M,N,device=dev,dtype=torch.float32)
-    B=torch.randn(M,N,device=dev,dtype=torch.float32)
-    out=k.cosine_similarity(A,B).double()
-    Ad=A.double(); Bd=B.double()
-    ref=(Ad*Bd).sum(1)/(Ad.norm(dim=1)*Bd.norm(dim=1))
-    err=(out-ref).abs()
-    near = ref.abs()<1e-2
-    # also a correlated case (cos near 1)
-    B2 = A + 0.001*torch.randn_like(A)
-    out2=k.cosine_similarity(A,B2).double()
-    ref2=(Ad*B2.double()).sum(1)/(Ad.norm(dim=1)*B2.double().norm(dim=1))
-    res.append(dict(shape=[M,N], N_mod_256=N%256,
-        max_abs_err=float(err.max()),
-        max_abs_err_near_orthogonal=float(err[near].max()) if near.any() else None,
-        n_near_orthogonal=int(near.sum()),
-        max_abs_err_dominant_cos_near1=float((out2-ref2).abs().max()),
-        max_out_abs=float(out.abs().max()),
-        max_out2=float(out2.max()),
-        any_nan=bool(torch.isnan(out).any() or torch.isnan(out2).any())))
-print(json.dumps(dict(cases=res, overall_max_abs_err=max(r["max_abs_err"] for r in res),
-   overall_max_abs_err_dominant=max(r["max_abs_err_dominant_cos_near1"] for r in res))))
+
+cases = []
+overshoot_count = 0
+for amax in [3.0, 1.0, 2.5, 0.7, 5.0, 1.3, 0.1, 7.77, 12.5, 0.333]:
+    x = (torch.rand(1024, device=dev)*2-1) * (amax*0.5)   # all |x| < amax
+    x[0] = -amax                                          # absmax element is negative
+    out = k.requantize(x)
+    scale = float(x.abs().max()/127.0)
+    q0 = float(out[0]/scale)
+    ov = float(out.abs().max()) > float(x.abs().max()) + 0.0
+    overshoot_count += int(ov)
+    cases.append({"amax": amax, "scale": scale, "q_of_min_elem": q0,
+                  "out_abs_max": float(out.abs().max()),
+                  "x_abs_max": float(x.abs().max()),
+                  "overshoot": ov,
+                  "ratio_out_over_in": float(out.abs().max())/float(x.abs().max())})
+res = {"num_cases": len(cases), "num_overshoot": overshoot_count, "cases": cases}
+print(json.dumps(res))

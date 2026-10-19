@@ -4,7 +4,7 @@ Programs for running the evaluation arms, auditing traces, and rebuilding the sc
 
 | Arm | Command |
 |---|---|
-| Fixed-tolerance `allclose` | `modal run baseline1_allclose_modal.py --all` |
+| Allclose / numerical checks, all active cases | `python -m modal run baseline1_allclose_modal.py --all --trial r3` |
 | One model call, no tools | `python baseline2_single_llm.py --all` |
 | One Fireworks call, no tools | `python run_single_fireworks.py --all` |
 | One agent with the full toolset | `modal run run_agentic_modal.py --arm solo --all` |
@@ -19,6 +19,8 @@ Audit before scoring. A correct verdict reached through a broken run is not a
 result — one case was scored correct for condemning genuine upstream code, which
 is how a benchmark case that could not be answered at all went unnoticed and
 inflated every figure that counted it.
+
+Allclose has its own [saved results and protocol](../traces_allclose/README.md). `r2` is the complete 90-case measurement; `r1` failed during startup. A new `--trial` preserves earlier results. `--resume` is only for unchanged sources and the same protocol. No model API is used.
 
 ## Where numbers come from
 
@@ -46,7 +48,7 @@ requests/responses, and tool runs retain their full transcripts, ledgers and
 probe artifacts. See [the trace guide](../TRACES.md) and [GLM index](../traces_glm/INDEX.md).
 The scorer discovers nested trials and groups them by dataset, provider, model,
 arm and original experimental batch, while linking to current per-case `rN`
-paths; repeats and the historical case_36/case_37 cohorts are not pooled silently.
+paths; repeats and the historical case_93/case_94 cohorts are not pooled silently.
 
 ## Filling missing arms
 
@@ -61,6 +63,8 @@ pilot cases. Current reports exclude the archive.
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset benchmark_fn_fp --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
 ```
 
+The command above selects the original 32 cases. Use `--dataset real_kernel_challenges` for cases 33–90.
+
 `--only-missing` skips case/arm slots with an existing valid judgment anywhere
 in the selected model-family trace tree, including historical GLM providers.
 It does not rerun wrong answers or abstentions. Existing incomplete trials are
@@ -68,8 +72,7 @@ preserved; use a new `rN` for a retry and do not submit a second batch
 while the same slots are still running. The source-only Fireworks runner has
 no such flag: pass an audited missing-case list with `--cases`.
 
-Current selections are the original suite, `single_call_vs_tools_challenges`
-(case_36–case_61) and `solo_vs_debate_challenges` (case_62–case_81).
+Current selections are the original suite (`benchmark_fn_fp`, cases 01–32) and `real_kernel_challenges` (cases 33–90). The input-specific challenge groups (cases 91–138) are archived and excluded from new experiments.
 The [early pilot](../archive/numerical_pilot/README.md) is archived and closed
 to expansion or reruns. Coverage completion combines historical and new
 records, so it does not establish identical model/settings across arms.
@@ -92,7 +95,7 @@ The debate is right about one more case and costs 2.5x to get there. That case
 is `case_01`, a missed defect the solo agent called trust, and it is the only
 case in 32 where the two arms disagree at all.
 
-They fail identically on the two they get wrong. `case_26` and `case_29` are
+They fail identically on the two they get wrong. `case_25` and `case_28` are
 both correct kernels, both rejected, at 0.85 and 0.88–0.93 confidence — and all
 four traces are clean: no truncation, no tool failure, no process defect, no
 logical inconsistency. The arms did not stumble into those answers; they

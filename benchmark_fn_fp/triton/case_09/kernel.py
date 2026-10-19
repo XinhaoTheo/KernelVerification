@@ -1,4 +1,4 @@
-"""Triton kernel under test: fn1_nsa_bitonic_gate_tie_pooled."""
+"""Triton kernel under test: fn1_nsa_bitonic_topk_tie_dilution."""
 import torch
 import triton
 import triton.language as tl

@@ -18,7 +18,7 @@ def _write(path, value):
 
 
 def _failed_attempt(tmp_path, *, finish="length", stale_verdict=None):
-    case = "case_106"
+    case = "case_33"
     path = tmp_path / "traces_glm" / case / "debate" / "r1"
     call = path / "llm_calls" / "001"
     public = {case: {"kernel": "def run(): pass\n", "problem": "Verify run."}}
@@ -86,3 +86,27 @@ def test_parse_error_does_not_hide_missing_capture_or_usage(tmp_path, missing):
     assert "raw API capture incomplete" in row["audit_issues"]
     assert row["outcome"] in {"token_limit", "error"}
     assert report._counts([row])["audited_correct"] == 0
+
+
+@pytest.mark.parametrize("visible,valid", [
+    (["previous_case"], True),
+    (["other_case"], False),
+    (["previous_case", "other_case"], False),
+    ([], False),
+])
+def test_renumbered_visibility_accepts_only_one_authenticated_alias(tmp_path, monkeypatch, visible, valid):
+    record, labels, public, _ = _failed_attempt(tmp_path)
+    case = record["case"]
+    record["case_aliases"] = [case, "previous_case"]
+    record["metadata"].update(case_visibility="current_case_only", max_tokens=8192,
+                              require_claim_scope_fields=True, debate_budget_closeout=True)
+    monkeypatch.setattr(report, "SCOPED_TOOL_CASES", frozenset({case}))
+    path = Path(record["path"]) / "artifact_visibility.json"
+    _write(path, {"visible_cases": visible, "previous_trace_root_removed": True,
+                  "public_files_sha256": {"kernel.py": "kernel-hash", "problem.txt": "problem-hash"}})
+    before = path.read_bytes()
+
+    row = report._attempt(record, labels, public, tmp_path)
+
+    assert ("current-case-only worker isolation missing or mismatched" not in row["audit_issues"]) == valid
+    assert path.read_bytes() == before

@@ -1,16 +1,47 @@
-import torch, sys, json
-sys.path.insert(0, "/root/cases/case_21")
-from kernel import paged_gather
+import torch, json, triton
+# Determine whether scalar K arg and program_id arithmetic are int32,
+# which decides overflow for K >= 2^31, without allocating 2^31 floats.
+import triton.language as tl
 
-result = {}
-for hd in [48, 96, 8]:
-    try:
-        kv = torch.randn(8, 4, hd, device="cuda")
-        bt = torch.randint(0, 8, (2, 2), dtype=torch.int32, device="cuda")
-        out = paged_gather(kv, bt, 4)
-        t = torch.arange(4, device="cuda")
-        ref = kv[bt[:, None].expand(2, 4), t//4, t%4]
-        result[f"head_dim_{hd}"] = {"status": "ok", "mismatches": (out != ref).sum().item()}
-    except Exception as e:
-        result[f"head_dim_{hd}"] = {"status": "error", "type": type(e).__name__, "msg": str(e)[:300]}
-print(json.dumps(result))
+@triton.jit
+def _probe_kernel(K, Out):
+    part = tl.program_id(0)
+    chunk = tl.cdiv(K, 512)
+    start = part * chunk
+    tl.store(Out + part, start.to(tl.int64))
+
+K_val = 2**31 + 100  # exceeds int32 range
+# chunk for small real K: emulate real kernel's params with tiny K to inspect dtype
+real_K = 1000
+out = torch.zeros(512, device="cuda", dtype=torch.int64)
+
+# Inspect the compiled signature of the real kernel for scalar K dtype
+from triton.compiler import ASTSource
+import importlib.util
+spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_22/kernel.py")
+kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
+a = torch.randn(real_K, device="cuda"); b = torch.randn(real_K, device="cuda")
+o = torch.zeros(1, device="cuda")
+# trigger a compile and inspect arg specialization
+compiled = kern._splitk_dot_kernel[(512,)](a, b, o, real_K, SPLIT=512, BLOCK=256)
+# check cache keys for the signature
+sigs = {}
+for key, val in kern._splitk_dot_kernel.cache[0].items():
+    sig = str(key) + " || " + str(getattr(val, "src", None))
+    sigs[str(key)[:200]] = sig[:400]
+    break
+
+# Direct dtype test: start value computation for K > 2^31 using the int64 store probe
+_probe_kernel[(1,)](K_val, out[:1])
+start_computed = out[0].item()
+expected = 0  # part=0 -> start=0
+res = {
+    "triton_version": triton.__version__,
+    "cache_signature_sample": sigs,
+    "probe_K_used": K_val,
+    "start_for_part0_int64result": start_computed,
+    "int32_overflow_reproduced": False,
+    "note": "full K>2^31 runtime test needs 2 x 8GB+ allocations; this probe inspects scalar arg dtype/specialization instead",
+    "vram_gb_available": torch.cuda.get_device_properties(0).total_memory / 1e9,
+}
+print(json.dumps(res))

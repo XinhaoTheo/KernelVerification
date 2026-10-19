@@ -1,0 +1,104 @@
+"""Standalone split-K matrix multiplication with a bias epilogue.
+
+Inspired by Triton's split-K scratch / final-reduction design.
+Copyright 2018-2020 Philippe Tillet; Copyright 2020-2022 OpenAI.
+MIT license; see LICENSE. This is a bounded T4 adaptation, not upstream code.
+"""
+import torch
+import triton
+import triton.language as tl
+
+
+@triton.jit
+def _partials(A, B, WORK, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,
+              TILES: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
+              BK: tl.constexpr):
+    row = tl.program_id(0) * BM + tl.arange(0, BM)
+    col = tl.program_id(1) * BN + tl.arange(0, BN)
+    split = tl.program_id(2)
+    lane = tl.arange(0, BK)
+    accum = tl.zeros((BM, BN), tl.float32)
+    for tile in range(TILES):
+        inner = (split * TILES + tile) * BK + lane
+        left = tl.load(A + row[:, None] * K + inner[None, :],
+                       mask=(row[:, None] < M) & (inner[None, :] < K), other=0.)
+        right = tl.load(B + inner[:, None] * N + col[None, :],
+                        mask=(inner[:, None] < K) & (col[None, :] < N), other=0.)
+        accum = tl.dot(left, right, accum)
+    offset = split * M * N + row[:, None] * N + col[None, :]
+    tl.store(WORK + offset, accum, mask=(row[:, None] < M) & (col[None, :] < N))
+
+
+@triton.jit
+def _finish(WORK, BIAS, OUT, M: tl.constexpr, N: tl.constexpr,
+            SPLITS: tl.constexpr, BLOCK: tl.constexpr):
+    index = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    value = tl.zeros((BLOCK,), tl.float32)
+    for split in range(SPLITS):
+        partial = tl.load(WORK + split * M * N + index, mask=index < M * N, other=0.)
+        value += partial.to(tl.float32)
+    bias = tl.load(BIAS + index % N, mask=index < M * N, other=0.)
+    tl.store(OUT + index, value + bias, mask=index < M * N)
+
+
+def validate_inputs(a, b, bias, split_k, require_cuda=True):
+    """Check the complete public domain; reference checks can also run on CPU."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+    values = (a, b, bias)
+    require(not torch.is_inference_mode_enabled(), "ordinary execution mode required")
+    for tensor in values:
+        require(type(tensor) is torch.Tensor, "standard torch.Tensor required")
+        require(tensor.layout == torch.strided and tensor.is_contiguous(), "contiguous strided tensor required")
+        require(not tensor.requires_grad and not tensor.is_inference(), "ordinary non-gradient tensors required")
+        require(not tensor.is_neg() and not tensor.is_conj(), "materialized logical values required")
+    require(all(t.device == a.device for t in values), "all tensors must share a device")
+    require(not require_cuda or a.is_cuda, "run requires CUDA")
+    require(a.ndim == b.ndim == 2 and bias.ndim == 1, "expected two matrices and a bias vector")
+    m, k = a.shape
+    kb, n = b.shape
+    require(k == kb and bias.shape == (n,), "matrix and bias dimensions disagree")
+    require(1 <= m <= 64 and 1 <= n <= 64 and 1 <= k <= 512, "shape outside supported domain")
+    require(a.dtype == b.dtype == torch.float16 and bias.dtype == torch.float32, "A/B must be FP16 and bias FP32")
+    require(type(split_k) is int and split_k in (1, 2, 4, 8), "split_k must be 1, 2, 4 or 8")
+    for tensor, bound in ((a, .5), (b, .5), (bias, 1.)):
+        require(bool(torch.isfinite(tensor).all().item()), "finite values required")
+        require(bool((tensor.abs() <= bound).all().item()), "input magnitude outside domain")
+    intervals = [(t.data_ptr(), t.data_ptr() + t.numel() * t.element_size()) for t in values]
+    require(all(a1 <= b0 or b1 <= a0 for i, (a0, a1) in enumerate(intervals)
+                for b0, b1 in intervals[i + 1:]), "input storage ranges must be disjoint")
+    return {"valid": True, "m": m, "n": n, "k": k, "split_k": split_k}
+
+
+def run(a, b, bias, split_k=4):
+    """Return a fresh FP32 CUDA result; input buffers are preserved."""
+    validate_inputs(a, b, bias, split_k)
+    m, k = a.shape
+    n = b.shape[1]
+    tiles = triton.cdiv(triton.cdiv(k, 32), split_k)
+    work_dtype = torch.float32
+    work = torch.empty((split_k, m, n), dtype=work_dtype, device=a.device)
+    out = torch.empty((m, n), dtype=torch.float32, device=a.device)
+    with torch.cuda.device(a.device):
+        _partials[(triton.cdiv(m, 16), triton.cdiv(n, 16), split_k)](
+            a, b, work, M=m, N=n, K=k, TILES=tiles, BM=16, BN=16, BK=32,
+            num_warps=4, num_stages=2)
+        _finish[(triton.cdiv(m * n, 256),)](
+            work, bias, out, M=m, N=n, SPLITS=split_k, BLOCK=256, num_warps=4)
+    return out
+
+
+def reference(a, b, bias, split_k=4):
+    """FP64 full matrix product; independent of split count and scratch layout."""
+    validate_inputs(a, b, bias, split_k, require_cuda=False)
+    return torch.matmul(a.double(), b.double()) + bias.double()[None, :]
+
+
+def make_inputs(device="cuda", m=17, n=33, k=257, split_k=4, seed=0):
+    """A convenience example, not a restriction on the legal input values."""
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    a = (torch.rand((m, k), generator=generator) - .5).half()
+    b = (torch.rand((k, n), generator=generator) - .5).half()
+    bias = (2 * torch.rand((n,), generator=generator) - 1).float()
+    return a.to(device), b.to(device), bias.to(device), split_k

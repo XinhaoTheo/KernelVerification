@@ -1,38 +1,44 @@
 import torch
-from kernel import requantize
+from kernel import topk_mask
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    x0 = torch.randn(4096, device=device)
+    n_cols, k = 64, 8
 
-    # Conventional test: one round trip, compared with a tolerance.
-    once = requantize(x0.clone())
-    # An INT8 round trip is only accurate to about absmax/127 per element, so a
-    # test written for this kernel uses a tolerance matched to the format.
-    level = x0.abs().max().item() / 127.0
-    short_pass = torch.allclose(once, x0, rtol=0.0, atol=2 * level)
-    one_step_bias = (once.abs().sum() / x0.abs().sum()).item()
+    # A row where the value at the cutoff is shared by several entries.
+    scores = torch.randn(4, n_cols, device=device)
+    scores[:, :12] = 2.0                      # 12 entries tied above the cutoff
+    cand = topk_mask(scores, k)
 
-    # Long-horizon behaviour: one optimizer step is "add the gradient, then store
-    # the parameter back in INT8". A per-step rounding bias compounds here.
-    grad = torch.full_like(x0, 1e-3)
-    x = x0.clone()
-    x_ref = x0.clone()
-    for _ in range(2000):
-        x = requantize(x + grad)
-        x_ref = x_ref + grad
-    long_pass = torch.allclose(x, x_ref, rtol=0.0, atol=2 * level)
-    tracked = ((x - x0).mean() / (x_ref - x0).mean()).item()
+    # Reference reading: admit exactly k, breaking the tie by lowest index.
+    ref = torch.zeros_like(scores)
+    order = torch.argsort(scores, dim=1, descending=True, stable=True)[:, :k]
+    ref.scatter_(1, order, scores.gather(1, order))
 
-    print(f"1 round trip: allclose={short_pass}, magnitude ratio={one_step_bias:.6f}")
-    print(f"2000 optimizer steps: allclose={long_pass}, fraction of the update actually tracked={tracked:.4f}")
-    # What a conventional CI test would conclude: a kernel unit test runs the
-    # operation once.
-    print(f"NAIVE_ALLCLOSE_VERDICT: {short_pass}")
-    return short_pass and not long_pass
+    raw_pass = torch.allclose(cand, ref, rtol=1e-2, atol=1e-2)
+
+    # The contract's actual requirement: no dropped entry exceeds a kept one.
+    kept = cand != 0
+    min_kept = torch.where(kept, cand, torch.full_like(cand, float("inf"))).min(dim=1).values
+    max_dropped = torch.where(kept, torch.full_like(cand, -float("inf")), scores).max(dim=1).values
+    ordering_ok = bool((min_kept >= max_dropped - 1e-6).all().item())
+
+    plain = torch.tensor([[5., 4., 3., 2., 1., 0., -1., -2.]], device=device)
+    kept_no_tie = {kk: int((topk_mask(plain, kk) != 0).sum().item()) for kk in (1, 2, 3)}
+    exact_without_ties = all(kept_no_tie[kk] == kk for kk in kept_no_tie)
+    print(f"no ties at all, kept counts by k = {kept_no_tie}, exactly k = {exact_without_ties}")
+
+    n_kept = int(kept[0].sum().item())
+    print(f"reference admits exactly k={k}; kernel kept {n_kept} entries")
+    print(f"elementwise allclose against that one reference = {raw_pass} (expected False)")
+    print(f"contract requirement (no dropped entry exceeds a kept one) = {ordering_ok} (expected True)")
+    # What a conventional CI test would conclude: it compares elementwise against
+    # one implementation's private tie convention.
+    print(f"NAIVE_ALLCLOSE_VERDICT: {raw_pass}")
+    return (not raw_pass) and ordering_ok and exact_without_ties
 
 
 if __name__ == "__main__":

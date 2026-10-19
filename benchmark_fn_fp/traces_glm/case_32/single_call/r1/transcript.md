@@ -21,98 +21,113 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: per-row ascending argsort of small integer keys
-(facebookresearch/sparse-delta-memory, lingua/sparse_delta_memory/triton_argsort.py).
+Operation: grouped INT4 dequantization fused with a matrix multiply
+(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).
 
-`triton_argsort(keys)` takes an [N, W] int64 tensor and returns the sorted keys
-together with the permutation that produces them:
+Weights are stored as 4-bit values packed into int32 words. Columns along the
+reduction dimension K are split into consecutive groups of `group_size`, and
+each group carries its own scale and zero-point row in `scales` / `zeros`.
 
-    sorted_keys[n, i] = keys[n, perm[n, i]]
-    sorted_keys[n, :] is non-decreasing
+Contract: every column must be dequantized with the scale and zero-point of the
+group it actually belongs to, for any K -- including a K that is not an exact
+multiple of group_size. In that case the trailing columns form a shorter final
+group which is still a group of its own, with its own row in `scales`/`zeros`;
+`scales` and `zeros` are supplied with ceil(K / group_size) rows accordingly.
 
-Tie rule: the sort must be STABLE. When two entries of a row hold the same key,
-the one with the LOWER original index must come first. The permutation is used
-to gather memory slots whose contents differ, so which of two tied entries is
-placed first changes the values that are read out afterwards, and stability is
-what makes the read reproducible across runs and across replicas.
-
-Input domain: keys are arbitrary int64 values. Duplicate keys within a row are
-expected -- the keys are quantized scores, and quantization is what makes two
-different underlying values land on the same key.
-
-Does triton_argsort() satisfy this contract?
+The kernel computes  C = A @ dequant(B),  with dequant(B)[k,n] =
+(unpacked_q[k,n] - zero[group_of(k), n]) * scale[group_of(k), n],
+where group_of(k) is the index of the group column k belongs to.
 
 
 ## Kernel implementation under test (kernel.py)
 
 ```python
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
 import torch
 import triton
 import triton.language as tl
 
 
 @triton.jit
-def _stable_argsort_kernel(
-    keys_ptr,       # [N, W] int64 input (modified in-place: sorted)
-    perm_ptr,       # [N, W] int64 output (permutation indices)
-    N: tl.constexpr,
-    W: tl.constexpr,
-    BLOCK_W: tl.constexpr,
+def quant_matmul_248_kernel(
+    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr, g_ptr,
+    M, N, K, bits, maxq,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    stride_scales, stride_zeros,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
-    """Ascending bitonic sort of each row, returning the permutation."""
-    pid = tl.program_id(0)
-    if pid >= N:
-        return
+    infearure_per_bits = 32 // bits
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-    offs = tl.arange(0, BLOCK_W)
-    mask = offs < W
-    base = pid * W
+    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    a_mask = offs_am[:, None] < M
+    b_ptrs = b_ptr + ((offs_k[:, None] // infearure_per_bits) * stride_bk + offs_bn[None, :] * stride_bn)
+    g_ptrs = g_ptr + offs_k
+    scales_ptrs = scales_ptr + offs_bn[None, :]
+    zeros_ptrs = zeros_ptr + (offs_bn[None, :] // infearure_per_bits)
 
-    keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
-    perm = offs.to(tl.int64)
+    shifter = (offs_k % infearure_per_bits) * bits
+    zeros_shifter = (offs_bn % infearure_per_bits) * bits
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    size = 1
-    while size < BLOCK_W:
-        stride = size
-        while stride > 0:
-            partner = offs ^ stride
-            ascending = ((offs & (size << 1)) == 0)
+    for k in range(0, num_pid_k):
+        g_idx = tl.load(g_ptrs)
+        scales = tl.load(scales_ptrs + g_idx[:, None] * stride_scales)
+        zeros = tl.load(zeros_ptrs + g_idx[:, None] * stride_zeros)
+        zeros = (zeros >> zeros_shifter[None, :]) & maxq
+        zeros = zeros + 1
+        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+        b = tl.load(b_ptrs)
+        b = (b >> shifter[:, None]) & maxq
+        b = (b - zeros) * scales
+        accumulator += tl.dot(a, b)
+        a_ptrs += BLOCK_SIZE_K
+        b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk
+        g_ptrs += BLOCK_SIZE_K
 
-            p_key = tl.load(keys_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
-            p_perm = tl.load(perm_ptr + base + partner, mask=(partner < W), other=0x7FFFFFFFFFFFFFFF)
-
-            is_lower_idx = offs < partner
-            want_smaller = (is_lower_idx & ascending) | ((~is_lower_idx) & (~ascending))
-
-            my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))
-
-            should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | \
-                                  ((~want_smaller) & my_is_smaller & (partner < W))
-
-            keys = tl.where(should_take_partner, p_key, keys)
-            perm = tl.where(should_take_partner, p_perm, perm)
-
-            tl.store(keys_ptr + base + offs, keys, mask=mask)
-            tl.store(perm_ptr + base + offs, perm, mask=mask)
-            tl.debug_barrier()
-
-            keys = tl.load(keys_ptr + base + offs, mask=mask, other=0x7FFFFFFFFFFFFFFF)
-            perm = tl.load(perm_ptr + base + offs, mask=mask, other=0)
-
-            stride = stride >> 1
-        size = size << 1
+    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    c_mask = (offs_am[:, None] < M) & (offs_bn[None, :] < N)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
-def triton_argsort(keys: torch.Tensor):
-    """Ascending argsort for small rows. Returns (sorted_keys, permutation)."""
-    N, W = keys.shape
-    BLOCK_W = triton.next_power_of_2(W)
-    keys_out = keys.clone()
-    perm = torch.arange(W, device=keys.device, dtype=torch.int64).unsqueeze(0).expand(N, -1).contiguous()
-    _stable_argsort_kernel[(N,)](keys_out, perm, N=N, W=W, BLOCK_W=BLOCK_W, num_warps=1)
-    return keys_out, perm
+def gptq_matmul(a, b_packed, scales, zeros, group_size, bits=4):
+    """Host wrapper. a: (M,K) fp32. b_packed: (K//(32//bits), N) int32.
+    scales/zeros: (num_groups, N), one row per group of `group_size` columns
+    along K. The per-column group table is derived here from group_size."""
+    M, K = a.shape
+    N = b_packed.shape[1]
+    maxq = 2 ** bits - 1
+
+    num_groups = K // group_size
+    g_idx = torch.clamp(
+        torch.arange(K, device=a.device, dtype=torch.int32) // group_size,
+        max=num_groups - 1,
+    )
+
+    c = torch.zeros((M, N), device=a.device, dtype=torch.float32)
+    BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K, GROUP_SIZE_M = 32, 32, 16, 1
+    grid = (triton.cdiv(M, BLOCK_SIZE_M) * triton.cdiv(N, BLOCK_SIZE_N),)
+    quant_matmul_248_kernel[grid](
+        a, b_packed, c, scales, zeros, g_idx,
+        M, N, K, bits, maxq,
+        a.stride(0), a.stride(1), b_packed.stride(0), b_packed.stride(1), c.stride(0), c.stride(1),
+        scales.stride(0), zeros.stride(0),
+        BLOCK_SIZE_M=BLOCK_SIZE_M, BLOCK_SIZE_N=BLOCK_SIZE_N, BLOCK_SIZE_K=BLOCK_SIZE_K,
+        GROUP_SIZE_M=GROUP_SIZE_M,
+    )
+    return c
 
 ```
 
@@ -120,59 +135,20 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Bitonic sort with a single thread per row? Actually each program handles one row with BLOCK_W lanes in parallel. Bitonic sort in Triton with parallel lanes is problematic: the compare-exchange uses tl.load of partner values from global memory each step, with debug_barrier to sync. The debug_barrier is a block-level barrier across warps? num_warps=1, so single warp — barrier within warp should synchronize... Actually tl.debug_barrier is __syncthreads, which syncs all threads in block. With one warp, load of partner values written by other lanes within same warp: stores then barrier then loads should work.
+The wrapper computes num_groups = K // group_size, clamping g_idx to num_groups-1. Contract says ceil(K/group_size) groups. For K not multiple, trailing group is its own group with its own row. Wrapper clamps trailing columns to last full group — wrong. Also b_packed indexing: b_ptrs use offs_k // infearure_per_bits, but offs_k within block plus BLOCK_SIZE_K increments — b_ptrs advances by BLOCK_SIZE_K//4 words; BLOCK_SIZE_K=16 → 4 words. OK. Also b load has no mask, but K assumed... Actually if K not multiple of 4? b indexing fine for K multiple of infearure_per_bits. Main defect: g_idx clamp misassigns trailing columns.
 
-But bitonic sort network sorts a sequence only when the full network runs over BLOCK_W with proper handling. Padded entries use INT64_MAX key and perm loaded with other=... for perm other=0x7FFF... (perm other = 0x7FFFFFFFFFFFFFFF? Look: perm loaded with other=0). Actually p_perm loaded with other=0x7FFFFFFFFFFFFFFF — huge perm for out-of-range partners, so padded entries treated as largest, fine.
-
-Ascending direction: `ascending = ((offs & (size << 1)) == 0)` — standard bitonic sort direction: element's block index. In standard bitonic sort, direction determined by (i & (2*size)) == 0 for the outer merge. Hmm, standard: for k = 2,4,...; for j = k/2,...; the ascending flag is ((i & k) == 0). Here size plays role of k and stride = j. So ascending = ((offs & size)==0)? They use (size<<1). That's wrong? Standard implementation:
-
-```
-for k = 2; k <= n; k *= 2:
-  for j = k/2; j > 0; j /= 2:
-    for i in parallel:
-      partner = i ^ j
-      ascending = ((i & k) == 0)
-```
-
-Here size=k, so ascending = ((offs & size)==0), not (size<<1). Using (size<<1) means for size=1 (k=2), ascending = (offs & 2)==0, i.e., direction by 4-blocks — wrong for first merge. That would produce incorrect sort.
-
-Wait, but maybe their loop structure differs: they run while size < BLOCK_W, stride from size down. With ascending = ((offs & (size<<1))==0): for size=1, direction alternates every 2 elements (offs&2), but pairs are (0,1) — direction constant within a pair? offs 0,1 both have offs&2==0, so ascending for both. Pair (2,3) both have offs&2 != 0 → descending. So first step sorts pairs ascending/descending — that's bitonic sequence creation, which matches k=2 stage of bitonic sort where pairs alternate? Standard k=2: pairs (0,1) ascending, (2,3) ascending too (i&k = i&2: i=0,1 →0 asc; i=2,3 → 2, descending). Yes! i&2==0 for i=0,1; i=2,3 have i&2=2 → descending. Hmm wait standard says (i & k)==0 with k=2: i=0,1 → asc; i=2,3 → desc. But actual bitonic sort first stage creates ascending pairs of 2 then merges... Actually standard bitonic sort creates bitonic sequences: stage k=2 sorts pairs with direction based on (i&2). Then merge k=4 with direction (i&4), etc. Hmm, in the standard version, for outer loop k, the direction uses (i & k). Here they use (i & 2*size)... 
-
-Let me re-derive: standard (from Wikipedia "Bitonic sorter" parallel version):
-```
-for (k = 2; k <= n; k *= 2)
-  for (j = k/2; j > 0; j /= 2)
-    l = i ^ j
-    dir = (i & k) == 0
-```
-So dir uses k, i.e., size. Implementation uses size<<1. That's a mismatch... unless they start with size representing k/2? Their inner: stride starts at size and halves — that's j from k/2 down with k = 2*size. And ascending should be (i & k) == (i & 2*size). So using (offs & (size<<1)) == 0 is exactly correct given k = 2*size. Good — so the network is correct.
-
-Wait but check: outer loop size from 1 doubling until size < BLOCK_W, i.e., last size = BLOCK_W/2, so k = BLOCK_W. Full network. Correct.
-
-Stability: bitonic sort isn't stable in general, but here they compare (keys, perm) lexicographically with perm tie-break... but perm values change during sort, and the comparator uses original index perm — comparing (key, -perm) i.e., smaller key first, then larger original index first?? my_is_smaller = (keys < p_key) | ((keys==p_key) & (perm > p_perm)). So for equal keys, the one with larger perm is "smaller" — that's descending by original index, which is UNSTABLE (stable requires lower index first). Hmm.
-
-Wait, maybe direction reversal: should_take_partner logic. Let's check comparator ordering. want_smaller: if ascending, element with lower offs wants to end up with the smaller element. The "smaller" element per comparator is defined by my_is_smaller. my_is_smaller means "I am smaller than partner" per comparator: keys<, or equal keys and perm>partner's perm. So smaller = equal keys → higher original index first. That's reverse-stable. That's a defect per the contract (ties: lower original index first).
-
-Hmm, but wait — maybe reversed direction still yields ascending keys but ties in reverse order. Keys sorted ascending; ties: larger original index first. Contract requires lower original index first. So reject.
-
-But double-check: could the bitonic network with a comparator that orders by (key asc, index desc) still... the sorted output is by that composite order, so ties yield descending original indices. Violates stability. Unless I misread `perm > p_perm`: yes, my_is_smaller when perm > p_perm, meaning element with larger index considered smaller → placed first. Unstable.
-
-Also concern: reading partner from global memory — each lane stores its own element then loads partner's; races across lanes within same warp? All lanes in one program (one warp, num_warps=1) do store then debug_barrier then load — sequential within the program. But different programs (pid) handle different rows — no overlap. Within a warp, does each lane write only its own offset, then barrier, then read partner offsets — fine.
-
-Another concern: each lane only stores at its own offs; but should_take_partner computed per lane; partner lanes compute complementary decisions (exchange symmetric) — yes since comparator is consistent both directions. p_perm load with mask partner<W other=INT64_MAX; for in-bounds partner the perm is valid. Fine.
-
-So main defect: tie-break direction reversed → unstable. Reject.
+But wait—maybe num_groups should be ceil? Given K, group_size: if K=10, group_size=4, groups ceil=3. num_groups = 2, clamp assigns k=8,9 to group 1 instead of group 2. Violates contract. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.9, "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."}
+{"verdict": "reject", "confidence": 0.9, "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."}
 
 ## Verdict
 
 {
   "verdict": "reject",
   "confidence": 0.9,
-  "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."
+  "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."
 }
 
 ## Usage and stop reason
@@ -183,21 +159,21 @@ So main defect: tie-break direction reversed → unstable. Reject.
   "response": {
     "verdict": "reject",
     "confidence": 0.9,
-    "reason": "The bitonic network itself looks structurally sound (k = 2*size with direction `(offs & (size<<1)) == 0` is the standard formulation), but the tie-break is reversed: `my_is_smaller` uses `(keys == p_key) & (perm > p_perm)`, so among equal keys the element with the LARGER original index is treated as smaller and placed first. This produces descending-index order for ties, violating the required stable (lower index first) contract."
+    "reason": "The wrapper computes num_groups = K // group_size and clamps g_idx to num_groups - 1, so when K is not a multiple of group_size the trailing columns are assigned to the last full group instead of their own final (shorter) group, violating the stated contract that they use their own row in scales/zeros (ceil(K/group_size) rows)."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 1166,
-    "output_tokens": 1671
+    "input_tokens": 1646,
+    "output_tokens": 312
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 28.96218916703947,
-  "kernel_sha256": "703f137b7dd84bb7153e74c005bb0c4380e623737693e7c4eb679b58613b9a67",
-  "problem_sha256": "78796c904229e19bf7e0ebf53a689091d841b723c1e15e760cac45ffd3dfcae2",
+  "elapsed_s": 7.090053332969546,
+  "kernel_sha256": "cd19f73291eaefb2445e102b11c8cc30d67a4eb7c1eab394946eb803ec093883",
+  "problem_sha256": "fbd66d7943268d1c396b03edb179f9f2398b6c883d0b62d9ba7f476a11969896",
   "prompt_variant": "original",
-  "estimated_usd": 0.008984800000000001,
+  "estimated_usd": 0.0036772,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

@@ -1,15 +1,15 @@
-Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's
-counter-based Philox RNG (tl.rand), as used by low-precision training kernels
-when casting high-precision accumulators down to a storage format.
+Operation: top-1 routing (a gate) over per-expert scores, implemented with the
+bitonic sort network used by Native Sparse Attention's selection branch
+(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).
 
-`stochastic_round_to_grid(x, seed)` must round each element to one of the two
-neighbouring multiples of STEP, choosing the upper one with probability equal
-to the element's fractional distance to it:
+`sorted_topk_indices(scores, k=1)` must return, for each token, the index of
+the highest-scoring expert.
 
-    lower = floor(x / STEP) * STEP
-    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower
+Contract on ties: when two experts have exactly equal scores, the LOWER
+index must be the one kept.
 
-so that E[out] == x. The randomness is drawn from the supplied seed.
+Each token's chosen expert contributes its output vector; the batch is then
+mean-pooled into a single continuous representation.
 
-Input domain: `x` is a 1-D tensor whose length is a power of two and fits in a
-single block.
+Input domain: `scores` has a power-of-two number of columns (the bitonic
+network this kernel family uses is defined only for power-of-two extents).

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_27`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_28`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 27.938s across 4 calls | tokens: in=36219 out=1085 total=37304
+- LLM time: 30.323s across 5 calls | tokens: in=51961 out=1563 total=53524
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,194 +25,219 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
   Output summary:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
   Output summary:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
   Output summary:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_27",
+    "entry": "case_28",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_27"
+    "entry": "case_28"
   }
 
-### Turn 2 - `solo` (8.617336754999997s, in=6733 out=361)
+### Turn 2 - `solo` (7.860217498999873s, in=7248 out=390)
 
 Message:
 
 ```text
-The obvious risk: when a row's mask keeps nothing, `x - tl.max(x)` becomes `-inf - (-inf) = NaN`, and dividing 0/0 gives NaN instead of the contractually required all-zero row. I'll record this claim and run a probe.
+The kernel calibrates the scale on the bulk of the row (with `pctl_levels=2`, the threshold ends up being roughly the 3rd-largest |x|) and then clamps to ±127·scale. On heavy-tailed rows, outlier channels get clamped away entirely, which the contract explicitly says the 5% bound cannot absorb. I'll record that claim and probe it.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "With keep all False, x is all -inf, so x - max(x) is NaN and e sums to 0, producing 0/0 = NaN instead of the required zeros.",
+    "rationale": "scale = thresh/127 with thresh well below the row max (after PCTL_LEVELS iterations thresh is a lower-order statistic of |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs are in the declared domain.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "the mask is arbitrary; a row may keep NO positions at all, and for such a row the specification requires an all-zero output row and every returned value must be finite."
+        "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
       }
     ],
-    "scope_rationale": "Contract requires that a mask row keeping no positions yields an all-zero output row and that every returned value be finite.",
-    "statement": "For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite."
+    "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative re
+  ...[truncated 165 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+
+### Turn 3 - `solo` (5.061484878999863s, in=8056 out=316)
+
+Message:
+
+```text
+Record the claim again with scope_rationale, then run probe.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
+      }
+    ],
+    "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-t
+  ...[truncated 477 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "With keep all False, x is all -inf, so x - max(x) is NaN and e sums to 0, producing 0/0 = NaN instead of the required zeros.",
+    "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "the mask is arbitrary; a row may keep NO positions at all, and for such a row the specification requires an all-zero output row and every returned value must be finite."
+        "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
       }
     ],
-    "scope_rationale": "Contract requires that a mask row keeping no positions yields an all-zero output row and that every returned value be finite.",
-    "statement": "For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite.",
-    "status": "open"
-  }
+    "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+    "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*sc
+  ...[truncated 111 chars]
 
-### Turn 3 - `solo` (5.077391260000013s, in=7823 out=289)
+### Turn 4 - `solo` (5.371422378000034s, in=9562 out=287)
 
 Message:
 
 ```text
-I'll run the probe for the all-False mask row case.
+Running the probe on heavy-tailed inputs matching the contract's domain.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, sys, os\nsys.path.insert(0, \"/root/cases/case_27\")\nfrom kernel import masked_softmax\n\ntorch.manual_seed(0)\nx = torch.randn(3, 8, device=\"cuda\")\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1, :] = False  # row keeping nothing\ny = masked_softmax(x, mask)\nprint(\"all_finite:\", bool(torch.isfinite(y).all()))\nprint(\"row1:\", y[1].tolist())\nprint(\"row1 nan count:\", int(torch.isnan(y[1]).sum()))\n# also sanity: normal rows correct?\nmask2 = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask2[0, 3:] = False\ny2 = masked_softmax(x, mask2)\nref = torch.where(mask2, x, float(\"-inf\"))\nref = (ref - ref.max(dim=1, keepdim=True).values).exp()\nref = ref / ref.sum(dim=1, keepdim=True)\nref = torch.where(mask2, r
-  ...[truncated 99 chars]
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(0)\nrows, cols = 64, 512\nx = torch.randn(rows, cols, device=\"cuda\") * 0.5\n# heavy-tailed: 3 outlier channels per row, 1-2 orders of magnitude above bulk\nfor r in range(rows):\n    idx = torch.randperm(cols, device=\"cuda\")[:3]\n    x[r, idx] *= torch.tensor([30.0, 60.0, 100.0], device=\"cuda\")\n\ny = quant_dequant(x)\nerr = (y - x).norm(dim=1) / x.norm(dim=1)\nprint(json.dumps({\n    \"metric\": \"per-row relative reconstruction error\",\n    \"max_rel_err\": err.max().item(),\n    \"mean_rel_err\": err.mean().item(),\n    \"frac_rows_over_5pct\": (err > 0.05).float().mean().item(),\n    \"min_rel_err\": err.min().item(),\n}))",
+  ...[truncated 81 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "d1f1c6906ee4417571118093f52f20c9b648d46d101c361fc678eb6c24edcc6c"
+        "path": "probes/t7_probe.py",
+        "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "0ee94448c747afed79c70d18a3b848f22f90f9700b0e46327a74136219b4f8f7"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t7_json_result.json",
+        "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite.",
-    "duration_s": 6.712037,
-    "event_id": "t6",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "probe_code",
-            "path": "probes/t6_probe.p
-  ...[truncated 1498 chars]
+    "claim_statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is 
+  ...[truncated 2730 chars]
 
-### Turn 4 - `solo` (8.673332807999941s, in=9583 out=199)
+### Turn 5 - `solo` (6.138650668000082s, in=11715 out=305)
 
 Message:
 
 ```text
-The probe confirmed the suspected failure: an all-False mask row yields NaN, violating the explicit contract. I'll finalize the evidence and record the verdict.
+The probe confirmed the claim decisively: every row exceeded 5% error (mean 69%, max 98%) because outlier channels are clamped. I'll finalize the evidence and record the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "all_finite": false,
-      "nan_count_row1": 8,
-      "normal_rows_max_abs_err": 5.96e-08,
-      "row1": "8 NaNs"
+      "frac_rows_over_5pct": 1.0,
+      "max_rel_err": 0.9815006852149963,
+      "mean_rel_err": 0.6887933015823364,
+      "metric": "per-row relative reconstruction error",
+      "min_rel_err": 0.13322266936302185,
+      "probe": "64x512 randn*0.5 rows with 3 outlier channels per row multiplied by 30/60/100"
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "For a row whose mask keeps no positions (3x8 tensor, row 1 all False), masked_softmax returns 8 NaN values (0/0), so not all returned values are finite, violating the contract's required all-zero row. Normal partially-masked rows match a reference softmax to 6e-8, isolating the failure to the all-masked row.",
-    "supports": "confirmed"
-  }
+    "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
+    "supports": "confir
+  ...[truncated 6 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "For a row whose mask keeps no positions (3x8 tensor, row 1 all False), masked_softmax returns 8 NaN values (0/0), so not all returned values are finite, violating the contract's required all-zero row. Normal partially-masked rows match a reference softmax to 6e-8, isolating the failure to the all-masked row.",
+    "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (5.570043451999936s, in=12080 out=236)
+### Turn 6 - `solo` (5.891579849999971s, in=15380 out=265)
 
 Message:
 
 ```text
-The claim is confirmed with a real probe: the kernel returns NaN on an all-False mask row, violating the explicit contract requirement of an all-zero row and finite outputs. Normal rows are accurate to 6e-8, isolating the defect. Recording the verdict.
+The claim is confirmed and fully evidenced: on the contract's declared heavy-tailed domain, every row exceeded the 5% relative error bound because outlier channels are clamped. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 (exit code 0) on a 3x8 CUDA tensor with row 1's mask all False showed masked_softmax returns 8 NaN values for that row (all_finite=False, nan_count_row1=8), caused by x - max(x) = -inf - (-inf) = NaN and 0/0 division in the kernel. The problem statement explicitly requires an all-zero output row for a mask keeping no positions and that every returned value be finite. Normal partially-masked rows matched a reference to 5.96e-08, isolating the failure to the contract-mandated case. Claim c1 is in_scope with scope evidence from problem.txt.",
+    "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "Probe t6 (exit code 0) on a 3x8 CUDA tensor with row 1's mask all False showed masked_softmax returns 8 NaN values for that row (all_finite=False, nan_count_row1=8), caused by x - max(x) = -inf - (-inf) = NaN and 0/0 division in the kernel. The problem statement explicitly requires an all-zero output row for a mask keeping no positions and that every returned value be finite. Normal partially-masked rows matched a reference to 5.96e-08, isolating the failure to the contract-mandated case. Claim c1 is in_scope with scope evidence from problem.txt.",
+    "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
     "verdict": "reject"
   }
 
@@ -224,90 +249,103 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite.
+Statement: On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.
 
 Scope: `in_scope`
 
-Scope rationale: Contract requires that a mask row keeping no positions yields an all-zero output row and that every returned value be finite.
+Scope rationale: The contract requires per-row relative reconstruction error ≤5% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.
 
 Scope evidence:
-- `problem.txt`: the mask is arbitrary; a row may keep NO positions at all, and for such a row the specification requires an all-zero output row and every returned value must be finite.
+- `problem.txt`: Relative row error ||y-x||/||x|| must not exceed 5%; "It is not loose enough to absorb a value that has been clamped away"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude.
 
-Rationale: With keep all False, x is all -inf, so x - max(x) is NaN and e sums to 0, producing 0/0 = NaN instead of the required zeros.
+Rationale: scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: For a row whose mask keeps no positions (3x8 tensor, row 1 all False), masked_softmax returns 8 NaN values (0/0), so not all returned values are finite, violating the contract's required all-zero row. Normal partially-masked rows match a reference softmax to 6e-8, isolating the failure to the all-masked row.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_27"
+  "entry": "case_28"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_27"
+  "entry": "case_28"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_27"
+  "entry": "case_28"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_27"
+  "entry": "case_28"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "With keep all False, x is all -inf, so x - max(x) is NaN and e sums to 0, producing 0/0 = NaN instead of the required zeros.",
+  "rationale": "scale = thresh/127 with thresh a lower-order statistic of |x| (after PCTL_LEVELS=2 iterations, roughly the 3rd-largest |x|), so entries with |x| > 127*scale are clamped; the contract states clamped entries remove their full magnitude and heavy-tailed inputs (outliers 1-2 orders above the bulk) are in the declared domain.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "the mask is arbitrary; a row may keep NO positions at all, and for such a row the specification requires an all-zero output row and every returned value must be finite."
+      "summary": "Relative row error ||y-x||/||x|| must not exceed 5%; \"It is not loose enough to absorb a value that has been clamped away\"; input domain is heavy-tailed transformer activations where a few channels exceed the bulk by 1-2 orders of magnitude."
     }
   ],
-  "scope_rationale": "Contract requires that a mask row keeping no positions yields an all-zero output row and that every returned value be finite.",
-  "statement": "For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite.",
+  "scope_rationale": "The contract requires per-row relative reconstruction error \u22645% on heavy-tailed activation inputs; with a scale calibrated on the bulk rather than the row max, outlier channels are clamped, which the contract explicitly says violates the 5% bound.",
+  "statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "d1f1c6906ee4417571118093f52f20c9b648d46d101c361fc678eb6c24edcc6c"
+      "path": "probes/t7_probe.py",
+      "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "0ee94448c747afed79c70d18a3b848f22f90f9700b0e46327a74136219b4f8f7"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t7_json_result.json",
+      "sha256": "2f831b500f88c8656c907f64c96299edb470e49505add5f317f561f3cd5a3979"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For a row where the mask keeps no positions (all-False mask row), masked_softmax returns NaN (0/0) instead of the contractually required all-zero row, so output values are non-finite.",
-  "duration_s": 6.712037,
-  "event_id": "t6",
+  "claim_statement": "On heavy-tailed rows (bulk plus a few outlier channels 1-2 orders of magnitude larger), the kernel's per-row relative reconstruction error exceeds 5% because outlier values are clamped to 127*scale where scale is calibrated on a lower-order statistic of |x| rather than the row max.",
+  "duration_s": 6.694412,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -315,60 +353,50 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "d1f1c6906ee4417571118093f52f20c9b648d46d101c361fc678eb6c24edcc6c"
+          "path": "probes/t7_probe.py",
+          "sha256": "164703ff359aa8296d3aa92e3d3dea55696ecfc6a93b42167da5a172a84294a4"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "0ee94448c747afed79c70d18a3b848f22f90f9700b0e46327a74136219b4f8f7"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "4c95741bc4ab766aad74d19190b249c5a01b477c3909e3043a7c17e660d8fd88"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        }
-      ],
-      "duration_s": 6.712037,
-      "exit_code": 0,
-      "expected_signal": null,
-      "json_parse_error": "last stdout line is not JSON: Expecting value",
-      "json_result": null,
-      "stderr
-...[truncated 698 chars]
+          "kind": "stderr"
+...[truncated 1930 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "For a row whose mask keeps no positions (3x8 tensor, row 1 all False), masked_softmax returns 8 NaN values (0/0), so not all returned values are finite, violating the contract's required all-zero row. Normal partially-masked rows match a reference softmax to 6e-8, isolating the failure to the all-masked row.",
+  "summary": "On heavy-tailed rows (bulk ~0.5, 3 outlier channels 1-2 orders above bulk, matching the contract's declared domain), every row's relative reconstruction error exceeded 5%: mean 68.9%, max 98.2%, min 13.3%. Outliers are clamped to 127*scale where scale is calibrated on the ~3rd-largest |x|, removing nearly their full magnitude, exactly the failure mode the contract says the 5% bound cannot absorb.",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 (exit code 0) on a 3x8 CUDA tensor with row 1's mask all False showed masked_softmax returns 8 NaN values for that row (all_finite=False, nan_count_row1=8), caused by x - max(x) = -inf - (-inf) = NaN and 0/0 division in the kernel. The problem statement explicitly requires an all-zero output row for a mask keeping no positions and that every returned value be finite. Normal partially-masked rows matched a reference to 5.96e-08, isolating the failure to the contract-mandated case. Claim c1 is in_scope with scope evidence from problem.txt.",
+  "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:33:56Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:34:34Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "Probe t6 (exit code 0) on a 3x8 CUDA tensor with row 1's mask all False showed masked_softmax returns 8 NaN values for that row (all_finite=False, nan_count_row1=8), caused by x - max(x) = -inf - (-inf) = NaN and 0/0 division in the kernel. The problem statement explicitly requires an all-zero output row for a mask keeping no positions and that every returned value be finite. Normal partially-masked rows matched a reference to 5.96e-08, isolating the failure to the contract-mandated case. Claim c1 is in_scope with scope evidence from problem.txt.",
+  "reason": "The kernel calibrates scale on a lower-order statistic of |x| (with default pctl_levels=2, roughly the 3rd-largest magnitude) rather than the row max, so outlier channels with |x| > 127*scale are clamped away. Probe t7 on the contract's declared heavy-tailed domain (64x512 activations, bulk ~0.5, 3 outlier channels per row 1-2 orders of magnitude above the bulk) showed every row violating the 5% relative reconstruction error bound: mean 68.9%, max 98.2%, min 13.3% (frac_rows_over_5pct = 1.0). The contract explicitly states the 5% bound is not loose enough to absorb a clamped-away value, so this is an in-scope contract violation.",
   "verdict": "reject"
 }

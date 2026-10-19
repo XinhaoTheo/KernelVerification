@@ -1,54 +1,71 @@
 
-import torch, importlib.util, json, traceback
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_07/kernel.py")
-kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
-dev='cuda'
-def wrap32(x):
-    x = x & 0xFFFFFFFF
-    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)
+import sys, json, math, torch
+sys.path.insert(0,"/root/cases/case_08")
+from kernel import stochastic_round_to_grid, STEP
 
-def run(M,K,N,gs,actorder=False,seed=7):
-    torch.manual_seed(seed)
-    groups=K//gs
-    q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)
-    zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)
-    scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()
-    if actorder:
-        g_idx = torch.randint(0,groups,(K,),device=dev).to(torch.int32)
-    else:
-        g_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)
-    qw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)
-    for k in range(K):
-        qw[k//8] |= (q[k] << ((k%8)*4))
-    qweight = wrap32(qw)
-    qz = torch.zeros((groups,N//8),device=dev,dtype=torch.int64)
-    for n in range(N):
-        qz[:,n//8] |= (zp[:,n] << ((n%8)*4))
-    qzeros = wrap32(qz)
-    a = torch.randn((M,K),device=dev,dtype=torch.float32)
-    gl=g_idx.long()
-    deq = (q.double() - (zp+1)[gl].double()) * scales[gl].double()
-    ref = a.double() @ deq
-    c = kern.gptq_matmul(a, qweight, scales, qzeros, g_idx, bits=4).double()
-    torch.cuda.synchronize()
-    e=(c-ref).abs().max().item(); d=ref.abs().max().item()
-    return {"max_abs_err":e,"ref_max_abs":d,"max_rel_err":e/d,"finite":bool(torch.isfinite(c).all().item())}
+dev="cuda"
+torch.manual_seed(0)
+N=1024
+# half structured mid-cell values (incl. negatives), half uniform random in [-5,5]
+fr=[0.1,0.25,0.5,0.75,0.9]
+ks=torch.arange(N//2, device=dev)//len(fr) - 50
+f=torch.tensor(fr*(N//2//len(fr)+1), device=dev)[:N//2]
+x1=((ks.float()*STEP)+f*STEP).float()
+x2=(torch.rand(N//2, device=dev)*10.0-5.0).float()
+x=torch.cat([x1,x2]).contiguous()
 
-cases = {
- "M32_K64_N64_g32": (32,64,64,32,False),
- "M64_K128_N64_g64": (64,128,64,64,False),
- "M128_K256_N128_g128": (128,256,128,128,False),
- "M33_K64_N64_g32_Mtail": (33,64,64,32,False),
- "M32_K64_N96_g32": (32,64,96,32,False),
- "M32_K64_N40_g32_Ntail": (32,64,40,32,False),
- "M64_K128_N64_g32_actorder": (64,128,64,32,True),
- "M32_K512_N64_g128_deepK": (32,512,64,128,False),
-}
-out={}
-for name,(M,K,N,gs,ao) in cases.items():
-    try:
-        out[name]=run(M,K,N,gs,ao)
-    except Exception as ex:
-        out[name]={"error":repr(ex)[:200]}
-worst=max([v["max_rel_err"] for v in out.values() if "max_rel_err" in v], default=None)
-print(json.dumps({"cases":out,"worst_max_rel_err":worst}))
+xd=x.double()
+kf=torch.floor(xd/0.05)
+lo=kf*0.05
+up=lo+0.05
+p=((xd-lo)/0.05).clamp(0.0,1.0)
+
+S=8000
+cnt=torch.zeros(N, device=dev, dtype=torch.float64)
+acc=torch.zeros(N, device=dev, dtype=torch.float64)
+max_offgrid=0.0
+max_nbr_dist=0.0
+outside_nbr=0
+for s in range(S):
+    o=stochastic_round_to_grid(x, s+999331).double()
+    dlo=(o-lo).abs(); dup=(o-up).abs()
+    is_up=dup<dlo
+    cnt+=is_up.double()
+    acc+=o
+    # distance to the chosen neighbour (should be ~0, few ulp)
+    nbr=torch.minimum(dlo,dup)
+    max_nbr_dist=max(max_nbr_dist,float(nbr.max()))
+    # off-grid: distance to nearest multiple of 0.05
+    og=(o-torch.round(o/0.05)*0.05).abs()
+    max_offgrid=max(max_offgrid,float(og.max()))
+    # neighbour-set violation: output more than 0.6*STEP from both neighbours
+    outside_nbr+=int((nbr>0.6*0.05).sum().item())
+
+freq=cnt/S
+mean_out=acc/S
+sig=torch.sqrt((p*(1-p)/S)).clamp_min(1e-12)
+z=(freq-p)/sig
+mz=float(z.abs().max()); ai=int(z.abs().argmax())
+# mean-based z (same variance scaled by STEP)
+zm=(mean_out-xd)/(0.05*sig)
+mzm=float(zm.abs().max()); bi=int(zm.abs().argmax())
+gm=float((mean_out-xd).mean())
+gsig=float((0.05*torch.sqrt(p*(1-p)/S)).pow(2).mean().sqrt()/math.sqrt(N))
+res=dict(
+ N=N, seeds=S, metric="double-precision nearest-neighbour classification",
+ max_abs_z_freq=mz, max_z_index=ai, max_z_p_true=float(p[ai]), max_z_freq=float(freq[ai]),
+ frac_abs_z_gt_5=float((z.abs()>5).double().mean()),
+ mean_z=float(z.mean()), std_z=float(z.std()),
+ overall_freq_minus_p=float((freq-p).mean()),
+ max_abs_z_mean=mzm, max_z_mean_index=bi,
+ max_abs_mean_err=float((mean_out-xd).abs().max()),
+ max_abs_mean_err_rel_STEP=float((mean_out-xd).abs().max()/0.05),
+ grand_mean_out_minus_x=gm, grand_mean_sigma=gsig,
+ grand_mean_z=gm/gsig if gsig>0 else None,
+ max_offgrid_abs=max_offgrid, max_offgrid_rel_STEP=max_offgrid/0.05,
+ max_dist_to_chosen_neighbour=max_nbr_dist,
+ max_dist_to_chosen_neighbour_rel_STEP=max_nbr_dist/0.05,
+ outside_neighbour_count=outside_nbr,
+ fp32_ulp_at_5=float(torch.tensor(5.0).nextafter(torch.tensor(6.0))-5.0),
+)
+print(json.dumps(res))

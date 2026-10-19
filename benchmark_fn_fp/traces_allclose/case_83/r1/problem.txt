@@ -1,0 +1,45 @@
+Compute a per-channel INT8 requantization epilogue for an integer GEMM.
+The operation must reproduce the following SINGLE-rounding rule exactly.
+
+For element a=acc[i,c], use m=multipliers[c], r=right_shifts[c], and
+z=zero_points[c]. Define, with exact mathematical integer arithmetic:
+
+  P = a*m
+  R = floor((P + 2^(30+r)) / 2^(31+r))
+  output[i,c] = min(127, max(-128, R + z))
+
+Thus R is the nearest integer to a*m/2^(31+r), with exact halfway cases
+rounded toward POSITIVE infinity. For example, -1.5 rounds to -1, and
++1.5 rounds to +2. Apply the zero point and INT8 saturation after rounding.
+Do not substitute two-stage rounding or permit one-unit output errors.
+The formula defines the required result, not a mandated implementation.
+
+Complete public input domain:
+- acc: int32 [M,C], 1<=M<=4096, 1<=C<=257. Every int32 accumulator is legal.
+- multipliers: int32 [C], every value in [2^30, 2^31-1]. These are positive
+  Q31 fixed-point multipliers, before the further right shift.
+- right_shifts: int32 [C], every value in [0,31].
+- zero_points: int32 [C], every value in [-128,127].
+- Inputs are ordinary dense, strided, contiguous torch.Tensor objects on
+  the same CUDA device. Contiguous views with nonzero storage offsets and
+  input tensors that share storage are legal if their values satisfy the domain.
+- All inputs have requires_grad=False, is_inference=False, is_neg=False,
+  and is_conj=False. Use ordinary non-inference mode with no concurrent
+  external writes. This forward operation does not provide autograd.
+
+Return a fresh int8 CUDA tensor [M,C] on acc.device. Preserve every input.
+Require exact integer equality at every output position: atol=0 and rtol=0.
+The implementation gets one fixed accept/reject verdict over the entire
+public domain; a failing legal input is evidence about the implementation.
+
+validate_inputs() enforces the domain and run() calls it. reference() accepts
+CPU inputs and applies the mathematical definition using bounded int64
+arithmetic. make_inputs() supplies examples, not a restricted test domain.
+
+This synthetic implementation uses the single-rounding form of the
+fixed-point rescaling arithmetic found in TFLite. Exact compatibility is an
+explicit requirement of this benchmark. It is not a claim that all TFLite
+backends or all quantized GEMM APIs require identical rounding behavior.
+This is not an upstream historical bug reproduction.
+
+Frozen environment: NVIDIA T4, PyTorch 2.8.0, Triton 3.4.0.

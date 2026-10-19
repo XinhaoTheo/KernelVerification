@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_19`
-- Turns: 6
-- Tool events: 10
+- Entry: `case_20`
+- Turns: 5
+- Tool events: 8
 - Claims: 1
 - Description updates: 0
-- LLM time: 57.369s across 5 calls | tokens: in=101461 out=3851 total=105312
-- Cache tokens: created=0 read=34550
+- LLM time: 46.809s across 4 calls | tokens: in=41399 out=3646 total=45045
+- Cache tokens: created=0 read=27640
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.97
 
 ## Timeline
 
@@ -26,248 +26,203 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_19",
+    "entry": "case_20",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 
-### Turn 2 - `solo` (9.791489942999988s, in=10122 out=730)
+### Turn 2 - `solo` (12.270154224000066s, in=4164 out=974)
 
 Message:
 
 ```text
-I see the suspicious `block_max >= m` update in the cross-block argmax. Let me read the rest of the source (wrapper) and record the claim.
+The kernel's line 26 computes `1.0 / (tl.sqrt(var) + eps)` rather than the contractually required `1 / sqrt(var + eps)`. Recording that claim and testing it.
 ```
 
 Tool calls:
 
-- `inspect_kernel_source -> t5 ok`
+- `record_claim -> t5 ok`
   Args:
   {
-    "end_line": 420,
-    "entry": "case_19",
-    "start_line": 240
-  }
-  Output summary:
-  {
-    "entry": "case_19"
-  }
-- `record_claim -> t6 ok`
-  Args:
-  {
-    "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
+    "rationale": "Line 26 of kernel.py: `rstd = 1.0 / (tl.sqrt(var) + eps)`. The epsilon is added outside the sqrt instead of inside. For var=0 this gives 1/eps = 1e5 instead of 1/sqrt(eps) \u2248 316, a 316x error; for var\u22481 it gives a relative error of about eps/2.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
+        "summary": "Contract states per-row: mean=sum(x)/N, var=sum((x-mean)^2)/N, rstd=1/sqrt(var+eps), y=(x-mean)*rstd*weight+bias."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Contract explicitly calls out epsilon behavior for vanishing variance: a constant row must not blow the output up, making constant/near-constant rows an in-domain input."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
-    "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later
-  ...[truncated 183 chars]
+    "scope_rationale": "problem.txt states the required formula lite
+  ...[truncated 624 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
+    "rationale": "Line 26 of kernel.py: `rstd = 1.0 / (tl.sqrt(var) + eps)`. The epsilon is added outside the sqrt instead of inside. For var=0 this gives 1/eps = 1e5 instead of 1/sqrt(eps) \u2248 316, a 316x error; for var\u22481 it gives a relative error of about eps/2.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
+        "summary": "Contract states per-row: mean=sum(x)/N, var=sum((x-mean)^2)/N, rstd=1/sqrt(var+eps), y=(x-mean)*rstd*weight+bias."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Contract explicitly calls out epsilon behavior for vanishing variance: a constant row must not blow the output up, making constant/near-constant rows an in-domain input."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
-    "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
-    "status": "open"
-  }
+    "scope_rationale": "problem.txt states the required formula literally as `rstd = 1 / sqrt(var + eps)` and additionally emphasizes the epsilon semantics (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"), explicitly naming the constant-row case as in-domain. Testing ordinary randn rows plus a constant row is therefore squarely inside the declared contract.",
+    "statement
+  ...[truncated 258 chars]
 
-### Turn 3 - `solo` (3.899976510999977s, in=16391 out=156)
-
-Message:
-
-```text
-I need to see the wrapper (lines 300-353) to know the public entry point and BLOCK_SIZE, then run a probe with a tie spanning two blocks.
-```
-
-Tool calls:
-
-- `inspect_kernel_source -> t7 ok`
-  Args:
-  {
-    "end_line": 353,
-    "entry": "case_19",
-    "start_line": 300
-  }
-  Output summary:
-  {
-    "entry": "case_19"
-  }
-
-### Turn 4 - `solo` (16.695297810999932s, in=20401 out=1351)
+### Turn 3 - `solo` (12.057373761000008s, in=6937 out=1028)
 
 Message:
 
 ```text
-Wrapper confirmed: BLOCK_SIZE = min(32768, next_pow2(n_cols)), so n_cols > 32768 spans multiple blocks. I'll probe a cross-block tie (and also record the loss values for reference).
+I'll run a probe comparing the kernel against the contract formula on normal rows and a constant row.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, sys, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_19/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ntorch.manual_seed(0)\nn_rows, n_cols = 4, 40000   # > 32768 -> multiple blocks\nlogits = torch.randn(n_rows, n_cols, device=\"cuda\", dtype=torch.float32) * 0.1\n# place exact ties at a low index (block 0) and a high index (block 1)\nlow_idx, high_idx = 100, 35000\nlogits[:, low_idx] = 5.0\nlogits[:, high_idx] = 5.0\ntarget = torch.tensor([0,1,2,3], device=\"cuda\", dtype=torch.int64)\n\nlg = logits.clone()\nloss, pred = k.cross_entropy_with_predictions(lg, target)\nref_loss = torch.nn.functional.cross_entropy(logits, target, reduction=\"none\")\n# referen
-  ...[truncated 881 chars]
+    "code": "\nimport torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\ndev='cuda'\neps=1e-5\nN=512\nx = torch.randn(8, N, device=dev, dtype=torch.float32)\n# make row 0 constant, row 1 near-constant (tiny variance)\nx[0] = 3.7\nx[1] = 3.7 + 1e-6*torch.randn(N, device=dev)\nw = torch.randn(N, device=dev); b = torch.randn(N, device=dev)\n\ny = m.layer_norm(x, w, b, eps)\nmean = x.mean(-1, keepdim=True)\nvar = ((x-mean)**2).mean(-1, keepdim=True)\nref = (x-mean)*torch.rsqrt(var+eps)*w + b\nref_t = torch.nn.functional.layer_norm(x, (N,), w, b, eps)\n\ndiff = (y-ref).abs()\nres = {\n \"metric\":\"max abs / rel err
+  ...[truncated 985 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
+        "path": "probes/t6_probe.py",
+        "sha256": "70c41ad9257635fcd580376bf15021944e6ca00a98f18fa64a3a82b4d345bda4"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
+        "path": "probes/t6_stdout.txt",
+        "sha256": "d63287ba92f435056ab8544c432d252d468c2f7c469be91df839b970af7a90b9"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
+        "path": "probes/t6_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
-    "duration_s": 8.001807,
-    "event_id": "t8",
+    "claim_statement": "layer_norm computes rstd = 1/(sqrt(var) + eps) instead of the contract's rstd = 1/sqrt(var + eps), producing wrong outputs (grossly wrong for near-constant / small-variance rows, and a small but systematic error for ordinary rows).",
+    "duration_s": 6.95323,
+    "event_id": "t6",
     "evidence_draft": {
       "claim_id": "c1",
       "data": {
         "artifacts": [
           {
-            "description": "Py
-  ...[truncated 2707 chars]
+            "description": "Python probe code executed by local runtime.",
+            "kind": "pr
+  ...[truncated 3244 chars]
 
-### Turn 5 - `solo` (12.25565308399996s, in=24420 out=911)
+### Turn 4 - `solo` (11.46689805899996s, in=11650 out=874)
 
 Message:
 
 ```text
-Probe t8 confirms the hypothesis: with n_cols=40000 (BLOCK_SIZE=32768) and exact ties at index 100 and 35000, the kernel reports 35000 while the lowest tied index is 100; the single-block control correctly returns 10. Recording evidence and the verdict.
+Probe t6 confirms the misplaced epsilon: the near-constant row (var≈1e-12) shows max abs error 0.73 and relative error 372×, and ordinary rows show a systematic ratio of 0.9999950 ≈ 1−eps/2. Finalizing evidence and the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t9 ok`
+- `finalize_probe_evidence -> t7 ok`
   Args:
   {
     "data": {
-      "BLOCK_SIZE": 32768,
-      "loss_ratio_kernel_over_ref": [
-        0.25,
-        0.25,
-        0.25,
-        0.25
-      ],
-      "n_cols": 40000,
-      "pred_kernel": [
-        35000,
-        35000,
-        35000,
-        35000
-      ],
-      "pred_required_lowest": [
-        100,
-        100,
-        100,
-        100
-      ],
-      "pred_single_block_control": [
-        10,
-        10
-      ],
-      "tie_indices": [
-        100,
-        35000
-      ]
+      "contract_rstd_var0": 316.2277660168379,
+      "eps": 1e-05,
+      "implied_rstd_var0_kernel": 100000.0,
+      "max_abs_err_vs_torch_layer_norm": 0.7276179194450378,
+      "ordinary_row_ratio_kernel_over_contract": 0.9999949932098389,
+      "predicted_ratio_1_minus_eps_over_2": 0.999995,
+      "row1_max_abs_err_vs_contract": 0.7276179194450378,
+      "row1_max_rel_err": 372.2176513671875,
+      "row1_var": 1.01108010852613e-12
     },
-    "event_id": "t8",
+    "event_id": "t6",
     "status": "confirmed",
-    "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-bloc
-  ...[truncated 271 chars]
+    "summary": "Kernel output vs contract formula rstd=1/sqrt(var+eps) (eps=1e-5, 8x512 fp32): near-constant row with var=1.01e-12 has max abs err 0.728 and max rel err 372x (also 0.728 vs torch.nn.functional.layer_norm, which agrees with the contract). Ordinary randn rows show a systematic multiplicative bias: median
+  ...[truncated 329 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction=\"mean\" with n_non_ignore=4 instead of the contract's per-row -log softmax.",
+    "summary": "Kernel output vs contract formula rstd=1/sqrt(var+eps) (eps=1e-5, 8x512 fp32): near-constant row with var=1.01e-12 has max abs err 0.728 and max rel err 372x (also 0.728 vs torch.nn.functional.layer_norm, which agrees with the contract). Ordinary randn rows show a systematic multiplicative bias: median ratio (y-b)/(ref-b) = 0.9999950 = 1 - eps/2, exactly the signature of rstd=1/(sqrt(var)+eps). The exactly-constant row happens to match only because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude; the implied rstd there would be 1e5 vs the contract's 316.2.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t6"
   }
 
-### Turn 6 - `solo` (14.726826319999986s, in=30127 out=703)
+### Turn 5 - `solo` (11.014643158000013s, in=18648 out=770)
 
 Message:
 
 ```text
-Claim c1 is confirmed with in-scope evidence; the cross-block tie rule is violated. Recording the verdict.
+Claim c1 is confirmed, in scope, and decisive: the kernel adds eps outside the sqrt. Recording the reject verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t10 ok`
+- `record_verdict -> t8 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tie
-  ...[truncated 618 chars]
+    "reason": "The contract in problem.txt requires rstd = 1 / sqrt(var + eps), and explicitly stresses the epsilon semantics for vanishing row variance. kernel.py line 26 instead computes `rstd = 1.0 / (tl.sqrt(var) + eps)` \u2014 epsilon added outside the square root, which is a different function, not a reordering or precision artifact.\n\nProbe t6 (8x512 fp32, eps=1e-5, compared against both the literal contract formula and torch.nn.functional.layer_norm, which agree) confirmed this at runtime:\n- Near-constant row (var = 1.01e-12): max abs error 0.728, max rel error 372x vs the contract; the same 0.728 max abs error vs torch layer_norm. The kernel's normalizer there is ~1/eps = 1e5 instead of the contract's 1/sqrt(eps) = 316.2
+  ...[truncated 725 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrappe
-  ...[truncated 218 chars]
+    "reason": "The contract in problem.txt requires rstd = 1 / sqrt(var + eps), and explicitly stresses the epsilon semantics for vanishing row variance. kernel.py line 26 instead computes `rstd = 1.0 / (tl.sqrt(var) + eps)` \u2014 epsilon added outside the square root, which is a different function, not a reordering or precision artifact.\n\nProbe t6 (8x512 fp32, eps=1e-5, compared against both the literal contract formula and torch.nn.functional.layer_norm, which agree) confirmed this at runtime:\n- Near-constant row (var = 1.01e-12): max abs error 0.728, max rel error 372x vs the contract; the same 0.728 max abs error vs torch layer_norm. The kernel's normalizer there is ~1/eps = 1e5 instead of the contract's 1/sqrt(eps) = 316.2, i.e. the stabilizer behaviour the contract calls out by name is wrong by ~316x.\n- Ordinary randn rows show the exact algebraic signature of the misplaced epsilon: median ratio (y-b)/(ref-b) = 0.9999950, matching the predicted 1 - eps/2 = 0.999995, with max abs errors ~2-4e-5 in a systematic (not random) direction.\n- The exactly-constant row (var=0) matches only trivially because x-mean=0 makes
+  ...[truncated 325 chars]
 
 ## Description Model
 
@@ -277,102 +232,95 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's "lowest index wins" tie rule for rows spanning multiple blocks.
+Statement: layer_norm computes rstd = 1/(sqrt(var) + eps) instead of the contract's rstd = 1/sqrt(var + eps), producing wrong outputs (grossly wrong for near-constant / small-variance rows, and a small but systematic error for ordinary rows).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly states the tie rule ("predicted must be the LOWEST such index") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.
+Scope rationale: problem.txt states the required formula literally as `rstd = 1 / sqrt(var + eps)` and additionally emphasizes the epsilon semantics ("it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up"), explicitly naming the constant-row case as in-domain. Testing ordinary randn rows plus a constant row is therefore squarely inside the declared contract.
 
 Scope evidence:
-- `problem.txt`: Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks.
+- `problem.txt`: Contract states per-row: mean=sum(x)/N, var=sum((x-mean)^2)/N, rstd=1/sqrt(var+eps), y=(x-mean)*rstd*weight+bias.
+- `problem.txt`: Contract explicitly calls out epsilon behavior for vanishing variance: a constant row must not blow the output up, making constant/near-constant rows an in-domain input.
 
-Rationale: Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.
+Rationale: Line 26 of kernel.py: `rstd = 1.0 / (tl.sqrt(var) + eps)`. The epsilon is added outside the sqrt instead of inside. For var=0 this gives 1/eps = 1e5 instead of 1/sqrt(eps) ≈ 316, a 316x error; for var≈1 it gives a relative error of about eps/2.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction="mean" with n_non_ignore=4 instead of the contract's per-row -log softmax.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Kernel output vs contract formula rstd=1/sqrt(var+eps) (eps=1e-5, 8x512 fp32): near-constant row with var=1.01e-12 has max abs err 0.728 and max rel err 372x (also 0.728 vs torch.nn.functional.layer_norm, which agrees with the contract). Ordinary randn rows show a systematic multiplicative bias: median ratio (y-b)/(ref-b) = 0.9999950 = 1 - eps/2, exactly the signature of rstd=1/(sqrt(var)+eps). The exactly-constant row happens to match only because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude; the implied rstd there would be 1e5 vs the contract's 316.2.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
-### t5 - inspect_kernel_source - ok
-
-{
-  "entry": "case_19"
-}
-
-### t6 - record_claim - ok
+### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Ties across blocks: `>=` updates on equality, choosing the later block's index instead of the earliest.",
+  "rationale": "Line 26 of kernel.py: `rstd = 1.0 / (tl.sqrt(var) + eps)`. The epsilon is added outside the sqrt instead of inside. For var=0 this gives 1/eps = 1e5 instead of 1/sqrt(eps) \u2248 316, a 316x error; for var\u22481 it gives a relative error of about eps/2.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size so a tie may fall in different blocks."
+      "summary": "Contract states per-row: mean=sum(x)/N, var=sum((x-mean)^2)/N, rstd=1/sqrt(var+eps), y=(x-mean)*rstd*weight+bias."
+    },
+    {
+      "source": "problem.txt",
+      "summary": "Contract explicitly calls out epsilon behavior for vanishing variance: a constant row must not blow the output up, making constant/near-constant rows an in-domain input."
     }
   ],
-  "scope_rationale": "problem.txt explicitly states the tie rule (\"predicted must be the LOWEST such index\") and explicitly declares the input domain includes n_cols exceeding block size so a tie may fall in different blocks.",
-  "statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
+  "scope_rationale": "problem.txt states the required formula literally as `rstd = 1 / sqrt(var + eps)` and additionally emphasizes the epsilon semantics (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"), explicitly naming the constant-row case as in-domain. Testing ordinary randn rows plus a constant row is therefore squarely inside the declared contract.",
+  "statement": "layer_norm computes rstd = 1/(sqrt(var) + eps) instead of the contract's rstd = 1/sqrt(var + eps), producing wrong outputs (grossly wrong for near-constant / small-variance rows, and a small but systematic error for ordinary rows).",
   "status": "open"
 }
 
-### t7 - inspect_kernel_source - ok
-
-{
-  "entry": "case_19"
-}
-
-### t8 - run_claim_probe - ok
+### t6 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
+      "path": "probes/t6_probe.py",
+      "sha256": "70c41ad9257635fcd580376bf15021944e6ca00a98f18fa64a3a82b4d345bda4"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
+      "path": "probes/t6_stdout.txt",
+      "sha256": "d63287ba92f435056ab8544c432d252d468c2f7c469be91df839b970af7a90b9"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t6_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "In liger_cross_entropy_kernel, the cross-block argmax uses `is_new_max = block_max >= m` (line 160), so when a later block ties the running maximum, argmax_idx is overwritten with the later (higher) index, violating the contract's \"lowest index wins\" tie rule for rows spanning multiple blocks.",
-  "duration_s": 8.001807,
-  "event_id": "t8",
+  "claim_statement": "layer_norm computes rstd = 1/(sqrt(var) + eps) instead of the contract's rstd = 1/sqrt(var + eps), producing wrong outputs (grossly wrong for near-constant / small-variance rows, and a small but systematic error for ordinary rows).",
+  "duration_s": 6.95323,
+  "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -380,57 +328,57 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "866629fb79992bfa6af808ee0e17eb373a5cd9a8f3d869c494c5bda0f235a8f7"
+          "path": "probes/t6_probe.py",
+          "sha256": "70c41ad9257635fcd580376bf15021944e6ca00a98f18fa64a3a82b4d345bda4"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "d7ad1e46f1fd32dfbbd96f57d5837c8d9a0e3ace348d6cc00a0b9faeb45e47dd"
+          "path": "probes/t6_stdout.txt",
+          "sha256": "d63287ba92f435056ab8544c432d252d468c2f7c469be91df839b970af7a90b9"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
+          "path": "probes/t6_stderr.txt",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       ],
-      "duration_s": 8.001807,
+      "duration_s": 6.95323,
       "exit_code": 0,
-      "expected_signal": "If clai
-...[truncated 1907 chars]
+      "expected_signal": "If the epsilon is misplaced, constant row (var=0) gets rstd=1/eps=1e5 vs c
+...[truncated 2444 chars]
 
-### t9 - finalize_probe_evidence - ok
+### t7 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Cross-block tie test (n_cols=40000, BLOCK_SIZE=32768, exact ties at col 100 in block 0 and col 35000 in block 1): kernel returned predicted=[35000,35000,35000,35000] while the contract-required lowest tied index is 100 for all rows. Single-block control (n_cols=1024, ties at 10 and 900) returned 10, i.e. intra-block tie handling via tl.min is correct and only the cross-block `>=` update is wrong. Incidentally loss/ref_loss = 0.25 for all rows, since the wrapper uses reduction=\"mean\" with n_non_ignore=4 instead of the contract's per-row -log softmax.",
+  "summary": "Kernel output vs contract formula rstd=1/sqrt(var+eps) (eps=1e-5, 8x512 fp32): near-constant row with var=1.01e-12 has max abs err 0.728 and max rel err 372x (also 0.728 vs torch.nn.functional.layer_norm, which agrees with the contract). Ordinary randn rows show a systematic multiplicative bias: median ratio (y-b)/(ref-b) = 0.9999950 = 1 - eps/2, exactly the signature of rstd=1/(sqrt(var)+eps). The exactly-constant row happens to match only because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude; the implied rstd there would be 1e5 vs the contract's 316.2.",
   "supports": "confirmed",
-  "tool_event_id": "t8"
+  "tool_event_id": "t6"
 }
 
-### t10 - record_verdict - ok
+### t8 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.97,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrapper passes reduction=\"mean\" with n_non_ignore=4, deviating from the contract's per-row loss[i] = -log softmax(logits[i])[target[i]]; this was not the decisive claim but reinforces the reject.)",
+  "reason": "The contract in problem.txt requires rstd = 1 / sqrt(var + eps), and explicitly stresses the epsilon semantics for vanishing row variance. kernel.py line 26 instead computes `rstd = 1.0 / (tl.sqrt(var) + eps)` \u2014 epsilon added outside the square root, which is a different function, not a reordering or precision artifact.\n\nProbe t6 (8x512 fp32, eps=1e-5, compared against both the literal contract formula and torch.nn.functional.layer_norm, which agree) confirmed this at runtime:\n- Near-constant row (var = 1.01e-12): max abs error 0.728, max rel error 372x vs the contract; the same 0.728 max abs error vs torch layer_norm. The kernel's normalizer there is ~1/eps = 1e5 instead of the contract's 1/sqrt(eps) = 316.2, i.e. the stabilizer behaviour the contract calls out by name is wrong by ~316x.\n- Ordinary randn rows show the exact algebraic signature of the misplaced epsilon: median ratio (y-b)/(ref-b) = 0.9999950, matching the predicted 1 - eps/2 = 0.999995, with max abs errors ~2-4e-5 in a systematic (not random) direction.\n- The exactly-constant row (var=0) matches only trivially because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude and does not exonerate the kernel.\n\nThis is a violation of a formula the contract states literally, on inputs the contract explicitly declares in-domain (constant/near-variance-zero rows and ordinary rows). Verdict: reject.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-08T14:50:44Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-08T14:50:33Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract requires predicted[i] = argmax with the LOWEST index among tied row maxima, and explicitly admits n_cols exceeding the block size so a tie can straddle blocks. Source inspection (t5/t7) shows the wrapper sets BLOCK_SIZE = min(32768, next_pow2(n_cols)) and the kernel's cross-block argmax update at line 160 uses `is_new_max = block_max >= m`, i.e. it overwrites the running argmax on an equal (not strictly greater) block max, preferring the later/higher index. Runtime probe t8 confirmed this on a case the contract admits: n_cols=40000 (BLOCK_SIZE=32768), exact ties placed at column 100 (block 0) and column 35000 (block 1); the kernel returned predicted=[35000,35000,35000,35000] while the required lowest tied index is 100 for every row. A single-block control (n_cols=1024, ties at 10 and 900) returned 10, showing intra-block tie handling via tl.min is correct and the defect is specifically the cross-block `>=` update. Since predicted feeds a downstream embedding gather, this changes the continuous output as the contract notes. (Additionally, t8 showed loss/ref_per_row = 0.25 exactly, since the wrapper passes reduction=\"mean\" with n_non_ignore=4, deviating from the contract's per-row loss[i] = -log softmax(logits[i])[target[i]]; this was not the decisive claim but reinforces the reject.)",
+  "reason": "The contract in problem.txt requires rstd = 1 / sqrt(var + eps), and explicitly stresses the epsilon semantics for vanishing row variance. kernel.py line 26 instead computes `rstd = 1.0 / (tl.sqrt(var) + eps)` \u2014 epsilon added outside the square root, which is a different function, not a reordering or precision artifact.\n\nProbe t6 (8x512 fp32, eps=1e-5, compared against both the literal contract formula and torch.nn.functional.layer_norm, which agree) confirmed this at runtime:\n- Near-constant row (var = 1.01e-12): max abs error 0.728, max rel error 372x vs the contract; the same 0.728 max abs error vs torch layer_norm. The kernel's normalizer there is ~1/eps = 1e5 instead of the contract's 1/sqrt(eps) = 316.2, i.e. the stabilizer behaviour the contract calls out by name is wrong by ~316x.\n- Ordinary randn rows show the exact algebraic signature of the misplaced epsilon: median ratio (y-b)/(ref-b) = 0.9999950, matching the predicted 1 - eps/2 = 0.999995, with max abs errors ~2-4e-5 in a systematic (not random) direction.\n- The exactly-constant row (var=0) matches only trivially because x-mean=0 makes y=b regardless of rstd, so it does not exercise the normalizer magnitude and does not exonerate the kernel.\n\nThis is a violation of a formula the contract states literally, on inputs the contract explicitly declares in-domain (constant/near-variance-zero rows and ordinary rows). Verdict: reject.",
   "verdict": "reject"
 }

@@ -1,21 +1,17 @@
-import torch, sys, json
-sys.path.insert(0, "/root/cases/case_17")
-from kernel import chunked_cumsum
-
+import torch, json
+import importlib.util
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_18/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 torch.manual_seed(0)
-x = torch.randn(3, 100, device="cuda", dtype=torch.float32)
-out = chunked_cumsum(x, chunk=64)
-ref = torch.cumsum(x, dim=1)
-tail = slice(64, 100)  # positions written by full chunk vs. trailing partial chunk
-written = slice(0, 64)
-err_tail = (out[:, tail] - ref[:, tail]).abs()
+x = torch.randn(4, 130, device="cuda", dtype=torch.float32)
+out = k.softmax(x)
+ref = torch.softmax(x, dim=1)
+row_sums = out.sum(dim=1)
 print(json.dumps({
-    "seqlen": 100, "chunk": 64, "shape": list(out.shape), "dtype": str(out.dtype),
-    "tail_indices": [64, 99],
-    "max_abs_err_written": float((out[:, written] - ref[:, written]).abs().max()),
-    "max_abs_err_tail": float(err_tail.max()),
-    "tail_is_all_zero": bool((out[:, tail] == 0).all()),
-    "ref_tail_allclose": bool(torch.allclose(out[:, tail], ref[:, tail], atol=1e-5)),
-    "sample_out_tail": out[0, 64:70].tolist(),
-    "sample_ref_tail": ref[0, 64:70].tolist(),
+  "shape": list(x.shape),
+  "row_sums": row_sums.tolist(),
+  "max_row_sum_dev_from_1": (row_sums - 1).abs().max().item(),
+  "max_abs_err_vs_torch_softmax": (out - ref).abs().max().item(),
+  "has_nan": bool(torch.isnan(out).any()),
+  "min_entry": out.min().item()
 }))

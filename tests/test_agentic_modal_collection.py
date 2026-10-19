@@ -260,7 +260,7 @@ def test_all_active_repository_public_bundles_collect_without_changing_metadata(
     details = read(benchmark / "case_map.json")["case_details"]
     active = {name: row for name, row in details.items() if is_active_case(row)}
     # Current bundles include the empty and explicit unknown schemas.
-    assert {"case_01", "case_115"} <= set(active)
+    assert {"case_01", "case_42"} <= set(active)
     for name, row in active.items():
         directory = benchmark / row["public_dir"]
         original = (directory / "meta.json").read_bytes()
@@ -275,7 +275,7 @@ def test_archived_family_metadata_remains_readable_without_reactivating_cases(ru
     module, _, _ = runner
     benchmark = Path(__file__).resolve().parents[1] / "benchmark_fn_fp"
     details = read(benchmark / "case_map.json")["case_details"]
-    for name in ("case_64", "case_66", "case_70", "case_72"):
+    for name in ("case_121", "case_123", "case_127", "case_129"):
         row = details[name]
         assert not is_active_case(row)
         directory = benchmark / row["public_dir"]

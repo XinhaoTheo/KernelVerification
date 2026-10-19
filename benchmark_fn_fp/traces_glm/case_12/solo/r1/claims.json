@@ -1,78 +1,66 @@
 [
   {
-    "created_at": "2026-09-30T08:22:13Z",
+    "created_at": "2026-09-30T08:24:28Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:22:29Z",
+        "created_at": "2026-09-30T08:24:45Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
-              "path": "probes/t6_probe.py",
-              "sha256": "c2218d1b6003dbcce75d74d422568c54b3ce8aacdc2c35d87f1810c9046f6720"
+              "path": "probes/t7_probe.py",
+              "sha256": "d47c1420065b89b00b83596535bd7adab2f63f916b8d44a0e08e5b4e0993e37a"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
-              "path": "probes/t6_stdout.txt",
-              "sha256": "cf7a8f27fc7695b4fd0a72d9f05a834614457f15b5d6efdb3a02a8d3112fa316"
+              "path": "probes/t7_stdout.txt",
+              "sha256": "b6f7ef89fe0d627fb421db4edf20843ac8f25e7e22102b8fcdf381f36e20d5fc"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
-              "path": "probes/t6_stderr.txt",
+              "path": "probes/t7_stderr.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t6_json_result.json",
-              "sha256": "ff0fbf633e1add6dd6558a9d85f96069052a82b442cc21d92a2548ebd56bb115"
             }
           ],
-          "duration_s": 5.207023,
+          "duration_s": 8.847861,
           "exit_code": 0,
           "expected_signal": null,
-          "json_parse_error": null,
-          "json_result": {
-            "contract": "1/sqrt(ms+eps)",
-            "kernel_impl": "1/(sqrt(ms)+eps)",
-            "max_abs_err": 2.1457672119140625e-06,
-            "max_rel_err": 6.997550485721149e-07,
-            "small_row_rel_err": 27.762353897094727
-          },
-          "kernel_impl": "1/(sqrt(ms)+eps)",
-          "max_abs_err": 2.15e-06,
-          "max_rel_err": 7e-07,
-          "ref_formula": "1/sqrt(ms+eps)",
-          "small_row_max_rel_err": 27.76,
+          "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+          "json_result": null,
+          "metric": "elementwise mismatch vs torch.repeat_interleave reference",
+          "mismatched_elements": 8,
+          "num_kv_heads": 2,
+          "num_q_heads": 4,
           "stderr": "",
-          "stdout": "{\"max_abs_err\": 2.1457672119140625e-06, \"max_rel_err\": 6.997550485721149e-07, \"small_row_rel_err\": 27.762353897094727, \"kernel_impl\": \"1/(sqrt(ms)+eps)\", \"contract\": \"1/sqrt(ms+eps)\"}\n",
+          "stdout": "tensor([[0., 1., 2., 3.],\n        [4., 5., 6., 7.],\n        [0., 1., 2., 3.],\n        [4., 5., 6., 7.]], device='cuda:0')\ntensor([[0., 1., 2., 3.],\n        [0., 1., 2., 3.],\n        [4., 5., 6., 7.],\n        [4., 5., 6., 7.]], device='cuda:0')\n{'mismatched_elements': 8, 'total': 16, 'num_kv_heads': 2, 'num_q_heads': 4}\n",
           "timed_out": false,
-          "timeout_s": 60
+          "timeout_s": 60,
+          "total_elements": 16
         },
         "id": "c1.e1",
         "kind": "runtime_probe",
-        "summary": "Kernel output deviates from the contract formula 1/sqrt(ms+eps): on randn inputs max rel err 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error is 27.76 (~2776%), consistent with 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). The contract's stated purpose of eps (keep normalizer finite for near-zero rows) is violated numerically.",
+        "summary": "With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].",
         "supports": "confirmed",
-        "tool_event_id": "t6"
+        "tool_event_id": "t7"
       }
     ],
     "id": "c1",
     "raised_by": "solo",
-    "rationale": "The kernel source line 23 computes 1.0 / (_sqrt(mean_square) + eps), adding eps to the square root instead of inside it, which yields different rstd whenever mean_square > 0 and fails the explicit formula in the contract.",
+    "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "rstd = 1 / sqrt(mean_square + eps) \u2014 epsilon must be inside the square root; problem.txt explicitly requires this formula."
+        "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
       }
     ],
-    "scope_rationale": "The problem statement explicitly defines the formula rstd = 1 / sqrt(mean_square + eps); the kernel implements 1 / (sqrt(mean_square) + eps), violating the declared formula.",
-    "statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.",
+    "scope_rationale": "The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.",
+    "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
     "status": "confirmed",
-    "updated_at": "2026-09-30T08:22:29Z"
+    "updated_at": "2026-09-30T08:24:45Z"
   }
 ]

@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
 try:
     from .case_registry import (canonical_dataset, case_public_dir, case_sort_key, dataset_members,
-                                dataset_root, is_active_case, load_registry, validation_path)
+                                dataset_root, is_active_case, load_registry, validation_cases)
 except ImportError:
     from case_registry import (canonical_dataset, case_public_dir, case_sort_key, dataset_members,
-                               dataset_root, is_active_case, load_registry, validation_path)
+                               dataset_root, is_active_case, load_registry, validation_cases)
 
 DATASETS = ("benchmark_fn_fp", "correlation_pair", "numerical_challenges", "evidence_challenges",
             "numerical_pilot", "single_call_vs_tools_challenges", "solo_vs_debate_challenges",
@@ -45,7 +44,7 @@ def case_names(repo: Path, dataset: str) -> list[str]:
 
 def ensure_active_dataset(dataset: str) -> None:
     if canonical_dataset(dataset) == "numerical_pilot":
-        raise ValueError("numerical_pilot is archived; case_82–105 are excluded from new experiments")
+        raise ValueError("numerical_pilot is archived; its cases are excluded from new experiments")
 
 
 def case_dataset(repo: Path, dataset: str, name: str, *, require_active: bool = False) -> str:
@@ -83,8 +82,7 @@ def checked_case_hashes(repo: Path, dataset: str, name: str) -> dict[str, str]:
         (public / filename).read_bytes()).hexdigest()
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}
     if dataset in FROZEN_DATASETS:
-        frozen_path = validation_path(Path(repo) / "benchmark_fn_fp", dataset)
-        validated = json.loads(frozen_path.read_text())["cases"]
+        validated = validation_cases(Path(repo) / "benchmark_fn_fp", dataset)
         if name not in validated:
             raise ValueError(f"No GPU validation for {dataset}/{name}")
         frozen = validated[name]

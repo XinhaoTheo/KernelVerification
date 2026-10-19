@@ -1,4 +1,4 @@
-"""Stable, directed-rounding mathematical GELU qualification for case_128/129."""
+"""Stable, directed-rounding mathematical GELU qualification for case_55/129."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -12,7 +12,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_128": "trust", "case_129": "reject"}
+EXPECTED = {"case_55": "trust", "case_56": "reject"}
 ATOL = 1e-6
 # Public reference returns FP64. The wider positive-tail interval contributes
 # at most one binary64 ulp (7.28e-12 at the largest finite FP16 input).

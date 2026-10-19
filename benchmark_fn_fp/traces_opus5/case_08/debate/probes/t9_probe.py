@@ -1,45 +1,28 @@
 
-import sys, json, math, torch
-sys.path.insert(0,"/root/cases/case_08")
-from kernel import stochastic_round_to_grid, STEP
+import json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("k9", "/root/cases/case_09/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-torch.manual_seed(0)
-dev="cuda"
-N=1024
-fr=[0.1,0.25,0.5,0.75,0.9]
-ks=torch.arange(N, device=dev)//len(fr) - 100
-f=torch.tensor(fr*(N//len(fr)+1), device=dev)[:N]
-x=((ks.float()*STEP)+f*STEP).float()
-lower=torch.floor(x/STEP)*STEP
-upper=lower+STEP
-p_up=((x-lower)/STEP).clamp(0,1)
-
-S=3000
-cnt=torch.zeros(N, device=dev, dtype=torch.float64)
-acc=torch.zeros(N, device=dev, dtype=torch.float64)
-bad_membership=0
-for s in range(S):
-    out=stochastic_round_to_grid(x, s+12345)
-    is_up=(out==upper)
-    is_lo=(out==lower)
-    bad_membership+=int((~(is_up|is_lo)).sum().item())
-    cnt+=is_up.double()
-    acc+=out.double()
-
-freq=cnt/S
-mean_out=acc/S
-sigma=torch.sqrt(p_up.double()*(1-p_up.double())/S).clamp_min(1e-12)
-z=(freq-p_up.double())/sigma
-maxz=float(z.abs().max()); argz=int(z.abs().argmax())
-mean_err=(mean_out-x.double()).abs()
-res=dict(
- N=N, seeds=S, max_abs_z=maxz,
- max_z_index=argz, max_z_p_up=float(p_up[argz]), max_z_freq=float(freq[argz]),
- frac_abs_z_gt_5=float((z.abs()>5).double().mean()),
- mean_z=float(z.mean()), overall_freq_minus_p=float((freq-p_up.double()).mean()),
- max_abs_mean_err=float(mean_err.max()),
- max_abs_mean_err_rel_STEP=float(mean_err.max()/STEP),
- grand_mean_out_minus_x=float((mean_out-x.double()).mean()),
- nonmember_count=bad_membership,
-)
-print(json.dumps(res))
+rows = []
+cases = []
+# N=4: duplicate max at (i,j) for all i<j, rest lower distinct
+for N in [2, 4, 8, 16]:
+    for i in range(N):
+        for j in range(i+1, N):
+            r = torch.full((N,), -1.0)
+            r[i] = 1.0; r[j] = 1.0
+            cases.append((N, i, j, r))
+summary = {}
+for N in [2, 4, 8, 16]:
+    sub = [(i, j, r) for (n, i, j, r) in cases if n == N]
+    scores = torch.stack([r for (_, _, r) in sub]).cuda()
+    top1 = m.sorted_topk_indices(scores, 1).squeeze(1).cpu()
+    lo = torch.tensor([i for (i, _, _) in sub])
+    hi = torch.tensor([j for (_, j, _) in sub])
+    got_low = int((top1 == lo).sum()); got_high = int((top1 == hi).sum())
+    other = int(((top1 != lo) & (top1 != hi)).sum())
+    summary[str(N)] = {"pairs": len(sub), "returned_lower_index": got_low,
+                       "returned_higher_index": got_high, "returned_neither": other,
+                       "sample": [[int(lo[t]), int(hi[t]), int(top1[t])] for t in range(min(6, len(sub)))]}
+print(json.dumps({"tie_probe": summary,
+                  "metric": "returned k=1 index vs lowest tied max index (contract: LOWER wins)"}))

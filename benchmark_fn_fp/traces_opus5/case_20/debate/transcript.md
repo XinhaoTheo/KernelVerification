@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_20`
+- Entry: `case_21`
 - Turns: 7
-- Tool events: 16
-- Claims: 3
+- Tool events: 14
+- Claims: 2
 - Description updates: 1
-- LLM time: 158.052s across 6 calls | tokens: in=235379 out=12772 total=248151
+- LLM time: 166.811s across 6 calls | tokens: in=191544 out=13479 total=205023
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.95
+- Confidence: 0.97
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_20",
+    "entry": "case_21",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_20"
+    "entry": "case_21"
   }
 
-### Turn 2 - `describer` (49.622504701s, in=4164 out=3776)
+### Turn 2 - `describer` (32.301065814999994s, in=3709 out=2462)
 
 Message:
 
 ```text
-I have the full source and contract; the decisive detail is the epsilon placement on line 26. Recording the description model.
+The full source and contract are already in state; the decisive structural fact is visible without more reads, so I'll record the description model directly.
 ```
 
 Tool calls:
@@ -76,36 +76,34 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
-      "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
-      "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
-      "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
-      "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
-    ],
-    "kernel_model": [
-      "One program per row (grid = (n_rows,)), BLOCK=256 fixed, thre
-  ...[truncated 6881 chars]
+      "Output shape [num_seqs, seq_len, head_dim], dtype/device of kv_cache; result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size] (problem.txt).",
+      "block_table is int32 [num_seqs, max_blocks] and holds PHYSICAL page ids; it must actually be read, since 'physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences'.",
+      "Input domain is explicitly broad: any seq_len fitting within max_blocks pages, and any sequence-to-physical-page mapping. So a correct kernel must handle arbitrary permutations/repeats of page ids, not just an identity-like table.",
+      "seq_len need not be a multiple of page_size (any length that fits), so partial final logical blocks are in scope.",
+      "head_dim is whatever kv_cac
+  ...[truncated 5129 chars]
   Output summary:
   {
     "contract_model": [
-      "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
-      "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
-      "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
-      "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
-      "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+      "Output shape [num_seqs, seq_len, head_dim], dtype/device of kv_cache; result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size] (problem.txt).",
+      "block_table is int32 [num_seqs, max_blocks] and holds PHYSICAL page ids; it must actually be read, since 'physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences'.",
+      "Input domain is explicitly broad: any seq_len fitting within max_blocks pages, and any sequence-to-physical-page mapping. So a correct kernel must handle arbitrary permutations/repeats of page ids, not just an identity-like table.",
+      "seq_len need not be a multiple of page_size (any length that fits), so partial final logical blocks are in scope.",
+      "head_dim is whatever kv_cache.shape[2] is; nothing in the problem restricts it to a power of two."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
-      "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct."
-  ...[truncated 6571 chars]
+      "Launch grid is (num_seqs, seq_len): one program per output token, each copying a whole head_dim row (kernel.py:29).",
+      "Per program: logical_block = slot // page_size, within = slot % page_size (kernel.py:12-13) \u2014 this decomposition matches the contract.",
+      "ph
+  ...[truncated 4819 chars]
 
-### Turn 3 - `skeptic` (29.747473533000004s, in=22420 out=2382)
+### Turn 3 - `skeptic` (21.22589153s, in=17384 out=1672)
 
 Message:
 
 ```text
-Recording the primary epsilon-placement hypotheses, split by regime so probes can distinguish a silently-wrong-scale bug from a tolerance artifact.
+The decisive structural fact is visible in source: `BlockTable` is passed but never loaded. I'll record the primary contract-violation claim plus the out-of-bounds corollary, both tied directly to problem.txt's stated input domain.
 ```
 
 Tool calls:
@@ -113,116 +111,122 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
+    "rationale": "The kernel body contains no tl.load from BlockTable; the physical page index is synthesized arithmetically from program ids. That hardcodes an identity/contiguous page allocation, which the problem explicitly says does not hold (\"physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences\").",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
+        "summary": "Specifies result[s, t] = kv_cache[block_table[s, t // page_size], t % page_size] and states the input domain allows the block table to map any sequence to any physical page, with pages interleaved across sequences."
       },
       {
-        "source": "kernel.py line 26",
-        "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
-      }
-    ],
-    "sc
-  ...[truncated 958 chars]
+        "source": "kernel.py:7,15",
+        "summary": "BlockTable is a kernel parameter but is never loaded; 
+  ...[truncated 1206 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
+    "rationale": "The kernel body contains no tl.load from BlockTable; the physical page index is synthesized arithmetically from program ids. That hardcodes an identity/contiguous page allocation, which the problem explicitly says does not hold (\"physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences\").",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
+        "summary": "Specifies result[s, t] = kv_cache[block_table[s, t // page_size], t % page_size] and states the input domain allows the block table to map any sequence to any physical page, with pages interleaved across sequences."
       },
       {
-        "source": "kernel.py line 26",
-        "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
+        "source": "kernel.py:7,15",
+        "summary": "BlockTable is a kernel parameter but is never loaded; physical page is computed as seq*max_blocks + logical_block."
       }
     ],
-    "scope_rationale": "problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"). No test.py exists, so representative in-contract inputs must be chosen from problem.tx
-  ...[truncated 592 chars]
+    "scope_rationale": "problem.txt is the only contract source (no test.py) and it states the output formula requires indexing through block_table, and explicitly widens the input domain: \"the block table may map any sequence to any physical page\". A random permutation table with num_pages == num_seqs*max_block
+  ...[truncated 840 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+    "rationale": "There is no bounds check on the synthesized page index and no mask on tl.load/tl.store; the wrapper never compares num_seqs*max_blocks against num_pages, so an oversubscribed page pool (the realistic paged-cache configuration) walks off the allocation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
+        "summary": "Declares kv_cache as [num_pages, page_size, head_dim] with pages allocated on demand and interleaved across sequences; imposes no requirement that num_pages >= num_seqs*max_blocks."
+      },
+      {
+        "source": "kernel.py:15-19",
+        "summary": "physical index is derived from program ids with no clamp/mask, and tl.load/tl.store are issued without a validity mask."
       }
     ],
-    "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps
-  ...[truncated 550 chars]
+    "scope_rationale": "problem.txt places no cou
+  ...[truncated 970 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+    "rationale": "There is no bounds check on the synthesized page index and no mask on tl.load/tl.store; the wrapper never compares num_seqs*max_blocks against num_pages, so an oversubscribed page pool (the realistic paged-cache configuration) walks off the allocation.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
-      }
-    ],
-    "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.",
-    "statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/s
-  ...[truncated 184 chars]
-- `record_claim -> t8 ok`
-  Args:
-  {
-    "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
+        "summary": "Declares kv_cache as [num_pages, page_size, head_dim] with pages allocated on demand and interleaved across sequences; imposes no requirement that num_pages >= num_seqs*max_blocks."
       },
       {
-        "source": "kernel.py line 36",
-        "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
+        "source": "kernel.py:15-19",
+        "summary": "physical index is derived from program ids with no clamp/mask, and tl.load/tl.store are issued without a validity mask."
       }
     ],
-    "scope_rationale": "problem.txt explicitly raises the constant-row case as the motiv
-  ...[truncated 589 chars]
-  Output summary:
-  {
-    "id": "c3",
-    "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
-      },
-      {
-        "source": "kernel.py line 36",
-        "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.",
-    "statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows 
-  ...[truncated 223 chars]
+    "scope_rationale": "problem.txt places no coupling between num_pages and num_seqs*max_blocks, and states pages are \"allocated on demand\" and shared/interleaved among sequences, which implies a page pool that need not be as large as num_seqs*max_blocks. Every block_table entry in the described case is a legal page id (< num_pages), so the input is fully inside the stated contract; only the kernel's synthesized index leaves bou
+  ...[truncated 604 chars]
 
-### Turn 4 - `experimenter` (26.967971000999995s, in=30534 out=2756)
+### Turn 4 - `experimenter` (32.192688546s, in=23605 out=2971)
 
 Message:
 
 ```text
-Launching all three probes together — they are independent (c1 near-constant rows, c2 benign randn tolerance quantification, c3 exactly-constant-row metric-validity check) and none of their input designs depends on another's outcome.
+Both claims are structurally independent (c1 uses an in-bounds permutation table; c2 deliberately oversubscribes the page pool and may kill the CUDA context), so I'm running them as two separate probes, with the c2 case isolated in a subprocess so an illegal-memory-access can be captured without confounding anything else.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t9 ok`
+- `run_claim_probe -> t8 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\ndev='cuda'; M,N=8,512; eps=1e-5\nres={}\nfor noise in [1e-4, 1e-3, 1e-2, 1e-1]:\n    x = (3.0 + noise*torch.randn(M,N,device=dev,dtype=torch.float32)).contiguous()\n    w = torch.randn(N,device=dev,dtype=torch.float32)\n    b = torch.randn(N,device=dev,dtype=torch.float32)\n    y = m.layer_norm(x,w,b,eps)\n    ref = F.layer_norm(x.double(),(N,),w.double(),b.double(),eps).float()\n    var = x.double().var(dim=-1,unbiased=False).mean().item()\n    denom = ref.abs().clamp_min(1e-6)\n    rel = ((y-ref).abs()/denom).max(
-  ...[truncated 583 chars]
+    "code": "\nimport json, importlib.util, torch\n\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nS, MB, PS, HD = 4, 8, 16, 64\nNP = S * MB           # 32 pages -> identity mapping stays in bounds\nkv = torch.randn(NP, PS, HD, device='cuda', dtype=torch.float32)\n\ndef ref_gather(kv, bt, seq_len):\n    t = torch.arange(seq_len, device=kv.device)\n    pages = bt[:, t // PS].long()          # [S, T]\n    within = (t % PS).view(1, -1).expand(pages.shape)\n    return kv[pages, within]\n\nres = {}\nfor name, bt in [\n    (\"identity\", torch.arange(NP, device='cuda', dtype=torch.int32).reshape(S, MB)),\n    (\"permutation\", torch.randper
+  ...[truncated 1120 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "be1e2eb2b1cc93f3ebecbc39895bd839739e778998656e7c5824c2af202c0d13"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "769b1e28b6546d8394495e847b3fe751952fdac3bdf8285b838b2c375d49eef6"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t8_json_result.json",
+        "sha256": "d2a39948203caf3cb2457ffa8d3467c770fc7b0be728d42954a7a829e0d48807"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "paged_gather ignores block_table entirely (the BlockTable pointer is never dereferenced; kernel.py:15 computes physical = seq*max_blocks + logical_block), so for any block table other than the exact contiguous map
+  ...[truncated 5796 chars]
+- `run_claim_probe -> t9 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "\nimport json, subprocess, sys, textwrap\n\nchild = textwrap.dedent('''\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nS, MB, PS, HD = 4, 8, 16, 64\nNP = 16                       # oversubscribed pool: NP < S*MB = 32\nkv = torch.randn(NP, PS, HD, device='cuda', dtype=torch.float32)\n# every entry is a legal page id (< NP); sequences share pages (interleaved pool)\nbt = torch.randint(0, NP, (S, MB), device='cuda', dtype=torch.int32)\nseq_len = MB * PS             # 128, uses all logical blocks\nout_info = {\"num_pages\": NP, \"seq_max_physical_touched\": S*MB - 1,\n            \"block_tabl
+  ...[truncated 1578 chars]
   Output summary:
   {
     "artifacts": [
@@ -230,13 +234,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
+        "sha256": "b334646430d42ab95ad1cd7629e07cd483909530ab1c049b8be29fe82bf7cb3d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233707093"
+        "sha256": "d5a68107acd29d2cb1ad94a71dacf2dd113f02e58994b7d3f4cbfd56567a8e64"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -248,423 +252,369 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "2024d784a9c91f2ae89d8adba4f1e707bc60b31abdb7dc67966e0f172c4ef347"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's norma
-  ...[truncated 6376 chars]
-- `run_claim_probe -> t10 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\ndev='cuda'; M,N=64,512; eps=1e-5\nx=torch.randn(M,N,device=dev,dtype=torch.float32)\nw=torch.randn(N,device=dev); b=torch.randn(N,device=dev)\ny=m.layer_norm(x,w,b,eps)\nref=F.layer_norm(x.double(),(N,),w.double(),b.double(),eps).float()\nrefd=F.layer_norm(x.double(),(N,),w.double(),b.double(),eps)\nvar=x.double().var(dim=-1,unbiased=False)\nrstd_k=1.0/(var.sqrt()+eps); rstd_c=1.0/(var+eps).sqrt()\nrel_rstd=((rstd_k-rstd_c).abs()/rstd_c).max().item()\ndenom=refd.abs().clamp_min(1e-3)\nrel_y=((y.double()-refd).abs()/
-  ...[truncated 897 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t10_probe.py",
-        "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t10_stdout.txt",
-        "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t10_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t10_json_result.json",
-        "sha256": "8338b2675af262ea34c9c7db9ef7dfbe20892d1c57214d7274af23ebac02cda9"
+        "sha256": "2db32ce22fd21c12c6b6832425cf61374da33730238e4fedc903ff91f6655711"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd
-  ...[truncated 4015 chars]
-- `run_claim_probe -> t11 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "\nimport json, importlib.util, torch, torch.nn.functional as F\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_20/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev='cuda'; M,N=4,512; eps=1e-5\nx=torch.full((M,N),2.0,device=dev,dtype=torch.float32)\ntorch.manual_seed(2)\nw=torch.randn(N,device=dev); b=torch.randn(N,device=dev)\ny=m.layer_norm(x,w,b,eps)\nref=F.layer_norm(x,(N,),w,b,eps)\nout={\"const_row_max_abs_err\":(y-ref).abs().max().item(),\n \"const_row_allclose_1e-6\":bool(torch.allclose(y,ref,rtol=1e-6,atol=1e-6)),\n \"y_equals_bias\":bool(torch.allclose(y,b.expand_as(y))),\n \"ref_equals_bias\":bool(torch.allclose(ref,b.expand_as(ref))),\n \"kernel_rstd_at_var0\":1.0/eps,\"contract_rstd
-  ...[truncated 557 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t11_probe.py",
-        "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t11_stdout.txt",
-        "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t11_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "ce98323335e9313358970b4b5a826102db9f0a94fb8b9c582bd1d703bd47f7ed"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not b
-  ...[truncated 3355 chars]
+    "claim_statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max
+  ...[truncated 3924 chars]
 
-### Turn 5 - `experimenter` (26.129584178000016s, in=44784 out=2184)
+### Turn 5 - `experimenter` (57.848668457s, in=33726 out=4898)
 
 Message:
 
 ```text
-All three probes returned; finalizing each. No new probes needed — c1's magnitude sweep, c2's benign-randn tolerance quantification, and c3's metric-validity check together cover the ledger.
+Both probes returned. c1 is decisive as-is. For c2 the mismatch alone is confounded with the c1 defect (output would be wrong even in-bounds), so the *out-of-bounds read* mechanism itself is not yet proven — I'm finalizing t9 as inconclusive for that mechanism and launching a targeted follow-up that (A) uses a sentinel backing buffer so an OOB read is identifiable by value, and (B) pushes the synthesized index far past the allocation in a subprocess to see if it faults.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t12 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "N": 512,
-      "all_outputs_finite": true,
-      "dtype": "float32",
-      "eps": 1e-05,
-      "noise_1e-1_allclose_1e-2": true,
-      "noise_1e-1_max_abs_err": 0.002498626708984375,
-      "noise_1e-2_max_abs_err": 0.2952742576599121,
-      "noise_1e-3_max_abs_err": 4.566250324249268,
-      "noise_1e-3_max_rel_err": 747.0294189453125,
-      "noise_1e-4_allclose_1e-2": false,
-      "noise_1e-4_contract_rstd": 316.07390915360946,
-      "noise_1e-4_kernel_rstd": 9201.270845276804,
-      "noise_1e-4_max_abs_err": 6.744071960449219,
-      "noise_1e-4_max_rel_err": 2185.77783203125,
-      "noise_1e-4_row_var": 9.737868619048764e-09
+      "config": "num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32, fp32",
+      "identity_len100_mismatched_tokens": 0,
+      "identity_len100_total_tokens": 400,
+      "identity_len128_mismatched_tokens": 0,
+      "identity_len128_total_tokens": 512,
+      "identity_max_abs_err": 0.0,
+      "metric": "bit-exact equality vs kv_cache[block_table[s,t//PS], t%PS]",
+      "oob_possible": false,
+      "permutation_len100_frac_wrong": 0.96,
+      "permutation_len100_mismatched_tokens": 384,
+      "permutation_len100_total_tokens": 400,
+      "permutation_len128_frac_wrong": 0.9688,
+      "permutation_len128_mismatched_tokens": 496,
+      "permutation_len128_total_tokens": 512,
+      "permutation_max_abs_err": 6.279704570770264,
+      "shape_ok_all_cases": true
     },
-    "event_id": "t9",
-    "status": "confirmed",
-    "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm
-  ...[truncated 501 chars]
+    "event_id": "t8",
+    "status":
+  ...[truncated 695 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.",
+    "summary": "Bit-exact gather comparison with num_pages=32==num_seqs*max_blocks (no OOB possible). With the contiguous/identity block table the kernel matches the reference exactly (0/512 and 0/400 tokens wrong), but with a random permutation block table \u2014 explicitly admitted by problem.txt (\"the block table may map any sequence to any physical page\") \u2014 496/512 tokens (96.9%) are wrong at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. This is the signature of block_table being ignored: correct only for the one mapping that coincides with physical = seq*max_blocks + logical_block. Shapes are correct in all cases.",
     "supports": "confirmed",
-    "tool_event_id": "t9"
+    "tool_event_id": "t8"
   }
-- `finalize_probe_evidence -> t13 ok`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
     "data": {
-      "allclose_rtol1e-3": true,
-      "allclose_rtol1e-5": false,
-      "allclose_rtol1e-6": false,
-      "eps": 1e-05,
-      "eps_0.1_allclose_1e-2": false,
-      "eps_0.1_max_abs_err": 0.4143395534178307,
-      "eps_1.0_allclose_1e-2": false,
-      "eps_1.0_max_abs_err": 1.9161843624620118,
-      "input": "randn(64,512) fp32",
-      "max_abs_err_y": 4.6567964320232136e-05,
-      "max_rel_rstd_err": 4.999962440057259e-06,
-      "predicted_eps_over_2": 5e-06,
-      "var_mean": 0.9963793361763285
+      "block_table_max_entry": 15,
+      "child_returncode": 0,
+      "confound": "mismatch also predicted by c1 (block_table ignored), so mismatch alone does not evidence an OOB read",
+      "cuda_error": null,
+      "max_abs_err": 7.093972206115723,
+      "max_synthesized_physical_index": 31,
+      "mismatched_tokens": 496,
+      "nonfinite_out": 0,
+      "num_pages": 16,
+      "num_seqs_x_max_blocks": 32,
+      "total_tokens": 512
     },
-    "event_id": "t10",
-    "status": "confirmed",
-    "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/ato
-  ...[truncated 299 chars]
+    "event_id": "t9",
+    "status": "inconclusive",
+    "summary": "Oversubscribed pool (num_pages=16 &lt; num_seqs*max_blocks=32, all block_table entries &lt;=15) ran to completion with no CUDA error (child returncode 0, empty stderr) and produced 496/512 wrong tokens, max abs err 7.09, no non-finite values. The wrong-output signal does not discriminate c2 from c1: wi
+  ...[truncated 391 chars]
   Output summary:
   {
     "claim_id": "c2",
-    "claim_status": "confirmed",
+    "claim_status": "inconclusive",
     "evidence_id": "c2.e1",
-    "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).",
-    "supports": "confirmed",
-    "tool_event_id": "t10"
+    "summary": "Oversubscribed pool (num_pages=16 &lt; num_seqs*max_blocks=32, all block_table entries &lt;=15) ran to completion with no CUDA error (child returncode 0, empty stderr) and produced 496/512 wrong tokens, max abs err 7.09, no non-finite values. The wrong-output signal does not discriminate c2 from c1: with block_table ignored the output would be wrong for this table even if every synthesized index were in bounds. No crash and no value-level proof that memory past kv_cache's 16 pages was actually read, so the out-of-bounds mechanism itself remains untested. Follow-up probe launched using a sentinel backing buffer and a far-out-of-range index configuration.",
+    "supports": "inconclusive",
+    "tool_event_id": "t9"
   }
-- `finalize_probe_evidence -> t14 ok`
+- `run_claim_probe -> t12 ok`
   Args:
   {
-    "data": {
-      "const_row_allclose_1e-6": true,
-      "const_row_max_abs_err": 0.0,
-      "contract_rstd_at_var0": 316.2277660168379,
-      "kernel_rstd_at_var0": 99999.99999999999,
-      "nearconst_allclose_1e-2": false,
-      "nearconst_max_abs_err": 6.426322314719196,
-      "ref_equals_bias": true,
-      "rstd_overstatement_factor": 316.2277660168379,
-      "y_equals_bias": true
-    },
-    "event_id": "t11",
-    "status": "confirmed",
-    "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-
-  ...[truncated 269 chars]
+    "claim_id": "c2",
+    "code": "\nimport json, subprocess, sys, textwrap, importlib.util, torch\n\nres = {}\n\n# ---------- Part A: sentinel backing buffer, identify OOB reads by value ----------\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_21/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(0)\nS, MB, PS, HD = 4, 8, 16, 64\nNP = 16\nbuf = torch.randn(64, PS, HD, device='cuda', dtype=torch.float32)   # 64 pages of backing store\nkv = buf[:NP]                                                       # kv_cache exposes only 16 pages\nassert kv.is_contiguous() and kv.data_ptr() == buf.data_ptr() and kv.stride(0) == PS*HD\nbt = torch.randint(0, NP, (S, MB), device='cuda', dtype=torch.int32)  # every entry a legal p
+  ...[truncated 3406 chars]
   Output summary:
   {
-    "claim_id": "c3",
-    "claim_status": "confirmed",
-    "evidence_id": "c3.e1",
-    "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.",
-    "supports": "confirmed",
-    "tool_event_id": "t11"
-  }
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t12_probe.py",
+        "sha256": "b652c0e073f338700bd122a618363e0abce39fb16c9780772fc7d423da428497"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t12_stdout.txt",
+        "sha256": "e159fb07253769a2ec12602c01a904bdfaf4065d052c97dffb855169847ae0b6"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t12_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t12_json_result.json",
+        "sha256": "6ab634f71b1f246d06955b8daecf3b630ee6f928dbececdeb368767734a5425e"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4,
+  ...[truncated 6386 chars]
 
-### Turn 6 - `skeptic` (8.563642501999993s, in=65816 out=481)
+### Turn 6 - `skeptic` (10.498390236000006s, in=56088 out=573)
 
 Message:
 
 ```text
-This is a review turn: all three claims are confirmed with direct runtime evidence, and the epsilon-placement defect is fully characterized across the variance sweep. Nothing in the new evidence points to an uncovered in-scope failure mode.
+This is the final review turn. c1 is confirmed with decisive bit-exact evidence (block_table ignored), and the follow-up probe t12 further supports c2 (256/256 OOB tokens matched backing memory beyond kv_cache; far-OOB config raised an illegal memory access). Nothing new is exposed that existing claims don't already cover, so I'm closing out my review.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t15 ok`
+- `record_no_new_claims -> t13 ok`
   Args:
   {
-    "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable 
-  ...[truncated 121 chars]
+    "reason": "The decisive defect is already captured and confirmed by c1: the BlockTable pointer is never dereferenced (kernel.py:15 synthesizes physical = seq*max_blocks + logical_block), and probe t8 showed bit-exact match only for the contiguous/identity table while 96-97% of tokens are wrong under a random permutation table, which problem.txt explicitly admits (\"the block table may map any sequence to any physical page\"). The follow-up probe t12 addresses the remaining open question on c2: with kv_cache = buf[:16], all 256 tokens whose synthesized index >= num_pages matched the backing buffer beyond kv_cache's own extent, and the far-out-of-range configuration raised a CUDA illegal memory access \u2014 evidence for the unmasked/unclamped index mechanism, which is a corollary of the
+  ...[truncated 307 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable hypothesis is left that existing claims do not already cover.",
+    "reason": "The decisive defect is already captured and confirmed by c1: the BlockTable pointer is never dereferenced (kernel.py:15 synthesizes physical = seq*max_blocks + logical_block), and probe t8 showed bit-exact match only for the contiguous/identity table while 96-97% of tokens are wrong under a random permutation table, which problem.txt explicitly admits (\"the block table may map any sequence to any physical page\"). The follow-up probe t12 addresses the remaining open question on c2: with kv_cache = buf[:16], all 256 tokens whose synthesized index >= num_pages matched the backing buffer beyond kv_cache's own extent, and the far-out-of-range configuration raised a CUDA illegal memory access \u2014 evidence for the unmasked/unclamped index mechanism, which is a corollary of the same root cause rather than a separate defect. Remaining unexplored surfaces (non-power-of-two head_dim, strided/non-contiguous kv_cache) are generalization notes outside the stated contract's explicit requirements and are not needed to decide the verdict.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
-    "reviewed_tool_event_count": 14,
+    "reviewed_tool_event_count": 12,
     "turn": 6
   }
 
-### Turn 7 - `judge` (17.02125176299998s, in=67661 out=1193)
+### Turn 7 - `judge` (12.744121849999999s, in=57032 out=903)
 
 Message:
 
 ```text
-All three claims are confirmed with runtime evidence, the Skeptic has signed off with no new claims, and the artifact contains no test.py — so problem.txt is the operative contract and it states the required formula explicitly. Recording a reject.
+Evidence is decisive and the Skeptic has signed off with no new claims, so I am finalizing.
 ```
 
 Tool calls:
 
-- `record_verdict -> t16 ok`
+- `record_verdict -> t14 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-
-  ...[truncated 1630 chars]
+    "reason": "The artifact provides no test.py/get_inputs, so problem.txt is the operative contract. It explicitly requires result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size], states that \"the physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences,\" and widens the input domain with \"the block table may map any sequence to any physical page.\" Claim c1 is confirmed and in_scope with scope evidence citing exactly that stated domain: kernel.py passes BlockTable as an argument but never dereferences it; line 15 synthesizes physical = seq*max_blocks + logical_block, hardcoding an identity/contiguous page allocation. Probe t8 shows the signature of that defect un
+  ...[truncated 1186 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.97,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c1"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined thr
-  ...[truncated 1230 chars]
+    "reason": "The artifact provides no test.py/get_inputs, so problem.txt is the operative contract. It explicitly requires result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size], states that \"the physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences,\" and widens the input domain with \"the block table may map any sequence to any physical page.\" Claim c1 is confirmed and in_scope with scope evidence citing exactly that stated domain: kernel.py passes BlockTable as an argument but never dereferences it; line 15 synthesizes physical = seq*max_blocks + logical_block, hardcoding an identity/contiguous page allocation. Probe t8 shows the signature of that defect under bit-exact equality (the correct metric for a pure data-movement gather, no precision or reduction-order excuse applies): with num_pages = num_seqs*max_blocks = 32 so no out-of-bounds confound, the contiguous/identity table matches exactly (0/512 and 0/400 tokens wrong), while a random permutation block table \u2014 an input the contract explicitly admits \u2014 yields 496/512 (96.9%) wrong tok
+  ...[truncated 786 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
-    "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
-    "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
-    "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
-    "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+    "Output shape [num_seqs, seq_len, head_dim], dtype/device of kv_cache; result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size] (problem.txt).",
+    "block_table is int32 [num_seqs, max_blocks] and holds PHYSICAL page ids; it must actually be read, since 'physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences'.",
+    "Input domain is explicitly broad: any seq_len fitting within max_blocks pages, and any sequence-to-physical-page mapping. So a correct kernel must handle arbitrary permutations/repeats of page ids, not just an identity-like table.",
+    "seq_len need not be a multiple of page_size (any length that fits), so partial final logical blocks are in scope.",
+    "head_dim is whatever kv_cache.shape[2] is; nothing in the problem restricts it to a power of two."
   ],
   "kernel_model": [
-    "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
-    "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct.",
-    "Line 26 implements rstd = 1.0 / (tl.sqrt(var) + eps), NOT 1.0 / tl.sqrt(var + eps). Epsilon is added to the standard deviation instead of the variance.",
-    "Consequence at var = 0 (constant row): kernel rstd = 1/eps = 1e5, contract rstd = 1/sqrt(eps) \u2248 316.2 \u2014 a ~316x overstatement. Output is still finite, so a NaN/inf check would not catch it; the numerator (x-mean) is 0 for a truly constant row, so y = bias there and the error can be masked unless weight-scaled residual noise exists (e.g. fp16 input where mean is not exactly representable, or near-constant rather than exactly constant rows).",
-    "Consequence at var ~ 1: sqrt(var)+eps vs sqrt(var+eps) differ by roughly eps/2 \u2248 5e-6 relative, i.e. below typical 1e-2/1e-3 fp16 tolerances and near fp32 rtol=1e-5 \u2014 a randn-only benchmark
-...[truncated 5303 chars]
+    "Launch grid is (num_seqs, seq_len): one program per output token, each copying a whole head_dim row (kernel.py:29).",
+    "Per program: logical_block = slot // page_size, within = slot % page_size (kernel.py:12-13) \u2014 this decomposition matches the contract.",
+    "physical = seq * max_blocks + logical_block (kernel.py:15). The BlockTable pointer argument is passed in but never loaded anywhere in the kernel body; there is no tl.load from BlockTable.",
+    "This implicitly assumes sequence s owns physical pages [s*max_blocks, s*max_blocks + max_blocks), i.e. contiguous, non-interleaved, allocation-order-identity paging \u2014 the exact assumption the problem says does not hold.",
+    "Addressing assumes each page's interior is contiguous: src = KV + physical*stride_kv_page + within*HEAD_DIM + offs (kernel.py:17) uses hardcoded HEAD_DIM/1 strides for the page and element dims rather than kv_cache.stride(1)/stride(2).",
+    "Output addressing similarly uses stride_out_seq for dim 0 but hardcodes slot*HEAD_DIM + offs for dims 1-2; valid only for a contiguous freshly-allocated out (
+...[truncated 3649 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_20 is a Triton row-wise LayerNorm forward. The contract fixes rstd = 1/sqrt(var + eps), but the kernel computes rstd = 1/(sqrt(var) + eps) (line 26), i.e. epsilon added outside the square root. This is a near-invisible error for well-conditioned rows and a large error for low-variance/constant rows, which is exactly the case the problem text singles out.
+- `du1` tasks=`initial`: Kernel is a paged-KV gather that never dereferences the block table: it computes the physical page as seq*max_blocks+logical_block, i.e. it hardcodes a contiguous per-sequence page layout instead of the required indirection kv_cache[block_table[s, t//page_size]].
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.
+Statement: paged_gather ignores block_table entirely (the BlockTable pointer is never dereferenced; kernel.py:15 computes physical = seq*max_blocks + logical_block), so for any block table other than the exact contiguous mapping block_table[s,b] == s*max_blocks + b, the output rows differ from the reference kv_cache[block_table[s, t//page_size], t % page_size]. Concretely, with num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32 and block_table a random permutation of 0..31 reshaped to (4,8) (int32), the returned tensor should be bit-exactly unequal to the reference for a large fraction of tokens.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement ("it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up"). No test.py exists, so representative in-contract inputs must be chosen from problem.txt; a 2-D fp32 tensor with a near-constant row and default eps=1e-5 is squarely within the stated domain (2-D x, 1-D weight/bias, eps stabilizer).
+Scope rationale: problem.txt is the only contract source (no test.py) and it states the output formula requires indexing through block_table, and explicitly widens the input domain: "the block table may map any sequence to any physical page". A random permutation table with num_pages == num_seqs*max_blocks is therefore an admitted, indeed typical, input; it keeps all page ids in range so no out-of-bounds confound is introduced. Metric is bit-exact equality (pure data movement, no arithmetic).
 
 Scope evidence:
-- `problem.txt`: Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract.
-- `kernel.py line 26`: Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root.
+- `problem.txt`: Specifies result[s, t] = kv_cache[block_table[s, t // page_size], t % page_size] and states the input domain allows the block table to map any sequence to any physical page, with pages interleaved across sequences.
+- `kernel.py:7,15`: BlockTable is a kernel parameter but is never loaded; physical page is computed as seq*max_blocks + logical_block.
 
-Rationale: Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.
+Rationale: The kernel body contains no tl.load from BlockTable; the physical page index is synthesized arithmetically from program ids. That hardcodes an identity/contiguous page allocation, which the problem explicitly says does not hold ("physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences").
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Bit-exact gather comparison with num_pages=32==num_seqs*max_blocks (no OOB possible). With the contiguous/identity block table the kernel matches the reference exactly (0/512 and 0/400 tokens wrong), but with a random permutation block table — explicitly admitted by problem.txt ("the block table may map any sequence to any physical page") — 496/512 tokens (96.9%) are wrong at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. This is the signature of block_table being ignored: correct only for the one mapping that coincides with physical = seq*max_blocks + logical_block. Shapes are correct in all cases.
 
-### c2 - `confirmed`
+### c2 - `inconclusive`
 
-Statement: Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.
+Statement: Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max_blocks=8, page_size=16, head_dim=64 with a valid int32 block table whose entries are all < 16 will address pages up to index 31, producing garbage data or a CUDA illegal-memory-access / device-side assert rather than the reference result.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.
+Scope rationale: problem.txt places no coupling between num_pages and num_seqs*max_blocks, and states pages are "allocated on demand" and shared/interleaved among sequences, which implies a page pool that need not be as large as num_seqs*max_blocks. Every block_table entry in the described case is a legal page id (< num_pages), so the input is fully inside the stated contract; only the kernel's synthesized index leaves bounds. Metric: bit-exact mismatch versus reference, plus any CUDA error surfaced after torch.cuda.synchronize().
 
 Scope evidence:
-- `problem.txt`: Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test.
+- `problem.txt`: Declares kv_cache as [num_pages, page_size, head_dim] with pages allocated on demand and interleaved across sequences; imposes no requirement that num_pages >= num_seqs*max_blocks.
+- `kernel.py:15-19`: physical index is derived from program ids with no clamp/mask, and tl.load/tl.store are issued without a validity mask.
 
-Rationale: Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.
-
-Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).
-
-### c3 - `confirmed`
-
-Statement: For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.
-
-Scope evidence:
-- `problem.txt`: Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up.
-- `kernel.py line 36`: Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd.
-
-Rationale: With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious "constant row" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.
+Rationale: There is no bounds check on the synthesized page index and no mask on tl.load/tl.store; the wrapper never compares num_seqs*max_blocks against num_pages, so an oversubscribed page pool (the realistic paged-cache configuration) walks off the allocation.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor — even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.
+- `c2.e1` runtime_probe supports `inconclusive`, tool_event_id=t9: Oversubscribed pool (num_pages=16 &lt; num_seqs*max_blocks=32, all block_table entries &lt;=15) ran to completion with no CUDA error (child returncode 0, empty stderr) and produced 496/512 wrong tokens, max abs err 7.09, no non-finite values. The wrong-output signal does not discriminate c2 from c1: with block_table ignored the output would be wrong for this table even if every synthesized index were in bounds. No crash and no value-level proof that memory past kv_cache's 16 pages was actually read, so the out-of-bounds mechanism itself remains untested. Follow-up probe launched using a sentinel backing buffer and a far-out-of-range index configuration.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_20"
+  "entry": "case_21"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Per-row (dim -1) LayerNorm over a 2-D input: mean = sum(x)/N, var = sum((x-mean)^2)/N (biased, population variance).",
-    "Normalizer must be rstd = 1/sqrt(var + eps) \u2014 epsilon inside the sqrt.",
-    "Output y = (x - mean) * rstd * weight + bias with per-column affine parameters of length N.",
-    "Problem text explicitly stresses the eps role: as row variance -> 0 the normalizer must stay bounded so a constant row does not blow up the output. This makes the var->0 / constant-row regime an in-contract case, not an exotic edge case.",
-    "Default eps = 1e-5; signature layer_norm(x, weight, bias, eps=1e-5) returning y (mean/rstd are internal scratch, not returned)."
+    "Output shape [num_seqs, seq_len, head_dim], dtype/device of kv_cache; result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size] (problem.txt).",
+    "block_table is int32 [num_seqs, max_blocks] and holds PHYSICAL page ids; it must actually be read, since 'physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences'.",
+    "Input domain is explicitly broad: any seq_len fitting within max_blocks pages, and any sequence-to-physical-page mapping. So a correct kernel must handle arbitrary permutations/repeats of page ids, not just an identity-like table.",
+    "seq_len need not be a multiple of page_size (any length that fits), so partial final logical blocks are in scope.",
+    "head_dim is whatever kv_cache.shape[2] is; nothing in the problem restricts it to a power of two."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "One program per row (grid = (n_rows,)), BLOCK=256 fixed, three sequential strided loops over N: mean pass (lines 12-17), variance pass (lines 19-25), normalize+affine pass (lines 30-36).",
-    "Mean/var accumulate in fp32 via .to(tl.float32) after masked loads with other=0.0; variance pass re-masks with tl.where(cols < N, a - mean, 0.0) (line 23) so out-of-range lanes contribute 0 rather than mean^2 \u2014 this masking is correct.",
-    "Line 26 implements rstd = 1.0 / (tl.sqrt(var) + eps), NOT 1.0 / tl.sqrt(var + eps). Epsilon is added to the standard deviation instead of the variance.",
-    "Consequence at var = 0 (constant row): kernel rstd = 1/eps = 1e5, contract rstd = 1/sqrt(eps) \u2248 316.2 \u2014 a ~316x overstatement. Output is still finite, so a NaN/inf check would not catch it; the numerator (x-mean) is 0 for a truly constant row, so y = bias there and the error can be masked unless weight-scaled residual noise exists (e.g. fp16 input where mean is not exactly representable, or near-constant rather than exactly constant rows).",
-    "Consequence at var ~ 1: sqrt(var)+eps vs sqrt(var+eps) differ by roughly eps/2 \u2248 5e-6 relative, i.e. below typical 1e-2/1e-3 fp16 tolerances and near fp32 rtol=1e-5 \u2
-...[truncated 5771 chars]
+    "Launch grid is (num_seqs, seq_len): one program per output token, each copying a whole head_dim row (kernel.py:29).",
+    "Per program: logical_block = slot // page_size, within = slot % page_size (kernel.py:12-13) \u2014 this decomposition matches the contract.",
+    "physical = seq * max_blocks + logical_block (kernel.py:15). The BlockTable pointer argument is passed in but never loaded anywhere in the kernel body; there is no tl.load from BlockTable.",
+    "This implicitly assumes sequence s owns physical pages [s*max_blocks, s*max_blocks + max_blocks), i.e. contiguous, non-interleaved, allocation-order-identity paging \u2014 the exact assumption the problem says does not hold.",
+    "Addressing assumes each page's interior is contiguous: src = KV + physical*stride_kv_page + within*HEAD_DIM + offs (kernel.py:17) uses hardcoded HEAD_DIM/1 strides for the page and element dims rather than kv_cache.stride(1)/stride(2).",
+    "Output addressing similarly uses stride_out_seq for dim 0 but hardcodes slot*HEAD_DIM + offs for dims 1-2; valid only for a contiguo
+...[truncated 4019 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Source line 26 adds eps to the standard deviation rather than the variance. When var is at or below eps the two formulas differ by a large multiplicative factor (up to ~1/sqrt(eps) vs 1/eps at var=0), and the numerator (x-mean) is nonzero for a near-constant row so the wrong scale is directly observable in y.",
+  "rationale": "The kernel body contains no tl.load from BlockTable; the physical page index is synthesized arithmetically from program ids. That hardcodes an identity/contiguous page allocation, which the problem explicitly says does not hold (\"physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences\").",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Specifies rstd = 1 / sqrt(var + eps) and explicitly requires the epsilon to keep the normalizer bounded as row variance approaches zero, making low-variance/constant rows part of the stated contract."
+      "summary": "Specifies result[s, t] = kv_cache[block_table[s, t // page_size], t % page_size] and states the input domain allows the block table to map any sequence to any physical page, with pages interleaved across sequences."
     },
     {
-      "source": "kernel.py line 26",
-      "summary": "Implements rstd = 1.0 / (tl.sqrt(var) + eps), placing eps outside the square root."
+      "source": "kernel.py:7,15",
+      "summary": "BlockTable is a kernel parameter but is never loaded; physical page is computed as seq*max_blocks + logical_block."
     }
   ],
-  "scope_rationale": "problem.txt states the required formula explicitly as rstd = 1/sqrt(var + eps) and further singles out the low-variance regime as a contract requirement (\"it must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up\"). No test.py exists, so representative in-contract inputs must be chosen from problem.txt; a 2-D fp32 tensor with a near-constant row and default eps=1e-5 is squarely within the stated domain (2-D x, 1-D weight/bias, eps stabilizer).",
-  "statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.",
-  "status": "open"
-}
+  "scope_rationale": "problem.txt is the only contract source (no test.py) and it states the output formula requires indexing through block_table, and explicitly widens the input domain: \"the block table may map any sequence to any physical page\". A random permutation table with num_pages == num_seqs*max_blocks is therefore an admitted, indeed typical, input; it keeps all page ids in range so no out-of-bounds confound is introduced. Metric is bit-exact equality (pure data movement, no arithmetic).",
+  "statement": "paged_gather ignores block_table entirely (the BlockTable pointer is never dereferenced; kernel.py:15 computes physical = seq*max_blocks + logical_block), so for any block table other than the exact contiguous mapping block_table[s,b] == s*max_blocks + b, the output rows differ from the reference kv_cache[block_table[s, t//page_size], t % page_size]. Concretely, with num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32 and block_table a random permutation of 0..31 reshaped to (4,8) (int32), the returned tensor should be bit-exactly unequal to the reference for a large fr
+...[truncated 40 chars]
 
 ### t7 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Expanding 1/(sqrt(v)+e) vs 1/sqrt(v+e) at v~1 gives a relative discrepancy of about e/2, i.e. a systematic (not random) bias in every output element. This determines whether the bug is detectable by a benign randn probe at all, which matters for judging severity and for interpreting any passing probe as evidence.",
+  "rationale": "There is no bounds check on the synthesized page index and no mask on tl.load/tl.store; the wrapper never compares num_seqs*max_blocks against num_pages, so an oversubscribed page pool (the realistic paged-cache configuration) walks off the allocation.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Gives the required formula rstd = 1 / sqrt(var + eps) for each row, with default-eps 2-D row-wise layer norm as the operation under test."
-    }
-  ],
-  "scope_rationale": "problem.txt states the exact formula, so any systematic deviation from rstd = 1/sqrt(var+eps) on the ordinary 2-D input domain is a stated-behavior violation. randn-scale input with default eps is the most representative case the contract admits; the claim is about quantifying the deviation on that domain, not about an exotic input.",
-  "statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.",
-  "status": "open"
-}
-
-### t8 - record_claim - ok
-
-{
-  "id": "c3",
-  "rationale": "With var exactly 0 the numerator (x-mean) is exactly 0 in fp32, so y = 0*rstd*w + b = b under both formulas. This is a metric-validity hazard: the most obvious \"constant row\" probe is non-discriminating, and passing it could be mistaken for evidence of correctness.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Names the constant-row case directly: eps must keep the normalizer finite as row variance approaches zero so a constant row does not blow the output up."
+      "summary": "Declares kv_cache as [num_pages, page_size, head_dim] with pages allocated on demand and interleaved across sequences; imposes no requirement that num_pages >= num_seqs*max_blocks."
     },
     {
-      "source": "kernel.py line 36",
-      "summary": "Stores (a - mean) * rstd * w + b, so a zero numerator makes the output independent of rstd."
+      "source": "kernel.py:15-19",
+      "summary": "physical index is derived from program ids with no clamp/mask, and tl.load/tl.store are issued without a validity mask."
     }
   ],
-  "scope_rationale": "problem.txt explicitly raises the constant-row case as the motivating scenario for eps, so an exactly-constant row is an in-contract input; this claim pins down which metric on that input is authoritative (rstd / near-constant rows) rather than proposing an out-of-domain input.",
-  "statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.",
+  "scope_rationale": "problem.txt places no coupling between num_pages and num_seqs*max_blocks, and states pages are \"allocated on demand\" and shared/interleaved among sequences, which implies a page pool that need not be as large as num_seqs*max_blocks. Every block_table entry in the described case is a legal page id (< num_pages), so the input is fully inside the stated contract; only the kernel's synthesized index leaves bounds. Metric: bit-exact mismatch versus reference, plus any CUDA error surfaced after torch.cuda.synchronize().",
+  "statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max_blocks=8, page_size=16, head_dim=64 with a valid int32 block table whose entries are all < 16 will address pages up to index 31, producing garbage data or a CUDA illegal-memory-access / device-side assert rather than the reference result.",
   "status": "open"
 }
+
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "be1e2eb2b1cc93f3ebecbc39895bd839739e778998656e7c5824c2af202c0d13"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "769b1e28b6546d8394495e847b3fe751952fdac3bdf8285b838b2c375d49eef6"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "d2a39948203caf3cb2457ffa8d3467c770fc7b0be728d42954a7a829e0d48807"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "paged_gather ignores block_table entirely (the BlockTable pointer is never dereferenced; kernel.py:15 computes physical = seq*max_blocks + logical_block), so for any block table other than the exact contiguous mapping block_table[s,b] == s*max_blocks + b, the output rows differ from the reference kv_cache[block_table[s, t//page_size], t % page_size]. Concretely, with num_seqs=4, max_blocks=8, page_size=16, head_dim=64, num_pages=32 and block_table a random permutation of 0..31 reshaped to (4,8) (int32), the returned tensor should be bit-exactly unequal to the reference for a large fraction of tokens.",
+  "duration_s": 8.370098,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "be1e2eb2b1cc93f3ebecbc39895bd839739e778998656e7c5824c2af202c0d13"
+        },
+        {
+          "desc
+...[truncated 4996 chars]
 
 ### t9 - run_claim_probe - ok
 
@@ -674,13 +624,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
+      "sha256": "b334646430d42ab95ad1cd7629e07cd483909530ab1c049b8be29fe82bf7cb3d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233707093"
+      "sha256": "d5a68107acd29d2cb1ad94a71dacf2dd113f02e58994b7d3f4cbfd56567a8e64"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -692,63 +642,13 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "2024d784a9c91f2ae89d8adba4f1e707bc60b31abdb7dc67966e0f172c4ef347"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "Line 26 computes rstd = 1.0/(tl.sqrt(var) + eps) instead of the contract's 1/sqrt(var + eps); for a near-constant row (e.g. x row = 3.0 + 1e-4*randn, fp32, N=512, eps=1e-5, so var ~ 1e-8 << eps) the kernel's normalizer will be ~1/(1e-4 + 1e-5) vs the correct ~1/sqrt(1e-8+1e-5), producing y that differs from torch.nn.functional.layer_norm by orders of magnitude (relative error >> 1e-2), not by rounding.",
-  "duration_s": 6.913119,
-  "event_id": "t9",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "863af9f8aadc798c19844ad6057963c7a35caa03f5176289b02d127b7b6e016c"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "54062217ff3d24793c0e9ccb1dad086d944876229b775273856e676233
-...[truncated 5576 chars]
-
-### t10 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t10_probe.py",
-      "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t10_stdout.txt",
-      "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t10_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t10_json_result.json",
-      "sha256": "8338b2675af262ea34c9c7db9ef7dfbe20892d1c57214d7274af23ebac02cda9"
+      "sha256": "2db32ce22fd21c12c6b6832425cf61374da33730238e4fedc903ff91f6655711"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "Because eps is added outside the sqrt, the kernel's error is not confined to near-zero variance: for ordinary well-conditioned fp32 input (x = torch.randn(64, 512), var ~ 1, default eps=1e-5) the kernel's rstd differs from 1/sqrt(var+eps) by roughly eps/2 relative (~5e-6), which can exceed a strict fp32 comparison tolerance (rtol=1e-6/atol=1e-6) while remaining invisible at rtol=1e-3.",
-  "duration_s": 4.883644,
-  "event_id": "t10",
+  "claim_statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max_blocks=8, page_size=16, head_dim=64 with a valid int32 block table whose entries are all < 16 will address pages up to index 31, producing garbage data or a CUDA illegal-memory-access / device-side assert rather than the reference result.",
+  "duration_s": 5.940723,
+  "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -756,136 +656,119 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t10_probe.py",
-          "sha256": "23d50b9e94000b1c85768c955824f9bc7de02f6283b3b7349b9b59e506d52633"
+          "path": "probes/t9_probe.py",
+          "sha256": "b334646430d42ab95ad1cd7629e07cd483909530ab1c049b8be29fe82bf7cb3d"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t10_stdout.txt",
-          "sha256": "028a5660e3b1bf8fd6cbeb7a7ffb3ce14cafd658fe8a9987226b6e0a87d28c06"
-   
-...[truncated 3215 chars]
+          "path": "probes/t9_stdout.txt",
+          "sha256": "d5a68107acd
+...[truncated 3124 chars]
 
-### t11 - run_claim_probe - ok
+### t10 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "Bit-exact gather comparison with num_pages=32==num_seqs*max_blocks (no OOB possible). With the contiguous/identity block table the kernel matches the reference exactly (0/512 and 0/400 tokens wrong), but with a random permutation block table \u2014 explicitly admitted by problem.txt (\"the block table may map any sequence to any physical page\") \u2014 496/512 tokens (96.9%) are wrong at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. This is the signature of block_table being ignored: correct only for the one mapping that coincides with physical = seq*max_blocks + logical_block. Shapes are correct in all cases.",
+  "supports": "confirmed",
+  "tool_event_id": "t8"
+}
+
+### t11 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "inconclusive",
+  "evidence_id": "c2.e1",
+  "summary": "Oversubscribed pool (num_pages=16 &lt; num_seqs*max_blocks=32, all block_table entries &lt;=15) ran to completion with no CUDA error (child returncode 0, empty stderr) and produced 496/512 wrong tokens, max abs err 7.09, no non-finite values. The wrong-output signal does not discriminate c2 from c1: with block_table ignored the output would be wrong for this table even if every synthesized index were in bounds. No crash and no value-level proof that memory past kv_cache's 16 pages was actually read, so the out-of-bounds mechanism itself remains untested. Follow-up probe launched using a sentinel backing buffer and a far-out-of-range index configuration.",
+  "supports": "inconclusive",
+  "tool_event_id": "t9"
+}
+
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t11_probe.py",
-      "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
+      "path": "probes/t12_probe.py",
+      "sha256": "b652c0e073f338700bd122a618363e0abce39fb16c9780772fc7d423da428497"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t11_stdout.txt",
-      "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "e159fb07253769a2ec12602c01a904bdfaf4065d052c97dffb855169847ae0b6"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t11_stderr.txt",
+      "path": "probes/t12_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "ce98323335e9313358970b4b5a826102db9f0a94fb8b9c582bd1d703bd47f7ed"
+      "path": "probes/t12_json_result.json",
+      "sha256": "6ab634f71b1f246d06955b8daecf3b630ee6f928dbececdeb368767734a5425e"
     }
   ],
-  "claim_id": "c3",
-  "claim_statement": "For an exactly constant row (e.g. x[0, :] = 2.0, fp32) the kernel produces y = bias regardless of the wrong rstd, so a probe using exactly-constant rows will match torch.nn.functional.layer_norm and must not be treated as rebutting the epsilon-placement claim; only near-constant / low-but-nonzero-variance rows or a direct rstd comparison discriminate.",
-  "duration_s": 5.797284,
-  "event_id": "t11",
+  "claim_id": "c2",
+  "claim_statement": "Because physical = seq*max_blocks + logical_block is unmasked and unclamped (kernel.py:15-19), whenever num_pages < num_seqs*max_blocks the kernel reads past the end of kv_cache: e.g. num_pages=16, num_seqs=4, max_blocks=8, page_size=16, head_dim=64 with a valid int32 block table whose entries are all < 16 will address pages up to index 31, producing garbage data or a CUDA illegal-memory-access / device-side assert rather than the reference result.",
+  "duration_s": 14.981937,
+  "event_id": "t12",
   "evidence_draft": {
-    "claim_id": "c3",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "cc018be4d731f910fc393714bae7f5028d04817c6199c316c7553e164ec94787"
+          "path": "probes/t12_probe.py",
+          "sha256": "b652c0e073f338700bd122a618363e0abce39fb16c9780772fc7d423da428497"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "e5b631943d1c7c5ac7fb6cf2e7bbf619e056e1b5f2cf9e3e1d0599d16f2fa585"
-        },
-        {
-          "descr
-...[truncated 2555 chars]
+          "path": "probes/t12_stdout.txt",
+          "sha256": "e15
+...[truncated 5586 chars]
 
-### t12 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Near-constant fp32 rows (x = 3.0 + noise*randn, N=512, eps=1e-5) diverge from the double-precision F.layer_norm oracle by orders of magnitude, exactly as predicted by rstd = 1/(sqrt(var)+eps). At noise=1e-4 (row var 9.74e-9 << eps) max_abs_err = 6.74, max_rel_err = 2186, allclose(rtol=1e-2) False; kernel rstd 9201 vs contract 316.07 (29x overstatement). Error decays monotonically as row variance rises (noise=1e-3: abs 4.57; 1e-2: abs 0.295; 1e-1: abs 2.5e-3, allclose 1e-2 True). Output stays finite throughout, so the failure is a silently wrong finite scale, not an exception.",
-  "supports": "confirmed",
-  "tool_event_id": "t9"
-}
-
-### t13 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "On benign x = randn(64,512) fp32 (mean row var 0.996, eps=1e-5) the measured max relative rstd deviation is 4.99996e-6, matching the predicted eps/2 = 5e-6 exactly. Output y max_abs_err = 4.66e-5 vs the double oracle: allclose passes at rtol/atol=1e-3 but fails at 1e-5 and 1e-6. So a loose randn-only harness would not catch the bug, while a strict fp32 comparison would. With non-default eps the same input becomes grossly wrong: eps=0.1 max_abs_err 0.414, eps=1.0 max_abs_err 1.916, both failing allclose(1e-2).",
-  "supports": "confirmed",
-  "tool_event_id": "t10"
-}
-
-### t14 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c3",
-  "claim_status": "confirmed",
-  "evidence_id": "c3.e1",
-  "summary": "Metric-validity hazard confirmed: for an exactly-constant fp32 row (x = 2.0, N=512) kernel output equals the reference bit-for-bit (max_abs_err = 0.0, allclose at 1e-6), and both equal bias, because (x-mean) == 0 nulls the rstd factor \u2014 even though kernel rstd at var=0 is 1e5 vs the contract's 316.23 (316x overstatement). With the same weight/bias, a near-constant row (2.0 + 1e-4*randn) gives max_abs_err 6.43 and fails allclose(1e-2). An exactly-constant-row probe therefore cannot rebut the epsilon-placement defect; near-constant rows or direct rstd comparison are the authoritative metrics.",
-  "supports": "confirmed",
-  "tool_event_id": "t11"
-}
-
-### t15 - record_no_new_claims - ok
+### t13 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "All three recorded claims (c1 near-constant/low-variance divergence, c2 systematic eps/2 bias at var~1 plus large-eps amplification, c3 exactly-constant-row metric-validity hazard) are confirmed by runtime probes t9/t10/t11 against a double-precision F.layer_norm oracle. Together they fully characterize the single root defect at kernel.py line 26 (rstd = 1/(sqrt(var)+eps) instead of 1/sqrt(var+eps)) across the whole variance range the contract admits, and problem.txt explicitly names the var->0 regime as a contract requirement. Remaining source observations (weight/bias not cast to fp32, wrapper assuming 2-D unit-stride columns, two-pass variance) concern dtype/stride/rank cases the stated contract does not require and would not change the verdict; no new in-scope, testable hypothesis is left that existing claims do not already cover.",
+  "reason": "The decisive defect is already captured and confirmed by c1: the BlockTable pointer is never dereferenced (kernel.py:15 synthesizes physical = seq*max_blocks + logical_block), and probe t8 showed bit-exact match only for the contiguous/identity table while 96-97% of tokens are wrong under a random permutation table, which problem.txt explicitly admits (\"the block table may map any sequence to any physical page\"). The follow-up probe t12 addresses the remaining open question on c2: with kv_cache = buf[:16], all 256 tokens whose synthesized index >= num_pages matched the backing buffer beyond kv_cache's own extent, and the far-out-of-range configuration raised a CUDA illegal memory access \u2014 evidence for the unmasked/unclamped index mechanism, which is a corollary of the same root cause rather than a separate defect. Remaining unexplored surfaces (non-power-of-two head_dim, strided/non-contiguous kv_cache) are generalization notes outside the stated contract's explicit requirements and are not needed to decide the verdict.",
   "reviewed_claims": [
-    "c1",
-    "c2",
-    "c3"
-  ],
-  "reviewed_tool_event_count": 14,
-  "turn": 6
-}
-
-### t16 - record_verdict - ok
-
-{
-  "confidence": 0.95,
-  "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined throughout (no NaN/Inf or undefined-tie exemption applies). c2 (confirmed, in_scope, t10) shows the deviation is not confined to that regime: even at var~1 the rstd bias is a systematic 4.99996e-6 \u2248 eps/2, matching the analytic prediction, and with eps=0.1 or 1.0 the same randn input is grossly wrong (max_abs_err 0.414 / 1.916, failing allclose 1e-2).\\n\\nThis is not covered by any tolerated-deviation category: it is not FP reduction-order noise, not a representation/layout convention, not a declared-lossy format, and not near-zero-magnitude relative-error inflation \u2014 it is a wrong formula for a quantity the contract writes out in closed form. c3 (confirmed) is a metric note rather than a defect: exactly-constant rows match bit-for-bit because (x-mean)==0 nulls rstd, so that probe 
-...[truncated 430 chars]
+  "reviewed_tool_event_count": 12,
+  "turn": 6
+}
+
+### t14 - record_verdict - ok
+
+{
+  "confidence": 0.97,
+  "decisive_claims": [
+    "c1"
+  ],
+  "reason": "The artifact provides no test.py/get_inputs, so problem.txt is the operative contract. It explicitly requires result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size], states that \"the physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences,\" and widens the input domain with \"the block table may map any sequence to any physical page.\" Claim c1 is confirmed and in_scope with scope evidence citing exactly that stated domain: kernel.py passes BlockTable as an argument but never dereferences it; line 15 synthesizes physical = seq*max_blocks + logical_block, hardcoding an identity/contiguous page allocation. Probe t8 shows the signature of that defect under bit-exact equality (the correct metric for a pure data-movement gather, no precision or reduction-order excuse applies): with num_pages = num_seqs*max_blocks = 32 so no out-of-bounds confound, the contiguous/identity table matches exactly (0/512 and 0/400 tokens wrong), while a random permutation block table \u2014 an input the contract explicitly admits \u2014 yields 496/512 (96.9%) wrong tokens at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. The reference is well-defined and finite in these cases, so this is a genuine violation of a behavior the contract explicitly requires, not a tie-break, layout-convention, or tolerance artifact. Claim c2 (unmasked/unclamped index reading past kv_cache when num_pages < num_seqs*max_blocks) remains formally inconclusive in the ledger; the follow-up probe t12 supports the mechanism (all 256 tokens with synthesized index >= num_pages matched backing memory beyond kv_cache's extent, and a far-out-of-range configuration raised a CUDA illegal memory access), but I am setting c2 aside as a corollary of the same root cause because it is not needed for the verdict. c1 alone is sufficient.",
+  "verdict": "reject"
+}
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-08T16:32:59Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-08T16:33:20Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c1"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json and problem.txt (no test.py, no get_inputs, meta.json has passed=null), so problem.txt is the operative contract. It explicitly requires rstd = 1 / sqrt(var + eps) and further states the epsilon 'must keep the normalizer finite as the row variance approaches zero, so that a constant row does not blow the output up' \u2014 making the low-variance regime a stated requirement, not a stress case. kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps), i.e. eps added to the standard deviation instead of the variance, which is a different formula from the one the contract mandates.\\n\\nc1 (confirmed, in_scope, t9): on plain 2-D fp32 input with default eps=1e-5 and near-constant rows (x = 3.0 + 1e-4*randn, N=512, row var 9.7e-9), the kernel deviates from a double-precision F.layer_norm oracle by max_abs_err 6.74 / max_rel_err 2186, failing allclose at rtol=1e-2; kernel rstd 9201 vs contract 316.07. Error decays monotonically as row variance rises, exactly the signature predicted by the misplaced epsilon, and the reference is finite and well-defined throughout (no NaN/Inf or undefined-tie exemption applies). c2 (confirmed, in_scope, t10) shows the deviation is not confined to that regime: even at var~1 the rstd bias is a systematic 4.99996e-6 \u2248 eps/2, matching the analytic prediction, and with eps=0.1 or 1.0 the same randn input is grossly wrong (max_abs_err 0.414 / 1.916, failing allclose 1e-2).\\n\\nThis is not covered by any tolerated-deviation category: it is not FP reduction-order noise, not a representation/layout convention, not a declared-lossy format, and not near-zero-magnitude relative-error inflation \u2014 it is a wrong formula for a quantity the contract writes out in closed form. c3 (confirmed) is a metric note rather than a defect: exactly-constant rows match bit-for-bit becaus
-...[truncated 470 chars]
+  "reason": "The artifact provides no test.py/get_inputs, so problem.txt is the operative contract. It explicitly requires result[s,t] = kv_cache[block_table[s, t//page_size], t % page_size], states that \"the physical pages of one sequence are not contiguous and are generally interleaved with those of other sequences,\" and widens the input domain with \"the block table may map any sequence to any physical page.\" Claim c1 is confirmed and in_scope with scope evidence citing exactly that stated domain: kernel.py passes BlockTable as an argument but never dereferences it; line 15 synthesizes physical = seq*max_blocks + logical_block, hardcoding an identity/contiguous page allocation. Probe t8 shows the signature of that defect under bit-exact equality (the correct metric for a pure data-movement gather, no precision or reduction-order excuse applies): with num_pages = num_seqs*max_blocks = 32 so no out-of-bounds confound, the contiguous/identity table matches exactly (0/512 and 0/400 tokens wrong), while a random permutation block table \u2014 an input the contract explicitly admits \u2014 yields 496/512 (96.9%) wrong tokens at seq_len=128 and 384/400 (96.0%) at seq_len=100, max abs err 6.28. The reference is well-defined and finite in these cases, so this is a genuine violation of a behavior the contract explicitly requires, not a tie-break, layout-convention, or tolerance artifact. Claim c2 (unmasked/unclamped index reading past kv_cache when num_pages < num_seqs*max_blocks) remains formally inconclusive in the ledger; the follow-up probe t12 supports the mechanism (all 256 tokens with synthesized index >= num_pages matched backing memory beyond kv_cache's extent, and a far-out-of-range configuration raised a CUDA illegal memory access), but I am setting c2 aside as a corollary of the same root cause because it is not needed for the verdict. c1 alone is sufficient.
+...[truncated 26 chars]

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from benchmark_fn_fp.eval_scripts.case_registry import case_sort_key, resolve_trace_case
+from benchmark_fn_fp.eval_scripts.case_registry import (case_sort_key, resolve_trace_case,
+                                                       validation_cases)
 from benchmark_fn_fp.eval_scripts.datasets import checked_case_hashes
 from benchmark_fn_fp.eval_scripts.traces import iter_trace_records
 
@@ -66,7 +67,7 @@ def test_private_validation_takes_precedence_over_stale_legacy_copy(tmp_path, da
     assert checked_case_hashes(tmp_path, dataset_name, "case_38") == hashes
 
 
-@pytest.mark.parametrize("existing_case", ["case_36", "case_37"])
+@pytest.mark.parametrize("existing_case", ["case_93", "case_94"])
 def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monkeypatch, existing_case):
     from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import build
     dataset = tmp_path / "benchmark_fn_fp/single_call_vs_tools_challenges"
@@ -85,6 +86,90 @@ def test_pair_builder_cannot_overwrite_cases_after_trace_cleanup(tmp_path, monke
 def test_numeric_sort_handles_three_digit_cases():
     assert sorted(["case_105", "case_82", "case_02"], key=case_sort_key) == [
         "case_02", "case_82", "case_105"]
+
+
+def compacted_registry():
+    return {"cases": {}, "case_details": {
+        "case_36": {"dataset": "real_kernel_challenges", "previous_id": "case_109",
+                    "aliases": ["case_109"], "validation_case_id": "case_109",
+                    "public_dir": "triton_eval_cases/case_36"},
+        "case_93": {"dataset": "correlation_pair", "previous_id": "case_36",
+                    "aliases": ["case_36", "case_a"], "validation_case_id": "case_36",
+                    "status": "archived", "archive_root": "archive/input_specific",
+                    "public_dir": "archive/input_specific/triton_eval_cases/case_93"},
+    }}
+
+
+def test_second_renumber_keeps_all_aliases_and_separates_archived_trace_identity(tmp_path):
+    write(tmp_path / "case_map.json", compacted_registry())
+    paths = []
+    for prefix, case, old, dataset in (
+        ("", "case_36", "case_109", "real_kernel_challenges"),
+        ("archive/input_specific", "case_93", "case_a", "correlation_pair"),
+    ):
+        trace = tmp_path / prefix / "traces_glm" / case / "solo/r1"
+        write(trace / "trace_meta.json", {"case": old, "dataset": dataset,
+              "model": "accounts/fireworks/models/glm-5p3", "arm": "solo", "trial": "r1"})
+        write(trace / "run.json", {"artifact": {"entry": f"/root/cases/{old}"}})
+        paths.extend(trace.iterdir())
+    before = {path: path.read_bytes() for path in paths}
+    assert [row["case"] for row in iter_trace_records(tmp_path)] == ["case_36"]
+    rows = {row["case"]: row for row in iter_trace_records(tmp_path, include_archived=True)}
+    assert set(rows) == {"case_36", "case_93"}
+    assert rows["case_93"]["original_case"] == "case_a"
+    assert rows["case_93"]["case_aliases"] == ["case_36", "case_93", "case_a"]
+    assert {path: path.read_bytes() for path in paths} == before
+    with pytest.raises(ValueError, match="dataset mismatch"):
+        resolve_trace_case("case_36", {"case": "case_36", "dataset": "correlation_pair"},
+                           compacted_registry())
+
+
+def test_compacted_source_checks_use_frozen_id_and_never_numeric_coincidence(tmp_path):
+    benchmark = tmp_path / "benchmark_fn_fp"
+    write(benchmark / "case_map.json", compacted_registry())
+    public = benchmark / "triton_eval_cases/case_36"
+    public.mkdir(parents=True)
+    hashes = {}
+    for kind, filename, content in (("kernel", "kernel.py", "def run(x): return x\n"),
+                                    ("problem", "problem.txt", "Return x unchanged.\n")):
+        (public / filename).write_text(content)
+        hashes[f"{kind}_sha256"] = hashlib.sha256(content.encode()).hexdigest()
+    frozen = benchmark / "real_kernel_challenges/private_data/validation_gpu.json"
+    write(frozen, {"cases": {"case_109": {"ground_truth": "trust", **hashes},
+                              "case_36": {"ground_truth": "reject", "kernel_sha256": "wrong"}}})
+    before = frozen.read_bytes()
+    assert checked_case_hashes(tmp_path, "real_kernel_challenges", "case_36") == hashes
+    assert validation_cases(benchmark, "real_kernel_challenges") == {
+        "case_36": {"ground_truth": "trust", **hashes}}
+    assert frozen.read_bytes() == before
+    write(frozen, {"cases": {"case_36": {"ground_truth": "trust", **hashes}}})
+    with pytest.raises(ValueError, match="No GPU validation"):
+        checked_case_hashes(tmp_path, "real_kernel_challenges", "case_36")
+
+
+def test_compacted_scoreboard_uses_dataset_scoped_frozen_labels(tmp_path):
+    from benchmark_fn_fp.eval_scripts.summarize_traces import build_report
+
+    write(tmp_path / "case_map.json", compacted_registry())
+    for prefix, case, old, dataset, verdict in (
+        ("", "case_36", "case_109", "real_kernel_challenges", "reject"),
+        ("archive/input_specific", "case_93", "case_36", "correlation_pair", "trust"),
+    ):
+        trace = tmp_path / prefix / "traces_glm" / case / "single_call/r1"
+        write(trace / "trace_meta.json", {"case": old, "dataset": dataset,
+              "model": "accounts/fireworks/models/glm-5p3", "arm": "single_call", "trial": "r1"})
+        write(trace / "usage.json", {"usage": {"input_tokens": 1, "output_tokens": 1},
+                                    "response": {"verdict": verdict}, "stop_reason": "stop"})
+    write(tmp_path / "real_kernel_challenges/private_data/validation_gpu.json",
+          {"cases": {"case_109": {"ground_truth": "reject"}}})
+    write(tmp_path / "archive/input_specific/single_call_vs_tools_challenges/private_data/correlation_pair/validation_gpu.json",
+          {"cases": {"case_36": {"ground_truth": "trust"}}})
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.json")}
+    report = build_report(benchmark_dir=tmp_path, include_archived=True)
+    rows = [row for group in report["arms"].values() for row in group["per_case"].values()]
+    assert {row["case"]: row["outcome"] for row in rows} == {
+        "case_36": "correct", "case_93": "correct"}
+    assert {path: path.read_bytes() for path in before} == before
 
 
 def test_original_builder_allocates_globally_and_preserves_source_names(tmp_path, monkeypatch):

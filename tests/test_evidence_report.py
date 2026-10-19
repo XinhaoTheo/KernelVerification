@@ -27,14 +27,14 @@ def raw_call(path, number, *, limit, used, finish="stop"):
 
 
 def row_inputs(path, *, calls=2):
-    row = {"case": "case_62", "arm": "solo", "trial": report.TRIALS[0],
+    row = {"case": "case_119", "arm": "solo", "trial": report.TRIALS[0],
            "model": report.MODEL, "provider": "fireworks", "path": str(path),
            "truth": "trust", "verdict": "reject", "outcome": "wrong_verdict",
            "usage_coverage": {"status": "complete", "captured_calls": calls,
                               "responses_saved": calls, "responses_with_usage": calls}}
     metadata = {"status": "completed", "total_output_token_budget": report.CAP,
                 "kernel_sha256": "kernel", "problem_sha256": "problem"}
-    frozen = {"case_62": {"kernel_sha256": "kernel", "problem_sha256": "problem"}}
+    frozen = {"case_119": {"kernel_sha256": "kernel", "problem_sha256": "problem"}}
     return row, metadata, frozen
 
 
@@ -193,14 +193,14 @@ def test_duplicate_designated_slots_fail_instead_of_overwriting():
 
 
 def test_new_cohort_cannot_borrow_old_case_or_repeat_slots():
-    cases = ("case_66", "case_67")
+    cases = ("case_123", "case_124")
     trials = ("ea_methods_v2_r1", "ea_methods_v2_r2")
     rows = [{"trial": trial, "case": case, "arm": arm, "status": "completed",
              "outcome": "wrong_verdict" if case == cases[0] and arm == "solo" else "correct",
              "valid_complete": True}
             for trial in trials for case in cases for arm in report.ARMS]
     result = report.pilot_gate(pilot_rows() + rows, cases=cases, trials=trials)[1]
-    assert result["replicated_cases"] == ["case_66"]
+    assert result["replicated_cases"] == ["case_123"]
     assert result["net_paired_improvements"] == 2
     assert result["expansion_numerical_gate"]
     slot(rows, trials[1], cases[0], "solo")["trial"] = report.TRIALS[1]
@@ -211,17 +211,17 @@ def test_new_cohort_cannot_borrow_old_case_or_repeat_slots():
 
 def test_derive_filters_dataset_and_keeps_failure_coverage(tmp_path, monkeypatch):
     root = tmp_path / "solo_vs_debate_challenges"
-    case = root.parent / "triton_eval_cases" / "case_62"
+    case = root.parent / "triton_eval_cases" / "case_119"
     case.mkdir(parents=True)
-    frozen = {"case_62": {"ground_truth": "trust"}}
+    frozen = {"case_119": {"ground_truth": "trust"}}
     for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):
         (case / filename).write_text("frozen material")
-        frozen["case_62"][f"{kind}_sha256"] = report.hashlib.sha256(b"frozen material").hexdigest()
+        frozen["case_119"][f"{kind}_sha256"] = report.hashlib.sha256(b"frozen material").hexdigest()
     write(root / "private_data" / "validation_gpu.json", {"cases": frozen})
-    path = tmp_path / "traces_glm" / "case_62" / "solo" / report.TRIALS[0]
-    metadata = {"case": "case_62", "arm": "solo", "trial": report.TRIALS[0],
+    path = tmp_path / "traces_glm" / "case_119" / "solo" / report.TRIALS[0]
+    metadata = {"case": "case_119", "arm": "solo", "trial": report.TRIALS[0],
                 "dataset": "evidence_challenges", "provider": "fireworks", "model": report.MODEL,
-                "status": "error", "total_output_token_budget": report.CAP, **frozen["case_62"]}
+                "status": "error", "total_output_token_budget": report.CAP, **frozen["case_119"]}
     write(path / "trace_meta.json", metadata)
     write(path / "run.json", {"verdict": {"verdict": "reject"}})
     raw_call(path, 1, limit=report.CAP, used=100)

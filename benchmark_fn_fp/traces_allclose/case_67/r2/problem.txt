@@ -1,0 +1,37 @@
+Decompose unsigned 32-bit linear indices into row and column coordinates
+for a row-major layout with a fixed width of 7:
+
+  row[i] = floor(indices[i] / 7)
+  col[i] = indices[i] - 7 * row[i].
+
+Inputs and complete public domain:
+- indices is a one-dimensional torch.uint32 tensor [N], 1<=N<=131072.
+- EVERY unsigned 32-bit value is legal, from 0 through 4294967295 inclusive.
+  Indices are values to decompose, not offsets used to access a backing
+  matrix; no matrix allocation or additional index-range bound is implied.
+- indices is an ordinary torch.Tensor (not a subclass), dense, strided,
+  contiguous, and on a CUDA device. Contiguous views with nonzero storage
+  offsets are legal. It has requires_grad=False, is_inference=False,
+  is_neg=False and is_conj=False. Calls run in ordinary non-inference mode,
+  without concurrent external writes to the input. This is not an autograd
+  operation.
+
+Return a fresh torch.uint32 tensor [N,2] on indices.device, with columns
+[row, col], preserving the input and its backing storage. Every coordinate
+must equal the integer mathematical target EXACTLY. Floating-point or
+approximate tolerances are not used. In particular, every col is in [0,6]
+and 7*row + col equals the original unsigned index in mathematical integers.
+
+Any division method is allowed, including reciprocal multiplication,
+bit operations and precomputed constants, if it satisfies this exact
+requirement for every legal unsigned index. Correctness is one verdict
+for the whole implementation; changing inputs only supplies evidence.
+
+validate_inputs() enforces this domain and is called by run(). reference()
+uses direct int64 division and remainder; it accepts CPU inputs. make_inputs()
+is a convenience generator, not an input-domain restriction. Index-to-coordinate
+conversion and precomputed fast division are standard GPU indexing operations.
+This is an original synthetic Triton adaptation of reciprocal-division
+techniques, not a claim of an upstream historical bug.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

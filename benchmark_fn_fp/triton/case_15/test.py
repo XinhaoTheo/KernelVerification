@@ -1,42 +1,30 @@
 import torch
-from kernel import group_quant_dequant
-
-
-def reference(x, group_size):
-    out = torch.zeros_like(x)
-    n_cols = x.shape[1]
-    for start in range(0, n_cols, group_size):
-        stop = min(start + group_size, n_cols)
-        chunk = x[:, start:stop]
-        scale = chunk.abs().amax(dim=1, keepdim=True) / 127.0
-        scale = torch.where(scale == 0, torch.ones_like(scale), scale)
-        q = torch.round(chunk / scale).clamp(-128, 127)
-        out[:, start:stop] = q * scale
-    return out
+from kernel import matmul
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    group = 64
 
-    # Conventional test shape: n_cols is a multiple of group_size.
-    x_r = torch.randn(8, 512, device=device)
-    cand_r = group_quant_dequant(x_r, group)
-    ref_r = reference(x_r, group)
+    # Conventional test shape: K is a multiple of the K block size (32).
+    a_r = torch.randn(128, 256, device=device)
+    b_r = torch.randn(256, 128, device=device)
+    cand_r = matmul(a_r, b_r)
+    ref_r = a_r @ b_r
     divisible_pass = torch.allclose(cand_r, ref_r, rtol=1e-2, atol=1e-2)
 
-    # Contract-permitted irregular shape: a shorter final group exists.
-    x_i = torch.randn(8, 500, device=device)
-    cand_i = group_quant_dequant(x_i, group)
-    ref_i = reference(x_i, group)
+    # Contract-permitted irregular K: the last K tile is partial.
+    a_i = torch.randn(128, 250, device=device)
+    b_i = torch.randn(250, 128, device=device)
+    cand_i = matmul(a_i, b_i)
+    ref_i = a_i @ b_i
     irregular_pass = torch.allclose(cand_i, ref_i, rtol=1e-2, atol=1e-2)
-    tail_err = (cand_i[:, 448:] - ref_i[:, 448:]).abs().max().item()
+    rel = ((cand_i - ref_i).abs().max() / ref_i.abs().max()).item()
 
-    print(f"n_cols=512 (multiple of group): allclose={divisible_pass}")
-    print(f"n_cols=500 (short final group): allclose={irregular_pass}, tail max abs err={tail_err:.4f}")
-    # What a conventional CI test would conclude: hidden sizes are round.
+    print(f"K=256 (multiple of BLOCK_K=32): allclose={divisible_pass}")
+    print(f"K=250 (partial K tile): allclose={irregular_pass}, max rel err={rel:.4f}")
+    # What a conventional CI test would conclude: benchmark shapes use round K.
     print(f"NAIVE_ALLCLOSE_VERDICT: {divisible_pass}")
     return divisible_pass and not irregular_pass
 

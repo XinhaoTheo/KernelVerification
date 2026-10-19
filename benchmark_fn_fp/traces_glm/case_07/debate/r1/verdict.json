@@ -1,11 +1,10 @@
 {
-  "confidence": 0.8,
-  "created_at": "2026-09-30T08:22:02Z",
+  "confidence": 0.9,
+  "created_at": "2026-09-30T08:20:04Z",
   "decisive_claims": [
-    "c1: kernel adds +1 to the unpacked zero-point (kernel.py line 46), deviating from the contract formula (q - zero)*scale stated in problem.txt",
-    "c2: K not a multiple of BLOCK_SIZE_K=16 causes unmasked out-of-bounds tail loads",
-    "c3: N not a multiple of BLOCK_SIZE_N=32 causes unmasked out-of-bounds N loads"
+    "c1",
+    "c2"
   ],
-  "reason": "No runtime evidence exists for any claim: all six probes (t9-t11, t15-t17) crashed in the Experimenter's own packing/unpacking code before invoking the kernel, so none are kernel evidence. The decisive claim c1 (kernel.py line 46 unconditionally does `zeros = zeros + 1`, deviating from the literal problem.txt formula dequant = (q - zero)*scale) is in-scope but remains inconclusive \u2014 it is directly decidable by a corrected probe comparing kernel output against both zero conventions, and such a probe was never successfully executed despite two rounds and explicit describer guidance (du2). c2/c3 are unknown-scope (no test harness or shape constraints in the artifact) and also lack any executed probe. Since the in-scope claim c1 cannot be confirmed or rebutted with the available evidence, needs_more_evidence is the correct verdict; a single executing probe against both zero-convention references would settle it.",
-  "verdict": "needs_more_evidence"
+  "reason": "The kernel implements the contract formula directly (lower = floor(x/STEP)*STEP, p_up = (x-lower)/STEP, select via tl.rand(seed, offs) comparison). Both in-scope risk claims are decisively rebutted: c1 (unbiasedness E[out]==x) shows bias of -5.25e-5 far within Monte-Carlo noise (z=-0.002) over 2000 seeds and 64 mixed-sign elements (probe t12); c2 (fp32 behavior at exact STEP=0.05 multiples) shows p_up exactly 0.0, deterministic outputs on the correct grid point, and zero residual from the k*STEP grid across 10 positive/negative exact multiples over 100 seeds (probe t13). Residual fp32 representations like 0.150000006 instead of exact 0.15 are consistent with the contract's own floor(x/STEP)*STEP formula computed in the input dtype, and are not a defect. No test.py/get_inputs exists, so problem.txt is the operative contract, and it is satisfied. The Skeptic reviewed the latest evidence (t16) and found no new claims. Minor unresolved notes (benchmark dtype, seed=0 edge, r<p_up boundary at p_up=1) are immaterial: tl.rand returns [0,1) so the boundary is well-defined, and no confirmed in-scope failure remains.",
+  "verdict": "trust"
 }

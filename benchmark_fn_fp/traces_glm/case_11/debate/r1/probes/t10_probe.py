@@ -1,23 +1,39 @@
-import torch, json, importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_11/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
+import torch, json, sys
+sys.path.insert(0, "/root/cases/case_12")
+from kernel import rms_norm_forward
 
-torch.manual_seed(1)
-S, H, D = 4, 2, 65  # odd headdim
-dev = "cuda"
-x = torch.randn(S, H, D, device=dev, dtype=torch.float32)
-cos = torch.randn(S, D // 2, device=dev)
-sin = torch.randn(S, D // 2, device=dev)
-out = k.apply_rotary(x, cos, sin, True)
-ref = torch.empty_like(x)
-x0 = x[..., 0::2][:, :, :D//2]; x1 = x[..., 1::2][:, :, :D//2]
-c = cos[:, None, :]; s = sin[:, None, :]
-ref[..., 0::2][:, :, :D//2] = x0*c - x1*s
-ref[..., 1::2][:, :, :D//2] = x0*s + x1*c
-# reference for last dim: unspecified by contract; check what kernel produced
-last_dim_vals = out[..., -1]
-x_last = x[..., -1]
-print(json.dumps({"claim":"c2","D":D,"last_dim_allclose_to_input":bool(torch.allclose(last_dim_vals, x_last)),
-  "last_dim_equals_zero":bool((last_dim_vals==0).all()),
-  "last_dim_max_abs_vs_input":(last_dim_vals-x_last).abs().max().item(),
-  "note":"last dim never written; out=torch.empty_like so value depends on allocator; mismatch vs input is not per se a contract violation since pairing contract presumes even headdim"}))
+def ref(X, eps):
+    ms = (X * X).sum(dim=1, dtype=torch.float32) / X.shape[1]
+    rstd = 1.0 / torch.sqrt(ms + eps)
+    return X * rstd.unsqueeze(1), rstd
+
+eps = 1e-6
+# rows: all-zero, tiny (1e-8 scale), normal randn
+X = torch.cat([
+    torch.zeros(1, 64),
+    torch.full((1, 64), 1e-8),
+    torch.randn(4, 64),
+]).cuda()
+
+Y = rms_norm_forward(X, eps)
+Yr, rstd_ref = ref(X, eps)
+# kernel rstd implied from Y/X where nonzero
+X32 = X.float()
+ratio = (Y.float() / X32).nan_to_num(0)  # zero rows give 0/0
+# compute kernel rstd analytically for the all-zero row: 1/(0+eps)=1e6 vs ref 1/sqrt(eps)=1e3
+k_rstd_zero = 1.0 / (0.0 + eps)
+ref_rstd_zero = 1.0 / (eps ** 0.5)
+d = {
+    "kernel_impl": "1/(sqrt(ms)+eps)",
+    "eps": eps,
+    "max_abs_err_normal_rows": float((Y[2:] - Yr[2:]).abs().max()),
+    "kernel_rstd_zero_row": k_rstd_zero,
+    "ref_rstd_zero_row": ref_rstd_zero,
+    "rstd_ratio_zero_row": k_rstd_zero / ref_rstd_zero,
+    "Y_zero_row_max_abs": float(Y[0].abs().max()),
+    "Y_tiny_row_max_abs_kernel": float(Y[1].abs().max()),
+    "Y_tiny_row_max_abs_ref": float(Yr[1].abs().max()),
+    "tiny_row_out_ratio": float(Y[1].abs().max() / Yr[1].abs().max()),
+    "max_rel_err_all_rows": float(((Y.float() - Yr).abs() / Yr.abs().clamp_min(1e-30)).max()),
+}
+print(json.dumps(d))

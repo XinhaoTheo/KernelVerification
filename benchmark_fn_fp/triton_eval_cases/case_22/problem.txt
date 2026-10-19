@@ -1,12 +1,16 @@
-Operation: inner product of two float32 vectors, computed with a split-K
-partitioning and combined with atomic accumulation, the reduction strategy used
-by split-K GEMM and all-reduce kernels.
+Operation: multiply every pixel of a feature map by a per-channel scale, the
+per-channel affine step of a normalization or quantization layer.
 
-    out = sum over k of a[k] * b[k]
+    out[n, c, h, w] = x[n, c, h, w] * scale[c]
 
-The partitioning is a performance choice. Floating-point addition is not
-associative, so partitioning and combining in a different order changes the
-last bits of the result; the contract requires the mathematical inner product,
-not bitwise agreement with any particular summation order.
+Two memory layouts are in common use and both appear in production stacks:
 
-Does splitk_dot() satisfy this contract?
+    NCHW : the channel axis has the larger stride (PyTorch default)
+    NHWC : the channel axis is contiguous (channels-last, which is what most GPU
+           and mobile inference kernels prefer)
+
+Which layout a kernel expects is a property of the pipeline it is compiled into,
+not of the arithmetic. A kernel is correct if, once its own layout convention is
+honored, it produces the specified per-channel scaling.
+
+Does scale_channels() satisfy this contract?

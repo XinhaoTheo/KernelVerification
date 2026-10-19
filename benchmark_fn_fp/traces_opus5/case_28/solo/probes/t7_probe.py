@@ -1,44 +1,38 @@
-import torch, json, importlib.util
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_28/kernel.py")
+
+import torch, json, importlib.util, sys
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_29/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-torch.manual_seed(0)
-res = {}
-
-def relerr(x, y):
-    return ((y - x).norm(dim=1) / x.norm(dim=1)).cpu()
-
+dev='cuda'
 def ref(x):
-    s = (x.abs().amax(dim=1, keepdim=True) / 127.0).clamp(min=1e-30)
-    return torch.clamp(torch.floor(x/s + 0.5), -127, 127) * s
+    return x.to(torch.float8_e4m3fn).to(torch.float32)
 
-# A: plain gaussian, no outliers
-xA = torch.randn(8, 512, device='cuda')
-yA = m.quant_dequant(xA)
-res['A_kernel_max_relerr'] = float(relerr(xA, yA).max())
-res['A_ref_max_relerr'] = float(relerr(xA, ref(xA)).max())
+# targeted subnormal-range values
+vals = [0.001, 0.002, 0.005, 0.01, 0.0146, 0.015, 0.0001, -0.003, 0.0019, 0.0009765625]
+x = torch.tensor(vals, dtype=torch.float32, device=dev)
+out = m.fp8_roundtrip(x).cpu()
+r = ref(x).cpu()
+targeted = [{"x":v,"kernel":float(o),"ref_e4m3":float(rr),"abs_err":abs(float(o)-float(rr))}
+            for v,o,rr in zip(vals,out,r)]
 
-# B: heavy-tailed, 3 outlier channels 1-2 orders above bulk
-xB = torch.randn(8, 512, device='cuda')
-xB[:, 3] = 60.0
-xB[:, 17] = -45.0
-xB[:, 100] = 30.0
-yB = m.quant_dequant(xB)
-eB = relerr(xB, yB)
-res['B_kernel_relerr_rows'] = [round(v,4) for v in eB.tolist()]
-res['B_kernel_max_relerr'] = float(eB.max())
-res['B_ref_max_relerr'] = float(relerr(xB, ref(xB)).max())
-res['B_row0_in'] = [float(xB[0,3]), float(xB[0,17]), float(xB[0,100])]
-res['B_row0_out'] = [float(yB[0,3]), float(yB[0,17]), float(yB[0,100])]
+# representability check: does kernel output round-trip through e4m3 unchanged?
+torch.manual_seed(0)
+g = torch.randn(200000, device=dev)
+og = m.fp8_roundtrip(g)
+rg = ref(g)
+representable = torch.isclose(og, ref(og)).float().mean().item()
+mismatch = (og != rg)
+n_mis = int(mismatch.sum())
+# among small |x|
+small = g.abs() < 2**-6
+n_small = int(small.sum())
+n_mis_small = int((mismatch & small).sum())
+n_mis_large = int((mismatch & ~small).sum())
+maxrel = ((og-rg).abs()/rg.abs().clamp_min(1e-30))[mismatch].max().item() if n_mis else 0.0
 
-# C: single outlier 20x bulk
-xC = torch.randn(8, 512, device='cuda')
-xC[:, 5] = 20.0
-yC = m.quant_dequant(xC)
-eC = relerr(xC, yC)
-res['C_kernel_max_relerr'] = float(eC.max())
-res['C_ref_max_relerr'] = float(relerr(xC, ref(xC)).max())
-res['C_row0_in5'] = float(xC[0,5]); res['C_row0_out5'] = float(yC[0,5])
-
-res['limit'] = 0.05
-print(json.dumps(res, indent=1))
+print(json.dumps({
+ "metric":"exact match vs torch float8_e4m3fn quantization + representability of kernel output",
+ "targeted":targeted,
+ "randn_n":200000,"n_mismatch":n_mis,"frac_output_representable":representable,
+ "n_small_lt_2^-6":n_small,"n_mismatch_small":n_mis_small,"n_mismatch_large":n_mis_large,
+ "max_rel_err_on_mismatch":maxrel}, indent=1))

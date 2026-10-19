@@ -1,24 +1,30 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_25/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-dev="cuda"
-torch.manual_seed(1)
+spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_26/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-cases = []
-overshoot_count = 0
-for amax in [3.0, 1.0, 2.5, 0.7, 5.0, 1.3, 0.1, 7.77, 12.5, 0.333]:
-    x = (torch.rand(1024, device=dev)*2-1) * (amax*0.5)   # all |x| < amax
-    x[0] = -amax                                          # absmax element is negative
-    out = k.requantize(x)
-    scale = float(x.abs().max()/127.0)
-    q0 = float(out[0]/scale)
-    ov = float(out.abs().max()) > float(x.abs().max()) + 0.0
-    overshoot_count += int(ov)
-    cases.append({"amax": amax, "scale": scale, "q_of_min_elem": q0,
-                  "out_abs_max": float(out.abs().max()),
-                  "x_abs_max": float(x.abs().max()),
-                  "overshoot": ov,
-                  "ratio_out_over_in": float(out.abs().max())/float(x.abs().max())})
-res = {"num_cases": len(cases), "num_overshoot": overshoot_count, "cases": cases}
+res = {}
+def analyze(name, row_list, k):
+    x = torch.tensor([row_list], dtype=torch.float32, device="cuda")
+    out = m.topk_mask(x, k)
+    o = out[0].tolist(); r = x[0].tolist()
+    # kept = output value equals input value (inputs contain no zeros)
+    kept = [i for i in range(len(r)) if o[i] == r[i] and r[i] != 0.0]
+    finite = torch.tensor([v for v in r if v == v], dtype=torch.float64)
+    v = torch.topk(torch.tensor(r, dtype=torch.float64), k).values[-1].item()
+    viol = [r[i] for i in kept if r[i] < v]
+    res[name] = {
+        "n": len(r), "k": k, "kth_largest": v,
+        "kept_count": len(kept),
+        "kept_values": [r[i] for i in kept],
+        "n_kept_strictly_below_kth": len(viol),
+        "out_row": o,
+    }
+
+# (a) pre-masked logits with -inf
+analyze("neg_inf_row", [3.0, 1.0, float("-inf"), float("-inf"), 5.0, 2.0, float("-inf"), 0.5], 2)
+# (b) +inf present with multiplicity 1 < k
+analyze("pos_inf_row", [float("inf"), 3.0, 1.0, 5.0, 2.0, 0.5, 4.0, 6.0], 3)
+# control: all finite
+analyze("finite_control", [3.0, 1.0, 7.0, 5.0, 2.0, 0.5, 4.0, 6.0], 3)
 print(json.dumps(res))

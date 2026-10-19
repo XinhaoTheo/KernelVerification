@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_06`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_07`
+- Turns: 7
+- Tool events: 10
 - Claims: 1
 - Description updates: 0
-- LLM time: 26.632s across 4 calls | tokens: in=43660 out=1305 total=44965
+- LLM time: 138.236s across 6 calls | tokens: in=77901 out=4683 total=82584
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
-- Confidence: 0.99
+- Verdict: `trust`
+- Confidence: 0.85
 
 ## Timeline
 
@@ -25,207 +25,278 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_06",
+    "entry": "case_07",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 
-### Turn 2 - `solo` (5.979775261s, in=7448 out=312)
+### Turn 2 - `solo` (24.704965111000007s, in=8432 out=1332)
 
 Message:
 
 ```text
-The kernel applies a coarse quantization (step 5e-3) to the recurrent state at every chunk, while the contract explicitly requires the recurrence be exact beyond ordinary FP arithmetic. I'll record this claim and test it.
+This kernel appears to be a near-copy of the original AutoGPTQ `quant_matmul_248` kernel. I'll verify it numerically against a reference dequantize+matmul on representative shapes.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Source line 32 rounds the state to a 5e-3 grid after each chunk, so the returned final state deviates from the exact recurrence by up to half the quantization step per chunk, growing with nchunks.",
+    "claim_id</arg_value><arg_value>c1</arg_value><arg_key>rationale": "The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length."
+        "summary": "dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format."
       }
     ],
-    "scope_rationale": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] carried out exactly with no approximation beyond ordinary floating-point arithmetic; line 32 adds a round-to-grid quantization that violates this.",
-    "statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final 
-  ...[truncated 77 chars]
+    "scope_rationale": "The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation in indexing/packing that changes C on inputs the contract admits i
+  ...[truncated 198 chars]
+  Output summary:
+  {
+    "error_type": "ToolRegistryError",
+    "message": "tool record_claim missing required arg: rationale"
+  }
+
+### Turn 3 - `solo` (5.114870886999995s, in=9216 out=307)
+
+Message:
+
+```text
+I'll record the claim (the previous call failed due to a malformed argument) and then run a numerical probe comparing the kernel against an independent dequantization + matmul reference.
+```
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format."
+      }
+    ],
+    "scope_rationale": "The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.",
+    "statement": "gptq_matmul produces C = A @ dequant(B) matc
+  ...[truncated 124 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Source line 32 rounds the state to a 5e-3 grid after each chunk, so the returned final state deviates from the exact recurrence by up to half the quantization step per chunk, growing with nchunks.",
+    "rationale": "The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length."
+        "summary": "dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format."
       }
     ],
-    "scope_rationale": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] carried out exactly with no approximation beyond ordinary floating-point arithmetic; line 32 adds a round-to-grid quantization that violates this.",
-    "statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.",
+    "scope_rationale": "The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.",
+    "statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (6.136969957999995s, in=8591 out=350)
+### Turn 4 - `solo` (18.746985584000015s, in=10537 out=1089)
 
 Message:
 
 ```text
-I'll run a runtime probe comparing the kernel's final state to the exact recurrence.
+I'll run a numerical probe comparing the kernel to an independent dequantization + matmul reference, using the AutoGPTQ packing convention (zero effective = unpacked zero + 1) on representative shapes.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, sys, json\nsys.path.insert(0, \"/root/cases/case_06\")\nfrom kernel import state_passing_lowbit\n\ntorch.manual_seed(0)\ndev = \"cuda\"\nresults = []\nfor nchunks, dim in [(8, 64), (64, 128), (256, 64)]:\n    new_states = torch.randn(nchunks, dim, device=dev, dtype=torch.float32)\n    dA_cs = -0.05 * torch.rand(nchunks, device=dev, dtype=torch.float32) - 0.01  # log-decays in (-0.06, -0.01)\n    out = state_passing_lowbit(new_states, dA_cs)\n    # exact reference in fp64\n    st = torch.zeros(dim, device=dev, dtype=torch.float64)\n    for c in range(nchunks):\n        st = torch.exp(dA_cs[c].double()) * st + new_states[c].double()\n    err = (out.double() - st).abs()\n    results.append({\n        \"nchunks\": nchunks, \"dim\": dim,\n       
-  ...[truncated 268 chars]
+    "code": "\nimport torch, json, sys\nsys.path.insert(0, '/root/cases/case_07')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\nM, K, N = 64, 256, 128\nbits = 4\nmaxq = 15\ngroupsize = 32\nn_groups = K // groupsize\n\na = torch.randn(M, K, device=dev, dtype=torch.float16)\nq = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\n# pack 8 values per int32 along K (little-endian nibbles)\nb_packed = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\nfor k in range(K):\n    word, off = k // 8, k % 8\n    b_packed[word, :] |= q[k, :] << (off * bits)\nscales = (torch.randn(n_groups, N, device=dev, dtype=torch.float16).abs() * 0.01 + 0.001)\nzeros = torch.randint(0, 16, (n_groups, N), device=dev, dtype=torch.int32)  # packed zeros along 
+  ...[truncated 1257 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "a46315e815fb5a868113703592d640637cbc39a46f5177b30c1df28aeb1aa844"
+        "path": "probes/t7_probe.py",
+        "sha256": "7cb9a9f78155139da9557ec68d3f09f831b9f295646bde9c084d1af5495ba844"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "41db84c5ba8806430cdababeb0751c391d5b66daa4e94cea70879d29ceca4952"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
+        "sha256": "a798b590ce108d51f73d6d2ecca1a1da844e0c15bc32ef1eccad95ade3428602"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
+    "duration_s": 5.552807,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha
+  ...[truncated 2018 chars]
+
+### Turn 5 - `solo` (20.35998751400001s, in=13307 out=1026)
+
+Message:
+
+```text
+The probe failed due to a bug in my own reference code (zeros indexing). Note the kernel treats `zeros` as packed along N (indexed `[g, n//8]`), matching AutoGPTQ. I'll rerun with a corrected reference.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_07')\nfrom kernel import gptq_matmul\n\ntorch.manual_seed(0)\ndev = 'cuda'\nM, K, N = 64, 256, 128\nbits, maxq, groupsize = 4, 15, 32\nn_groups = K // groupsize\n\na = torch.randn(M, K, device=dev, dtype=torch.float16)\nq = torch.randint(0, 16, (K, N), device=dev, dtype=torch.int32)\nb_packed = torch.zeros((K // 8, N), device=dev, dtype=torch.int32)\nfor k in range(K):\n    b_packed[k // 8, :] |= q[k, :] << ((k % 8) * bits)\nscales = (torch.randn(n_groups, N, device=dev, dtype=torch.float16).abs() * 0.01 + 0.001)\nzeros = torch.randint(0, 16, (n_groups, N // 8), device=dev, dtype=torch.int32)  # packed along N\ng_idx = (torch.arange(K, device=dev) // groupsize).to(torch.int32)\n\nc = gptq_matmul(
+  ...[truncated 904 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "16a2278d6d27c9554e049f3276afbcb92928c474cd94deec1ca2aa17feb815a0"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "987361641dfb1049fea4320904a7fa6c3f9d0ed40d2e0457e2b5b092ea0878bc"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "260f349785a987c3c1301e183c639992f874eeb19621633548a54ac8ff02a8df"
+        "path": "probes/t8_json_result.json",
+        "sha256": "64915a96cabc93b009f3fc80e9a0dd1c6f75d65a5d6953c0989c8cdc0c9bc231"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.",
-    "duration_s": 7.178885,
-    "event_id": "t6",
-    "evid
-  ...[truncated 4056 chars]
+    "claim_statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
+    "duration_s": 5.180513,
+    "event_id": "t8",
+  ...[truncated 2851 chars]
 
-### Turn 4 - `solo` (6.779122066999989s, in=11441 out=342)
+### Turn 6 - `solo` (13.016174847000002s, in=16180 out=615)
 
 Message:
 
 ```text
-The probe confirmed the quantization defect: max abs error ~0.018 (thousands of times FP32 rounding) and up to 100% relative error on in-contract inputs. I'll finalize the evidence, confirm the claim, and record the verdict.
+The t8 probe succeeded: the kernel output matches an independent dequant+matmul reference with max abs error 0.0014 (fp16-accumulate rounding scale) on a representative 4-bit GPTQ input. I'll finalize that evidence and record the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
     "data": {
-      "max_abs_err": 0.017791848401188304,
-      "rel_err_max": 1.0,
-      "results": [
-        {
-          "dim": 64,
-          "max_abs_err": 0.0116,
-          "nchunks": 8
-        },
-        {
-          "dim": 128,
-          "max_abs_err": 0.0161,
-          "nchunks": 64
-        },
-        {
-          "dim": 64,
-          "max_abs_err": 0.0178,
-          "nchunks": 256
-        }
-      ]
+      "allclose": true,
+      "max_abs_err": 0.00141221284866333,
+      "mean_abs_err": 0.00021785117860417813,
+      "metric": "max abs error vs independent dequant reference (zero_eff = unpacked_zero + 1, AutoGPTQ convention)",
+      "shape": [
+        64,
+        128
+      ],
+      "tested": "M=64, K=256, N=128, bits=4, groupsize=32, random q/scales/zeros, packed little-endian nibbles along K (b) and N (zeros)"
     },
-    "event_id": "t6",
+    "event_id": "t8",
     "status": "confirmed",
-    "summary": "On random inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)), the kernel's final state deviates from the exact fp64 recurrence by max abs error 0.0116/0.0161/0.0178 \u2014 orders of magnitude beyond ordinary FP32 arithmetic (eps~1e-7 for these magnitudes) \u2014 with max relative error up to 100%. This matches the 5e-3 round-to-grid quantization at 
-  ...[truncated 83 chars]
+    "summary": "On a representative 4-bit GPTQ input (M=64,K=256,N=128, groupsize 32, packed int32 nibbles, per-(group,column) scales and zeros), gptq_matmul matches an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1))*scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent w
+  ...[truncated 210 chars]
   Output summary:
   {
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "On random inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)), the kernel's final state deviates from the exact fp64 recurrence by max abs error 0.0116/0.0161/0.0178 \u2014 orders of magnitude beyond ordinary FP32 arithmetic (eps~1e-7 for these magnitudes) \u2014 with max relative error up to 100%. This matches the 5e-3 round-to-grid quantization at line 32, an extra approximation the contract forbids.",
+    "summary": "On a representative 4-bit GPTQ input (M=64,K=256,N=128, groupsize 32, packed int32 nibbles, per-(group,column) scales and zeros), gptq_matmul matches an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1))*scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 matmul accumulation, i.e. faithful evaluation of the declared 4-bit format. The kernel's zeros+1 matches the AutoGPTQ packed-zero convention referenced by the contract.",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t8"
   }
 
-### Turn 5 - `solo` (7.736566702999994s, in=16180 out=301)
+### Turn 7 - `solo` (56.29256813499998s, in=20229 out=314)
 
 Message:
 
 ```text
-The claim is confirmed and in-scope: the kernel adds a 5e-3 quantization the contract's "exact recurrence" clause explicitly forbids, with runtime evidence showing errors far beyond FP arithmetic. I'll record the final verdict.
+The sole claim c1 is confirmed with a successful runtime probe (t8): the kernel matches an independent dequant+matmul reference at float16-matmul rounding scale on a representative 4-bit GPTQ input. No open claims remain — I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t10 ok`
   Args:
   {
-    "confidence": 0.99,
+    "confidence": 0.85,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) requires the chunked state-passing recurrence state <- exp(dA_cs[c])*state + new_states[c] to be exact, \"no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" Kernel line 32 instead rounds the state to a 5e-3 grid after every chunk. Runtime probe (tool event t6, claim c1, confirmed) compared the kernel's final state to an exact fp64 recurrence on random in-domain inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)): max abs error 0.0116/0.0161/0.0178 \u2014 ~10^5 times ordinary FP32 rounding at these magnitudes \u2014 with max relative error up to 100%. This is a confirmed, in-scope violation of the contract's exactness requirement, 
-  ...[truncated 52 chars]
+    "reason": "Probe t8 (run_claim_probe, exit 0) tested gptq_matmul on a representative 4-bit GPTQ input (M=64, K=256, N=128, groupsize 32, packed int32 little-endian nibbles along K for B and along N for zeros, per-(group,column) scales) and compared against an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1)) * scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 tl.dot accumulation, i.e. faithful evaluation of the declared 4-bit format per the contract's dequantization formula. The kernel's zeros+1 handling matches the AutoGPTQ packed-zero convention referenced by problem.txt. No conflicting evidence; kernel source inspection shows correct per-group s
+  ...[truncated 44 chars]
   Output summary:
   {
-    "confidence": 0.99,
+    "confidence": 0.85,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) requires the chunked state-passing recurrence state <- exp(dA_cs[c])*state + new_states[c] to be exact, \"no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" Kernel line 32 instead rounds the state to a 5e-3 grid after every chunk. Runtime probe (tool event t6, claim c1, confirmed) compared the kernel's final state to an exact fp64 recurrence on random in-domain inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)): max abs error 0.0116/0.0161/0.0178 \u2014 ~10^5 times ordinary FP32 rounding at these magnitudes \u2014 with max relative error up to 100%. This is a confirmed, in-scope violation of the contract's exactness requirement, so the kernel is rejected.",
-    "verdict": "reject"
+    "reason": "Probe t8 (run_claim_probe, exit 0) tested gptq_matmul on a representative 4-bit GPTQ input (M=64, K=256, N=128, groupsize 32, packed int32 little-endian nibbles along K for B and along N for zeros, per-(group,column) scales) and compared against an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1)) * scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 tl.dot accumulation, i.e. faithful evaluation of the declared 4-bit format per the contract's dequantization formula. The kernel's zeros+1 handling matches the AutoGPTQ packed-zero convention referenced by problem.txt. No conflicting evidence; kernel source inspection shows correct per-group scale/zero indexing.",
+    "verdict": "trust"
   }
 
 ## Description Model
@@ -236,96 +307,97 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.
+Statement: gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.
 
 Scope: `in_scope`
 
-Scope rationale: The contract requires state <- exp(dA_cs[c])*state + new_states[c] carried out exactly with no approximation beyond ordinary floating-point arithmetic; line 32 adds a round-to-grid quantization that violates this.
+Scope rationale: The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.
 
 Scope evidence:
-- `problem.txt`: The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.
+- `problem.txt`: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format.
 
-Rationale: Source line 32 rounds the state to a 5e-3 grid after each chunk, so the returned final state deviates from the exact recurrence by up to half the quantization step per chunk, growing with nchunks.
+Rationale: The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: On random inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)), the kernel's final state deviates from the exact fp64 recurrence by max abs error 0.0116/0.0161/0.0178 — orders of magnitude beyond ordinary FP32 arithmetic (eps~1e-7 for these magnitudes) — with max relative error up to 100%. This matches the 5e-3 round-to-grid quantization at line 32, an extra approximation the contract forbids.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: On a representative 4-bit GPTQ input (M=64,K=256,N=128, groupsize 32, packed int32 nibbles, per-(group,column) scales and zeros), gptq_matmul matches an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1))*scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances — consistent with float16 matmul accumulation, i.e. faithful evaluation of the declared 4-bit format. The kernel's zeros+1 matches the AutoGPTQ packed-zero convention referenced by the contract.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "ToolRegistryError",
+  "message": "tool record_claim missing required arg: rationale"
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Source line 32 rounds the state to a 5e-3 grid after each chunk, so the returned final state deviates from the exact recurrence by up to half the quantization step per chunk, growing with nchunks.",
+  "rationale": "The kernel indexes packed b by k//8, g_idx by k, scales/zeros by group and column, and adds +1 to the zero point, matching the AutoGPTQ convention; a numerical mismatch against an independent dequant reference would indicate an indexing or packing error.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length."
+      "summary": "dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]; kernel must evaluate C = A @ dequant(B) faithfully in the declared 4-bit format."
     }
   ],
-  "scope_rationale": "The contract requires state <- exp(dA_cs[c])*state + new_states[c] carried out exactly with no approximation beyond ordinary floating-point arithmetic; line 32 adds a round-to-grid quantization that violates this.",
-  "statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.",
+  "scope_rationale": "The contract requires C = A @ dequant(B) with the exact dequantization formula per (group, column); any deviation that changes C on inputs the contract admits is a defect.",
+  "statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "a46315e815fb5a868113703592d640637cbc39a46f5177b30c1df28aeb1aa844"
+      "path": "probes/t7_probe.py",
+      "sha256": "7cb9a9f78155139da9557ec68d3f09f831b9f295646bde9c084d1af5495ba844"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "41db84c5ba8806430cdababeb0751c391d5b66daa4e94cea70879d29ceca4952"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "260f349785a987c3c1301e183c639992f874eeb19621633548a54ac8ff02a8df"
+      "path": "probes/t7_stderr.txt",
+      "sha256": "a798b590ce108d51f73d6d2ecca1a1da844e0c15bc32ef1eccad95ade3428602"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel's per-chunk quantization (floor(state/5e-3 + 0.5)*5e-3) makes the final state deviate from the exact recurrence by more than floating-point error.",
-  "duration_s": 7.178885,
-  "event_id": "t6",
+  "claim_statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
+  "duration_s": 5.552807,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -333,52 +405,115 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "a46315e815fb5a868113703592d640637cbc39a46f5177b30c1df28aeb1aa844"
+          "path": "probes/t7_probe.py",
+          "sha256": "7cb9a9f78155139da9557ec68d3f09f831b9f295646bde9c084d1af5495ba844"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "41db84c5ba8806430cdababeb0751c391d5b66daa4e94cea70879d29ceca4952"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852
-...[truncated 3256 chars]
+          "path": "probes/t7_stderr.txt",
+          "sha256": "a798b590ce108d51f73d6d2ecca1a1da844e0c15bc32ef1eccad95ade3428602"
+        }
+      ],
+      "duration_s": 5.552807,
+      "exit_code": 1,
+      "expected_signal": "max abs err near float16 matmul rounding (~<0.1 for these scales)",
+      "json_parse_error": "stdout has no non-empty lines",
+      "json
+...[truncated 1218 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "16a2278d6d27c9554e049f3276afbcb92928c474cd94deec1ca2aa17feb815a0"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "987361641dfb1049fea4320904a7fa6c3f9d0ed40d2e0457e2b5b092ea0878bc"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "64915a96cabc93b009f3fc80e9a0dd1c6f75d65a5d6953c0989c8cdc0c9bc231"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "gptq_matmul produces C = A @ dequant(B) matching the contract formula dequant(B)[k,n] = (q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] on typical 4-bit GPTQ inputs.",
+  "duration_s": 5.180513,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "16a2278d6d27c9554e049f3276afbcb92928c474cd94deec1ca2aa17feb815a0"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t8_stdout.txt",
+          "sha256": "987361641dfb1049fea4320904a7fa6c3f9d0ed40d2e0457e2b5b092ea0878bc"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495
+...[truncated 2051 chars]
+
+### t9 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "On random inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)), the kernel's final state deviates from the exact fp64 recurrence by max abs error 0.0116/0.0161/0.0178 \u2014 orders of magnitude beyond ordinary FP32 arithmetic (eps~1e-7 for these magnitudes) \u2014 with max relative error up to 100%. This matches the 5e-3 round-to-grid quantization at line 32, an extra approximation the contract forbids.",
+  "summary": "On a representative 4-bit GPTQ input (M=64,K=256,N=128, groupsize 32, packed int32 nibbles, per-(group,column) scales and zeros), gptq_matmul matches an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1))*scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 matmul accumulation, i.e. faithful evaluation of the declared 4-bit format. The kernel's zeros+1 matches the AutoGPTQ packed-zero convention referenced by the contract.",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t8"
 }
 
-### t8 - record_verdict - ok
+### t10 - record_verdict - ok
 
 {
-  "confidence": 0.99,
+  "confidence": 0.85,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) requires the chunked state-passing recurrence state <- exp(dA_cs[c])*state + new_states[c] to be exact, \"no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" Kernel line 32 instead rounds the state to a 5e-3 grid after every chunk. Runtime probe (tool event t6, claim c1, confirmed) compared the kernel's final state to an exact fp64 recurrence on random in-domain inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)): max abs error 0.0116/0.0161/0.0178 \u2014 ~10^5 times ordinary FP32 rounding at these magnitudes \u2014 with max relative error up to 100%. This is a confirmed, in-scope violation of the contract's exactness requirement, so the kernel is rejected.",
-  "verdict": "reject"
+  "reason": "Probe t8 (run_claim_probe, exit 0) tested gptq_matmul on a representative 4-bit GPTQ input (M=64, K=256, N=128, groupsize 32, packed int32 little-endian nibbles along K for B and along N for zeros, per-(group,column) scales) and compared against an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1)) * scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 tl.dot accumulation, i.e. faithful evaluation of the declared 4-bit format per the contract's dequantization formula. The kernel's zeros+1 handling matches the AutoGPTQ packed-zero convention referenced by problem.txt. No conflicting evidence; kernel source inspection shows correct per-group scale/zero indexing.",
+  "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.99,
-  "created_at": "2026-09-30T08:17:24Z",
+  "confidence": 0.85,
+  "created_at": "2026-09-30T08:19:33Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) requires the chunked state-passing recurrence state <- exp(dA_cs[c])*state + new_states[c] to be exact, \"no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" Kernel line 32 instead rounds the state to a 5e-3 grid after every chunk. Runtime probe (tool event t6, claim c1, confirmed) compared the kernel's final state to an exact fp64 recurrence on random in-domain inputs (nchunks 8/64/256, dim 64/128, log-decays in (-0.06,-0.01)): max abs error 0.0116/0.0161/0.0178 \u2014 ~10^5 times ordinary FP32 rounding at these magnitudes \u2014 with max relative error up to 100%. This is a confirmed, in-scope violation of the contract's exactness requirement, so the kernel is rejected.",
-  "verdict": "reject"
+  "reason": "Probe t8 (run_claim_probe, exit 0) tested gptq_matmul on a representative 4-bit GPTQ input (M=64, K=256, N=128, groupsize 32, packed int32 little-endian nibbles along K for B and along N for zeros, per-(group,column) scales) and compared against an independent reference C = A @ dequant(B) with dequant = (q - (zero_unpacked+1)) * scale. Max abs error 1.4e-3, mean 2.2e-4, allclose at 1e-3 tolerances \u2014 consistent with float16 tl.dot accumulation, i.e. faithful evaluation of the declared 4-bit format per the contract's dequantization formula. The kernel's zeros+1 handling matches the AutoGPTQ packed-zero convention referenced by problem.txt. No conflicting evidence; kernel source inspection shows correct per-group scale/zero indexing.",
+  "verdict": "trust"
 }

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_31`
-- Turns: 13
-- Tool events: 21
+- Entry: `case_32`
+- Turns: 14
+- Tool events: 26
 - Claims: 3
 - Description updates: 2
-- LLM time: 206.343s across 12 calls | tokens: in=403386 out=10717 total=414103
+- LLM time: 620.613s across 13 calls | tokens: in=491118 out=13081 total=504199
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.9
+- Confidence: 0.98
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_31",
+    "entry": "case_32",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_31"
+    "entry": "case_32"
   }
 
-### Turn 2 - `describer` (27.396071119s, in=9829 out=1455)
+### Turn 2 - `describer` (61.01088619400002s, in=5338 out=2899)
 
 Message:
 
 ```text
-I'll describe this block-sparse attention kernel and record the structured description model.
+I've read the full artifact context (kernel source, contract, files). The kernel is a single-warp-per-row bitonic argsort with a (key, tie-break-on-perm) comparator and global-memory exchange. I'll record a structured description of the contract, implementation model, and the specific risk surfaces — most notably the apparent tie-break direction and the padding-sentinel interaction.
 ```
 
 Tool calls:
@@ -75,33 +75,33 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Packed variable-length batch: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1] on a flat axis; sequence lengths are arbitrary and differ across the batch.",
-      "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to keys in the same sequence as t and inside key blocks selected by block_mask[h, i, j].",
-      "Sequence lengths need not be multiples of block size; partial final blocks mean positions past the sequence end belong to the next sequence and must not contribute to the softmax (key domain per query is exact).",
-      "block_mask is per (query-head, query-block, key-block); GQA (nhead_q multiple of nhead_k) is permitted by the wrapper's assertion.",
-      "Softmax normalization must use only in-scope keys; rows whose selected-key set is empty wo
-  ...[truncated 5359 chars]
+      "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+      "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+      "Input domain is arbitrary int64 values, including the value 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores).",
+      "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order affects downstream values, not just cosmetics.",
+      "Downstream usage implies evidence should include tied-key cases and permutation validity (perm is a permutation of range(W) per row), not o
+  ...[truncated 5533 chars]
   Output summary:
   {
     "contract_model": [
-      "Packed variable-length batch: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1] on a flat axis; sequence lengths are arbitrary and differ across the batch.",
-      "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to keys in the same sequence as t and inside key blocks selected by block_mask[h, i, j].",
-      "Sequence lengths need not be multiples of block size; partial final blocks mean positions past the sequence end belong to the next sequence and must not contribute to the softmax (key domain per query is exact).",
-      "block_mask is per (query-head, query-block, key-block); GQA (nhead_q multiple of nhead_k) is permitted by the wrapper's assertion.",
-      "Softmax normalization must use only in-scope keys; rows whose selected-key set is empty would need defined behavior (contract does not state what, e.g. zeros)."
+      "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+      "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+      "Input domain is arbitrary int64 values, including the value 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores).",
+      "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order affects downstream values, not just cosmetics.",
+      "Downstream usage implies evidence should include tied-key cases and permutation validity (perm is a permutation of range(W) per row), not only sorted-key allclose."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Triton kernel _fwd_kernel does online-softmax flash attention over variable-sized q/k blocks via precomputed cu_q_block / cu_k_block / q_block_to_batch / cu_num_k_block index tensors built by calculate_blocks().",
-      "calculate_blocks: per-batch block counts ceil-div bloc
-  ...[truncated 5049 chars]
+      "One Triton program per row (grid=(N,), num_warps=1); row width W padded to BLOCK_W = next_power_of_2(W); lanes with offs >= W are masked.",
+      "Bitonic sort network: outer loop doubles size (size < BLOCK_W), inner loop halves stride; direction ascending = ((offs & (size << 1)) == 0), which matches the standard biton
+  ...[truncated 5223 chars]
 
-### Turn 3 - `skeptic` (15.924403619000032s, in=20573 out=808)
+### Turn 3 - `skeptic` (376.632576213s, in=15700 out=1023)
 
 Message:
 
 ```text
-I'll record the highest-risk testable claims from the risk map, focusing on the partial-block handling that the contract explicitly emphasizes.
+The description is thorough. I'll record the three highest-risk, directly testable claims: the reversed tie-break comparator, the INT64_MAX padding-sentinel collision, and the store→barrier→reload visibility concern.
 ```
 
 Tool calls:
@@ -109,16 +109,16 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Line 226 computes EVEN_SEQ_KBLOCK from the total packed length only, so a batch mix like [40, 24] with k_block_size 32 gives total 64, EVEN_SEQ_KBLOCK=True, while batch 0's last k block is partial and its extra rows belong to batch 1 \u2014 no -inf masking means out-of-sequence keys produce real scores that enter the softmax, violating the \"positions past the end must not contribute\" clause.",
+    "rationale": "Line 41 defines the total order as (key asc, perm DESC), so tied keys are ordered higher-original-index-first; with a small W=2 or W=4 row of duplicate keys (e.g. [5,5] or [3,3,3,3]) the kernel's perm should show the descending index order where a stable reference shows ascending.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "A sequence length is NOT required to be a multiple of the block size; positions past a sequence's end belong to the next sequence and must not contribute to the softmax."
+        "summary": "\"Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.\" And \"Duplicate keys within a row are expected\" \u2014 duplicate-key rows are explicitly the expected input domain, and tie order is stated required behavior."
       }
     ],
-    "statement": "When the total packed k length is a multiple of k_block_size but an individual batch'
-  ...[truncated 224 chars]
+    "statement": "For rows with duplicate keys, triton_argsort breaks ties by placing the
+  ...[truncated 138 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -127,13 +127,13 @@ Tool calls:
 - `record_claim -> t7 error`
   Args:
   {
-    "rationale": "The kernel's causal test adds the k-minus-q length offset to the query index; if the intended causal rule for varlen is position equality (query i attends key j only if i >= j within the same sequence), then whenever a batch's k length exceeds its q length, the offset shifts the boundary and includes keys with j > i that should be masked (or vice versa), producing wrong outputs. This is testable with causal=True and one batch having seq_k > seq_q.",
+    "rationale": "Line 25/35 loads padding lanes' keys as other=0x7FFFFFFFFFFFFFFF, the same value a real input may legally hold; the should_take_partner gate only blocks an in-range lane from taking an out-of-range partner, not the reverse, and the padding lane's masked store (line 49-50, mask=offs<W) combined with the in-range partner's asymmetric non-swap could leave duplicates of the real MAX key or an inconsistent (key,perm) pairing in real slots.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract says out[t] = softmax over selected keys of q[t]\u00b7k/sqrt(headdim) @ v restricted to same-sequence keys in selected blocks; the kernel exposes causal in the API (source implements it), and sequence lengths generally 
-  ...[truncated 358 chars]
+        "summary": "\"Input domain: keys are arbitrary int64 values\" \u2014 a row containing 0x7FFFFFFFFFFFFFFF is admitted by the stated contract, and sorted_keys[n,i] == keys[n,perm[n,i]] plus perm being the permutation that produces them is stated output be
+  ...[truncated 356 chars]
   Output summary:
   {
     "error_type": "LedgerError",
@@ -142,28 +142,27 @@ Tool calls:
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "The l_i==0->1 fallback is a silent convention; the reference behavior for fully-masked query rows is unstated in problem.txt, so the kernel may diverge (reference could produce NaN or garbage rows). Softmax denominator is only over in-scope keys per contract, and an empty set is contract-admissible since the contract admits arbitrary block_mask values.",
+    "rationale": "tl.debug_barrier() synchronizes threads but there is no guarantee the compiler's caching of the partner loads (line 35-36) at the top of the next iteration is invalidated, so a lane could compare against its partner's pre-swap value and mis-order keys; a repeated-run probe on the same input detecting any nondeterminism or wrong order would confirm it.",
     "scope": "unknown",
-    "scope_rationale": "The contract admits inputs where no key block is selected for a query, but problem.txt does not state what the output should be for such rows, so scope of the divergence is unknown.",
-    "statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match th
-  ...[truncated 49 chars]
+    "statement": "The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm and produce an incorrectly sorted row or non-deterministic output across repeated runs."
+  }
   Output summary:
   {
     "id": "c1",
-    "rationale": "The l_i==0->1 fallback is a silent convention; the reference behavior for fully-masked query rows is unstated in problem.txt, so the kernel may diverge (reference could produce NaN or garbage rows). Softmax denominator is only over in-scope keys per contract, and an empty set is contract-admissible since the contract admits arbitrary block_mask values.",
+    "rationale": "tl.debug_barrier() synchronizes threads but there is no guarantee the compiler's caching of the partner loads (line 35-36) at the top of the next iteration is invalidated, so a lane could compare against its partner's pre-swap value and mis-order keys; a repeated-run probe on the same input detecting any nondeterminism or wrong order would confirm it.",
     "scope": "unknown",
     "scope_evidence": [],
-    "scope_rationale": "The contract admits inputs where no key block is selected for a query, but problem.txt does not state what the output should be for such rows, so scope of the divergence is unknown.",
-    "statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.",
+    "scope_rationale": "",
+    "statement": "The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm and produce an incorrectly sorted row or non-deterministic output across repeated runs.",
     "status": "open"
   }
 
-### Turn 4 - `experimenter` (23.089068217999966s, in=23382 out=1274)
+### Turn 4 - `experimenter` (14.221871810000039s, in=18380 out=801)
 
 Message:
 
 ```text
-I'll probe claim c1 by running the kernel on an input where a query block has no selected key blocks, comparing against a natural masked-softmax reference, to document both behaviors.
+I'll probe c1 by running the kernel repeatedly on tied-key and stress rows, checking determinism, sortedness, permutation validity, and agreement with a stable reference.
 ```
 
 Tool calls:
@@ -172,8 +171,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport torch, json, math\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_31/kernel.py\")\n# fall back: load via sys.path\nimport sys\nsys.path.insert(0, \"/root/cases/case_31\")\nimport kernel as K\n\ntorch.manual_seed(0)\ndev = 'cuda'\nBS = 2\nseqlens_q = [40, 40]\nseqlens_k = [64, 64]\ncu_q = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_q),0)), device=dev, dtype=torch.int32)\ncu_k = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_k),0)), device=dev, dtype=torch.int32)\nnq, nk, hd = 1, 1, 64\nq = torch.randn(cu_q[-1].item(), nq, hd, device=dev)\nk = torch.randn(cu_k[-1].item(), nk, hd, device=dev)\nv = torch.randn_like(k)\nqb, kb = 32, 32\n# compute block counts\ndef blocks(cu, bs):\
-  ...[truncated 2219 chars]
+    "code": "\nimport torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndev = 'cuda'\nresults = {}\ncases = []\n# duplicate-heavy rows, various W including non-power-of-two\nfor W in [2,3,4,5,7,8]:\n    torch.manual_seed(0)\n    keys = torch.randint(0, 3, (256, W), device=dev, dtype=torch.int64)\n    cases.append((f\"dup_W{W}\", keys))\n# all-equal rows\ncases.append((\"all_eq\", torch.full((64, 4), 7, device=dev, dtype=torch.int64)))\n# INT64_MAX rows\ncases.append((\"maxkey\", torch.full((64, 3), 0x7FFFFFFFFFFFFFFF, device=dev, dtype=torch.int64)))\n# random int64 full range\ntorch.manual_seed(1)\ncases.append((\"rand\", t
+  ...[truncated 1875 chars]
   Output summary:
   {
     "artifacts": [
@@ -181,228 +180,201 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "13d16cf12c6e18f72851f6332829e4a6ce64be0c4365a7c6ae35b0c258a8e97c"
+        "sha256": "b0fd32cb3392099f32c3167166172194c36317306aebd8efcd448c6438533911"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "b97dc19464111f54f066f7b4c52690e8c5b80261659f42b1e7518150554f3206"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t9_stderr.txt",
-        "sha256": "9e2fd6a0213574f82c092d0db05d73b36843fc004c36a0a50cbf329bd2cd6e13"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.",
-    "duration_s": 11.663714,
-    "event_id": "t9",
-    "evidence_draft": {
-      "claim_id": "c1",
-      "data": {
-        "artifacts": [
-          {
-            "description": "Python probe code executed by local runtime.",
-            "kind": "prob
-  ...[truncated 2870 chars]
-
-### Turn 5 - `experimenter` (16.890310082999804s, in=26819 out=1050)
-
-Message:
-
-```text
-The t9 probe failed due to a bug in my reference block-index computation (it used row counts instead of block counts when indexing block_mask). I'll fix the reference logic and re-run the probe for c1.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t10 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport torch, json, math, sys\nsys.path.insert(0, \"/root/cases/case_31\")\nimport kernel as K\n\ntorch.manual_seed(0)\ndev = 'cuda'\nseqlens_q = [40, 40]\nseqlens_k = [64, 64]\ncu_q = torch.tensor([0]+[sum(seqlens_q[:i+1]) for i in range(2)], device=dev, dtype=torch.int32)\ncu_k = torch.tensor([0]+[sum(seqlens_k[:i+1]) for i in range(2)], device=dev, dtype=torch.int32)\nnq, nk, hd = 1, 1, 64\nq = torch.randn(cu_q[-1].item(), nq, hd, device=dev)\nk = torch.randn(cu_k[-1].item(), nk, hd, device=dev)\nv = torch.randn_like(k)\nqb, kb = 32, 32\n\n# q-block id for a global row t (batch-local block index + global q-block offset)\nqb_per_batch = [ (l + qb - 1)//qb for l in seqlens_q ]\nkb_per_batch = [ (l + kb - 1)//kb for l in seqlens_k ]\nqblk_offsets = [0, qb
-  ...[truncated 2120 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t10_probe.py",
-        "sha256": "7e486f80648fe4b7c7307d2376241617603fcea27b82f8822617b533da67b6cb"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t10_stdout.txt",
-        "sha256": "c99c2b9b36660c1fa9a1be4288c26dc82e1be10af51be7ce3743490e232ef57d"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t10_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t10_json_result.json",
-        "sha256": "f8940cefd30ddf61844a60cd84b5d7281bbd33dce39712e72f7456c32130a793"
+        "path": "probes/t9_json_result.json",
+        "sha256": "4bfad0a5481c9a937cfc8162cd9b404e67537e32bdef9d4672cc791cafdb8980"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for e
-  ...[truncated 4288 chars]
+    "claim_statement": "The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm
+  ...[truncated 13540 chars]
 
-### Turn 6 - `experimenter` (8.100069795000081s, in=30430 out=330)
+### Turn 5 - `experimenter` (26.73720449299981s, in=25076 out=1276)
 
 Message:
 
 ```text
-The t10 probe for claim c1 completed successfully: the kernel emits exact zeros on empty-key rows (finite output), while the reference behavior for empty softmax rows is undefined by the contract — I cannot decide match/mismatch, so I'll finalize this as inconclusive evidence.
+The t9 probe is back. Results: all cases were fully deterministic across 10 repeated runs on identical inputs, and perm was always a valid permutation with gather-consistent sorted_keys. However, there are deterministic mis-sorts (dup_W3/W5/W7, W=6 rand) — but these are reproducible, not nondeterministic, and are explained by the deterministic `(partner < W)` gating in `should_take_partner` for masked lanes, not by stale partner reads. So the visibility claim (c1) is not supported: no nondeterminism observed, and the observed mis-ordering has a deterministic source-level cause. I'll finalize c1 as rebutted, with the mis-sort data preserved for the Judge.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t11 ok`
+- `finalize_probe_evidence -> t10 ok`
   Args:
   {
     "data": {
-      "empty_rows": "rows 0-31 (query block 0 of batch 0, no selected k block)",
-      "kernel_out_abs_max_empty_rows": 0.0,
-      "kernel_out_all_finite": true,
-      "kernel_out_empty_rows_all_zero": true,
-      "max_abs_err_nonempty_rows": 3.8743019104003906e-07
+      "all_eq_perm_row0": [
+        3,
+        2,
+        1,
+        0
+      ],
+      "all_eq_ref_perm_row0": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "deterministic_10_runs_all_cases": true,
+      "gather_consistent_all_cases": true,
+      "perm_is_permutation_all_cases": true,
+      "sorted_keys_match_ref": {
+        "all_eq": true,
+        "dup_W2": true,
+        "dup_W3": false,
+        "dup_W4": true,
+        "dup_W5": false,
+        "dup_W7": false,
+        "dup_W8": true,
+        "maxkey": true,
+        "rand_W6": false
+      },
+      "sorted_keys_mismatch_witness": "dup_W3/W5/W7 and W=6 random rows show reproducibly wrong sorted order even when perm row0 equals the stable reference (some other rows mis-sort); this is a deterministic logic defect, not stale-read nondeterminism"
     },
-    "event_id": "t10",
-    "status": "inconclusive",
-    "summary": "Kernel behavior confirmed: for query rows with no block_mask-selected k block, the l_i==0 fallback yields exact zeros (all finite, non-empty rows match masked-softmax reference to 3.9e-7). However, the reference behavior for empty softmax rows is undefined by problem.txt and no reference implementation exists in the artifact, so whether zeros match the expected output is undecidable from this probe alone. Claim stays inconclusive; the Describer/Judge should 
-  ...[truncated 73 chars]
+    "event_id": "t9",
+  
+  ...[truncated 986 chars]
   Output summary:
   {
     "claim_id": "c1",
-    "claim_status": "inconclusive",
+    "claim_status": "rebutted",
     "evidence_id": "c1.e1",
-    "summary": "Kernel behavior confirmed: for query rows with no block_mask-selected k block, the l_i==0 fallback yields exact zeros (all finite, non-empty rows match masked-softmax reference to 3.9e-7). However, the reference behavior for empty softmax rows is undefined by problem.txt and no reference implementation exists in the artifact, so whether zeros match the expected output is undecidable from this probe alone. Claim stays inconclusive; the Describer/Judge should weigh the contract's undefined-row note.",
-    "supports": "inconclusive",
-    "tool_event_id": "t10"
+    "summary": "10 repeated runs on identical duplicate-heavy, all-equal, INT64_MAX, and random inputs (W=2..8) were fully deterministic; perm always a valid permutation and gather-consistent. The visibility/stale-partner-read hypothesis predicted nondeterminism or run-to-run variance \u2014 none observed. The observed mis-sorts (non-power-of-two W and W=6) are reproducible and instead attributable to the deterministic (partner < W) gating of should_take_partner, i.e., a source-level logic bug, not memory staleness. Note for Judge: the probe independently surfaced two confirmed defects from the (unrecorded) skeptic claims: (1) tie-break orders equal keys by perm DESCENDING (all_eq row0 perm [3,2,1,0] vs stable ref [0,1,2,3]), violating the contract's lower-index-first stability; (2) rows are incorrectly sorted (sorted_keys != stable reference sorted keys) for non-power-of-two W (3,5,7) and W=6, despite gather consistency.",
+    "supports": "rebutted",
+    "tool_event_id": "t9"
   }
 
-### Turn 7 - `skeptic` (20.225971744999924s, in=34172 out=1087)
+### Turn 6 - `skeptic` (15.8371744210001s, in=35139 out=788)
 
 Message:
 
 ```text
-Two high-risk in-scope claims (the EVEN_SEQ_KBLOCK partial-block leak and the causal-alignment offset) failed to record in round 3 due to a LedgerError and were never re-sent, so the ledger currently covers only the empty-row convention (c1, inconclusive). These remain uncovered, material, and directly testable against the contract's explicit partial-block clause, so I'll record them properly now with the required scope_rationale.
+This is the final review. The t9 probe evidence already contains confirmed, reproducible in-scope failures (perm-descending tie-break; mis-sorted rows for non-power-of-two W and W=6) that no claim in the ledger covers — c1 only tracked the rebutted visibility hypothesis. These are material, testable problems exposed by new evidence, so I record them now.
 ```
 
 Tool calls:
 
-- `record_claim -> t12 ok`
+- `record_claim -> t11 ok`
   Args:
   {
-    "rationale": "Line 226 computes EVEN_SEQ_KBLOCK from the total packed length only, so a batch mix like [40, 24] with k_block_size 32 gives total 64 and EVEN_SEQ_KBLOCK=True, while batch 0's last k block is partial; the tail mask at lines 155-156 is compiled out, so rows past the sequence end (belonging to the next sequence) get real attention scores and leak into the softmax.",
+    "rationale": "Kernel line 41 orders ties by perm DESCENDING, and the t9 probe confirms the all-equal W=4 case yields perm [3,2,1,0] where the stable reference is [0,1,2,3]; perm mismatch vs stable reference was observed in every duplicate-key case.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax."
+        "summary": "\"Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.\" Duplicate keys are the expected input domain."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states sequence lengths 
-  ...[truncated 736 chars]
+    "scope_rationale": "problem.txt explicitly requires stable ties (lower original index first) and states duplicate keys within a row are expected; e.g. all-equal-key rows are admitted inputs, and the probe evidence (c1.e1/t9) shows perm [3,2,1,0] 
+  ...[truncated 287 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Line 226 computes EVEN_SEQ_KBLOCK from the total packed length only, so a batch mix like [40, 24] with k_block_size 32 gives total 64 and EVEN_SEQ_KBLOCK=True, while batch 0's last k block is partial; the tail mask at lines 155-156 is compiled out, so rows past the sequence end (belonging to the next sequence) get real attention scores and leak into the softmax.",
+    "rationale": "Kernel line 41 orders ties by perm DESCENDING, and the t9 probe confirms the all-equal W=4 case yields perm [3,2,1,0] where the stable reference is [0,1,2,3]; perm mismatch vs stable reference was observed in every duplicate-key case.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax."
+        "summary": "\"Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.\" Duplicate keys are the expected input domain."
       }
     ],
-    "scope_rationale": "problem.txt explicitly states sequence lengths are arbitrary and not multiples of the block size, and that positions past a sequence's end belong to the next sequence and must not contribute to the softmax; the input cu_k_seqlens=[0,40,64] with k_block_size 32 is a contract-admitted case that the EVEN_SEQ_KBLOCK heuristic misclassifies.",
-    "statement": "When the total packed k length is a multiple of k_block_size but an individu
-  ...[truncated 370 chars]
-- `record_claim -> t13 ok`
+    "scope_rationale": "problem.txt explicitly requires stable ties (lower original index first) and states duplicate keys within a row are expected; e.g. all-equal-key rows are admitted inputs, and the probe evidence (c1.e1/t9) shows perm [3,2,1,0] vs stable reference [0,1,2,3].",
+    "statement": "For rows with duplicate keys, triton_argsort breaks ties by placing the HIGHER original index first in the permutation (e.g. all-equal row yields perm [3,2,1,0] instead of the stable [0,1,2,3]), violating the contract's stability rule.",
+    "status": "open"
+  }
+- `record_claim -> t12 ok`
   Args:
   {
-    "rationale": "The causal gate (lines 112, 153) adds offset = k_len - q_len to the query index before comparing against the key index; this right-shifts the causal boundary by the length difference, so whenever a batch's k length exceeds its q length, keys with key-index > query-index (strictly future keys under position-based causal semantics) are attended, producing wrong output under causal=True.",
+    "rationale": "The should_take_partner gate at kernel line 43-44 blocks swaps for lanes whose partner is out of range, breaking the symmetry of the bitonic compare-exchange; the t9 probe shows reproducible sorted_keys mismatches vs the stable reference for W=3, 5, 7 and random W=6.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "out[t] = softmax over selected keys of q[t]\u00b7k/sqrt(headdim) @ v restricted to keys that belong to the same sequence as t and lie in a selected block; sequence lengths generally differ within a batch."
+        "summary": "\"sorted_keys[n, :] is non-decreasing\" and \"sorted_keys[n, i] = keys[n, perm[n, i]]\" are stated output requirements for an [N, W] tensor; the contract does not restrict W to powers of two."
       }
     ],
-    "scope_rationale": "The causal flag is part of the API the kernel impleme
-  ...[truncated 555 chars]
+    "scope_rationale": "problem.txt states sorted_keys[n,:] must be non-decreasing for any [N, W] int64 input; the t9 probe evidence (c1.e1) shows reproducibly wrong sorted order for W=3,5,7 and W=6 random rows
+  ...[truncated 284 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "The causal gate (lines 112, 153) adds offset = k_len - q_len to the query index before comparing against the key index; this right-shifts the causal boundary by the length difference, so whenever a batch's k length exceeds its q length, keys with key-index > query-index (strictly future keys under position-based causal semantics) are attended, producing wrong output under causal=True.",
+    "rationale": "The should_take_partner gate at kernel line 43-44 blocks swaps for lanes whose partner is out of range, breaking the symmetry of the bitonic compare-exchange; the t9 probe shows reproducible sorted_keys mismatches vs the stable reference for W=3, 5, 7 and random W=6.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "out[t] = softmax over selected keys of q[t]\u00b7k/sqrt(headdim) @ v restricted to keys that belong to the same sequence as t and lie in a selected block; sequence lengths generally differ within a batch."
+        "summary": "\"sorted_keys[n, :] is non-decreasing\" and \"sorted_keys[n, i] = keys[n, perm[n, i]]\" are stated output requirements for an [N, W] tensor; the contract does not restrict W to powers of two."
       }
     ],
-    "scope_rationale": "The causal flag is part of the API the kernel implements (block_sparse_attention signature includes causal=True/False), and the contract's attention restriction must still hold under causal masking; a batch with k length differing from q length is explicitly contract-admitted.",
-    "statement": "With causal=True and a batch whose k length differs from its q length, the offset term (k_len - q_len) in the causal conditions at lines 112 an
-  ...[truncated 189 chars]
+    "scope_rationale": "problem.txt states sorted_keys[n,:] must be non-decreasing for any [N, W] int64 input; the t9 probe evidence (c1.e1) shows reproducibly wrong sorted order for W=3,5,7 and W=6 random rows.",
+    "statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.",
+    "status": "open"
+  }
 
-### Turn 8 - `describer` (20.261069190999933s, in=33864 out=1103)
+### Turn 7 - `describer` (33.33525772300004s, in=36351 out=1787)
 
 Message:
 
 ```text
-The description model is mostly current; the open claims (c2 partial-k-block leak, c3 causal offset) now match my risk map's top two entries. I'll record a focused update capturing the claim-to-risk linkage, refinement of the EVEN_SEQ_KBLOCK asymmetry, and remaining open questions for the Judge.
+The t9 probe evidence has now clarified two of my earlier open questions (tie direction, padding/masked-lane sorting). I'll record an updated description model reflecting the confirmed deterministic defects and their mechanisms, so the Judge has an accurate structural account tied to the open claims c2 and c3.
 ```
 
 Tool calls:
 
-- `record_description_update -> t14 ok`
+- `record_description_update -> t13 ok`
   Args:
   {
     "contract_model": [
-      "Packed varlen contract: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1]; lengths arbitrary and differing across batch, explicitly NOT required to be multiples of block size (problem.txt partial-block clause).",
-      "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to same-sequence keys inside block_mask-selected key blocks; softmax denominator must include only those keys.",
-      "block_mask is per (head, q-block, k-block); GQA allowed (nhead_q % nhead_k == 0 asserted in wrapper); causal flag is part of the API and the same-sequence/selected-block restriction must hold under it.",
-      "Output convention for rows whose selected-key set is empty (all blocks unselected, or causal empties them) is not stated in problem.txt \u2014 undecidable from c
-  ...[truncated 3475 chars]
+      "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+      "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+      "Input domain is arbitrary int64 values, including 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores); the contract does not restrict W to powers of two.",
+      "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order changes downstream values, not just cosmetics.",
+      "The deciding metric for both defects is exact comparison against a stable reference (torch.argsort
+  ...[truncated 6325 chars]
   Output summary:
   {
     "contract_model": [
-      "Packed varlen contract: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1]; lengths arbitrary and differing across batch, explicitly NOT required to be multiples of block size (problem.txt partial-block clause).",
-      "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to same-sequence keys inside block_mask-selected key blocks; softmax denominator must include only those keys.",
-      "block_mask is per (head, q-block, k-block); GQA allowed (nhead_q % nhead_k == 0 asserted in wrapper); causal flag is part of the API and the same-sequence/selected-block restriction must hold under it.",
-      "Output convention for rows whose selected-key set is empty (all blocks unselected, or causal empties them) is not stated in problem.txt \u2014 undecidable from contract alone."
+      "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+      "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+      "Input domain is arbitrary int64 values, including 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores); the contract does not restrict W to powers of two.",
+      "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order changes downstream values, not just cosmetics.",
+      "The deciding metric for both defects is exact comparison against a stable reference (torch.argsort stable=True): perm equality for ties, and sorted_keys equality / non-decreasing order for general W."
     ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Same as du1: Triton online-softmax flash attention over varlen q/k blocks, grid (num_q_block, nhead_q), per-block metadata via calculate_blocks (cu_block, block_to_batch, cu_num_block).",
-      "Line 226: EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0) \u2014 total packed length only; note the asymme
-  ...[truncated 3165 chars]
+    "impact_on_claims": [
+      "c2 (tie-break reversal) matches the description model's comparator direction finding and is directly evidenced by t9's all_eq case ([3,2,1,0] vs [0,1,2,3]); the structural model corroborates the claim.",
+      "c3 (non-power-of-two W mis-sort) matches the masked-la
+  ...[truncated 5989 chars]
 
-### Turn 9 - `skeptic` (9.640980439000032s, in=41346 out=223)
+### Turn 8 - `skeptic` (8.087479423999866s, in=47671 out=280)
 
 Message:
 
 ```text
-This is the final review round. The two open in-scope claims (c2 partial-k-block leak, c3 causal offset) already capture the top risk surfaces, and the only new evidence this round (probe t10 on c1) is inconclusive due to the contract's undefined empty-row behavior. No material, testable, in-scope problem has emerged that isn't already covered.
+This is the final review turn. The two material in-scope defects (perm-descending tie-break in c2, non-power-of-two W mis-sort in c3) are already recorded and backed by the t9 probe evidence; the describer's update corroborates both mechanisms, and c1's visibility concern was rebutted with 10-run determinism. No uncovered, decisive problem remains.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t15 ok`
+- `record_no_new_claims -> t14 ok`
   Args:
   {
-    "reason": "Final review: existing claims c2 (EVEN_SEQ_KBLOCK total-length heuristic causing partial k-block cross-sequence key leakage) and c3 (causal offset shift for differing q/k lengths) already cover the top in-scope risk surfaces, and no new probe or source evidence this round exposes an additional material problem. Probe t10 on c1 remains inconclusive because the contract is silent on empty-key-row output.",
+    "reason": "Final review: the ledger's open claims c2 (tie-break reversal violating the explicit stability rule, evidenced by t9 all_eq perm [3,2,1,0] vs stable ref [0,1,2,3]) and c3 (deterministic mis-sorts for non-power-of-two W=3,5,7 and W=6, evidenced by t9 sorted_keys mismatches vs the stable reference) already cover all material, testable, in-scope defects exposed by the evidence. c1 (memory visibility) was rebutted by 10-run determinism on identical inputs, and the describer's updated model corroborates both confirmed mechanisms. No additional in-scope claim is needed.",
     "reviewed_claims": [
       "c1",
       "c2",
@@ -412,32 +384,69 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: existing claims c2 (EVEN_SEQ_KBLOCK total-length heuristic causing partial k-block cross-sequence key leakage) and c3 (causal offset shift for differing q/k lengths) already cover the top in-scope risk surfaces, and no new probe or source evidence this round exposes an additional material problem. Probe t10 on c1 remains inconclusive because the contract is silent on empty-key-row output.",
+    "reason": "Final review: the ledger's open claims c2 (tie-break reversal violating the explicit stability rule, evidenced by t9 all_eq perm [3,2,1,0] vs stable ref [0,1,2,3]) and c3 (deterministic mis-sorts for non-power-of-two W=3,5,7 and W=6, evidenced by t9 sorted_keys mismatches vs the stable reference) already cover all material, testable, in-scope defects exposed by the evidence. c1 (memory visibility) was rebutted by 10-run determinism on identical inputs, and the describer's updated model corroborates both confirmed mechanisms. No additional in-scope claim is needed.",
     "reviewed_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reviewed_tool_event_count": 14,
-    "turn": 9
+    "reviewed_tool_event_count": 13,
+    "turn": 8
   }
 
-### Turn 10 - `experimenter` (24.828623350000044s, in=41386 out=1609)
+### Turn 9 - `experimenter` (23.892997113999627s, in=47064 out=1417)
 
 Message:
 
 ```text
-Two open claims (c2, c3) have no evidence yet. I'll launch independent runtime probes for both: c2 uses cu_k_seqlens=[0,40,64] (total 64 is a multiple of 32 while batch 0's k length 40 is not) with causal=False and all blocks selected, comparing against a same-sequence-only reference; c3 uses a single batch with seq_q=32, seq_k=64 under causal=True, comparing against a position-based causal reference.
+Open claims c2 and c3 both lack direct evidence entries. I'll launch two independent runtime probes together: one for c2 (tie-break direction vs stable reference on duplicate-key rows) and one for c3 (sortedness of sorted_keys for non-power-of-two W and W=6, measuring non-decreasing violations directly). I'll also attach source-inspection evidence now, since the kernel source directly shows the comparator (line 41) and the gated exchange (lines 43–44).
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t16 ok`
+- `run_claim_probe -> t15 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_31\")\nimport kernel as K\n\ntorch.manual_seed(0)\ndev = 'cuda'\nseqlens_q = [32, 32]\nseqlens_k = [40, 24]   # total 64 -> EVEN_SEQ_KBLOCK=True (misclassified); batch0 last k block partial\ncu_q = torch.tensor([0, 32, 64], device=dev, dtype=torch.int32)\ncu_k = torch.tensor([0, 40, 64], device=dev, dtype=torch.int32)\nnq, nk, hd = 1, 1, 64\nq = torch.randn(64, nq, hd, device=dev)\nk = torch.randn(64, nk, hd, device=dev)\nv = torch.randn_like(k)\nqb, kb = 32, 32\nqb_per_batch = [(l + qb - 1)//qb for l in seqlens_q]\nkb_per_batch = [(l + kb - 1)//kb for l in seqlens_k]\nqblk_off = [0, qb_per_batch[0]]\nkblk_off = [0, kb_per_batch[0]]\nnqb, nkb = sum(qb_per_batch), sum(kb_per_batch)\nbm = torch.on
-  ...[truncated 1546 chars]
+    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev = 'cuda'\nresults = {}\n# Minimal decisive case: all-equal rows (every pair is a tie)\nfor W in [2,4,8]:\n    keys = torch.full((8, W), 7, device=dev, dtype=torch.int64)\n    s, p = m.triton_argsort(keys.clone()); torch.cuda.synchronize()\n    ref = torch.argsort(keys.cpu(), dim=1, stable=True).to(dev)\n    results[f\"all_eq_W{W}\"] = {\"perm\": p[0].cpu().tolist(), \"stable_ref\": ref[0].cpu().tolist(),\n        \"perm_matches_stable\": bool(torch.equal(p, ref)),\n        \"perm_is_reversed_arange\": p[0].cpu().tolist() == list(range(W-1,-1,-1))}\n# Mixed dupl
+  ...[truncated 825 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "9c13e368b255edee3137e422237fb106f29dad82e999a9053c2e7cc9ba9b037e"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "b2a9c6312486bfd2f20ac403fdea08739bcfd6dd7fb401491b7a898a7e3c2a63"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "e0cea388ecff7cb08179fa77431652ace07221374f8a2f22cd4efa6d4b67f9fc"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "For rows with duplicate keys, triton_argsort breaks ties by placing the HIGHER original index first in the permutation (e.g. all-equal row yields perm [3,2,1,0] instead of the stable [0,1,2,3]), violating the 
+  ...[truncated 6122 chars]
+- `run_claim_probe -> t16 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev = 'cuda'\nresults = {}\nfor W in [2,3,4,5,6,7,8,9,12]:\n    viol = {}\n    for trial in range(5):\n        torch.manual_seed(trial)\n        keys = torch.randint(-1000, 1000, (512, W), device=dev, dtype=torch.int64)\n        s, p = m.triton_argsort(keys.clone()); torch.cuda.synchronize()\n        ref_sorted = torch.sort(keys, dim=1).values\n        nondec = (s[:, :-1] <= s[:, 1:]).all().item() if W > 1 else True\n        viol[f\"trial{trial}\"] = {\"nondecreasing\": bool(nondec),\n            \"matches_sorted_ref\": bool(torch.equal(s, ref_sorted)),\n          
+  ...[truncated 789 chars]
   Output summary:
   {
     "artifacts": [
@@ -445,303 +454,458 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t16_probe.py",
-        "sha256": "4148049c8223d6c59fb69fa553459e002e6048f983a249c64cd893d4190b68b9"
+        "sha256": "af958710c055a458af965007d23ab36255c8dbf6d22e569085c89e57b24ff082"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t16_stdout.txt",
-        "sha256": "3e845a3ec8e842b056a43a48e83713482508e25f852a4ba17dfe17449c203e32"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t16_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t16_json_result.json",
-        "sha256": "9be7209c602d401d6f6471e25ceade187cd7e28f47de36feabca2738d99b3f52"
+        "sha256": "83c2e1c4c28ee97657673038d4074d67f02e52d01390e1a4e25170e3e773f4f3"
       }
     ],
+    "claim_id": "c3",
+    "claim_statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.",
+    "duration_s": 4.428073,
+    "event_id": "t16",
+    "evidence_draft": {
+      "claim_id": "c3",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by loc
+  ...[truncated 2542 chars]
+- `append_evidence -> t17 ok`
+  Args:
+  {
     "claim_id": "c2",
-    "claim_statement": "When the total packed k length is a multiple of k_block_size but an individual batch's k length is not (e.g. cu_k_seqlens = [0, 40, 64] with k_block_size 32), EVEN_SEQ_KBLOCK is wrongly True, the per-block tai
-  ...[truncated 4163 chars]
-- `run_claim_probe -> t17 ok`
+    "data": {
+      "comparator_expr": "my_is_smaller = (keys < p_key) | ((keys == p_key) & (perm > p_perm))",
+      "comparator_line": 41,
+      "effective_order": "(key asc, perm desc)"
+    },
+    "kind": "source_inspection",
+    "summary": "kernel.py line 41 defines the total comparator as 'smaller iff key < partner_key, or keys tied AND perm > partner_perm', i.e. ties are ordered by perm DESCENDING, the opposite of the contract's lower-original-index-first stability rule.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "id": "c2.e1",
+    "summary": "kernel.py line 41 defines the total comparator as 'smaller iff key < partner_key, or keys tied AND perm > partner_perm', i.e. ties are ordered by perm DESCENDING, the opposite of the contract's lower-original-index-first stability rule.",
+    "supports": "confirmed"
+  }
+- `append_evidence -> t18 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_31\")\nimport kernel as K\n\ntorch.manual_seed(1)\ndev = 'cuda'\n# single batch, q len 32, k len 64, both multiples of block size -> isolates causal offset effect\nseqlens_q = [32]; seqlens_k = [64]\ncu_q = torch.tensor([0, 32], device=dev, dtype=torch.int32)\ncu_k = torch.tensor([0, 64], device=dev, dtype=torch.int32)\nnq, nk, hd = 1, 1, 64\nq = torch.randn(32, nq, hd, device=dev)\nk = torch.randn(64, nk, hd, device=dev)\nv = torch.randn_like(k)\nqb, kb = 32, 32\nnqb, nkb = 1, 2\nbm = torch.ones(nk, nqb, nkb, dtype=torch.bool, device=dev)\n\nout = K.block_sparse_attention(q, k, v, cu_q, cu_k, bm, qb, kb, causal=True)\n\nscale = hd ** -0.5\nref = torch.full_like(q, float('nan'))\nfor t in range(
-  ...[truncated 918 chars]
+    "data": {
+      "gate_expr": "should_take_partner = (want_smaller & (~my_is_smaller) & (partner < W)) | ((~want_smaller) & my_is_smaller & (partner < W))",
+      "gating_lines": "43-44"
+    },
+    "kind": "source_inspection",
+    "summary": "kernel.py lines 43-44 gate both clauses of should_take_partner on (partner < W); an in-range lane paired with an out-of-range lane never swaps, while the masked partner lane can still take the in-range value, breaking bitonic compare-exchange symmetry for boundary pairs whenever W is not a power of two.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "id": "c3.e1",
+    "summary": "kernel.py lines 43-44 gate both clauses of should_take_partner on (partner < W); an in-range lane paired with an out-of-range lane never swaps, while the masked partner lane can still take the in-range value, breaking bitonic compare-exchange symmetry for boundary pairs whenever W is not a power of two.",
+    "supports": "confirmed"
+  }
+
+### Turn 10 - `experimenter` (18.134478685999966s, in=48661 out=1004)
+
+Message:
+
+```text
+t15 decisively confirms c2 (all-equal rows yield reversed arange perm, never the stable reference). t16 failed on a probe-code bug (bool has no .all) and needs a fixed relaunch for c3. I'll finalize t15, mark c2 confirmed, and relaunch the corrected c3 probe in the same turn.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t19 ok`
+  Args:
+  {
+    "data": {
+      "all_eq_W2_perm": [
+        1,
+        0
+      ],
+      "all_eq_W4_perm": [
+        3,
+        2,
+        1,
+        0
+      ],
+      "all_eq_W4_stable_ref": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "all_eq_W8_perm": [
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "metric": "exact perm equality vs torch.argsort(stable=True)",
+      "mixed_dup_W8_perm": [
+        5,
+        6,
+        4,
+        1,
+        7,
+        3,
+        2,
+        0
+      ],
+      "mixed_dup_W8_stable_ref": [
+        5,
+        1,
+        4,
+        6,
+        0,
+        2,
+        3,
+        7
+      ],
+      "perm_is_reversed_arange_all_eq_cases": true,
+      "perm_matches_stable_any_case": false
+    },
+    "event_id": "t15",
+    "status": "confirmed",
+    "summary": "Runtime probe confirms c2: on all-equal rows (every pair t
+  ...[truncated 519 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e2",
+    "summary": "Runtime probe confirms c2: on all-equal rows (every pair tied), the kernel returns the reversed arange permutation ([1,0], [3,2,1,0], [7,...,0]) while the stable reference returns identity \u2014 ties are ordered by HIGHER original index first, a direct violation of the contract's lower-index-first stability. Mixed-duplicate W=8 row also mismatches the stable reference perm while sorted_keys stays non-decreasing and gather-consistent, isolating the failure to tie order (not sortedness). Corroborates source inspection of line 41's comparator.",
+    "supports": "confirmed",
+    "tool_event_id": "t15"
+  }
+- `update_claim_status -> t20 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "status": "confirmed"
+  }
+  Output summary:
+  {
+    "id": "c2",
+    "status": "confirmed"
+  }
+- `run_claim_probe -> t21 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_32/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ndev = 'cuda'\nresults = {}\narange_cache = {W: torch.arange(W, device=dev, dtype=torch.int64) for W in [2,3,4,5,6,7,8,9,12]}\nfor W in [2,3,4,5,6,7,8,9,12]:\n    nondec_fail = 0; mismatch = 0; perm_bad = 0\n    for trial in range(5):\n        torch.manual_seed(trial)\n        keys = torch.randint(-1000, 1000, (512, W), device=dev, dtype=torch.int64)\n        s, p = m.triton_argsort(keys.clone()); torch.cuda.synchronize()\n        ref_sorted = torch.sort(keys, dim=1).values\n        nondec = bool((s[:, :-1] <= s[:, 1:]).all().item()) if W > 1 else True\n        if n
+  ...[truncated 849 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t17_probe.py",
-        "sha256": "2d5d9ea0e61976a7ee8538dc39dd0ab9e95c6564f41e1ed8e4b247318aadf748"
+        "path": "probes/t21_probe.py",
+        "sha256": "d3c25e17b5543b73ba49604ec7fd3becbd7ba55be5f1047ab3bce53037b88711"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t17_stdout.txt",
-        "sha256": "3ea18de68c106bf436481f6594e8853d8a0dce948638518572580fc09ad5ee15"
+        "path": "probes/t21_stdout.txt",
+        "sha256": "4ebf7b39345c8636db9e9913b603a92ac985187f35a943d3f9c0da33b3c322ab"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t17_stderr.txt",
+        "path": "probes/t21_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t17_json_result.json",
-        "sha256": "fd9402eb3f1b66ca0ddb701168488ce9c0f7596c6d975a04f68c6dcd82caa2c5"
+        "path": "probes/t21_json_result.json",
+        "sha256": "cca749bd9e355445d12dedfc011e828c0c1f4cc57f5f0b3ef66e97b6a2b5fd16"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "With causal=True and a batch whose k length differs from its q length, the offset term (k_len - q_len) in the causal conditions at lines 112 and 153 shifts the causal boundary and attends keys that a position-
-  ...[truncated 3783 chars]
+    "claim_statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violati
+  ...[truncated 6919 chars]
 
-### Turn 11 - `experimenter` (17.502505749999955s, in=42462 out=960)
+### Turn 11 - `experimenter` (11.066928337000263s, in=53730 out=489)
 
 Message:
 
 ```text
-Both probes from the last turn completed. I'll finalize evidence for c2 (large cross-sequence leak errors on both batches) and c3 (large divergence from position-based causal reference when seq_k > seq_q).
+The corrected c3 probe (t21) is decisive: non-power-of-two W (3,5,6,7,9,12) show 5/5 non-decreasing violations and mismatches vs torch.sort, while power-of-two W (2,4,8) are clean. Finalizing c3 as confirmed.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t18 ok`
+- `finalize_probe_evidence -> t22 ok`
   Args:
   {
     "data": {
-      "batch0_k_len": 40,
-      "batch1_k_len": 24,
-      "causal": false,
-      "expected_signal": "large error on batch0 query rows if next-sequence keys leak into softmax",
-      "k_block_size": 32,
-      "max_abs_err_batch0_rows": 0.5456611514091492,
-      "max_abs_err_batch1_rows": 0.5828728675842285,
-      "max_abs_err_overall": 0.5828728675842285,
-      "metric": "kernel output vs same-sequence-only masked-softmax reference (causal=False, all blocks selected)",
-      "total_k_len": 64
+      "mismatch_vs_torchsort_of_5": {
+        "W12": 5,
+        "W2": 0,
+        "W3": 5,
+        "W4": 0,
+        "W5": 5,
+        "W6": 5,
+        "W7": 5,
+        "W8": 0,
+        "W9": 5
+      },
+      "nondecreasing_violations_of_5": {
+        "W12": 5,
+        "W2": 0,
+        "W3": 5,
+        "W4": 0,
+        "W5": 5,
+        "W6": 5,
+        "W7": 5,
+        "W8": 0,
+        "W9": 5
+      },
+      "perm_not_permutation_of_5": "0 for all W",
+      "tests": "N=512 rows, torch.randint(-1000,1000), 5 trials per W, W in {2,3,4,5,6,7,8,9,12}"
     },
-    "event_id": "t16",
+    "event_id": "t21",
     "status": "confirmed",
-    "summary": "Confirmed: with cu_k_seqlens=[0,40,64] (total 64 multiple of k_block_size 32, but batch lengths 40 and 24 not multiples), EVEN_SEQ_KBLOCK is misclassified True and the per-block tail mask is compiled out. Kernel output deviates from the same-se
-  ...[truncated 325 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "Confirmed: with cu_k_seqlens=[0,40,64] (total 64 multiple of k_block_size 32, but batch lengths 40 and 24 not multiples), EVEN_SEQ_KBLOCK is misclassified True and the per-block tail mask is compiled out. Kernel output deviates from the same-sequence-only reference by max_abs_err 0.546 on batch-0 query rows and 0.583 overall \u2014 next-sequence keys past the batch boundary get real attention scores and leak into the softmax, violating problem.txt's explicit partial-block exclusion clause. Error is far beyond any numerical tolerance.",
-    "supports": "confirmed",
-    "tool_event_id": "t16"
-  }
-- `finalize_probe_evidence -> t19 ok`
-  Args:
-  {
-    "data": {
-      "causal": true,
-      "expected_signal": "large max_abs_err vs position-based causal reference when seq_k > seq_q under causal=True",
-      "max_abs_err": 2.5029797554016113,
-      "max_abs_err_row0": 2.5029797554016113,
-      "mean_abs_err": 0.2687445878982544,
-      "metric": "kernel output vs position-based causal reference (query i attends keys j<=i), causal=True, seq_q=32, seq_k=64",
-      "note": "Reference semantics caveat: problem.txt does not explicitly define causal alignment when seq_k != seq_q; kernel implements bottom-right-aligned (FlashAttention cross-attn style) causal via offset = k_len - q_len. The numeric divergence from position-based causal is confirmed; whether it is a contract violation depends on the intended causal convention, which the Describer flagged as a
-  ...[truncated 835 chars]
+    "summary": "Runtime probe confirms c3: sorted_keys rows are NOT non-decreasing (5/5 trials) and mismatch torch.sort().values for every non-power-of-two W tested (3,5,6,7,9,12), while power-of-two W (2,4,8) are fully clean (0/5 vio
+  ...[truncated 360 chars]
   Output summary:
   {
     "claim_id": "c3",
     "claim_status": "confirmed",
-    "evidence_id": "c3.e1",
-    "summary": "Confirmed (numeric divergence, semantics caveat): with causal=True and a single batch of seq_q=32, seq_k=64, the kernel's offset=(k_len - q_len)=32 in the causal conditions shifts the causal boundary; kernel output diverges from a position-based causal reference (query i attends keys j<=i) by max_abs_err 2.50 (row 0 itself, where the reference attends only key 0 but the kernel attends keys 0-31). Caveat: problem.txt does not explicitly define causal alignment when q and k lengths differ; the kernel uses the FlashAttention cross-attention bottom-right-aligned convention. The divergence is confirmed fact; Judge should weigh the causal-convention ambiguity.",
+    "evidence_id": "c3.e2",
+    "summary": "Runtime probe confirms c3: sorted_keys rows are NOT non-decreasing (5/5 trials) and mismatch torch.sort().values for every non-power-of-two W tested (3,5,6,7,9,12), while power-of-two W (2,4,8) are fully clean (0/5 violations). perm remains a valid permutation in all cases. This is exactly the pattern predicted by the asymmetric (partner < W) gating of should_take_partner: only boundary-straddling pairs (which exist exactly when W != power of two) are broken. Corroborates the c3.e1 source inspection of lines 43-44 and the earlier t9 evidence.",
     "supports": "confirmed",
-    "tool_event_id": "t17"
+    "tool_event_id": "t21"
+  }
+- `update_claim_status -> t23 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "status": "confirmed"
+  }
+  Output summary:
+  {
+    "id": "c3",
+    "status": "confirmed"
   }
 
-### Turn 12 - `skeptic` (7.180477484999983s, in=49604 out=234)
+### Turn 12 - `skeptic` (10.054659563999849s, in=55103 out=330)
 
 Message:
 
 ```text
-This is the final review round. The two in-scope claims (c2 partial k-block cross-sequence leakage, c3 causal offset shift) are confirmed with runtime evidence, and c1 remains contract-undecidable. No new material, testable in-scope problem has emerged beyond these.
+This is the final review turn. The two material in-scope defects are already recorded and confirmed with both source and runtime evidence (c2: tie-break reversed, violating explicit stability; c3: deterministic mis-sorts for all non-power-of-two W). The remaining open questions are curiosity items not material to the verdict. No new claims needed.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t20 ok`
+- `record_no_new_claims -> t24 ok`
   Args:
   {
-    "reason": "Final review: c2 (EVEN_SEQ_KBLOCK total-length heuristic causing next-sequence keys to leak into the softmax on contract-admitted partial k-blocks, max_abs_err ~0.58) and c3 (causal offset = k_len - q_len shifting the causal boundary when q/k lengths differ, max_abs_err ~2.50 with a semantics caveat) are confirmed with runtime probes and already cover the top in-scope risk surfaces. c1 (empty-key-row zeros) stays inconclusive because problem.txt does not define output for empty softmax rows. No new evidence exposes an additional material, testable, in-scope problem.",
-    "reviewed_claims": [
-      "c1",
-      "c2",
-      "c3"
-    ]
-  }
+    "reason": "Final review: both confirmed in-scope claims, c2 (tie-break orders duplicates by HIGHER original index, violating problem.txt's explicit lower-index-first stability rule; t15 all-equal rows yield reversed arange perm, never matching the stable reference) and c3 (deterministic mis-sorted/non-non-decreasing rows for every non-power-of-two W=3,5,6,7,9,12 at 5/5 trials, power-of-two W clean; t21), are backed by source inspection (line 41 comparator, lines 43-44 gating) and decisive runtime probes with the correct metric (exact comparison vs stable reference). c1 (memory visibility) was rebutted by 10-run determinism. The describer's open questions (W=6 sentinel attribution detail, cross-Triton-version nondeterminism) fall under the already-confirmed asymmetric-gating defect fami
+  ...[truncated 172 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c2 (EVEN_SEQ_KBLOCK total-length heuristic causing next-sequence keys to leak into the softmax on contract-admitted partial k-blocks, max_abs_err ~0.58) and c3 (causal offset = k_len - q_len shifting the causal boundary when q/k lengths differ, max_abs_err ~2.50 with a semantics caveat) are confirmed with runtime probes and already cover the top in-scope risk surfaces. c1 (empty-key-row zeros) stays inconclusive because problem.txt does not define output for empty softmax rows. No new evidence exposes an additional material, testable, in-scope problem.",
+    "reason": "Final review: both confirmed in-scope claims, c2 (tie-break orders duplicates by HIGHER original index, violating problem.txt's explicit lower-index-first stability rule; t15 all-equal rows yield reversed arange perm, never matching the stable reference) and c3 (deterministic mis-sorted/non-non-decreasing rows for every non-power-of-two W=3,5,6,7,9,12 at 5/5 trials, power-of-two W clean; t21), are backed by source inspection (line 41 comparator, lines 43-44 gating) and decisive runtime probes with the correct metric (exact comparison vs stable reference). c1 (memory visibility) was rebutted by 10-run determinism. The describer's open questions (W=6 sentinel attribution detail, cross-Triton-version nondeterminism) fall under the already-confirmed asymmetric-gating defect family or are residual generalization concerns, not new material in-scope defects. No additional claim is warranted.",
     "reviewed_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reviewed_tool_event_count": 19,
+    "reviewed_tool_event_count": 23,
     "turn": 12
   }
 
-### Turn 13 - `judge` (15.303429626000025s, in=49519 out=584)
+### Turn 13 - `judge` (11.984159968999847s, in=54753 out=509)
 
 Message:
 
 ```text
-The evidence is decisive. Claim c2 is confirmed, in-scope, and directly tied to the contract's explicit partial-block clause: with cu_k_seqlens=[0,40,64] and k_block_size 32, the kernel's EVEN_SEQ_KBLOCK heuristic (kernel line 226, computed from the total packed length only) wrongly returns True, compiling out the tail mask at lines 155–156, so keys from the next sequence (rows 40–63) get real attention scores and leak into the softmax of batch-0 queries — max_abs_err 0.546/0.583, far beyond any tolerance, against a same-sequence-only reference. This violates problem.txt's explicit rule that positions past a sequence's end must not contribute to the softmax. There is no test.py/get_inputs in the artifact, so problem.txt is the operative contract and this is a valid basis for reject. Claim c3 (causal alignment convention) has a semantics caveat — the contract doesn't define causal alignment when q/k lengths differ, so it's a supporting note, not decisive. c1 remains inconclusive (contract silent on empty-key rows) and is set aside as undecidable.
+The ledger is complete: both material in-scope defects are confirmed with source and decisive runtime evidence, and the Skeptic signed off with no new claims. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t21 ok`
+- `record_verdict -> t25 error`
   Args:
   {
-    "confidence": 0.9,
+    "confidence": 0.98,
     "decisive_claims": [
-      "c2"
+      "c2: tie-break reverses the contract's explicit stability rule (perm DESCENDING on ties; all-equal rows return reversed arange instead of identity)",
+      "c3: asymmetric (partner < W) gating of should_take_partner deterministically mis-sorts rows for every non-power-of-two W (3,5,6,7,9,12), violating the non-decreasing requirement"
     ],
-    "reason": "Reject based on claim c2 (confirmed, in_scope, scope evidence cites problem.txt's explicit partial-block clause, which is the operative contract since the artifact has no test.py/get_inputs). EVEN_SEQ_KBLOCK is computed from the total packed k length only (kernel line 226), so a contract-admitted batch mix like [40, 24] with k_block_size 32 (total 64) is misclassified as even; the per-block tail mask (lines 155-156) is compiled out, and probe t16 shows next-sequence keys leaking into the softmax with max_abs_err 0.546 on batch-0 rows and 0.583 overall \u2014 a gross violation of the contract's stated rule that positions past a sequence's end must not contribute to the softmax. c3 (causal offset divergence under causal
-  ...[truncated 458 chars]
+    "reason": "Two confirmed, in-scope defects directly violate problem.txt's explicit contract. (1) Stability: kernel.py line 41's comparator orders tied keys by perm DESCENDING (smaller iff key < p_key or (keys==p_key & perm > p_perm)), so on all-equal rows the kernel returns the reversed arange permutation (e.g. [3,2,1,0] at W=4) while torch.argsort(stable=True) returns identity \u2014 confirmed by source 
+  ...[truncated 1079 chars]
   Output summary:
   {
-    "confidence": 0.9,
+    "error_type": "ValueError",
+    "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c2: tie-break reverses the contract's explicit stability rule (perm DESCENDING on ties; all-equal rows return reversed arange instead of identity): unknown claim; c3: asymmetric (partner < W) gating of should_take_partner deterministically mis-sorts rows for every non-power-of-two W (3,5,6,7,9,12), violating the non-decreasing requirement: unknown claim"
+  }
+
+### Turn 14 - `judge` (9.61689050599989s, in=48152 out=478)
+
+Message:
+
+```text
+The prior verdict call failed only because decisive_claims must reference claim IDs, not prose. Both c2 and c3 are confirmed, in_scope, with problem.txt scope evidence (the artifact has no test.py/get_inputs, so problem.txt is the operative contract). Re-recording with claim IDs.
+```
+
+Tool calls:
+
+- `record_verdict -> t26 ok`
+  Args:
+  {
+    "confidence": 0.98,
     "decisive_claims": [
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "Reject based on claim c2 (confirmed, in_scope, scope evidence cites problem.txt's explicit partial-block clause, which is the operative contract since the artifact has no test.py/get_inputs). EVEN_SEQ_KBLOCK is computed from the total packed k length only (kernel line 226), so a contract-admitted batch mix like [40, 24] with k_block_size 32 (total 64) is misclassified as even; the per-block tail mask (lines 155-156) is compiled out, and probe t16 shows next-sequence keys leaking into the softmax with max_abs_err 0.546 on batch-0 rows and 0.583 overall \u2014 a gross violation of the contract's stated rule that positions past a sequence's end must not contribute to the softmax. c3 (causal offset divergence under causal=True with differing q/k lengths, max_abs_err 2.50) is confirmed numerically but carries a semantics caveat since problem.txt does not define causal alignment when lengths differ (the kernel uses the FlashAttention bottom-right-aligned convention); it is a supporting note, not the decisive basis. c1 (empty-key-row zeros) is inconclusive and set aside as undecidable because the contract does not sp
-  ...[truncated 58 chars]
+    "reason": "Two confirmed, in-scope defects directly violate problem.txt's explicit contract (the artifact provides no test.py/get_inputs, so problem.txt is the operative contract). (1) Stability (c2): kernel.py line 41's comparator orders tied keys by perm DESCENDING (smaller iff key < p_key or (keys==p_key & perm > p_perm)), so on all-equal rows the kernel returns the reversed arange permutation (e.g. [3,2,1,0] at W=4) while torch.argsort(stable=True) returns identity \u2014 confirmed by source inspection (c2.e1) and runtime probe t15. problem.txt explicitly requires the LOWER original index first and states duplicate keys are the expected input domain, so this is a defect regardless of magnitude. (2) Sortedness (c3)
+  ...[truncated 752 chars]
+  Output summary:
+  {
+    "confidence": 0.98,
+    "decisive_claims": [
+      "c2",
+      "c3"
+    ],
+    "reason": "Two confirmed, in-scope defects directly violate problem.txt's explicit contract (the artifact provides no test.py/get_inputs, so problem.txt is the operative contract). (1) Stability (c2): kernel.py line 41's comparator orders tied keys by perm DESCENDING (smaller iff key < p_key or (keys==p_key & perm > p_perm)), so on all-equal rows the kernel returns the reversed arange permutation (e.g. [3,2,1,0] at W=4) while torch.argsort(stable=True) returns identity \u2014 confirmed by source inspection (c2.e1) and runtime probe t15. problem.txt explicitly requires the LOWER original index first and states duplicate keys are the expected input domain, so this is a defect regardless of magnitude. (2) Sortedness (c3): lines 43\u201344 gate should_take_partner on (partner < W), making boundary-straddling compare-exchanges one-sided whenever W is not a power of two; probe t21 shows 5/5 non-decreasing violations and mismatches vs torch.sort().values for W=3,5,6,7,9,12 while power-of-two W (2,4,8) are clean, violating problem.txt's explicit \"sorted_keys[n,:] is non-decreasing\" requirement, which imposes no powe
+  ...[truncated 352 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Packed variable-length batch: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1] on a flat axis; sequence lengths are arbitrary and differ across the batch.",
-    "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to keys in the same sequence as t and inside key blocks selected by block_mask[h, i, j].",
-    "Sequence lengths need not be multiples of block size; partial final blocks mean positions past the sequence end belong to the next sequence and must not contribute to the softmax (key domain per query is exact).",
-    "block_mask is per (query-head, query-block, key-block); GQA (nhead_q multiple of nhead_k) is permitted by the wrapper's assertion.",
-    "Softmax normalization must use only in-scope keys; rows whose selected-key set is empty would need defined behavior (contract does not state what, e.g. zeros).",
-    "Packed varlen contract: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1]; lengths arbitrary and differing across batch, explicitly NOT required to be multiples of block size (problem.txt partial-block clause).",
-    "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to same-sequence keys inside block_mask-selected key blocks; softmax denominator must include only those keys.",
-    "block_mask is per (head, q-block, k-block); GQA allowed (nhead_q % nhead_k == 0 asserted in wrapper); causal flag is part of the API and the same-sequence/selected-block restriction must hold under it.",
-    "Output convention for rows whose selected-key set is empty (all blocks unselected, or causal empties them) is not stated in problem.txt \u2014 undecidable from contract alone."
+    "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+    "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+    "Input domain is arbitrary int64 values, including the value 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores).",
+    "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order affects downstream values, not just cosmetics.",
+    "Downstream usage implies evidence should include tied-key cases and permutation validity (perm is a permutation of range(W) per row), not only sorted-key allclose.",
+    "Input domain is arbitrary int64 values, including 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores); the contract does not restrict W to powers of two.",
+    "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order changes downstream values, not just cosmetics.",
+    "The deciding metric for both defects is exact comparison against a stable reference (torch.argsort stable=True): perm equality for ties, and sorted_keys equality / non-decreasing order for general W."
   ],
   "kernel_model": [
-    "Triton kernel _fwd_kernel does online-softmax flash attention over variable-sized q/k blocks via precomputed cu_q_block / cu_k_block / q_block_to_batch / cu_num_k_block index tensors built by calculate_blocks().",
-    "calculate_blocks: per-batch block counts ceil-div block_size, cu_block gives flat start
-...[truncated 7563 chars]
+    "One Triton program per row (grid=(N,), num_warps=1); row width W padded to BLOCK_W = next_power_of_2(W); lanes with offs >= W are masked.",
+    "Bitonic sort network: outer loop doubles size (size < BLOCK_W), inner loop halves stride; direction ascending = ((offs & (size << 1)) == 0), which matches the standard bitonic formulation.",
+    "Compare-exchange uses an explicit total comparator: an element is 'my_is_smaller' iff key < partner_key, or (keys tied AND perm > partner_perm) \u2014 i.e. the effective total order is (key ascending, perm DESCENDING) on ties, which is the opp
+...[truncated 9280 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Description of case_31: Triton variable-length block-sparse flash-attention forward kernel (hbsattn fix_tile_size variant). Contract: packed varlen batch, per-(head,q-block,k-block) block_mask selection, softmax over same-sequence selected keys only, arbitrary sequence lengths including non-multiple-of-block-size partial blocks.
-- `du2` tasks=`initial`: Round update for case_31: linked open claims c2/c3 to the top risk-map entries; refined the EVEN_SEQ_KBLOCK asymmetry (q-side heuristic checks per-batch, k-side checks only total) and the causal offset as a bottom-right-aligned (FlashAttention cross-attn style) convention vs position-equal causal; noted c1's empty-row zeros convention is contract-undefined and probe t10 inconclusive.
+- `du1` tasks=`initial`: Described case_32: Triton bitonic argsort claiming stability. Key risks: comparator orders ties by perm descending (violating the required lower-index-first stability), INT64_MAX padding-sentinel collision, and global-memory compare-exchange via debug_barrier.
+- `du2` tasks=`initial`: Updated description after t9 probe: two of three open mechanism questions are now evidence-corroborated. Comparator (line 41) orders ties by perm DESCENDING (t9: all_eq perm [3,2,1,0] vs stable [0,1,2,3]) — matches claim c2. The (partner < W) gating of should_take_partner asymmetrically suppresses one side of boundary-straddling compare-exchanges, deterministically mis-sorting non-power-of-two W (3,5,7) and W=6 rows — matches claim c3. Memory-visibility risk is downgraded: 10-run determinism across all cases, with the observed mis-sorts reproducible and source-attributable. perm stayed a valid permutation and gather-consistent in all cases, so the correct deciding metric is exact comparison vs a stable reference, not validity checks.
 
 ## Claims
 
-### c1 - `inconclusive`
+### c1 - `rebutted`
 
-Statement: For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.
+Statement: The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm and produce an incorrectly sorted row or non-deterministic output across repeated runs.
 
 Scope: `unknown`
 
-Scope rationale: The contract admits inputs where no key block is selected for a query, but problem.txt does not state what the output should be for such rows, so scope of the divergence is unknown.
-
-Rationale: The l_i==0->1 fallback is a silent convention; the reference behavior for fully-masked query rows is unstated in problem.txt, so the kernel may diverge (reference could produce NaN or garbage rows). Softmax denominator is only over in-scope keys per contract, and an empty set is contract-admissible since the contract admits arbitrary block_mask values.
+Rationale: tl.debug_barrier() synchronizes threads but there is no guarantee the compiler's caching of the partner loads (line 35-36) at the top of the next iteration is invalidated, so a lane could compare against its partner's pre-swap value and mis-order keys; a repeated-run probe on the same input detecting any nondeterminism or wrong order would confirm it.
 
 Evidence:
-- `c1.e1` runtime_probe supports `inconclusive`, tool_event_id=t10: Kernel behavior confirmed: for query rows with no block_mask-selected k block, the l_i==0 fallback yields exact zeros (all finite, non-empty rows match masked-softmax reference to 3.9e-7). However, the reference behavior for empty softmax rows is undefined by problem.txt and no reference implementation exists in the artifact, so whether zeros match the expected output is undecidable from this probe alone. Claim stays inconclusive; the Describer/Judge should weigh the contract's undefined-row note.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t9: 10 repeated runs on identical duplicate-heavy, all-equal, INT64_MAX, and random inputs (W=2..8) were fully deterministic; perm always a valid permutation and gather-consistent. The visibility/stale-partner-read hypothesis predicted nondeterminism or run-to-run variance — none observed. The observed mis-sorts (non-power-of-two W and W=6) are reproducible and instead attributable to the deterministic (partner < W) gating of should_take_partner, i.e., a source-level logic bug, not memory staleness. Note for Judge: the probe independently surfaced two confirmed defects from the (unrecorded) skeptic claims: (1) tie-break orders equal keys by perm DESCENDING (all_eq row0 perm [3,2,1,0] vs stable ref [0,1,2,3]), violating the contract's lower-index-first stability; (2) rows are incorrectly sorted (sorted_keys != stable reference sorted keys) for non-power-of-two W (3,5,7) and W=6, despite gather consistency.
 
 ### c2 - `confirmed`
 
-Statement: When the total packed k length is a multiple of k_block_size but an individual batch's k length is not (e.g. cu_k_seqlens = [0, 40, 64] with k_block_size 32), EVEN_SEQ_KBLOCK is wrongly True, the per-block tail mask (kernel lines 155-156) is skipped, and keys past the sequence end (belonging to the next sequence) get real attention scores that leak into the softmax, violating the contract's partial-block exclusion rule.
+Statement: For rows with duplicate keys, triton_argsort breaks ties by placing the HIGHER original index first in the permutation (e.g. all-equal row yields perm [3,2,1,0] instead of the stable [0,1,2,3]), violating the contract's stability rule.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly states sequence lengths are arbitrary and not multiples of the block size, and that positions past a sequence's end belong to the next sequence and must not contribute to the softmax; the input cu_k_seqlens=[0,40,64] with k_block_size 32 is a contract-admitted case that the EVEN_SEQ_KBLOCK heuristic misclassifies.
+Scope rationale: problem.txt explicitly requires stable ties (lower original index first) and states duplicate keys within a row are expected; e.g. all-equal-key rows are admitted inputs, and the probe evidence (c1.e1/t9) shows perm [3,2,1,0] vs stable reference [0,1,2,3].
 
 Scope evidence:
-- `problem.txt`: A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax.
+- `problem.txt`: "Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first." Duplicate keys are the expected input domain.
 
-Rationale: Line 226 computes EVEN_SEQ_KBLOCK from the total packed length only, so a batch mix like [40, 24] with k_block_size 32 gives total 64 and EVEN_SEQ_KBLOCK=True, while batch 0's last k block is partial; the tail mask at lines 155-156 is compiled out, so rows past the sequence end (belonging to the next sequence) get real attention scores and leak into the softmax.
+Rationale: Kernel line 41 orders ties by perm DESCENDING, and the t9 probe confirms the all-equal W=4 case yields perm [3,2,1,0] where the stable reference is [0,1,2,3]; perm mismatch vs stable reference was observed in every duplicate-key case.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t16: Confirmed: with cu_k_seqlens=[0,40,64] (total 64 multiple of k_block_size 32, but batch lengths 40 and 24 not multiples), EVEN_SEQ_KBLOCK is misclassified True and the per-block tail mask is compiled out. Kernel output deviates from the same-sequence-only reference by max_abs_err 0.546 on batch-0 query rows and 0.583 overall — next-sequence keys past the batch boundary get real attention scores and leak into the softmax, violating problem.txt's explicit partial-block exclusion clause. Error is far beyond any numerical tolerance.
+- `c2.e1` source_inspection supports `confirmed`: kernel.py line 41 defines the total comparator as 'smaller iff key < partner_key, or keys tied AND perm > partner_perm', i.e. ties are ordered by perm DESCENDING, the opposite of the contract's lower-original-index-first stability rule.
+- `c2.e2` runtime_probe supports `confirmed`, tool_event_id=t15: Runtime probe confirms c2: on all-equal rows (every pair tied), the kernel returns the reversed arange permutation ([1,0], [3,2,1,0], [7,...,0]) while the stable reference returns identity — ties are ordered by HIGHER original index first, a direct violation of the contract's lower-index-first stability. Mixed-duplicate W=8 row also mismatches the stable reference perm while sorted_keys stays non-decreasing and gather-consistent, isolating the failure to tie order (not sortedness). Corroborates source inspection of line 41's comparator.
 
 ### c3 - `confirmed`
 
-Statement: With causal=True and a batch whose k length differs from its q length, the offset term (k_len - q_len) in the causal conditions at lines 112 and 153 shifts the causal boundary and attends keys that a position-based causal reference masks (or vice versa), producing wrong outputs for causal=True varlen inputs.
+Statement: For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.
 
 Scope: `in_scope`
 
-Scope rationale: The causal flag is part of the API the kernel implements (block_sparse_attention signature includes causal=True/False), and the contract's attention restriction must still hold under causal masking; a batch with k length differing from q length is explicitly contract-admitted.
+Scope rationale: problem.txt states sorted_keys[n,:] must be non-decreasing for any [N, W] int64 input; the t9 probe evidence (c1.e1) shows reproducibly wrong sorted order for W=3,5,7 and W=6 random rows.
 
 Scope evidence:
-- `problem.txt`: out[t] = softmax over selected keys of q[t]·k/sqrt(headdim) @ v restricted to keys that belong to the same sequence as t and lie in a selected block; sequence lengths generally differ within a batch.
+- `problem.txt`: "sorted_keys[n, :] is non-decreasing" and "sorted_keys[n, i] = keys[n, perm[n, i]]" are stated output requirements for an [N, W] tensor; the contract does not restrict W to powers of two.
 
-Rationale: The causal gate (lines 112, 153) adds offset = k_len - q_len to the query index before comparing against the key index; this right-shifts the causal boundary by the length difference, so whenever a batch's k length exceeds its q length, keys with key-index > query-index (strictly future keys under position-based causal semantics) are attended, producing wrong output under causal=True.
+Rationale: The should_take_partner gate at kernel line 43-44 blocks swaps for lanes whose partner is out of range, breaking the symmetry of the bitonic compare-exchange; the t9 probe shows reproducible sorted_keys mismatches vs the stable reference for W=3, 5, 7 and random W=6.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t17: Confirmed (numeric divergence, semantics caveat): with causal=True and a single batch of seq_q=32, seq_k=64, the kernel's offset=(k_len - q_len)=32 in the causal conditions shifts the causal boundary; kernel output diverges from a position-based causal reference (query i attends keys j<=i) by max_abs_err 2.50 (row 0 itself, where the reference attends only key 0 but the kernel attends keys 0-31). Caveat: problem.txt does not explicitly define causal alignment when q and k lengths differ; the kernel uses the FlashAttention cross-attention bottom-right-aligned convention. The divergence is confirmed fact; Judge should weigh the causal-convention ambiguity.
+- `c3.e1` source_inspection supports `confirmed`: kernel.py lines 43-44 gate both clauses of should_take_partner on (partner < W); an in-range lane paired with an out-of-range lane never swaps, while the masked partner lane can still take the in-range value, breaking bitonic compare-exchange symmetry for boundary pairs whenever W is not a power of two.
+- `c3.e2` runtime_probe supports `confirmed`, tool_event_id=t21: Runtime probe confirms c3: sorted_keys rows are NOT non-decreasing (5/5 trials) and mismatch torch.sort().values for every non-power-of-two W tested (3,5,6,7,9,12), while power-of-two W (2,4,8) are fully clean (0/5 violations). perm remains a valid permutation in all cases. This is exactly the pattern predicted by the asymmetric (partner < W) gating of should_take_partner: only boundary-straddling pairs (which exist exactly when W != power of two) are broken. Corroborates the c3.e1 source inspection of lines 43-44 and the earlier t9 evidence.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_31"
+  "entry": "case_32"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Packed variable-length batch: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1] on a flat axis; sequence lengths are arbitrary and differ across the batch.",
-    "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to keys in the same sequence as t and inside key blocks selected by block_mask[h, i, j].",
-    "Sequence lengths need not be multiples of block size; partial final blocks mean positions past the sequence end belong to the next sequence and must not contribute to the softmax (key domain per query is exact).",
-    "block_mask is per (query-head, query-block, key-block); GQA (nhead_q multiple of nhead_k) is permitted by the wrapper's assertion.",
-    "Softmax normalization must use only in-scope keys; rows whose selected-key set is empty would need defined behavior (contract does not state what, e.g. zeros)."
+    "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+    "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+    "Input domain is arbitrary int64 values, including the value 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores).",
+    "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order affects downstream values, not just cosmetics.",
+    "Downstream usage implies evidence should include tied-key cases and permutation validity (perm is a permutation of range(W) per row), not only sorted-key allclose."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Triton kernel _fwd_kernel does online-softmax flash attention over variable-sized q/k blocks via precomputed cu_q_block / cu_k_block / q_block_to_batch / cu_num_k_block index tensors built by calculate_blocks().",
-    "calculate_blocks: per-batch block counts ceil-div block_size, cu_block gives flat start offsets of each block, block_sizes handles last partial block per batch, block_to_batch maps block index to batch; grid is (num_q_block, nhead_q).",
-    "Per (q_block, head): loads q rows masked by off_m < end_m (last partial q block), loops over the same batch's k blocks, skips blocks where block_mask is False; causal gate uses end_m/start_n with a per-batch offset.",
-    "Masks: q/k/v loads masked by off_n < end_n for partial k blocks; after computing qk, applies -inf via tl.where for causal (per-row condition) and for partial k blocks (line 155-156) before exp; online softmax accumulates m_i, l_i, acc, and rescales at the end (l_i==0 -> 1 fallback for empty rows).",
-    "GQA handled by off_head_k = off_head_q // head_q_to_k_ratio; block_mask indexed by 
-...[truncated 4249 chars]
+    "One Triton program per row (grid=(N,), num_warps=1); row width W padded to BLOCK_W = next_power_of_2(W); lanes with offs >= W are masked.",
+    "Bitonic sort network: outer loop doubles size (size < BLOCK_W), inner loop halves stride; direction ascending = ((offs & (size << 1)) == 0), which matches the standard bitonic formulation.",
+    "Compare-exchange uses an explicit total comparator: an element is 'my_is_smaller' iff key < partner_key, or (keys tied AND perm > partner_perm) \u2014 i.e. the effective total order is (key ascending, perm DESCENDING) on ties, which is the opposite of the stable (key asc, perm asc) order the contract requires.",
+    "Exchange is done through global memory: each lane stores only its own slot (no cross-lane write race), then tl.debug_barrier(), then reloads its own keys/perm from memory each iteration; partner values are loaded fresh at the top of each step.",
+    "Padding sentinel: out-of-range lanes load keys/perm as other=0x7FFFFFFFFFFFFFFF; comparator result is gated by (partner < W) in should_take_partner so in-range lanes cannot take an out-of-range partner, but 
+...[truncated 4423 chars]
 
 ### t6 - record_claim - error
 
@@ -761,11 +925,11 @@ Evidence:
 
 {
   "id": "c1",
-  "rationale": "The l_i==0->1 fallback is a silent convention; the reference behavior for fully-masked query rows is unstated in problem.txt, so the kernel may diverge (reference could produce NaN or garbage rows). Softmax denominator is only over in-scope keys per contract, and an empty set is contract-admissible since the contract admits arbitrary block_mask values.",
+  "rationale": "tl.debug_barrier() synchronizes threads but there is no guarantee the compiler's caching of the partner loads (line 35-36) at the top of the next iteration is invalidated, so a lane could compare against its partner's pre-swap value and mis-order keys; a repeated-run probe on the same input detecting any nondeterminism or wrong order would confirm it.",
   "scope": "unknown",
   "scope_evidence": [],
-  "scope_rationale": "The contract admits inputs where no key block is selected for a query, but problem.txt does not state what the output should be for such rows, so scope of the divergence is unknown.",
-  "statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.",
+  "scope_rationale": "",
+  "statement": "The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm and produce an incorrectly sorted row or non-deterministic output across repeated runs.",
   "status": "open"
 }
 
@@ -777,24 +941,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "13d16cf12c6e18f72851f6332829e4a6ce64be0c4365a7c6ae35b0c258a8e97c"
+      "sha256": "b0fd32cb3392099f32c3167166172194c36317306aebd8efcd448c6438533911"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "b97dc19464111f54f066f7b4c52690e8c5b80261659f42b1e7518150554f3206"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t9_stderr.txt",
-      "sha256": "9e2fd6a0213574f82c092d0db05d73b36843fc004c36a0a50cbf329bd2cd6e13"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t9_json_result.json",
+      "sha256": "4bfad0a5481c9a937cfc8162cd9b404e67537e32bdef9d4672cc791cafdb8980"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.",
-  "duration_s": 11.663714,
+  "claim_statement": "The store -> tl.debug_barrier() -> reload exchange pattern may not guarantee that each lane's fresh global store is visible to its partner's load in the next compare step, so lanes can read stale partner keys/perm and produce an incorrectly sorted row or non-deterministic output across repeated runs.",
+  "duration_s": 7.246121,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -804,158 +974,153 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "13d16cf12c6e18f72851f6332829e4a6ce64be0c4365a7c6ae35b0c258a8e97c"
+          "sha256": "b0fd32cb3392099f32c3167166172194c36317306aebd8efcd448c6438533911"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t9_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "b97dc19464111f54f066f7b4c52690e8c5b80261659f42b1e7518150554f3206"
         },
         {
           "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t9_stderr.txt",
-          "sha256": "9e2fd6a0213574f82c092d0db05d73b36843fc004c36a0a50cbf329bd2cd6e13"
-        }
-      ],
-      "duration_s": 11.663714,
-      "exit_code": 1,
-      "expected_signal": "kernel outputs zeros for empty-key rows; reference behavior undefined/NaN 
-...[truncated 2070 chars]
+       
+...[truncated 12740 chars]
 
-### t10 - run_claim_probe - ok
+### t10 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "rebutted",
+  "evidence_id": "c1.e1",
+  "summary": "10 repeated runs on identical duplicate-heavy, all-equal, INT64_MAX, and random inputs (W=2..8) were fully deterministic; perm always a valid permutation and gather-consistent. The visibility/stale-partner-read hypothesis predicted nondeterminism or run-to-run variance \u2014 none observed. The observed mis-sorts (non-power-of-two W and W=6) are reproducible and instead attributable to the deterministic (partner < W) gating of should_take_partner, i.e., a source-level logic bug, not memory staleness. Note for Judge: the probe independently surfaced two confirmed defects from the (unrecorded) skeptic claims: (1) tie-break orders equal keys by perm DESCENDING (all_eq row0 perm [3,2,1,0] vs stable ref [0,1,2,3]), violating the contract's lower-index-first stability; (2) rows are incorrectly sorted (sorted_keys != stable reference sorted keys) for non-power-of-two W (3,5,7) and W=6, despite gather consistency.",
+  "supports": "rebutted",
+  "tool_event_id": "t9"
+}
+
+### t11 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "Kernel line 41 orders ties by perm DESCENDING, and the t9 probe confirms the all-equal W=4 case yields perm [3,2,1,0] where the stable reference is [0,1,2,3]; perm mismatch vs stable reference was observed in every duplicate-key case.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"Tie rule: the sort must be STABLE. When two entries of a row hold the same key, the one with the LOWER original index must come first.\" Duplicate keys are the expected input domain."
+    }
+  ],
+  "scope_rationale": "problem.txt explicitly requires stable ties (lower original index first) and states duplicate keys within a row are expected; e.g. all-equal-key rows are admitted inputs, and the probe evidence (c1.e1/t9) shows perm [3,2,1,0] vs stable reference [0,1,2,3].",
+  "statement": "For rows with duplicate keys, triton_argsort breaks ties by placing the HIGHER original index first in the permutation (e.g. all-equal row yields perm [3,2,1,0] instead of the stable [0,1,2,3]), violating the contract's stability rule.",
+  "status": "open"
+}
+
+### t12 - record_claim - ok
+
+{
+  "id": "c3",
+  "rationale": "The should_take_partner gate at kernel line 43-44 blocks swaps for lanes whose partner is out of range, breaking the symmetry of the bitonic compare-exchange; the t9 probe shows reproducible sorted_keys mismatches vs the stable reference for W=3, 5, 7 and random W=6.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"sorted_keys[n, :] is non-decreasing\" and \"sorted_keys[n, i] = keys[n, perm[n, i]]\" are stated output requirements for an [N, W] tensor; the contract does not restrict W to powers of two."
+    }
+  ],
+  "scope_rationale": "problem.txt states sorted_keys[n,:] must be non-decreasing for any [N, W] int64 input; the t9 probe evidence (c1.e1) shows reproducibly wrong sorted order for W=3,5,7 and W=6 random rows.",
+  "statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.",
+  "status": "open"
+}
+
+### t13 - record_description_update - ok
+
+{
+  "contract_model": [
+    "triton_argsort(keys) takes an [N, W] int64 tensor and returns (sorted_keys, perm) with sorted_keys[n,i] == keys[n, perm[n,i]] and each row non-decreasing.",
+    "The tie rule is explicit: the sort must be STABLE \u2014 among equal keys, the entry with the LOWER original index must come first in the permutation.",
+    "Input domain is arbitrary int64 values, including 0x7FFFFFFFFFFFFFFF; duplicate keys per row are expected (quantized scores); the contract does not restrict W to powers of two.",
+    "Stability is semantically load-bearing: the permutation gathers memory slots with differing contents, so tie order changes downstream values, not just cosmetics.",
+    "The deciding metric for both defects is exact comparison against a stable reference (torch.argsort stable=True): perm equality for ties, and sorted_keys equality / non-decreasing order for general W."
+  ],
+  "impact_on_claims": [
+    "c2 (tie-break reversal) matches the description model's comparator direction finding and is directly evidenced by t9's all_eq case ([3,2,1,0] vs [0,1,2,3]); the structural model corroborates the claim.",
+    "c3 (non-power-of-two W mis-sort) matches the masked-lane gating mechanism in the kernel model; t9's reproducible sorted_keys mismatches for W=3,5,7,6 are consistent with the asymmetric (partner < W) should_take_partner gate breaking compare-exchange symmetry.",
+    "c1 (visibility/stale reads) remains rebutted: the description model's memory-visibility risk is now downgraded, with determinism observed across 10 repeated runs in all t9 cases."
+  ],
+  "kernel_model": [
+    "One Triton program per row (grid=(N,), num_warps=1); W padded to BLOCK_W = next_power_of_2(W); lanes with offs >= W are masked.",
+    "Bitonic sort network: outer loop doubles size, inner loop halves stride; direction ascending = ((offs & (size << 1)) == 0).",
+    "Comparator (line 41) implements total order (key ASC, perm DESC): an element counts as 'smaller' iff key < p_ke
+...[truncated 5189 chars]
+
+### t14 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Final review: the ledger's open claims c2 (tie-break reversal violating the explicit stability rule, evidenced by t9 all_eq perm [3,2,1,0] vs stable ref [0,1,2,3]) and c3 (deterministic mis-sorts for non-power-of-two W=3,5,7 and W=6, evidenced by t9 sorted_keys mismatches vs the stable reference) already cover all material, testable, in-scope defects exposed by the evidence. c1 (memory visibility) was rebutted by 10-run determinism on identical inputs, and the describer's updated model corroborates both confirmed mechanisms. No additional in-scope claim is needed.",
+  "reviewed_claims": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "reviewed_tool_event_count": 13,
+  "turn": 8
+}
+
+### t15 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t10_probe.py",
-      "sha256": "7e486f80648fe4b7c7307d2376241617603fcea27b82f8822617b533da67b6cb"
+      "path": "probes/t15_probe.py",
+      "sha256": "9c13e368b255edee3137e422237fb106f29dad82e999a9053c2e7cc9ba9b037e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t10_stdout.txt",
-      "sha256": "c99c2b9b36660c1fa9a1be4288c26dc82e1be10af51be7ce3743490e232ef57d"
+      "path": "probes/t15_stdout.txt",
+      "sha256": "b2a9c6312486bfd2f20ac403fdea08739bcfd6dd7fb401491b7a898a7e3c2a63"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t10_stderr.txt",
+      "path": "probes/t15_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t10_json_result.json",
-      "sha256": "f8940cefd30ddf61844a60cd84b5d7281bbd33dce39712e72f7456c32130a793"
+      "path": "probes/t15_json_result.json",
+      "sha256": "e0cea388ecff7cb08179fa77431652ace07221374f8a2f22cd4efa6d4b67f9fc"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "For query rows whose selected-key set is empty (no block_mask-selected k block, or causal removes all keys), the kernel's l_i==0 fallback yields output zeros, which may not match the reference's behavior for empty softmax rows.",
-  "duration_s": 6.472083,
-  "event_id": "t10",
+  "claim_id": "c2",
+  "claim_statement": "For rows with duplicate keys, triton_argsort breaks ties by placing the HIGHER original index first in the permutation (e.g. all-equal row yields perm [3,2,1,0] instead of the stable [0,1,2,3]), violating the contract's stability rule.",
+  "duration_s": 4.847993,
+  "event_id": "t15",
   "evidence_draft": {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t10_probe.py",
-          "sha256": "7e486f80648fe4b7c7307d2376241617603fcea27b82f8822617b533da67b6cb"
+          "path": "probes/t15_probe.py",
+          "sha256": "9c13e368b255edee3137e422237fb106f29dad82e999a9053c2e7cc9ba9b037e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t10_stdout.txt",
-          "sha256": "c99c2b9b36660c1fa9a1be4288c26dc82e1be10af51be7ce3743490e232ef57d"
+          "path": "probes/t15_stdout.txt",
+          "sha256": "b2a9c6312486bfd2f20ac403fdea08739bcfd6dd7fb401491b7a898a7e3c2a63"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t10_stderr.txt",
-   
-...[truncated 3488 chars]
-
-### t11 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "inconclusive",
-  "evidence_id": "c1.e1",
-  "summary": "Kernel behavior confirmed: for query rows with no block_mask-selected k block, the l_i==0 fallback yields exact zeros (all finite, non-empty rows match masked-softmax reference to 3.9e-7). However, the reference behavior for empty softmax rows is undefined by problem.txt and no reference implementation exists in the artifact, so whether zeros match the expected output is undecidable from this probe alone. Claim stays inconclusive; the Describer/Judge should weigh the contract's undefined-row note.",
-  "supports": "inconclusive",
-  "tool_event_id": "t10"
-}
-
-### t12 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "Line 226 computes EVEN_SEQ_KBLOCK from the total packed length only, so a batch mix like [40, 24] with k_block_size 32 gives total 64 and EVEN_SEQ_KBLOCK=True, while batch 0's last k block is partial; the tail mask at lines 155-156 is compiled out, so rows past the sequence end (belonging to the next sequence) get real attention scores and leak into the softmax.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "A sequence length is NOT required to be a multiple of the block size; when it is not, the final block of that sequence is partial and the positions past its end belong to the next sequence, so they must not contribute to the softmax."
-    }
-  ],
-  "scope_rationale": "problem.txt explicitly states sequence lengths are arbitrary and not multiples of the block size, and that positions past a sequence's end belong to the next sequence and must not contribute to the softmax; the input cu_k_seqlens=[0,40,64] with k_block_size 32 is a contract-admitted case that the EVEN_SEQ_KBLOCK heuristic misclassifies.",
-  "statement": "When the total packed k length is a multiple of k_block_size but an individual batch's k length is not (e.g. cu_k_seqlens = [0, 40, 64] with k_block_size 32), EVEN_SEQ_KBLOCK is wrongly True, the per-block tail mask (kernel lines 155-156) is skipped, and keys past the sequence end (belonging to the next sequence) get real attention scores that leak into the softmax, violating the contract's partial-block exclusion rule.",
-  "status": "open"
-}
-
-### t13 - record_claim - ok
-
-{
-  "id": "c3",
-  "rationale": "The causal gate (lines 112, 153) adds offset = k_len - q_len to the query index before comparing against the key index; this right-shifts the causal boundary by the length difference, so whenever a batch's k length exceeds its q length, keys with key-index > query-index (strictly future keys under position-based causal semantics) are attended, producing wrong output under causal=True.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "out[t] = softmax over selected keys of q[t]\u00b7k/sqrt(headdim) @ v restricted to keys that belong to the same sequence as t and lie in a selected block; sequence lengths generally differ within a batch."
-    }
-  ],
-  "scope_rationale": "The causal flag is part of the API the kernel implements (block_sparse_attention signature includes causal=True/False), and the contract's attention restriction must still hold under causal masking; a batch with k length differing from q length is explicitly contract-admitted.",
-  "statement": "With causal=True and a batch whose k length differs from its q length, the offset term (k_len - q_len) in the causal conditions at lines 112 and 153 shifts the causal boundary and attends keys that a position-based causal reference masks (or vice versa), producing wrong outputs for causal=True varlen inputs.",
-  "status": "open"
-}
-
-### t14 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Packed varlen contract: sequence b occupies rows cu_seqlens[b]..cu_seqlens[b+1]; lengths arbitrary and differing across batch, explicitly NOT required to be multiples of block size (problem.txt partial-block clause).",
-    "out[t] = softmax(q[t]\u00b7K/sqrt(headdim)) @ V restricted to same-sequence keys inside block_mask-selected key blocks; softmax denominator must include only those keys.",
-    "block_mask is per (head, q-block, k-block); GQA allowed (nhead_q % nhead_k == 0 asserted in wrapper); causal flag is part of the API and the same-sequence/selected-block restriction must hold under it.",
-    "Output convention for rows whose selected-key set is empty (all blocks unselected, or causal empties them) is not stated in problem.txt \u2014 undecidable from contract alone."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Same as du1: Triton online-softmax flash attention over varlen q/k blocks, grid (num_q_block, nhead_q), per-block metadata via calculate_blocks (cu_block, block_to_batch, cu_num_block).",
-    "Line 226: EVEN_SEQ_KBLOCK = ((cu_k_seqlens[-1] - cu_k_seqlens[0]) % k_block_size == 0) \u2014 total packed length only; note the asymmetry that EVEN_SEQ_QBLOCK (line 227) correctly checks all per-batch differences, so the q-side heuristic is safe while the k-side one is not.",
-    "Line 155-156 tail masking (off_n < end_n added as -inf) is compiled out when EVEN_SEQ_KBLOCK is True; also note the tail mask is only applied when start_n + BLOCK_N > end_n, i.e. only the last k block per batch, so misclassification leaks only the next batch's rows that fall inside that final partial block.",
-    "Causal gate uses offset = k_len - q_len added to the q-side index (lines 112 and 153); corresponds to a bottom-right-aligned causal matrix (like FlashAttention cross-attn convention), which only equals position-equal causal masking when k_len == q_len.",
-    "Empty-key rows: l_i==0 -> 1 fallback gives exact zeros and lse=0 (confirmed 
-...[truncated 2365 chars]
-
-### t15 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "Final review: existing claims c2 (EVEN_SEQ_KBLOCK total-length heuristic causing partial k-block cross-sequence key leakage) and c3 (causal offset shift for differing q/k lengths) already cover the top in-scope risk surfaces, and no new probe or source evidence this round exposes an additional material problem. Probe t10 on c1 remains inconclusive because the contract is silent on empty-key-row output.",
-  "reviewed_claims": [
-    "c1",
-    "c2",
-    "c3"
-  ],
-  "reviewed_tool_event_count": 14,
-  "turn": 9
-}
+          "path": "probes/t15_stderr.t
+...[truncated 5322 chars]
 
 ### t16 - run_claim_probe - ok
 
@@ -965,81 +1130,25 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t16_probe.py",
-      "sha256": "4148049c8223d6c59fb69fa553459e002e6048f983a249c64cd893d4190b68b9"
+      "sha256": "af958710c055a458af965007d23ab36255c8dbf6d22e569085c89e57b24ff082"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t16_stdout.txt",
-      "sha256": "3e845a3ec8e842b056a43a48e83713482508e25f852a4ba17dfe17449c203e32"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t16_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t16_json_result.json",
-      "sha256": "9be7209c602d401d6f6471e25ceade187cd7e28f47de36feabca2738d99b3f52"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "When the total packed k length is a multiple of k_block_size but an individual batch's k length is not (e.g. cu_k_seqlens = [0, 40, 64] with k_block_size 32), EVEN_SEQ_KBLOCK is wrongly True, the per-block tail mask (kernel lines 155-156) is skipped, and keys past the sequence end (belonging to the next sequence) get real attention scores that leak into the softmax, violating the contract's partial-block exclusion rule.",
-  "duration_s": 10.851516,
-  "event_id": "t16",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t16_probe.py",
-          "sha256": "4148049c8223d6c59fb69fa553459e002e6048f983a249c64cd893d4190b68b9"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t16_stdout.txt",
-          "sha256": "3e845a3ec8e842b056a43a48e8371348
-...[truncated 3363 chars]
-
-### t17 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t17_probe.py",
-      "sha256": "2d5d9ea0e61976a7ee8538dc39dd0ab9e95c6564f41e1ed8e4b247318aadf748"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t17_stdout.txt",
-      "sha256": "3ea18de68c106bf436481f6594e8853d8a0dce948638518572580fc09ad5ee15"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t17_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t17_json_result.json",
-      "sha256": "fd9402eb3f1b66ca0ddb701168488ce9c0f7596c6d975a04f68c6dcd82caa2c5"
+      "sha256": "83c2e1c4c28ee97657673038d4074d67f02e52d01390e1a4e25170e3e773f4f3"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "With causal=True and a batch whose k length differs from its q length, the offset term (k_len - q_len) in the causal conditions at lines 112 and 153 shifts the causal boundary and attends keys that a position-based causal reference masks (or vice versa), producing wrong outputs for causal=True varlen inputs.",
-  "duration_s": 7.086597,
-  "event_id": "t17",
+  "claim_statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.",
+  "duration_s": 4.428073,
+  "event_id": "t16",
   "evidence_draft": {
     "claim_id": "c3",
     "data": {
@@ -1047,74 +1156,176 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t17_probe.py",
-          "sha256": "2d5d9ea0e61976a7ee8538dc39dd0ab9e95c6564f41e1ed8e4b247318aadf748"
+          "path": "probes/t16_probe.py",
+          "sha256": "af958710c055a458af965007d23ab36255c8dbf6d22e569085c89e57b24ff082"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t17_stdout.txt",
-          "sha256": "3ea18de68c106bf436481f6594e8853d8a0dce948638518572580fc09ad5ee15"
+          "path": "probes/t16_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
-          "description": "Captured stderr from the probe pro
-...[truncated 2983 chars]
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t16_stderr.txt",
+          "sha256": "83c2e1c4c28ee97657673038d4074d67f02e52d01390e1a4e25170e3e773f4f3"
+        }
+      ],
+      "duration_s": 4.428073,
+      "exit_code": 1,
+      "expected_signal": "sorted_keys rows are not non-decrea
+...[truncated 1742 chars]
 
-### t18 - finalize_probe_evidence - ok
+### t17 - append_evidence - ok
 
 {
-  "claim_id": "c2",
-  "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "Confirmed: with cu_k_seqlens=[0,40,64] (total 64 multiple of k_block_size 32, but batch lengths 40 and 24 not multiples), EVEN_SEQ_KBLOCK is misclassified True and the per-block tail mask is compiled out. Kernel output deviates from the same-sequence-only reference by max_abs_err 0.546 on batch-0 query rows and 0.583 overall \u2014 next-sequence keys past the batch boundary get real attention scores and leak into the softmax, violating problem.txt's explicit partial-block exclusion clause. Error is far beyond any numerical tolerance.",
-  "supports": "confirmed",
-  "tool_event_id": "t16"
+  "id": "c2.e1",
+  "summary": "kernel.py line 41 defines the total comparator as 'smaller iff key < partner_key, or keys tied AND perm > partner_perm', i.e. ties are ordered by perm DESCENDING, the opposite of the contract's lower-original-index-first stability rule.",
+  "supports": "confirmed"
+}
+
+### t18 - append_evidence - ok
+
+{
+  "id": "c3.e1",
+  "summary": "kernel.py lines 43-44 gate both clauses of should_take_partner on (partner < W); an in-range lane paired with an out-of-range lane never swaps, while the masked partner lane can still take the in-range value, breaking bitonic compare-exchange symmetry for boundary pairs whenever W is not a power of two.",
+  "supports": "confirmed"
 }
 
 ### t19 - finalize_probe_evidence - ok
 
 {
-  "claim_id": "c3",
+  "claim_id": "c2",
   "claim_status": "confirmed",
-  "evidence_id": "c3.e1",
-  "summary": "Confirmed (numeric divergence, semantics caveat): with causal=True and a single batch of seq_q=32, seq_k=64, the kernel's offset=(k_len - q_len)=32 in the causal conditions shifts the causal boundary; kernel output diverges from a position-based causal reference (query i attends keys j<=i) by max_abs_err 2.50 (row 0 itself, where the reference attends only key 0 but the kernel attends keys 0-31). Caveat: problem.txt does not explicitly define causal alignment when q and k lengths differ; the kernel uses the FlashAttention cross-attention bottom-right-aligned convention. The divergence is confirmed fact; Judge should weigh the causal-convention ambiguity.",
+  "evidence_id": "c2.e2",
+  "summary": "Runtime probe confirms c2: on all-equal rows (every pair tied), the kernel returns the reversed arange permutation ([1,0], [3,2,1,0], [7,...,0]) while the stable reference returns identity \u2014 ties are ordered by HIGHER original index first, a direct violation of the contract's lower-index-first stability. Mixed-duplicate W=8 row also mismatches the stable reference perm while sorted_keys stays non-decreasing and gather-consistent, isolating the failure to tie order (not sortedness). Corroborates source inspection of line 41's comparator.",
   "supports": "confirmed",
-  "tool_event_id": "t17"
+  "tool_event_id": "t15"
 }
 
-### t20 - record_no_new_claims - ok
+### t20 - update_claim_status - ok
+
+{
+  "id": "c2",
+  "status": "confirmed"
+}
+
+### t21 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t21_probe.py",
+      "sha256": "d3c25e17b5543b73ba49604ec7fd3becbd7ba55be5f1047ab3bce53037b88711"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t21_stdout.txt",
+      "sha256": "4ebf7b39345c8636db9e9913b603a92ac985187f35a943d3f9c0da33b3c322ab"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t21_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t21_json_result.json",
+      "sha256": "cca749bd9e355445d12dedfc011e828c0c1f4cc57f5f0b3ef66e97b6a2b5fd16"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "For non-power-of-two W (e.g. 3, 5, 7) and W=6, the asymmetric (partner &lt; W) gating of should_take_partner causes rows to be incorrectly sorted (sorted_keys is not the stable-reference sorted order), violating the contract's non-decreasing/gather requirement.",
+  "duration_s": 5.385868,
+  "event_id": "t21",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t21_probe.py",
+          "sha256": "d3c25e17b5543b73ba49604ec7fd3becbd7ba55be5f1047ab3bce53037b88711"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t21_stdout.txt",
+          "sha256": "4ebf7b39345c8636db9e9913b603a92ac985187f35a943d3f9c0da33b3c322ab"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "p
+...[truncated 6119 chars]
+
+### t22 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "confirmed",
+  "evidence_id": "c3.e2",
+  "summary": "Runtime probe confirms c3: sorted_keys rows are NOT non-decreasing (5/5 trials) and mismatch torch.sort().values for every non-power-of-two W tested (3,5,6,7,9,12), while power-of-two W (2,4,8) are fully clean (0/5 violations). perm remains a valid permutation in all cases. This is exactly the pattern predicted by the asymmetric (partner < W) gating of should_take_partner: only boundary-straddling pairs (which exist exactly when W != power of two) are broken. Corroborates the c3.e1 source inspection of lines 43-44 and the earlier t9 evidence.",
+  "supports": "confirmed",
+  "tool_event_id": "t21"
+}
+
+### t23 - update_claim_status - ok
+
+{
+  "id": "c3",
+  "status": "confirmed"
+}
+
+### t24 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c2 (EVEN_SEQ_KBLOCK total-length heuristic causing next-sequence keys to leak into the softmax on contract-admitted partial k-blocks, max_abs_err ~0.58) and c3 (causal offset = k_len - q_len shifting the causal boundary when q/k lengths differ, max_abs_err ~2.50 with a semantics caveat) are confirmed with runtime probes and already cover the top in-scope risk surfaces. c1 (empty-key-row zeros) stays inconclusive because problem.txt does not define output for empty softmax rows. No new evidence exposes an additional material, testable, in-scope problem.",
+  "reason": "Final review: both confirmed in-scope claims, c2 (tie-break orders duplicates by HIGHER original index, violating problem.txt's explicit lower-index-first stability rule; t15 all-equal rows yield reversed arange perm, never matching the stable reference) and c3 (deterministic mis-sorted/non-non-decreasing rows for every non-power-of-two W=3,5,6,7,9,12 at 5/5 trials, power-of-two W clean; t21), are backed by source inspection (line 41 comparator, lines 43-44 gating) and decisive runtime probes with the correct metric (exact comparison vs stable reference). c1 (memory visibility) was rebutted by 10-run determinism. The describer's open questions (W=6 sentinel attribution detail, cross-Triton-version nondeterminism) fall under the already-confirmed asymmetric-gating defect family or are residual generalization concerns, not new material in-scope defects. No additional claim is warranted.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
-  "reviewed_tool_event_count": 19,
+  "reviewed_tool_event_count": 23,
   "turn": 12
 }
 
-### t21 - record_verdict - ok
+### t25 - record_verdict - error
 
 {
-  "confidence": 0.9,
+  "error_type": "ValueError",
+  "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c2: tie-break reverses the contract's explicit stability rule (perm DESCENDING on ties; all-equal rows return reversed arange instead of identity): unknown claim; c3: asymmetric (partner < W) gating of should_take_partner deterministically mis-sorts rows for every non-power-of-two W (3,5,6,7,9,12), violating the non-decreasing requirement: unknown claim"
+}
+
+### t26 - record_verdict - ok
+
+{
+  "confidence": 0.98,
   "decisive_claims": [
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "Reject based on claim c2 (confirmed, in_scope, scope evidence cites problem.txt's explicit partial-block clause, which is the operative contract since the artifact has no test.py/get_inputs). EVEN_SEQ_KBLOCK is computed from the total packed k length only (kernel line 226), so a contract-admitted batch mix like [40, 24] with k_block_size 32 (total 64) is misclassified as even; the per-block tail mask (lines 155-156) is compiled out, and probe t16 shows next-sequence keys leaking into the softmax with max_abs_err 0.546 on batch-0 rows and 0.583 overall \u2014 a gross violation of the contract's stated rule that positions past a sequence's end must not contribute to the softmax. c3 (causal offset divergence under causal=True with differing q/k lengths, max_abs_err 2.50) is confirmed numerically but carries a semantics caveat since problem.txt does not define causal alignment when lengths differ (the kernel uses the FlashAttention bottom-right-aligned convention); it is a supporting note, not the decisive basis. c1 (empty-key-row zeros) is inconclusive and set aside as undecidable because the contract does not specify output for empty-key rows.",
+  "reason": "Two confirmed, in-scope defects directly violate problem.txt's explicit contract (the artifact provides no test.py/get_inputs, so problem.txt is the operative contract). (1) Stability (c2): kernel.py line 41's comparator orders tied keys by perm DESCENDING (smaller iff key < p_key or (keys==p_key & perm > p_perm)), so on all-equal rows the kernel returns the reversed arange permutation (e.g. [3,2,1,0] at W=4) while torch.argsort(stable=True) returns identity \u2014 confirmed by source inspection (c2.e1) and runtime probe t15. problem.txt explicitly requires the LOWER original index first and states duplicate keys are the expected input domain, so this is a defect regardless of magnitude. (2) Sortedness (c3): lines 43\u201344 gate should_take_partner on (partner < W), making boundary-straddling compare-exchanges one-sided whenever W is not a power of two; probe t21 shows 5/5 non-decreasing violations and mismatches vs torch.sort().values for W=3,5,6,7,9,12 while power-of-two W (2,4,8) are clean, violating problem.txt's explicit \"sorted_keys[n,:] is non-decreasing\" requirement, which imposes no power-of-two restriction on W. c1 (memory-visibility nondeterminism) was rebutted by 10-run determinism and does not affect the verdict. Residual open questions (W=6 sentinel-attribution detail, cross-Triton-version visibility) are non-decisive items within the already-confirmed asymmetric-gating defect family and are set aside.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.9,
-  "created_at": "2026-09-30T08:40:52Z",
+  "confidence": 0.98,
+  "created_at": "2026-09-30T08:51:21Z",
   "decisive_claims": [
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "Reject based on claim c2 (confirmed, in_scope, scope evidence cites problem.txt's explicit partial-block clause, which is the operative contract since the artifact has no test.py/get_inputs). EVEN_SEQ_KBLOCK is computed from the total packed k length only (kernel line 226), so a contract-admitted batch mix like [40, 24] with k_block_size 32 (total 64) is misclassified as even; the per-block tail mask (lines 155-156) is compiled out, and probe t16 shows next-sequence keys leaking into the softmax with max_abs_err 0.546 on batch-0 rows and 0.583 overall \u2014 a gross violation of the contract's stated rule that positions past a sequence's end must not contribute to the softmax. c3 (causal offset divergence under causal=True with differing q/k lengths, max_abs_err 2.50) is confirmed numerically but carries a semantics caveat since problem.txt does not define causal alignment when lengths differ (the kernel uses the FlashAttention bottom-right-aligned convention); it is a supporting note, not the decisive basis. c1 (empty-key-row zeros) is inconclusive and set aside as undecidable because the contract does not specify output for empty-key rows.",
+  "reason": "Two confirmed, in-scope defects directly violate problem.txt's explicit contract (the artifact provides no test.py/get_inputs, so problem.txt is the operative contract). (1) Stability (c2): kernel.py line 41's comparator orders tied keys by perm DESCENDING (smaller iff key < p_key or (keys==p_key & perm > p_perm)), so on all-equal rows the kernel returns the reversed arange permutation (e.g. [3,2,1,0] at W=4) while torch.argsort(stable=True) returns identity \u2014 confirmed by source inspection (c2.e1) and runtime probe t15. problem.txt explicitly requires the LOWER original index first and states duplicate keys are the expected input domain, so this is a defect regardless of magnitude. (2) Sortedness (c3): lines 43\u201344 gate should_take_partner on (partner < W), making boundary-straddling compare-exchanges one-sided whenever W is not a power of two; probe t21 shows 5/5 non-decreasing violations and mismatches vs torch.sort().values for W=3,5,6,7,9,12 while power-of-two W (2,4,8) are clean, violating problem.txt's explicit \"sorted_keys[n,:] is non-decreasing\" requirement, which imposes no power-of-two restriction on W. c1 (memory-visibility nondeterminism) was rebutted by 10-run determinism and does not affect the verdict. Residual open questions (W=6 sentinel-attribution detail, cross-Triton-version visibility) are non-decisive items within the already-confirmed asymmetric-gating defect family and are set aside.",
   "verdict": "reject"
 }

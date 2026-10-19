@@ -1,48 +1,45 @@
 
-import torch, importlib.util, json
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_07/kernel.py")
-kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
+import sys, json, math, torch
+sys.path.insert(0,"/root/cases/case_08")
+from kernel import stochastic_round_to_grid, STEP
 
-dev='cuda'
-M,K,N,gs = 32,64,64,32
 torch.manual_seed(0)
-groups=K//gs
-q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)
-zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)  # keep zp+1 <=15
-scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()
-g_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)
+dev="cuda"
+N=1024
+fr=[0.1,0.25,0.5,0.75,0.9]
+ks=torch.arange(N, device=dev)//len(fr) - 100
+f=torch.tensor(fr*(N//len(fr)+1), device=dev)[:N]
+x=((ks.float()*STEP)+f*STEP).float()
+lower=torch.floor(x/STEP)*STEP
+upper=lower+STEP
+p_up=((x-lower)/STEP).clamp(0,1)
 
-def wrap32(x):
-    x = x & 0xFFFFFFFF
-    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)
+S=3000
+cnt=torch.zeros(N, device=dev, dtype=torch.float64)
+acc=torch.zeros(N, device=dev, dtype=torch.float64)
+bad_membership=0
+for s in range(S):
+    out=stochastic_round_to_grid(x, s+12345)
+    is_up=(out==upper)
+    is_lo=(out==lower)
+    bad_membership+=int((~(is_up|is_lo)).sum().item())
+    cnt+=is_up.double()
+    acc+=out.double()
 
-qw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)
-for k in range(K):
-    qw[k//8] |= (q[k] << ((k%8)*4))
-qweight = wrap32(qw)
-qz = torch.zeros((groups,N//8),device=dev,dtype=torch.int64)
-for n in range(N):
-    qz[:,n//8] |= (zp[:,n] << ((n%8)*4))
-qzeros = wrap32(qz)
-
-a = torch.randn((M,K),device=dev,dtype=torch.float32)
-gl = g_idx.long()
-deq_plus = (q.double() - (zp+1)[gl].double()) * scales[gl].double()
-deq_bare = (q.double() - zp[gl].double()) * scales[gl].double()
-ref_plus = (a.double() @ deq_plus)
-ref_bare = (a.double() @ deq_bare)
-
-c = kern.gptq_matmul(a, qweight, scales, qzeros, g_idx, bits=4).double()
-den_p = ref_plus.abs().max().item(); den_b = ref_bare.abs().max().item()
-e_p = (c-ref_plus).abs().max().item(); e_b = (c-ref_bare).abs().max().item()
-# predicted systematic offset between conventions
-off = (a.double() @ scales[gl].double()).abs().max().item()
-print(json.dumps({
- "shape":[M,K,N],"group_size":gs,
- "max_abs_err_vs_zp_plus1_ref":e_p,
- "max_abs_err_vs_bare_zp_ref":e_b,
- "ref_plus_max_abs":den_p,"ref_bare_max_abs":den_b,
- "max_rel_err_vs_zp_plus1":e_p/den_p,
- "max_rel_err_vs_bare_zp":e_b/den_b,
- "predicted_convention_offset_max_abs":off,
- "kernel_matches":"zp_plus1" if e_p<e_b else "bare_zp"}))
+freq=cnt/S
+mean_out=acc/S
+sigma=torch.sqrt(p_up.double()*(1-p_up.double())/S).clamp_min(1e-12)
+z=(freq-p_up.double())/sigma
+maxz=float(z.abs().max()); argz=int(z.abs().argmax())
+mean_err=(mean_out-x.double()).abs()
+res=dict(
+ N=N, seeds=S, max_abs_z=maxz,
+ max_z_index=argz, max_z_p_up=float(p_up[argz]), max_z_freq=float(freq[argz]),
+ frac_abs_z_gt_5=float((z.abs()>5).double().mean()),
+ mean_z=float(z.mean()), overall_freq_minus_p=float((freq-p_up.double()).mean()),
+ max_abs_mean_err=float(mean_err.max()),
+ max_abs_mean_err_rel_STEP=float(mean_err.max()/STEP),
+ grand_mean_out_minus_x=float((mean_out-x.double()).mean()),
+ nonmember_count=bad_membership,
+)
+print(json.dumps(res))

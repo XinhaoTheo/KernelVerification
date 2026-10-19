@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_18`
-- Turns: 7
-- Tool events: 13
-- Claims: 2
-- Description updates: 1
-- LLM time: 258.566s across 6 calls | tokens: in=98717 out=3001 total=101718
+- Entry: `case_19`
+- Turns: 10
+- Tool events: 20
+- Claims: 3
+- Description updates: 2
+- LLM time: 131.409s across 9 calls | tokens: in=255080 out=6764 total=261844
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.95
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_18",
+    "entry": "case_19",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 
-### Turn 2 - `describer` (15.921643838000023s, in=4476 out=871)
+### Turn 2 - `describer` (24.101735314999928s, in=10317 out=1339)
 
 Message:
 
 ```text
-I have full context: the kernel computes row-wise softmax in three passes, but the denominator pass uses `n_full = n_cols // BLOCK` full blocks only, excluding the trailing partial block — which the problem explicitly says must be included. I'll record the description model now.
+The key surface here is the cross-block argmax accumulation. Within a block the code takes the min offset among max-valued entries (lowest index in that block), but across blocks `is_new_max = block_max >= m` lets a *later* block with an equal max overwrite the running argmax, so a tie spanning multiple blocks reports the later block's index rather than the globally lowest one. I'll record the full description.
 ```
 
 Tool calls:
@@ -75,252 +75,356 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
-      "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
-      "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
-      "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
+      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
+      "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
     ],
     "kernel_model": [
-      "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
-      "kernel.py lines 11 and 
-  ...[truncated 2483 chars]
+      "Wrapper (kernel.py:328-353) launches one program per
+  ...[truncated 3573 chars]
   Output summary:
   {
     "contract_model": [
-      "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
-      "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
-      "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
-      "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
+      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
+      "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
-      "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
-      "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
-      "Wrapper softmax
-  ...[truncated 2207 chars]
+      "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
+      "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching t
+  ...[truncated 3263 chars]
 
-### Turn 3 - `skeptic` (8.871144418000085s, in=11139 out=523)
+### Turn 3 - `skeptic` (5.032070562999934s, in=18465 out=165)
 
 Message:
 
 ```text
-I'll record the two highest-risk, testable claims derived from the source: the truncated denominator for partial-block widths, and the degenerate n_cols < block_size case.
+Record the highest-risk claims. Two claims: cross-block tie violation (in_scope per contract's tie rule and input domain), and within-block remainder masking edge case (the all -inf row is likely out of scope). Maybe record the tie claim as in_scope, and the second as unknown/out_of_scope. Also loss mean reduction over n_non_ignore — problem says loss[i] = -log softmax; wrapper divides by n_non_ignore in kernel (reduction "mean" divides loss by n_non_ignore!). Wait — contract says loss[i] = -log softmax(logits[i])[target[i]], but kernel stores loss / n_non_ignore. That's a potential bug: the per-row loss is scaled by mean over non-ignored tokens. That's a strong in-scope claim!
 ```
 
 Tool calls:
 
-- `record_claim -> t6 ok`
+- `read_claim_ledger -> t6 ok`
+
+### Turn 4 - `skeptic` (13.64426730699995s, in=18745 out=710)
+
+Message:
+
+```text
+I'll record the three highest-risk claims: the cross-block tie violation, the masked-lane -inf argmax edge, and the mean-reduction scaling of per-row loss.
+```
+
+Tool calls:
+
+- `record_claim -> t7 error`
   Args:
   {
-    "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
+    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
       }
     ],
-    "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=12
-  ...[truncated 256 chars]
+    "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 400
+  ...[truncated 161 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
+    "scope": "unknown",
+    "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask."
+  }
   Output summary:
   {
     "id": "c1",
-    "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
-    "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
+    "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "",
+    "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
     "status": "open"
   }
-- `record_claim -> t7 ok`
+- `record_claim -> t9 error`
   Args:
   {
-    "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
+    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than -log softmax per row.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
+        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
       }
     ],
-    "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
-    "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0
-  ...[truncated 113 chars]
+    "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 5 - `describer` (28.594185914000036s, in=19374 out=1584)
+
+Message:
+
+```text
+The description model needs a refinement: the skeptic raised two additional high-risk surfaces (cross-block tie via `>=` at line 160, and the mean-reduction division of per-row loss at lines 307-314), but both `record_claim` calls errored on missing `scope_rationale` and never landed in the ledger. Only claim c1 (the `-inf` masked-lane argmax edge) was actually recorded. I'll update the shared description to incorporate these surfaces so the contract-vs-kernel picture is complete for the next round.
+```
+
+Tool calls:
+
+- `record_description_update -> t10 ok`
+  Args:
+  {
+    "contract_model": [
+      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+      "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
+      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
+    ],
+    "kernel_model": [
+      "Wrapper (k
+  ...[truncated 5071 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+      "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
+      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, lse_square_scale=0, no softcap; returns (loss fp32, predicted int32).",
+      "Loss path: online softmax computes lse (lines 127-177), loss = lse - ori_X_y (line 284); then because reduction=='mea
+  ...[truncated 4771 chars]
+
+### Turn 6 - `skeptic` (9.659210193000035s, in=30212 out=556)
+
+Message:
+
+```text
+I'll re-record the two claims that failed earlier due to missing scope_rationale — the cross-block tie violation and the per-row loss scaling.
+```
+
+Tool calls:
+
+- `record_claim -> t11 ok`
+  Args:
+  {
+    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
+      }
+    ],
+    "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ti
+  ...[truncated 406 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
+    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
+        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
       }
     ],
-    "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
-    "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
+    "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.",
+    "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWES
+  ...[truncated 40 chars]
+- `record_claim -> t12 ok`
+  Args:
+  {
+    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
+      }
+    ],
+    "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
+    "statement": "The returned per-row l
+  ...[truncated 232 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
+      }
+    ],
+    "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
+    "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
     "status": "open"
   }
 
-### Turn 4 - `experimenter` (8.855892104000077s, in=13904 out=480)
+### Turn 7 - `experimenter` (17.543933181000057s, in=33090 out=926)
 
 Message:
 
 ```text
-I'll probe both claims at once: c1 (n_cols=130, partial block, row sums) and c2 (n_cols=64 < block_size, NaN/Inf check). They're independent experiments.
+I'll probe all three open claims independently — c2 (cross-block ties, n_cols=40000), c3 (loss scaling, n_rows=4), and c1 (all -inf row).
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `run_claim_probe -> t13 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 130, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"max_row_sum_dev_from_1\": (row_sums - 1).abs().max().item(),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"min_entry\": out.min().item()\n}))",
-    "expected_signal": "row sums > 1 and nonzero max abs error vs torch.softmax"
-  }
+    "claim_id": "c2",
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 2, 40000\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\n# row 0: max at index 0, tied copy at 40000-block boundary region (index 35000, in 2nd block)\nlogits[0] = -10.0\nlogits[0, 0] = 5.0\nlogits[0, 35000] = 5.0  # tie in second block (BLOCK_SIZE=32768)\n# row 1: max in first block only (control)\nlogits[1] = torch.randn(n_cols, device='cuda')\ntarget = torch.tensor([0, 5], device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nref_pred0 = int(torch.argmax(logits[0]))  # torch argmax returns lowest index on ties\nout = {\"predicted_row0\": int(pre
+  ...[truncated 343 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
+        "path": "probes/t13_probe.py",
+        "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
+        "path": "probes/t13_stdout.txt",
+        "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
+        "path": "probes/t13_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
+        "path": "probes/t13_json_result.json",
+        "sha256": "51471496f592e0c816b6a8457256c81600e8d954ac1ec4c480fa2d0c91891d41"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates f
-  ...[truncated 3139 chars]
-- `run_claim_probe -> t9 ok`
+    "claim_id": "c2",
+    "claim_statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block
+  ...[truncated 2654 chars]
+- `run_claim_probe -> t14 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_18/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(4, 64, device=\"cuda\", dtype=torch.float32)\nout = k.softmax(x)\nref = torch.softmax(x, dim=1)\nrow_sums = out.sum(dim=1)\nprint(json.dumps({\n  \"shape\": list(x.shape),\n  \"row_sums\": row_sums.tolist(),\n  \"has_nan\": bool(torch.isnan(out).any()),\n  \"has_inf\": bool(torch.isinf(out).any()),\n  \"max_abs_err_vs_torch_softmax\": (out - ref).abs().max().item()\n}))",
-    "expected_signal": "output contains NaN or Inf due to denom=0.0"
-  }
+    "claim_id": "c3",
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 4, 1000\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\ntarget = torch.randint(0, n_cols, (n_rows,), device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nref = torch.nn.functional.cross_entropy(logits, target, reduction='none')\nratio = (ref / loss).tolist()\nout = {\"n_rows\": n_rows, \"kernel_loss\": loss.tolist(), \"ref_per_row\": ref.tolist(),\n       \"ref_over_kernel_ratio\": ratio,\n       \"max_rel_err\": float(((loss - ref).abs() / ref.abs()).max()),\n       \"scaling_bug\": bool(((loss * n_rows) - ref).abs().max() < 1e-4 * ref.abs().max(
+  ...[truncated 164 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
+        "path": "probes/t14_probe.py",
+        "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
+        "path": "probes/t14_stdout.txt",
+        "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
+        "path": "probes/t14_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
+        "path": "probes/t14_json_result.json",
+        "sha256": "baad4c8bccdd61a41960775e0d548e6568ac41d1199fdc556d1d6873b33fb719"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probabili
-  ...[truncated 2641 chars]
+    "claim_id": "c3",
+    "claim_statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any b
+  ...[truncated 3507 chars]
+- `run_claim_probe -> t15 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 2, 40000  # > 32768 so masked remainder blocks exist; also power-of-2 case\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\nlogits[0] = float('-inf')  # all -inf row\ntarget = torch.tensor([0, 5], device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nout = {\"n_cols\": n_cols, \"predicted_all_neg_inf_row\": int(predicted[0]),\n       \"loss_all_neg_inf_row\": float(loss[0]),\n       \"predicted_normal_row\": int(predicted[1]),\n       \"out_of_range\": bool(predicted[0] >= n_cols)}\nprint(json.dumps(out))",
+    "expected_signal": "predicted[i] == n_co
+  ...[truncated 65 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "f5c498b877dd67117aebeff17e035cf0cda85957ca086df46e7a3a0ca79ca29b"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X
+  ...[truncated 2541 chars]
 
-### Turn 5 - `experimenter` (210.04297810000003s, in=18091 out=497)
+### Turn 8 - `experimenter` (15.005807109999978s, in=37726 out=759)
 
 Message:
 
 ```text
-Both probes completed with decisive results: c1 shows rows summing above 1 (max deviation 0.139) and c2 shows all-Inf outputs from denom=0. I'll finalize both claims.
+All three probes returned clean results. I'll finalize each: c2's tie probe returned 35000 instead of the lowest tied index 0; c3's probe shows a constant 4.0 loss ratio; c1's degenerate -inf row returned predicted=32768 (in-range, not n_cols) with NaN loss — the claim's specific n_cols prediction isn't observed and the reference is undefined there, so that one is inconclusive.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `finalize_probe_evidence -> t16 ok`
   Args:
   {
     "data": {
-      "has_nan": false,
-      "input_shape": [
-        4,
-        130
-      ],
-      "max_abs_err_vs_torch_softmax": 0.00867936760187149,
-      "max_row_sum_dev_from_1": 0.13868117332458496,
-      "min_entry": 0.00022502124193124473,
-      "n_cols": 130,
-      "row_sums": [
-        1.0045435428619385,
-        1.0068390369415283,
-        1.007639765739441,
-        1.138681173324585
+      "expected_lowest_tied": 0,
+      "n_cols": 40000,
+      "predicted_row1_control": 13867,
+      "reported_predicted_row0": 35000,
+      "tie_indices": [
+        0,
+        35000
       ]
     },
-    "event_id": "t8",
+    "event_id": "t13",
     "status": "confirmed",
-    "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
-    "supports": "confirm
-  ...[truncated 5 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
-  }
-- `finalize_probe_evidence -> t11 ok`
-  Args:
-  {
-    "data": {
-      "has_inf": true,
-      "has_nan": false,
-      "input_shape": [
-        4,
-        64
-      ],
-      "max_abs_err_vs_torch_softmax": null,
-      "n_cols": 64,
-      "row_sums": [
-        "Inf",
-        "Inf",
-        "Inf",
-        "Inf"
-      ]
-    },
-    "event_id": "t9",
-    "status": "confirmed",
-    "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
+    "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
     "supports": "confirmed"
   }
   Output summary:
@@ -328,304 +432,359 @@ Tool calls:
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
+    "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
     "supports": "confirmed",
-    "tool_event_id": "t9"
+    "tool_event_id": "t13"
+  }
+- `finalize_probe_evidence -> t17 ok`
+  Args:
+  {
+    "data": {
+      "kernel_loss": [
+        1.7524,
+        2.2115,
+        1.737,
+        1.4388
+      ],
+      "max_rel_err": 0.75,
+      "n_rows": 4,
+      "ref_over_kernel_ratio": [
+        4.0,
+        4.0,
+        4.0,
+        4.0
+      ],
+      "ref_per_row": [
+        7.0096,
+        8.8461,
+        6.9481,
+        5.7551
+      ],
+      "scaling_bug": true
+    },
+    "event_id": "t14",
+    "status": "confirmed",
+    "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "confirmed",
+    "evidence_id": "c3.e1",
+    "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
+    "supports": "confirmed",
+    "tool_event_id": "t14"
+  }
+- `finalize_probe_evidence -> t18 ok`
+  Args:
+  {
+    "data": {
+      "loss": "NaN",
+      "n_cols": 40000,
+      "out_of_range": false,
+      "predicted_all_neg_inf_row": 32768
+    },
+    "event_id": "t15",
+    "status": "inconclusive",
+    "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
+    "supports": "inconclusive"
+  }
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "inconclusive",
+    "evidence_id": "c1.e1",
+    "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
+    "supports": "inconclusive",
+    "tool_event_id": "t15"
   }
 
-### Turn 6 - `skeptic` (5.577399903000014s, in=25190 out=197)
+### Turn 9 - `skeptic` (7.87171836899995s, in=43462 out=262)
 
 Message:
 
 ```text
-Both in-scope claims (c1, c2) are confirmed with decisive runtime evidence directly tied to the problem.txt contract. No new material problems surfaced; this is the final review.
+This is the final review turn. Both in-scope claims (c2 cross-block tie violation, c3 per-row loss scaling) are confirmed with direct runtime evidence tied to the contract's stated tie rule and per-row loss definition; the remaining claim (c1) is inconclusive on a reference-undefined degenerate case and cannot support a reject. No new material, in-scope problem is exposed by the latest evidence.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t12 ok`
+- `record_no_new_claims -> t19 ok`
   Args:
   {
-    "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
+    "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ]
   }
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
+    "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
     "reviewed_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reviewed_tool_event_count": 11,
-    "turn": 6
+    "reviewed_tool_event_count": 18,
+    "turn": 9
   }
 
-### Turn 7 - `judge` (9.296930213999985s, in=25917 out=433)
+### Turn 10 - `judge` (9.955728631999932s, in=43689 out=463)
 
 Message:
 
 ```text
-The evidence is complete: both in-scope claims are confirmed by decisive runtime probes (partial-block rows sum >1 with max deviation 0.139; n_cols<block_size yields all-Inf outputs), and the Skeptic has signed off with no new claims. The problem.txt explicitly requires the trailing partial block be normalized, so this is a valid reject basis.
+The ledger has two confirmed in-scope defects with direct runtime evidence: c2 (cross-block tie violation — the `>=` at line 160 lets a later equal-max block overwrite the lowest tied index, observed predicted=35000 vs required 0) and c3 (per-row loss divided by n_non_ignore, observed exact ratio 4.0 vs the contract's per-row -log softmax). c1 is inconclusive on a reference-undefined degenerate case and cannot affect the verdict. Skeptic signed off with no new claims, and no open claims lack evidence. I'll record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t13 ok`
+- `record_verdict -> t20 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entri
-  ...[truncated 566 chars]
+    "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log soft
+  ...[truncated 488 chars]
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.95,
     "decisive_claims": [
-      "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviatio
-  ...[truncated 166 chars]
+    "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set a
+  ...[truncated 88 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
-    "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
-    "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
-    "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
+    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
+    "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper.",
+    "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract."
   ],
   "kernel_model": [
-    "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
-    "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
-    "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
-    "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
-    "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
-  ],
-  "open_questions": [],
-  "risk_map": [
-    "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
-    "When n_cols is an exact multiple of block_size (e.g. random 128/256/512-col tests), the bug is invisible \u2014 a benig
-...[truncated 1000 chars]
+    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
+    "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching the contract math.",
+    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block (note: X_block is the fp32-cast/loaded value, so equality is on the fp32 view).",
+    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block with block_max EQUAL to the running max replaces the earlier argmax, so cross-block ties report the later block's lowest index, not the global lowe
+...[truncated 6415 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Description of case_18: Triton three-pass row-wise softmax. Max pass and output pass iterate all blocks via tl.cdiv, but the denominator pass iterates only n_full = n_cols // BLOCK blocks, omitting the trailing partial block — violating the contract that non-multiple n_cols be fully normalized.
+- `du1` tasks=`initial`: Described Liger-style fused cross-entropy kernel (case_19) focusing on the argmax/predicted-token tie contract: per-block argmax picks lowest index, but cross-block accumulation uses >= so a tie spanning blocks reports the later block's index.
+- `du2` tasks=`initial`: Refined case_19 description after re-examining the loss path: the wrapper's reduction='mean' divides each row's stored loss by n_non_ignore (lines 307-311), so the returned loss vector is the per-row -log softmax scaled by 1/N — the contract's loss[i] has no such division. Also clarified that the skeptic's two strongest claims (cross-block tie via >= at line 160, and this mean-reduction loss scaling) failed to be recorded due to missing scope_rationale and need re-recording; only the -inf masked-lane claim c1 is currently in the ledger.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `inconclusive`
 
-Statement: For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.
+Statement: For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.
 
-Scope: `in_scope`
+Scope: `unknown`
 
-Scope rationale: problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).
-
-Scope evidence:
-- `problem.txt`: n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest.
-
-Rationale: kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.
+Rationale: Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.
+- `c1.e1` runtime_probe supports `inconclusive`, tool_event_id=t15: All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) — in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.
 
 ### c2 - `confirmed`
 
-Statement: When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.
+Statement: When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.
+Scope rationale: problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.
 
 Scope evidence:
-- `problem.txt`: Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution.
+- `problem.txt`: Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks.
 
-Rationale: With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.
+Rationale: Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.
+
+### c3 - `confirmed`
+
+Statement: The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.
+
+Scope evidence:
+- `problem.txt`: cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] — a per-row quantity with no division by the number of rows.
+
+Rationale: Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.
+
+Evidence:
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t14: Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row — the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Row-wise softmax of a 2-D float32 tensor: y[j] = exp(x[j]-max(x)) / sum_k exp(x[k]-max(x)), per problem.txt.",
-    "Every output row must be a valid probability distribution: non-negative entries summing to 1.",
-    "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is part of the row and must be normalized with the rest (explicitly emphasized in problem.txt).",
-    "Block-computed three-pass structure (max pass, sum pass, output pass) with block_size defaulting to 128 in the wrapper."
+    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
+    "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "kernel.py lines 13-17: pass 1 computes row max over all blocks via tl.cdiv(n_cols, BLOCK) with masked loads (other=-inf) \u2014 correct for partial blocks.",
-    "kernel.py lines 11 and 19-23: pass 2 computes the denominator only over n_full = n_cols // BLOCK blocks, i.e. only whole blocks; the trailing partial block's exp(x - max) terms are never added to denom.",
-    "kernel.py lines 25-28: pass 3 writes exp(x - row_max)/denom for ALL columns including the trailing partial block, using the denominator that excluded those columns.",
-    "Wrapper softmax() (lines 31-36) launches one program per row, passes row strides, and assumes a contiguous 2-D layout (element stride 1, only row stride passed).",
-    "Masked out-of-range loads use -inf, so exp(-inf - row_max)=0 for padding in pass 1 and pass 3, which is benign; the truncation bug is the loop bound in pass 2, not the masking."
-  ],
-  "open_questions": [],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Truncated denominator: when n_cols is not a multiple of block_size, denom sums only over full blocks, so each output entry (including the partial block) is divided by too small a denominator; rows will sum to more than 1. Example: n_cols=130, BLOCK=128 \u2014 tail values with large exp(x-max) inflate the error most.",
-    "When n_cols is an exact multiple of block_size (e.g. random 128/256/5
-...[truncated 1407 chars]
+    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
+    "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching the contract math.",
+    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block (note: X_block is the fp32-cast/loaded value, so equality is on the fp32 view).",
+    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block with block_max EQUAL to the running max replaces the earlier argmax, so cross-block ties report the later block's lowest index, not the global lowest index.",
+    "Only RETURN_PREDICTED_TOKENS is enabled, so the argmax code executes; masked-out lanes load as -inf and never spuriously equal a finite block_max 
+...[truncated 2463 chars]
 
-### t6 - record_claim - ok
+### t6 - read_claim_ledger - ok
+
+### t7 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t8 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "kernel.py line 20 iterates pass 2 over only n_full = n_cols // BLOCK blocks while passes 1 and 3 use tl.cdiv(n_cols, BLOCK), so trailing partial-block terms are missing from the denominator and rows sum to more than 1.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "n_cols may be any positive integer and is NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest."
-    }
-  ],
-  "scope_rationale": "problem.txt explicitly requires correctness for n_cols not a multiple of block_size and that every output row sums to 1; a representative in-contract input is any 2-D float32 tensor with n_cols % block_size != 0 (e.g. 4x130 with default block_size=128).",
-  "statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
+  "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "",
+  "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
   "status": "open"
 }
 
-### t7 - record_claim - ok
+### t9 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t10 - record_description_update - ok
+
+{
+  "contract_model": [
+    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
+    "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
+    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
+    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, lse_square_scale=0, no softcap; returns (loss fp32, predicted int32).",
+    "Loss path: online softmax computes lse (lines 127-177), loss = lse - ori_X_y (line 284); then because reduction=='mean' and HAS_WEIGHT is False, loss is divided by n_non_ignore at lines 307-311 before being stored per row (line 316). The stored loss vector is therefore each row's -log softmax scaled by 1/N, NOT the contract's per-row value. (Note: this was previously described as 'mean over non-ignored tokens' matching the contract; it does not \u2014 the contract has no N scaling.)",
+    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block, on the fp32-cast view of the logits.",
+    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block
+...[truncated 3971 chars]
+
+### t11 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "With n_cols < BLOCK, the pass-2 loop body never executes and denom remains the initial 0.0, producing 0/0 or nonzero/0 results.",
+  "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Input domain: n_cols may be any positive integer (no lower bound at block_size), and every row of the result must be a valid probability distribution."
+      "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
     }
   ],
-  "scope_rationale": "problem.txt admits any positive n_cols, including values below block_size, and requires every row to be a valid probability distribution; e.g. a 4x64 float32 tensor with default block_size=128 is an in-contract input.",
-  "statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
+  "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.",
+  "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t12 - record_claim - ok
 
 {
-  "artifacts": [
+  "id": "c3",
+  "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
+  "scope": "in_scope",
+  "scope_evidence": [
     {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "dddc50ccb88cfe66894bdb404d7b2972102a9d67ed88bbe819b34deeae9a3468"
+      "source": "problem.txt",
+      "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "For a 2-D float32 input with n_cols not a multiple of block_size (e.g. n_cols=130, block_size=128), the kernel's denominator omits the trailing partial block, so every output row sums to more than 1 and deviates from torch.softmax.",
-  "duration_s": 4.736636,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "bf1c19e5a364f053c143de067ca11b7c633092cc88f57b644747c27431ecf63f"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "b3d97993012cf21e008341ed04df5b7a23811f20c48094b0fce58ae6de6915ae"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t8_stderr.txt",
-       
-...[truncated 2339 chars]
+  "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
+  "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
+  "status": "open"
+}
 
-### t9 - run_claim_probe - ok
+### t13 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
+      "path": "probes/t13_probe.py",
+      "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
+      "path": "probes/t13_stdout.txt",
+      "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
+      "path": "probes/t13_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "98a84f031321f2a03b382519c4e8af3dc2a1e41ca0e52826adcd22969bd8796a"
+      "path": "probes/t13_json_result.json",
+      "sha256": "51471496f592e0c816b6a8457256c81600e8d954ac1ec4c480fa2d0c91891d41"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "When n_cols < block_size (e.g. n_cols=64 with default block_size=128), n_full = 0 so the denominator loop never runs, denom stays 0.0, and the output row becomes NaN/Inf (division by zero), violating the probability-distribution requirement.",
-  "duration_s": 5.771302,
-  "event_id": "t9",
+  "claim_statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.",
+  "duration_s": 9.141824,
+  "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -633,77 +792,196 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t9_probe.py",
-          "sha256": "2efa3b0ed092d3b9fa40c6d03c39f31f4a09cad49aa26d155761e4eb51ac448f"
+          "path": "probes/t13_probe.py",
+          "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "d04312deef92e58acb376e285cc5d04b69ecf4af025c0046d9ab882b84b46c78"
+          "path": "probes/t13_stdout.txt",
+          "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
+        },
+        {
+          "description": "Captured stderr from the probe proc
+...[truncated 1854 chars]
+
+### t14 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t14_probe.py",
+      "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t14_stdout.txt",
+      "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t14_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t14_json_result.json",
+      "sha256": "baad4c8bccdd61a41960775e0d548e6568ac41d1199fdc556d1d6873b33fb719"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
+  "duration_s": 6.8632,
+  "event_id": "t14",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t14_probe.py",
+          "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t14_stdout.txt",
+          "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t9_stderr.txt
-...[truncated 1841 chars]
+          "path": "probe
+...[truncated 2707 chars]
 
-### t10 - finalize_probe_evidence - ok
+### t15 - run_claim_probe - ok
 
 {
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t15_probe.py",
+      "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t15_stdout.txt",
+      "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t15_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t15_json_result.json",
+      "sha256": "f5c498b877dd67117aebeff17e035cf0cda85957ca086df46e7a3a0ca79ca29b"
+    }
+  ],
   "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "n_cols=130 with block_size=128: every output row sums to more than 1 (row sums 1.0045-1.1387, max deviation from 1 = 0.1387), confirming the trailing partial block was excluded from the denominator. Max abs error vs torch.softmax = 8.68e-3, far beyond tolerance; all entries finite so this is a real miscalculation, not a NaN artifact.",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
+  "claim_statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
+  "duration_s": 5.580913,
+  "event_id": "t15",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t15_probe.py",
+          "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t15_stdout.txt",
+          "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr"
+...[truncated 1741 chars]
 
-### t11 - finalize_probe_evidence - ok
+### t16 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "n_cols=64 < block_size=128: n_full=0 so the denominator loop never runs, denom stays 0.0, and every output row is all-Inf (exp(0-ish)/0), row sums = Inf, max abs error vs torch.softmax = Inf. Violates the contract requirement that each row be a valid probability distribution.",
+  "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
   "supports": "confirmed",
-  "tool_event_id": "t9"
+  "tool_event_id": "t13"
 }
 
-### t12 - record_no_new_claims - ok
+### t17 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "confirmed",
+  "evidence_id": "c3.e1",
+  "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
+  "supports": "confirmed",
+  "tool_event_id": "t14"
+}
+
+### t18 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "inconclusive",
+  "evidence_id": "c1.e1",
+  "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
+  "supports": "inconclusive",
+  "tool_event_id": "t15"
+}
+
+### t19 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: claims c1 (partial-block denominator omission, rows sum > 1, max dev 0.1387) and c2 (n_cols < block_size gives all-Inf outputs) are both confirmed in-scope with decisive probe evidence tied to problem.txt's explicit contract that n_cols need not be a multiple of block_size and every row must be a probability distribution. No additional testable in-scope problems found; the single root cause (pass-2 loop bound n_full = n_cols // BLOCK) fully explains both failure modes.",
+  "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
   "reviewed_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 11,
-  "turn": 6
+  "reviewed_tool_event_count": 18,
+  "turn": 9
 }
 
-### t13 - record_verdict - ok
+### t20 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.95,
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
+  "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set aside as a generalization note; it does not affect the verdict.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:30:51Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:29:57Z",
   "decisive_claims": [
-    "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "The kernel's denominator pass (kernel.py lines 11, 19-23) iterates only n_full = n_cols // BLOCK blocks while the max and output passes use tl.cdiv(n_cols, BLOCK), omitting the trailing partial block from the denominator. problem.txt \u2014 the operative contract, since no test.py/get_inputs exists \u2014 explicitly states n_cols may be any positive integer, is NOT required to be a multiple of block_size, and every output row must be a probability distribution summing to 1. Confirmed in-scope probe evidence (t8, t9) on ordinary float32 inputs shows: (1) n_cols=130 with default block_size=128 gives row sums 1.0045\u20131.1387 (max deviation 0.1387) and max abs error vs torch.softmax of 8.68e-3 with all entries finite \u2014 a real miscalculation, not a NaN artifact; (2) n_cols=64 < block_size=128 gives n_full=0 so denom stays 0.0 and every output row is all-Inf, grossly violating the probability-distribution requirement. The reference torch.softmax is finite for both inputs, so this is not a reference-undefined case, and no contract clause (precision, tie-breaking, layout) accounts for these deviations. Both confirmed claims are in_scope with scope evidence citing the stated input domain. Skeptic review (t12) found no new claims. Reject.",
+  "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set aside as a generalization note; it does not affect the verdict.",
   "verdict": "reject"
 }

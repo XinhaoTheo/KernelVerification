@@ -1,28 +1,18 @@
 ## Problem statement (contract + reference behavior)
 
-Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,
-the activation quantization step of INT8 inference.
+Operation: round a float32 tensor to the nearest value representable in the FP8
+e4m3 format, the storage step of FP8 inference and training kernels.
 
-    scale = calibration(|x|) / 127
-    q     = round(x / scale), clamped to [-127, 127]
-    y     = q * scale
+e4m3 has 4 exponent bits and 3 mantissa bits, so within any binade it can
+represent 8 evenly spaced values. Rounding to that grid is the point of the
+format, not an implementation shortcut: the resulting relative error is bounded
+by half a mantissa step, about 2^-4 = 6.25%.
 
-Accuracy requirement: the relative reconstruction error of each row,
+The contract is that every value is rounded to the nearest representable e4m3
+value. Deviation from the float32 input up to the format's own rounding step is
+the intended behavior of the operation.
 
-    ||y - x|| / ||x||        (Euclidean norm over the row)
-
-must not exceed 5%. That is the usual way INT8 quantization quality is stated,
-and it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's
-dynamic range leaves a residual well under 1%. It is not loose enough to absorb
-a value that has been clamped away, since a clamped entry removes its whole
-magnitude from the reconstruction.
-
-Input domain: real transformer activations, whose per-channel magnitudes are
-heavy-tailed. A small number of channels carrying values one or two orders of
-magnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and
-those channels are exactly the ones downstream layers depend on.
-
-Does quant_dequant() satisfy this contract?
+Does fp8_roundtrip() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -34,33 +24,27 @@ import triton.language as tl
 
 
 @triton.jit
-def _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    cols = tl.arange(0, BLOCK)
-    valid = cols < N
-    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)
+def _fp8_roundtrip_kernel(X, OUT, N, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < N
+    x = tl.load(X + offs, mask=mask, other=0.0)
 
+    # e4m3: 3 mantissa bits, so quantize to 1/8 of a binade.
     ax = tl.abs(x)
-    absmax = tl.max(ax, axis=0)
-    # Calibrate on the bulk of the row rather than on its single largest value.
-    thresh = absmax
-    for _ in range(PCTL_LEVELS):
-        below = tl.where(ax < thresh, ax, 0.0)
-        thresh = tl.max(below, axis=0)
-
-    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)
-    q = tl.floor(x / scale + 0.5)
-    q = tl.minimum(tl.maximum(q, -127.0), 127.0)
-    tl.store(OUT + row * stride + cols, q * scale, mask=valid)
+    e = tl.floor(tl.log2(tl.where(ax == 0.0, 1.0, ax)))
+    step = tl.exp2(e - 3.0)
+    q = tl.floor(x / step + 0.5) * step
+    q = tl.where(ax == 0.0, 0.0, q)
+    tl.store(OUT + offs, q, mask=mask)
 
 
-def quant_dequant(x, pctl_levels: int = 2):
-    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.
-    n_rows, n_cols = x.shape
+def fp8_roundtrip(x):
+    # Round a float32 tensor to the nearest value representable in e4m3.
+    n = x.numel()
     out = torch.empty_like(x)
-    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,
-                             PCTL_LEVELS=pctl_levels,
-                             BLOCK=triton.next_power_of_2(n_cols))
+    BLOCK = 1024
+    _fp8_roundtrip_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
     return out
 
 ```

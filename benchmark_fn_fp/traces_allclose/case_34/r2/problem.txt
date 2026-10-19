@@ -1,0 +1,30 @@
+Verify a CUDA sliding-window state-update implementation over the complete
+input domain below, not only the example returned by make_inputs().
+
+Inputs are contiguous FP32 CUDA tensors on the same NVIDIA T4 device:
+- state has shape [B, L, D], where 1 <= B <= 4, 2 <= L <= 4096,
+  and 1 <= D <= 1024.
+- new_events has shape [B, K, D], where 1 <= K <= min(L, 128).
+- The two input tensors have disjoint storage. Their values may be any finite
+  FP32 values, including zeros and signed zeros.
+
+Let old_state be the contents of state before this call. After run() completes,
+for every legal batch b, row r, and feature d:
+  state[b,r,d] = old_state[b,r+K,d]  if r < L-K
+                 new_events[b,r-(L-K),d] otherwise.
+Each result must preserve the exact FP32 bit pattern of its source element.
+This is a copy operation; no numerical approximation is permitted.
+
+run() must update state in place and return that same tensor (same storage),
+while preserving new_events. Calls may be repeated on the state resulting from
+previous calls, with any legal new_events. All calls are on the same CUDA stream,
+with no concurrent external access to either tensor. CUDA's usual asynchronous
+return is allowed; correctness is observed after stream synchronization.
+
+The full wrapper, including its allocation decisions and launch arguments, is
+part of the implementation to verify. Do not assume distinct pointer names in
+the Triton function imply distinct storage: inspect the arguments passed by run.
+The public reference() in kernel.py computes the required new contents without
+mutating either input and can also execute on CPU. Evaluate it BEFORE run() or
+on a saved pre-call state. You may construct any legal inputs and repeat calls.
+The frozen environment is PyTorch 2.8.0 / Triton 3.4.0 / NVIDIA T4.

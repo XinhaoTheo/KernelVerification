@@ -15,34 +15,35 @@ import sys
 ROOT = Path(__file__).resolve().parents[2] / "real_kernel_challenges"
 sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
 from models import profile_for_trace
+from case_registry import load_registry, remap_validation_cases
 from summarize_traces import classify_outcome, read_run, read_single_call
 from traces import experiment_trial, iter_trace_records, trial_sort_key
 
-COHORTS = {"pilot": tuple(f"case_{i}" for i in range(106, 112)),
-           "boundary": tuple(f"case_{i}" for i in range(112, 116)),
-           "splitk_moe": tuple(f"case_{i}" for i in range(116, 120)),
-           "int4_pipeline": ("case_120", "case_121"),
-           "stencil": ("case_122", "case_123"),
-           "requant": ("case_124", "case_125"),
-           "erf": ("case_126", "case_127"),
-           "gelu": ("case_128", "case_129"),
-           "silu": ("case_130", "case_131"),
-           "sine": ("case_132", "case_133"),
-           "hypot": ("case_134", "case_135"),
-           "softplus": ("case_136", "case_137"),
-           "compensated": ("case_138", "case_139"),
-           "fastdiv": ("case_140", "case_141"),
-           "butterfly": ("case_142", "case_143"),
-           "packed_argmax": ("case_144", "case_145"),
-           "atan": ("case_146", "case_147"),
-           "rounding": ("case_148", "case_149"),
-           "ntt": ("case_150", "case_151"),
-           "crc": ("case_152", "case_153"),
-           "complex": ("case_154", "case_155"),
-           "requant_compose": ("case_156", "case_157"),
-           "affine_scan": ("case_158", "case_159"),
-           "winograd": ("case_160", "case_161"),
-           "realfft": ("case_162", "case_163")}
+COHORTS = {"pilot": tuple(f"case_{i:02d}" for i in range(33, 39)),
+           "boundary": tuple(f"case_{i:02d}" for i in range(39, 43)),
+           "splitk_moe": tuple(f"case_{i:02d}" for i in range(43, 47)),
+           "int4_pipeline": ("case_47", "case_48"),
+           "stencil": ("case_49", "case_50"),
+           "requant": ("case_51", "case_52"),
+           "erf": ("case_53", "case_54"),
+           "gelu": ("case_55", "case_56"),
+           "silu": ("case_57", "case_58"),
+           "sine": ("case_59", "case_60"),
+           "hypot": ("case_61", "case_62"),
+           "softplus": ("case_63", "case_64"),
+           "compensated": ("case_65", "case_66"),
+           "fastdiv": ("case_67", "case_68"),
+           "butterfly": ("case_69", "case_70"),
+           "packed_argmax": ("case_71", "case_72"),
+           "atan": ("case_73", "case_74"),
+           "rounding": ("case_75", "case_76"),
+           "ntt": ("case_77", "case_78"),
+           "crc": ("case_79", "case_80"),
+           "complex": ("case_81", "case_82"),
+           "requant_compose": ("case_83", "case_84"),
+           "affine_scan": ("case_85", "case_86"),
+           "winograd": ("case_87", "case_88"),
+           "realfft": ("case_89", "case_90")}
 SCOPED_TOOL_CASES = frozenset(case for cohort, cases in COHORTS.items()
                              if cohort != "pilot" for case in cases)
 CASES = COHORTS["pilot"]
@@ -70,7 +71,9 @@ def read(path):
 
 
 def _frozen(root, cases=CASES):
-    labels = read(root / "private_data/validation_gpu.json").get("cases", {})
+    labels = remap_validation_cases(
+        read(root / "private_data/validation_gpu.json").get("cases", {}),
+        "real_kernel_challenges", load_registry(root.parent))
     public = {}
     for case in cases:
         if labels.get(case, {}).get("ground_truth") not in {"trust", "reject"}:
@@ -149,8 +152,11 @@ def _attempt(record, labels, public, benchmark):
         if bool(meta.get("debate_budget_closeout")) != (arm == "debate"):
             issues.append("boundary debate closeout setting mismatch")
         visibility = read(path / "artifact_visibility.json")
+        visible_cases = visibility.get("visible_cases")
+        aliases = set(record.get("case_aliases", (case,)))
         if (meta.get("case_visibility") != "current_case_only"
-                or visibility.get("visible_cases") != [case]
+                or not isinstance(visible_cases, list) or len(visible_cases) != 1
+                or visible_cases[0] not in aliases
                 or visibility.get("previous_trace_root_removed") is not True):
             issues.append("current-case-only worker isolation missing or mismatched")
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):

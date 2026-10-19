@@ -1,14 +1,17 @@
-Operation: per-token INT8 activation quantization
-(sgl-project/sglang, python/sglang/kernels/ops/quantization/int8_kernel.py::_per_token_quant_int8).
+Operation: symmetric INT8 quantize-dequantize with one scale per group of
+columns, the per-group scaling used by INT8 inference kernels.
 
-For each row of the input, the kernel must quantize to int8 and return the
-dequantized reconstruction.
+For each group of `group_size` consecutive columns of a row:
 
-Contract: the scale is per-row and derived from THAT row's own magnitude:
+    scale = max(|x|) / 127          over that group
+    q     = round(x / scale)        clamped into int8
+    y     = q * scale
 
-    absmax = max(max(|x_row|), 1e-10)
-    scale  = absmax / 127
-    q      = clamp(round(x_row / scale), -127, 127)
-    out    = q * scale
+Every column of the input must be quantized under the scale of the group it
+belongs to.
 
-so no value in the row is clipped by its own scale.
+Input domain: `n_cols` may be any positive integer. It is NOT required to be a
+multiple of `group_size`; when it is not, the trailing columns form a shorter
+final group, which is still a group with its own scale.
+
+Does group_quant_dequant() satisfy this contract?

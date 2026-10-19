@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_04`
-- Turns: 4
-- Tool events: 9
+- Entry: `case_05`
+- Turns: 7
+- Tool events: 10
 - Claims: 1
 - Description updates: 0
-- LLM time: 23.722s across 3 calls | tokens: in=33685 out=1785 total=35470
+- LLM time: 73.177s across 6 calls | tokens: in=86088 out=4093 total=90181
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.92
+- Confidence: 0.95
 
 ## Timeline
 
@@ -25,49 +25,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_04",
+    "entry": "case_05",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 
-### Turn 2 - `solo` (18.223921021000002s, in=6699 out=976)
+### Turn 2 - `solo` (16.936983839s, in=7305 out=856)
 
 Message:
 
 ```text
-The kernel looks correct. One suspicion: mean_square when a row is near zero — rsqrt(mean_square+eps) fine. Precision: contract says fp32 accumulation — ok. Note: Liger original uses tl.rsqrt fine. The bf16 round-trip: X.float() handles it. Potential issue: tl.sum masked with other=0.0 fine.
-
-Actually the original Liger kernel stores RSTD and computes Y in fp32 — matches. Potential difference: original uses rsqrt approximations? Fine. Run a probe comparing against reference across fp32, bf16 round-trip, near-zero rows.The kernel matches the contract formula; my main risk hypotheses are numerical behavior on near-zero rows and on bf16 round-trip inputs. Let me record a claim and run a probe comparing it against an fp32 reference.
+The kernel implements: find the minimum value strictly above the pivot, then count values strictly above the pivot within EPS (1e-3) of that minimum. This matches the contract on its face. I'll record a claim that the implementation is correct against the contract's tie semantics, and probe it with representative power-of-two inputs: exact ties, near-ties within tolerance, chain-ties (each consecutive pair within EPS but endpoints beyond), values straddling the pivot, and the empty-above-pivot case.
 ```
 
 Tool calls:
@@ -75,36 +73,49 @@ Tool calls:
 - `record_claim -> t5 ok`
   Args:
   {
-    "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
+    "rationale": "Source inspection suggests the min-above-pivot plus within-EPS count matches the contract, but chain-tie cases (each value within EPS of the next but not of the minimum) and pivot-boundary cases could reveal off-by-one or tolerance-semantic failures.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+        "summary": "`count_tied_at_boundary(scores, pivot)` must return how many of the values strictly above `pivot` are tied with the smallest of them; `scores` is a single tile whose length is a power of two."
       }
     ],
-    "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 te
-  ...[truncated 69 chars]
+    "scope_rationale": "Contract requires counting values strictly above pivot that are tied with the smallest of them, on power-of-two-length single-tile scores; tolerance value unspecified.",
+    "statement": "count_tied_at_bou
+  ...[truncated 228 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
-    "scope": "unknown",
+    "rationale": "Source inspection suggests the min-above-pivot plus within-EPS count matches the contract, but chain-tie cases (each value within EPS of the next but not of the minimum) and pivot-boundary cases could reveal off-by-one or tolerance-semantic failures.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+        "summary": "`count_tied_at_boundary(scores, pivot)` must return how many of the values strictly above `pivot` are tied with the smallest of them; `scores` is a single tile whose length is a power of two."
       }
     ],
-    "scope_rationale": "",
-    "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+    "scope_rationale": "Contract requires counting values strictly above pivot that are tied with the smallest of them, on power-of-two-length single-tile scores; tolerance value unspecified.",
+    "statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
     "status": "open"
   }
+
+### Turn 3 - `solo` (15.355654257000001s, in=8579 out=961)
+
+Message:
+
+```text
+I'll run a probe covering exact ties, within-tolerance and beyond-tolerance values, chain-ties, pivot-boundary values, the empty case, and random tiles, comparing against a Python reference implementing the contract semantics.
+```
+
+Tool calls:
+
 - `run_claim_probe -> t6 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nif dev == 'cpu':\n    print(json.dumps({\"error\": \"no cuda\"}))\nelse:\n    import importlib.util, sys\n    spec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_04/kernel.py\")\n    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n\n    def ref(X, eps):\n        X32 = X.float()\n        ms = (X32 * X32).sum(-1) / X32.shape[-1]\n        rstd = torch.rsqrt(ms + eps)\n        return X32 * rstd.unsqueeze(-1), rstd\n\n    results = {}\n    cases = {\n        \"fp32_randn\": torch.randn(64, 256, device=dev),\n        \"fp32_small\": torch.randn(64, 256, device=dev) * 1e-6,\n        \"fp32_tiny\": torch.randn(64, 256, 
-  ...[truncated 1086 chars]
+    "code": "\nimport torch, json, sys\nsys.path.insert(0, \"/root/cases/case_05\")\nfrom kernel import count_tied_at_boundary\n\nEPS = 1e-3  # kernel's own tolerance; contract doesn't fix it, use same for reference\n\ndef ref(scores, pivot):\n    above = scores[scores > pivot]\n    if len(above) == 0:\n        return 0\n    m = above.min().item()\n    return int((above - m).abs().lt(EPS).sum().item())\n\ncases = {}\ndef add(name, vals, pivot):\n    s = torch.tensor(vals, dtype=torch.float32)\n    if (len(vals) & (len(vals)-1)) != 0:\n        s = torch.cat([s, torch.full(( (1<<(len(vals)-1).bit_length()) - len(vals), ), -1e9, dtype=torch.float32)])\n    cases[name] = (s, float(pivot))\n\n# exact ties\nadd(\"exact_ties\", [0.5, 0.5, 0.5, 0.1, 0.2, 0.9, 0.4, 0.3], 0.25)\n
+  ...[truncated 1557 chars]
   Output summary:
   {
     "artifacts": [
@@ -112,123 +123,202 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t6_probe.py",
-        "sha256": "434d1a4dbe3b3e53bb925eace841a3854e887bd74a0f9007c906e53a13bbc7c8"
+        "sha256": "76922640a7a96af53391f9c57f9ef6d1f73eb3a03632139cd318ca9fa5710d51"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t6_stdout.txt",
-        "sha256": "4b12a26d297046248fb44a60f0fce7dc86efb6c1953abc2ae65ce70479a29a70"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t6_stderr.txt",
+        "sha256": "5db6443f6fa5631e0b3260c30be5efc4a617816d6a2394e5991a38c651abc589"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
+    "duration_s": 6.204708,
+    "event_id": "t6",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+           
+  ...[truncated 3165 chars]
+
+### Turn 4 - `solo` (13.194801861999998s, in=12252 out=920)
+
+Message:
+
+```text
+The probe crashed only because I created CPU tensors; the kernel requires CUDA tensors. I'll rerun with everything on GPU.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t7 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_05\")\nfrom kernel import count_tied_at_boundary\n\ndev = \"cuda\"\nEPS = 1e-3  # kernel's own tolerance; contract doesn't fix it\n\ndef ref(scores, pivot):\n    above = scores[scores > pivot]\n    if len(above) == 0:\n        return 0\n    m = above.min().item()\n    return int((above - m).abs().lt(EPS).sum().item())\n\ncases = {}\ndef add(name, vals, pivot):\n    s = torch.tensor(vals, dtype=torch.float32, device=dev)\n    n = 1 << (len(vals)-1).bit_length()\n    if len(vals) != n:\n        s = torch.cat([s, torch.full((n - len(vals),), -1e9, dtype=torch.float32, device=dev)])\n    cases[name] = (s, float(pivot))\n\nadd(\"exact_ties\", [0.5, 0.5, 0.5, 0.1, 0.2, 0.9, 0.4, 0.3], 0.25)\nadd(\"tol
+  ...[truncated 1400 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t7_probe.py",
+        "sha256": "5dfebecafb23ae1660ea9af9cb98df8cae9b9689aeada1abcdfdcee22e8c6865"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t7_stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t7_stderr.txt",
+        "sha256": "b4acba152ff16b128d0ee247220354ac18c5e11faae08229b996252fe8e9a3cb"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
+    "duration_s": 4.448898,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+           
+  ...[truncated 2055 chars]
+
+### Turn 5 - `solo` (12.983984173000003s, in=15346 out=929)
+
+Message:
+
+```text
+Two probes failed on my own probe bugs (CPU tensors, then a wrong Generator API). The named cases never ran. I'll fix the random-sweep code and rerun.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json, sys, random\nsys.path.insert(0, \"/root/cases/case_05\")\nfrom kernel import count_tied_at_boundary\n\ndev = \"cuda\"\nEPS = 1e-3\n\ndef ref(scores, pivot):\n    above = scores[scores > pivot]\n    if len(above) == 0:\n        return 0\n    m = above.min().item()\n    return int((above - m).abs().lt(EPS).sum().item())\n\ncases = {}\ndef add(name, vals, pivot):\n    s = torch.tensor(vals, dtype=torch.float32, device=dev)\n    n = 1 << (len(vals)-1).bit_length()\n    if len(vals) != n:\n        s = torch.cat([s, torch.full((n - len(vals),), -1e9, dtype=torch.float32, device=dev)])\n    cases[name] = (s, float(pivot))\n\nadd(\"exact_ties\", [0.5, 0.5, 0.5, 0.1, 0.2, 0.9, 0.4, 0.3], 0.25)\nadd(\"tolerance\", [0.3000, 0.3005, 0.3015, 0.3020, 
+  ...[truncated 1388 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t8_probe.py",
+        "sha256": "8e8986c472b6350f3d9c24c73721088aaf97792594c3f050338b773a306203ad"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t8_stdout.txt",
+        "sha256": "97bee76574c7bd5286c1ef5859afe50e727bae757a68871055956838d919b2ae"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t8_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "cb379370543954c50dfca19c7837a021e68b6dfbbf29a35809b9015620420301"
+        "path": "probes/t8_json_result.json",
+        "sha256": "18c5c4c7572ff3144964d354f0d2f247e3f38cb681bff42f560cc75a485c47f7"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 te
-  ...[truncated 5115 chars]
+    "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundar
+  ...[truncated 4586 chars]
 
-### Turn 3 - `solo` (3.0556795590000014s, in=11963 out=556)
+### Turn 6 - `solo` (9.446091181s, in=19264 out=241)
 
 Message:
 
 ```text
-The probe (t6) already answered claim c1: max abs/rel errors are at fp32 rounding level (~4.8e-07, ~2.3e-07) across fp32, bf16 round-trip, near-zero rows, and multiple sizes, all finite. I'll record the evidence, mark the claim rebutted (kernel matches contract), and give the verdict.
+The corrected probe (t8) passed all 8 targeted cases plus 50 random power-of-two tiles with zero mismatches. I'll finalize the evidence and issue the verdict.
 ```
 
 Tool calls:
 
-- `append_evidence -> t7 ok`
+- `finalize_probe_evidence -> t9 ok`
   Args:
   {
-    "claim_id": "c1",
     "data": {
-      "bf16_roundtrip": {
-        "max_abs_err": 4.76837158203125e-07,
-        "max_rel_err": 2.2695842005759914e-07
+      "cases": {
+        "all_above_single_min": "1/1",
+        "chain": "3/3",
+        "empty": "0/0",
+        "exact_ties": "1/1",
+        "pivot_boundary": "1/1",
+        "pivot_equal": "2/2",
+        "size1_pad": "1/1",
+        "tolerance": "2/2"
       },
-      "fp32_randn": {
-        "max_abs_err": 4.76837158203125e-07,
-        "max_rel_err": 2.273527854868007e-07
-      },
-      "fp32_small": {
-        "max_abs_err": 0.0
-      },
-      "fp32_tiny": {
-        "max_abs_err": 0.0
-      },
-      "metric": "elementwise max abs/rel error vs fp32 reference",
-      "n_1024": {
-        "max_abs_err": 4.76837158203125e-07
-      },
-      "n_128": {
-        "max_abs_err": 4.76837158203125e-07
-      },
-      "n_4096": {
-        "max_abs_err": 4.76837158203125e-07
-      },
-      "n_7": {
-        "max_abs_err": 1.1920928955078125e-07
-      },
-      "near_zero_row": {
-        "finite": true,
-        "max_abs_err": 4.76837158203125e-07,
-        "max_rel_err": 
-  ...[truncated 408 chars]
-  Output summary:
-  {
-    "id": "c1.e1",
-    "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
-    "supports": "rebutted"
+      "mismatches": [],
+      "random_mismatches": 0,
+      "random_trials": 50
+    },
+    "event_id": "t8",
+    "summary": "All 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary, all-above, empty, size-1 padded) and 50 random power-of-two-length CUDA tiles matched the EPS-based reference tie-count exactly; zero mismatches.",
+    "supports": "confirmed"
   }
-- `update_claim_status -> t8 ok`
-  Args:
+  Output summary:
   {
     "claim_id": "c1",
-    "status": "rebutted"
-  }
-  Output summary:
-  {
-    "id": "c1",
-    "status": "rebutted"
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "All 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary, all-above, empty, size-1 padded) and 50 random power-of-two-length CUDA tiles matched the EPS-based reference tie-count exactly; zero mismatches.",
+    "supports": "confirmed",
+    "tool_event_id": "t8"
   }
 
-### Turn 4 - `solo` (2.441901749000003s, in=15023 out=253)
+### Turn 7 - `solo` (5.259958910999998s, in=23342 out=186)
 
 Message:
 
 ```text
-The single claim c1 is fully resolved as rebutted — the kernel matches the contract on all admitted inputs. I'll record the final verdict.
+The single claim is confirmed by probe t8: all 8 targeted cases and 50 random power-of-two tiles matched the reference tie-count exactly. Recording the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t9 ok`
+- `record_verdict -> t10 ok`
   Args:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+    "reason": "Source inspection shows the kernel computes the minimum value strictly above the pivot and counts values strictly above the pivot within EPS (1e-3, tolerance value left unspecified by the contract), matching the required semantics. Runtime probe t8 confirmed this on 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary exclusion, all-above, empty, size-1) and 50 random power-of-two-length CUDA tiles: zero mismatches against an EPS-based reference tie-count. No contract violation found.",
     "verdict": "trust"
   }
   Output summary:
   {
-    "confidence": 0.92,
+    "confidence": 0.95,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+    "reason": "Source inspection shows the kernel computes the minimum value strictly above the pivot and counts values strictly above the pivot within EPS (1e-3, tolerance value left unspecified by the contract), matching the required semantics. Runtime probe t8 confirmed this on 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary exclusion, all-above, empty, size-1) and 50 random power-of-two-length CUDA tiles: zero mismatches against an EPS-based reference tie-count. No contract violation found.",
     "verdict": "trust"
   }
 
@@ -238,60 +328,62 @@ No description model recorded.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.
+Statement: count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.
 
-Scope: `unknown`
+Scope: `in_scope`
+
+Scope rationale: Contract requires counting values strictly above pivot that are tied with the smallest of them, on power-of-two-length single-tile scores; tolerance value unspecified.
 
 Scope evidence:
-- `problem.txt`: Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero.
+- `problem.txt`: `count_tied_at_boundary(scores, pivot)` must return how many of the values strictly above `pivot` are tied with the smallest of them; `scores` is a single tile whose length is a power of two.
 
-Rationale: The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.
+Rationale: Source inspection suggests the min-above-pivot plus within-EPS count matches the contract, but chain-tie cases (each value within EPS of the next but not of the minimum) and pivot-boundary cases could reveal off-by-one or tolerance-semantic failures.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t6: Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: All 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary, all-above, empty, size-1 padded) and 50 random power-of-two-length CUDA tiles matched the EPS-based reference tie-count exactly; zero mismatches.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t5 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The contract requires fp32 accumulation, correct mean_square/rstd formula, and correct behavior for bf16 round-trip and near-zero rows; the kernel computes y = x * rsqrt(mean(x^2)+eps) in fp32, but runtime evidence is needed to confirm accuracy vs a float64/fp32 reference on the admitted input domain.",
-  "scope": "unknown",
+  "rationale": "Source inspection suggests the min-above-pivot plus within-EPS count matches the contract, but chain-tie cases (each value within EPS of the next but not of the minimum) and pivot-boundary cases could reveal off-by-one or tolerance-semantic failures.",
+  "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract: mean_square = sum(x*x)/n_cols; rstd = 1/sqrt(mean_square+eps); y = x*rstd, fp32 accumulation, inputs may be fp32 or bf16 round-trip, rows near zero."
+      "summary": "`count_tied_at_boundary(scores, pivot)` must return how many of the values strictly above `pivot` are tied with the smallest of them; `scores` is a single tile whose length is a power of two."
     }
   ],
-  "scope_rationale": "",
-  "statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
+  "scope_rationale": "Contract requires counting values strictly above pivot that are tied with the smallest of them, on power-of-two-length single-tile scores; tolerance value unspecified.",
+  "statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
   "status": "open"
 }
 
@@ -303,30 +395,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t6_probe.py",
-      "sha256": "434d1a4dbe3b3e53bb925eace841a3854e887bd74a0f9007c906e53a13bbc7c8"
+      "sha256": "76922640a7a96af53391f9c57f9ef6d1f73eb3a03632139cd318ca9fa5710d51"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t6_stdout.txt",
-      "sha256": "4b12a26d297046248fb44a60f0fce7dc86efb6c1953abc2ae65ce70479a29a70"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t6_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "cb379370543954c50dfca19c7837a021e68b6dfbbf29a35809b9015620420301"
+      "sha256": "5db6443f6fa5631e0b3260c30be5efc4a617816d6a2394e5991a38c651abc589"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The Triton RMSNorm kernel's output Y and stored RSTD deviate from the reference computation y = x / sqrt(mean(x^2)+eps) (fp32 accumulation) beyond fp32 rounding tolerance on the contract's admitted inputs: fp32 tensors, bf16 round-trip tensors, and rows with magnitude near zero.",
-  "duration_s": 8.759567,
+  "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
+  "duration_s": 6.204708,
   "event_id": "t6",
   "evidence_draft": {
     "claim_id": "c1",
@@ -336,54 +422,166 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t6_probe.py",
-          "sha256": "434d1a4dbe3b3e53bb925eace841a3854e887bd74a0f9007c906e53a13bbc7c8"
+          "sha256": "76922640a7a96af53391f9c57f9ef6d1f73eb3a03632139cd318ca9fa5710d51"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t6_stdout.txt",
-          "sha256": "4b12a26d297046248fb44a60f0fce7dc86efb6c1953abc2ae65ce70479a29a70"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
- 
-...[truncated 4315 chars]
+          "path": "probes/t6_stderr.txt",
+          "sha256": "5db6443f6fa5631e0b3260c30be5efc4a617816d6a2394e5991a38c651abc589"
+        }
+      ],
+      "duration_s": 6.204708,
+      "exit_code": 1,
+      "expected_signal": "All representative cases and random power-of-two tiles match 
+...[truncated 2365 chars]
 
-### t7 - append_evidence - ok
+### t7 - run_claim_probe - ok
 
 {
-  "id": "c1.e1",
-  "summary": "Probe t6 vs fp32 reference across contract-admitted inputs (fp32 randn, *1e-6, *1e-30, bf16 round-trip, zero/1e-40 rows, n in {7,128,256,1024,4096}): max_abs_err <= 4.77e-07, max_rel_err <= 2.29e-07, all outputs finite. Deviations are at fp32 rounding level, not beyond tolerance.",
-  "supports": "rebutted"
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t7_probe.py",
+      "sha256": "5dfebecafb23ae1660ea9af9cb98df8cae9b9689aeada1abcdfdcee22e8c6865"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t7_stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t7_stderr.txt",
+      "sha256": "b4acba152ff16b128d0ee247220354ac18c5e11faae08229b996252fe8e9a3cb"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
+  "duration_s": 4.448898,
+  "event_id": "t7",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t7_probe.py",
+          "sha256": "5dfebecafb23ae1660ea9af9cb98df8cae9b9689aeada1abcdfdcee22e8c6865"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t7_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t7_stderr.txt",
+          "sha256": "b4acba152ff16b128d0ee247220354ac18c5e11faae08229b996252fe8e9a3cb"
+        }
+      ],
+      "duration_s": 4.448898,
+      "exit_code": 1,
+      "expected_signal": "All representative cases and random power-of-two tiles match 
+...[truncated 1255 chars]
+
+### t8 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t8_probe.py",
+      "sha256": "8e8986c472b6350f3d9c24c73721088aaf97792594c3f050338b773a306203ad"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t8_stdout.txt",
+      "sha256": "97bee76574c7bd5286c1ef5859afe50e727bae757a68871055956838d919b2ae"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t8_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t8_json_result.json",
+      "sha256": "18c5c4c7572ff3144964d354f0d2f247e3f38cb681bff42f560cc75a485c47f7"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "count_tied_at_boundary returns, for representative power-of-two-length score tiles, the number of values strictly above pivot within tolerance of the smallest above-pivot value, including exact ties, pivot-boundary values, and the empty case.",
+  "duration_s": 5.351596,
+  "event_id": "t8",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t8_probe.py",
+          "sha256": "8e8986c472b6350f3d9c24c73721088aaf97792594c3f050338b773a306203ad"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t8_stdout.txt",
+          "sha256": "97bee76574c7bd5286c1ef5859afe50e727bae757a68871055956838d919b2ae"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t8_stderr.tx
+...[truncated 3786 chars]
+
+### t9 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "All 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary, all-above, empty, size-1 padded) and 50 random power-of-two-length CUDA tiles matched the EPS-based reference tie-count exactly; zero mismatches.",
+  "supports": "confirmed",
+  "tool_event_id": "t8"
 }
 
-### t8 - update_claim_status - ok
+### t10 - record_verdict - ok
 
 {
-  "id": "c1",
-  "status": "rebutted"
-}
-
-### t9 - record_verdict - ok
-
-{
-  "confidence": 0.92,
+  "confidence": 0.95,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+  "reason": "Source inspection shows the kernel computes the minimum value strictly above the pivot and counts values strictly above the pivot within EPS (1e-3, tolerance value left unspecified by the contract), matching the required semantics. Runtime probe t8 confirmed this on 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary exclusion, all-above, empty, size-1) and 50 random power-of-two-length CUDA tiles: zero mismatches against an EPS-based reference tie-count. No contract violation found.",
   "verdict": "trust"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.92,
-  "created_at": "2026-09-10T05:20:17Z",
+  "confidence": 0.95,
+  "created_at": "2026-09-30T08:16:50Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The kernel implements exactly the contract formula: fp32-accumulated mean_square = sum(x^2)/n, rstd = rsqrt(mean_square+eps), y = x*rstd, with fp32 upcast handling both fp32 and bf16 round-trip inputs. Runtime probe t6 (evidence c1.e1) compared against an fp32 reference across all contract-admitted input classes \u2014 fp32 randn, inputs scaled by 1e-6 and 1e-30, bf16 round-trip tensors, rows containing exact zero and 1e-40 values, and n in {7,128,256,1024,4096}. Max abs error <= 4.77e-07, max rel error <= 2.29e-07, all outputs finite including near-zero rows. Deviations are pure fp32 rounding-level noise, not contract violations.",
+  "reason": "Source inspection shows the kernel computes the minimum value strictly above the pivot and counts values strictly above the pivot within EPS (1e-3, tolerance value left unspecified by the contract), matching the required semantics. Runtime probe t8 confirmed this on 8 targeted cases (exact ties, within/beyond tolerance, chain ties, pivot-boundary exclusion, all-above, empty, size-1) and 50 random power-of-two-length CUDA tiles: zero mismatches against an EPS-based reference tie-count. No contract violation found.",
   "verdict": "trust"
 }

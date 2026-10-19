@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_19`
-- Turns: 10
-- Tool events: 20
-- Claims: 3
-- Description updates: 2
-- LLM time: 131.409s across 9 calls | tokens: in=255080 out=6764 total=261844
+- Entry: `case_20`
+- Turns: 19
+- Tool events: 23
+- Claims: 2
+- Description updates: 4
+- LLM time: 215.132s across 18 calls | tokens: in=431930 out=10375 total=442305
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
-- Confidence: 0.95
+- Verdict: `needs_more_evidence`
+- Confidence: 0.7
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -26,47 +26,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_19",
+    "entry": "case_20",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_19"
+    "entry": "case_20"
   }
 
-### Turn 2 - `describer` (24.101735314999928s, in=10317 out=1339)
+### Turn 2 - `describer` (16.347558541000012s, in=4796 out=854)
 
 Message:
 
 ```text
-The key surface here is the cross-block argmax accumulation. Within a block the code takes the min offset among max-valued entries (lowest index in that block), but across blocks `is_new_max = block_max >= m` lets a *later* block with an equal max overwrite the running argmax, so a tie spanning multiple blocks reports the later block's index rather than the globally lowest one. I'll record the full description.
+I'll describe the kernel: the eps placement differs from the contract. The contract requires rstd = 1/sqrt(var + eps), while the kernel computes rstd = 1/(sqrt(var) + eps) at line 26. That's the key risk surface.
 ```
 
 Tool calls:
@@ -75,213 +75,240 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
-      "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
+      "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+      "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero (constant rows must not blow up)",
+      "Affine parameters weight and bias are applied per column after normalization",
+      "Only the forward layer_norm() output y is contractual; mean/rstd buffers are internal"
     ],
     "kernel_model": [
-      "Wrapper (kernel.py:328-353) launches one program per
-  ...[truncated 3573 chars]
+      "Triton kernel with one program per row (grid = (n_rows,)), BLOCK=256, looped over N in chunks with cols<N masking",
+      "Computes mean and variance in float32 with two-pass accumulation; masked lanes contribute 0 to sums, and variance pass zeroes out-of-range lanes via tl.where before squaring",
+      "Line 26 c
+  ...[truncated 2516 chars]
   Output summary:
   {
     "contract_model": [
-      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
-      "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
+      "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+      "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero (constant rows must not blow up)",
+      "Affine parameters weight and bias are applied per column after normalization",
+      "Only the forward layer_norm() output y is contractual; mean/rstd buffers are internal"
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
-      "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching t
-  ...[truncated 3263 chars]
+      "Triton kernel with one program per row (grid = (n_rows,)), BLOCK=256, looped over N in chunks with cols<N masking",
+      "Computes mean and variance in float32 with two-pass accumulation; masked lanes contribute 0 to sums, and variance pass zeroes out-of-range lanes via tl.where before squaring",
+      "Line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps): eps is added OUTSIDE the sqrt, i.e. to the denominator after sqrt, not as sqrt(var + eps)",
+      "Writes mean and rstd to auxiliary float32 tensors Mean/Rstd, though these are not part of the returned output",
+      "Output y is stored back in the input tensor's dtype via torch.empty_like(x); (a-mean)*rstd*w+b computed in fp32 then 
+  ...[truncated 2240 chars]
 
-### Turn 3 - `skeptic` (5.032070562999934s, in=18465 out=165)
-
-Message:
-
-```text
-Record the highest-risk claims. Two claims: cross-block tie violation (in_scope per contract's tie rule and input domain), and within-block remainder masking edge case (the all -inf row is likely out of scope). Maybe record the tie claim as in_scope, and the second as unknown/out_of_scope. Also loss mean reduction over n_non_ignore — problem says loss[i] = -log softmax; wrapper divides by n_non_ignore in kernel (reduction "mean" divides loss by n_non_ignore!). Wait — contract says loss[i] = -log softmax(logits[i])[target[i]], but kernel stores loss / n_non_ignore. That's a potential bug: the per-row loss is scaled by mean over non-ignored tokens. That's a strong in-scope claim!
-```
-
-Tool calls:
-
-- `read_claim_ledger -> t6 ok`
-
-### Turn 4 - `skeptic` (13.64426730699995s, in=18745 out=710)
+### Turn 3 - `skeptic` (12.569466756999987s, in=11578 out=702)
 
 Message:
 
 ```text
-I'll record the three highest-risk claims: the cross-block tie violation, the masked-lane -inf argmax edge, and the mean-reduction scaling of per-row loss.
+The decisive risk is the eps placement at line 26. I'll record two concrete claims: the main in-scope output divergence for near-zero-variance rows, and the rstd-buffer mismatch (likely out of scope since only y is contractual).
 ```
 
 Tool calls:
 
-- `record_claim -> t7 error`
+- `record_claim -> t6 error`
   Args:
   {
-    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
+    "rationale": "Line 26 computes rstd = 1.0/(sqrt(var)+eps) while the contract requires 1/sqrt(var+eps). For rows where var is small but nonzero, (x-mean) != 0, and the two rstd values differ by ~eps/(2*var^(3/2)), so y = (x-mean)*rstd*w + bias differs by a relatively large amount near the eps-dominated regime; e.g., with rows of tiny perturbations (std ~ 1e-3 to 1e-2, eps=1e-5), the relative error in rstd can reach several percent, well beyond typical allclose tolerances.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
-      }
-    ],
-    "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 400
-  ...[truncated 161 chars]
+        "summary": "Contract states rstd = 1 / sqrt(var + eps) and emphasizes eps must keep the normalizer finite 'as the row variance approaches zero', i.e., near-zero-variance rows are explicitly within the contract's protected regime."
+  ...[truncated 399 chars]
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
-- `record_claim -> t8 ok`
+- `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
-    "scope": "unknown",
-    "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask."
+    "rationale": "At var=0, contract rstd = 1/sqrt(eps) while kernel rstd = 1/eps; with eps=1e-5 these are ~316 vs 100000, a 316x difference. However, only y is contractual per the problem statement, and at var=0 the output y equals bias in both cases, so this divergence is visible only in the internal Mean/Rstd buffers the kernel writes.",
+    "scope": "out_of_scope",
+    "scope_rationale": "problem.txt asks only whether layer_norm()'s output satisfies the formula; the Mean/Rstd buffers are internal artifacts of the kernel, and for constant rows y equals bias in both implementations, so this divergence does not affect the contractual output.",
+    "statement": "The kernel's auxiliary rstd buffer is 1/(sqrt(var)+eps), which for a constant row (var=0) equals 1/eps instead of the contract's 1/sqrt
+  ...[truncated 143 chars]
+  Output summary:
+  {
+    "id": "c1",
+    "rationale": "At var=0, contract rstd = 1/sqrt(eps) while kernel rstd = 1/eps; with eps=1e-5 these are ~316 vs 100000, a 316x difference. However, only y is contractual per the problem statement, and at var=0 the output y equals bias in both cases, so this divergence is visible only in the internal Mean/Rstd buffers the kernel writes.",
+    "scope": "out_of_scope",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt asks only whether layer_norm()'s output satisfies the formula; the Mean/Rstd buffers are internal artifacts of the kernel, and for constant rows y equals bias in both implementations, so this divergence does not affect the contractual output.",
+    "statement": "The kernel's auxiliary rstd buffer is 1/(sqrt(var)+eps), which for a constant row (var=0) equals 1/eps instead of the contract's 1/sqrt(eps), so any consumer comparing the rstd normalizer against the reference formula diverges by a factor of 1/sqrt(eps) (~316x for eps=1e-5).",
+    "status": "open"
+  }
+
+### Turn 4 - `experimenter` (8.840445492000072s, in=14052 out=463)
+
+Message:
+
+```text
+The only open claim is c1, about the rstd computation at line 26. Since the divergence is a deterministic algebraic fact visible in the source (1/(sqrt(var)+eps) at var=0 gives 1/eps, not the contract's 1/sqrt(eps)), source inspection is decisive evidence — no runtime probe is needed.
+```
+
+Tool calls:
+
+- `append_evidence -> t8 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "data": {
+      "contract_rstd_var0": 316.22776601683796,
+      "kernel_rstd_var0": 100000.0,
+      "ratio": 316.22776601683796,
+      "source_line": 26
+    },
+    "kind": "source_inspection",
+    "summary": "kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps). For a constant row, var == 0 exactly (two-pass variance with masked lanes contributing 0), so kernel rstd = 1/eps = 1e5 for eps=1e-5, while the contract formula 1/sqrt(var+eps) gives 1/sqrt(eps) \u2248 316.23 \u2014 a 316.23x divergence in the auxiliary Rstd buffer. Note this buffer is internal: for var=0 the store at line 36 writes (0)*rstd*w + b = b, so the returned y equals bias either way, consistent with the claim's out-of-scope classification.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "id": "c1.e1",
+    "summary": "kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps). For a constant row, var == 0 exactly (two-pass variance with masked lanes contributing 0), so kernel rstd = 1/eps = 1e5 for eps=1e-5, while the contract formula 1/sqrt(var+eps) gives 1/sqrt(eps) \u2248 316.23 \u2014 a 316.23x divergence in the auxiliary Rstd buffer. Note this buffer is internal: for var=0 the store at line 36 writes (0)*rstd*w + b = b, so the returned y equals bias either way, consistent with the claim's out-of-scope classification.",
+    "supports": "confirmed"
+  }
+
+### Turn 5 - `experimenter` (3.1900957240000025s, in=15357 out=68)
+
+Message:
+
+```text
+Claim c1 already has confirming source-inspection evidence; I'll finalize its status so no open claims remain.
+```
+
+Tool calls:
+
+- `update_claim_status -> t9 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "status": "confirmed"
   }
   Output summary:
   {
     "id": "c1",
-    "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "",
-    "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
-    "status": "open"
-  }
-- `record_claim -> t9 error`
-  Args:
-  {
-    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than -log softmax per row.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
-      }
-    ],
-    "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token."
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+    "status": "confirmed"
   }
 
-### Turn 5 - `describer` (28.594185914000036s, in=19374 out=1584)
+### Turn 6 - `skeptic` (14.92010089400003s, in=15872 out=817)
 
 Message:
 
 ```text
-The description model needs a refinement: the skeptic raised two additional high-risk surfaces (cross-block tie via `>=` at line 160, and the mean-reduction division of per-row loss at lines 307-314), but both `record_claim` calls errored on missing `scope_rationale` and never landed in the ledger. Only claim c1 (the `-inf` masked-lane argmax edge) was actually recorded. I'll update the shared description to incorporate these surfaces so the contract-vs-kernel picture is complete for the next round.
+The earlier in-scope claim (output divergence for near-zero-variance rows from eps placed outside the sqrt) failed to record due to a missing scope_rationale and was never retried; existing claim c1 only covers the internal rstd buffer at var=0. Source evidence at line 26 already confirms the algebraic divergence, and problem.txt explicitly mandates 1/sqrt(var+eps) with the near-zero-variance regime highlighted — so I'll record that material in-scope claim now, with proper scope fields.
 ```
 
 Tool calls:
 
-- `record_description_update -> t10 ok`
+- `record_claim -> t10 ok`
   Args:
   {
-    "contract_model": [
-      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-      "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
-      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
-    ],
-    "kernel_model": [
-      "Wrapper (k
-  ...[truncated 5071 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-      "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
-      "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-      "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, lse_square_scale=0, no softcap; returns (loss fp32, predicted int32).",
-      "Loss path: online softmax computes lse (lines 127-177), loss = lse - ori_X_y (line 284); then because reduction=='mea
-  ...[truncated 4771 chars]
-
-### Turn 6 - `skeptic` (9.659210193000035s, in=30212 out=556)
-
-Message:
-
-```text
-I'll re-record the two claims that failed earlier due to missing scope_rationale — the cross-block tie violation and the per-row loss scaling.
-```
-
-Tool calls:
-
-- `record_claim -> t11 ok`
-  Args:
-  {
-    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
+    "rationale": "Line 26 computes rstd = 1.0/(tl.sqrt(var)+eps) instead of 1/sqrt(var+eps). For a row with small nonzero variance, e.g. var = 1e-6 (std 1e-3) and eps=1e-5, contract rstd = 1/sqrt(1.1e-5) \u2248 302 while kernel rstd = 1/(1e-3+1e-5) \u2248 990 \u2014 a >3x error in the normalizer. Since (x-mean) != 0 for such rows, y = (x-mean)*rstd*w + b differs from the contract by the same >3x factor on the normalized component, far beyond any typical allclose tolerance. The error vanishes only for normal-variance rows (var >> eps) and for exactly-constant rows (where (x-mean)=0).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
-      }
-    ],
-    "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ti
-  ...[truncated 406 chars]
+        "summary": "Contract states rstd = 1 / sqrt(var + eps) and y = (x-mean)*rstd*weight + bias, and explicitly says eps 'mus
+  ...[truncated 958 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
+    "rationale": "Line 26 computes rstd = 1.0/(tl.sqrt(var)+eps) instead of 1/sqrt(var+eps). For a row with small nonzero variance, e.g. var = 1e-6 (std 1e-3) and eps=1e-5, contract rstd = 1/sqrt(1.1e-5) \u2248 302 while kernel rstd = 1/(1e-3+1e-5) \u2248 990 \u2014 a >3x error in the normalizer. Since (x-mean) != 0 for such rows, y = (x-mean)*rstd*w + b differs from the contract by the same >3x factor on the normalized component, far beyond any typical allclose tolerance. The error vanishes only for normal-variance rows (var >> eps) and for exactly-constant rows (where (x-mean)=0).",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
+        "summary": "Contract states rstd = 1 / sqrt(var + eps) and y = (x-mean)*rstd*weight + bias, and explicitly says eps 'must keep the normalizer finite as the row variance approaches zero' \u2014 the near-zero-variance regime is the contract's stated protected domain, so output accuracy there is required."
       }
     ],
-    "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.",
-    "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWES
-  ...[truncated 40 chars]
-- `record_claim -> t12 ok`
-  Args:
-  {
-    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
-      }
-    ],
-    "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
-    "statement": "The returned per-row l
-  ...[truncated 232 chars]
-  Output summary:
-  {
-    "id": "c3",
-    "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
-      }
-    ],
-    "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
-    "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
-    "status": "open"
-  }
+    "scope_rationale": "problem.txt's stated formula is rstd = 1/sqrt(var + eps) and it explicitly names the near-zero-variance regime (\"as the row variance approaches zero\") as the case eps
+  ...[truncated 592 chars]
 
-### Turn 7 - `experimenter` (17.543933181000057s, in=33090 out=926)
+### Turn 7 - `describer` (17.30858764100003s, in=16614 out=983)
 
 Message:
 
 ```text
-I'll probe all three open claims independently — c2 (cross-block ties, n_cols=40000), c3 (loss scaling, n_rows=4), and c1 (all -inf row).
+The only open claim is c2 (output divergence for small-nonzero-variance rows from the eps-outside-sqrt bug). I'll refine the description model to sharpen the evidence-gathering surface for it: the key detail is that the mean subtraction must remain nonzero for the divergence to reach y, and that the error is a smooth multiplicative factor ~eps/(2*var), so a single-row probe with controlled variance (e.g., constant row plus one perturbed element) is decisive.
+```
+
+Tool calls:
+
+- `record_description_update -> t11 ok`
+  Args:
+  {
+    "contract_model": [
+      "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+      "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero; the contract explicitly protects the near-zero-variance regime",
+      "Only the returned y is contractual; the Mean/Rstd buffers are internal kernel artifacts"
+    ],
+    "kernel_model": [
+      "Triton kernel, one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking (other=0.0 and tl.where before squaring)",
+      "Line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps added outside the sqrt, so the normalizer is 1/(std+eps) instead of 1/sqrt(var+eps)",
+      "For var >> eps the two formulas agree to relative order eps/(2*var
+  ...[truncated 2311 chars]
+  Output summary:
+  {
+    "contract_model": [
+      "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+      "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero; the contract explicitly protects the near-zero-variance regime",
+      "Only the returned y is contractual; the Mean/Rstd buffers are internal kernel artifacts"
+    ],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "Triton kernel, one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking (other=0.0 and tl.where before squaring)",
+      "Line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps added outside the sqrt, so the normalizer is 1/(std+eps) instead of 1/sqrt(var+eps)",
+      "For var >> eps the two formulas agree to relative order eps/(2*var); for small nonzero var (var ~ eps) the kernel's rstd is larger by a factor ~1+eps/(2*var) up to ~3x at var=1e-6, and this factor multiplies (x-mean)*w in y",
+      "For exactly-constant rows (var=0), (x-mean)=0 so y=bias in both implementations; divergence appears only in the internal Rstd buffer",
+      "Wrapper assumes 2D x, contiguous last dim; y cast to x.dtype on store
+  ...[truncated 2001 chars]
+
+### Turn 8 - `skeptic` (6.483206408000001s, in=23864 out=238)
+
+Message:
+
+```text
+This is the final review turn. The open in-scope claim c2 (eps placed outside the sqrt at line 26, producing multi-x errors in y for small-nonzero-variance rows) already captures the material contract violation, backed by the contract formula and source inspection. No new evidence exposes anything beyond it.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t12 ok`
+  Args:
+  {
+    "reason": "Final review: the only material in-scope defect \u2014 rstd = 1/(sqrt(var)+eps) at kernel.py line 26 instead of 1/sqrt(var+eps), which deviates from the contract formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows \u2014 is already recorded as open in-scope claim c2 with contract scope evidence. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No new evidence from the latest description update or probes exposes an additional material, testable in-scope problem.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Final review: the only material in-scope defect \u2014 rstd = 1/(sqrt(var)+eps) at kernel.py line 26 instead of 1/sqrt(var+eps), which deviates from the contract formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows \u2014 is already recorded as open in-scope claim c2 with contract scope evidence. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No new evidence from the latest description update or probes exposes an additional material, testable in-scope problem.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 11,
+    "turn": 8
+  }
+
+### Turn 9 - `experimenter` (16.66827519399999s, in=24108 out=1017)
+
+Message:
+
+```text
+I'll run a runtime probe for open claim c2: build a row with small nonzero variance (constant row plus one perturbed element, and also a symmetric ±δ pattern), call the kernel, and compare its output y against the exact contract formula 1/sqrt(var+eps).
 ```
 
 Tool calls:
@@ -290,8 +317,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c2",
-    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 2, 40000\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\n# row 0: max at index 0, tied copy at 40000-block boundary region (index 35000, in 2nd block)\nlogits[0] = -10.0\nlogits[0, 0] = 5.0\nlogits[0, 35000] = 5.0  # tie in second block (BLOCK_SIZE=32768)\n# row 1: max in first block only (control)\nlogits[1] = torch.randn(n_cols, device='cuda')\ntarget = torch.tensor([0, 5], device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nref_pred0 = int(torch.argmax(logits[0]))  # torch argmax returns lowest index on ties\nout = {\"predicted_row0\": int(pre
-  ...[truncated 343 chars]
+    "code": "import torch, math, json, sys\nsys.path.insert(0, \"/root/cases/case_20\")\nfrom kernel import layer_norm\n\neps = 1e-5\nN = 512\ntorch.manual_seed(0)\n\ndef ref(x, w, b, eps):\n    xf = x.float()\n    mean = xf.mean(-1, keepdim=True)\n    var = ((xf - mean) ** 2).mean(-1, keepdim=True)\n    rstd = 1.0 / torch.sqrt(var + eps)\n    return (xf - mean) * rstd * w.float() + b.float()\n\nresults = {}\nrows = []\ndeltas = [1e-4, 1e-3, 1e-2]\nfor d in deltas:\n    # constant row + single perturbed element\n    r = torch.full((N,), 0.7)\n    r[3] = 0.7 + d\n    rows.append((\"single_perturb\", d, r))\n    # symmetric pattern: two elements perturbed +-d (mean stays 0.7)\n    r2 = torch.full((N,), 0.7)\n    r2[0] = 0.7 + d\n    r2[1] = 0.7 - d\n    rows.append((\"sym
+  ...[truncated 2060 chars]
   Output summary:
   {
     "artifacts": [
@@ -299,213 +326,181 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t13_probe.py",
-        "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
+        "sha256": "1a6b5b75f656b9ade19cba0e5469b9414b9765f154c86e1bce2b717d3f30d946"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t13_stdout.txt",
-        "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t13_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t13_json_result.json",
-        "sha256": "51471496f592e0c816b6a8457256c81600e8d954ac1ec4c480fa2d0c91891d41"
+        "sha256": "5509a05e2d02fdbaf00a086f4084a02929d5e52c6a04d9a0fe778d2bb66238d7"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block
-  ...[truncated 2654 chars]
-- `run_claim_probe -> t14 ok`
-  Args:
-  {
-    "claim_id": "c3",
-    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 4, 1000\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\ntarget = torch.randint(0, n_cols, (n_rows,), device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nref = torch.nn.functional.cross_entropy(logits, target, reduction='none')\nratio = (ref / loss).tolist()\nout = {\"n_rows\": n_rows, \"kernel_loss\": loss.tolist(), \"ref_per_row\": ref.tolist(),\n       \"ref_over_kernel_ratio\": ratio,\n       \"max_rel_err\": float(((loss - ref).abs() / ref.abs()).max()),\n       \"scaling_bug\": bool(((loss * n_rows) - ref).abs().max() < 1e-4 * ref.abs().max(
-  ...[truncated 164 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t14_probe.py",
-        "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t14_stdout.txt",
-        "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t14_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t14_json_result.json",
-        "sha256": "baad4c8bccdd61a41960775e0d548e6568ac41d1199fdc556d1d6873b33fb719"
-      }
-    ],
-    "claim_id": "c3",
-    "claim_statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any b
-  ...[truncated 3507 chars]
-- `run_claim_probe -> t15 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "import torch, json, sys\nsys.path.insert(0, '/root/cases/case_19')\nfrom kernel import cross_entropy_with_predictions\nn_rows, n_cols = 2, 40000  # > 32768 so masked remainder blocks exist; also power-of-2 case\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device='cuda', dtype=torch.float32)\nlogits[0] = float('-inf')  # all -inf row\ntarget = torch.tensor([0, 5], device='cuda')\nloss, predicted = cross_entropy_with_predictions(logits, target)\nout = {\"n_cols\": n_cols, \"predicted_all_neg_inf_row\": int(predicted[0]),\n       \"loss_all_neg_inf_row\": float(loss[0]),\n       \"predicted_normal_row\": int(predicted[1]),\n       \"out_of_range\": bool(predicted[0] >= n_cols)}\nprint(json.dumps(out))",
-    "expected_signal": "predicted[i] == n_co
-  ...[truncated 65 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t15_probe.py",
-        "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t15_stdout.txt",
-        "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t15_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t15_json_result.json",
-        "sha256": "f5c498b877dd67117aebeff17e035cf0cda85957ca086df46e7a3a0ca79ca29b"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X
-  ...[truncated 2541 chars]
+    "claim_statement": "For rows with small nonzero variance (e.g. var ~ 1e-6, eps = 1e-5), the returned layer_norm() output y deviates from the contract formula 1/sqrt(var+eps) because the kernel computes rstd = 1/(sqrt(var)+eps) at line 26, giving an error of order eps/(2*var) in the normalizer (~3x for var=1e-6), which multiplies directly into y = (x-mean)*rstd*weight + bias.",
+    "duration_s": 4.506198,
+    "event_id": "t13",
+    "evidence_draft": {
+      "claim_id": "c2",
+      "dat
+  ...[truncated 3305 chars]
 
-### Turn 8 - `experimenter` (15.005807109999978s, in=37726 out=759)
+### Turn 10 - `experimenter` (9.601487454999983s, in=26179 out=221)
 
 Message:
 
 ```text
-All three probes returned clean results. I'll finalize each: c2's tie probe returned 35000 instead of the lowest tied index 0; c3's probe shows a constant 4.0 loss ratio; c1's degenerate -inf row returned predicted=32768 (in-range, not n_cols) with NaN loss — the claim's specific n_cols prediction isn't observed and the reference is undefined there, so that one is inconclusive.
+The previous probe failed because tensors were on CPU; the Triton kernel needs CUDA tensors. I'll mark that result inconclusive and re-launch a corrected GPU probe for claim c2.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t16 ok`
+- `finalize_probe_evidence -> t14 ok`
   Args:
   {
     "data": {
-      "expected_lowest_tied": 0,
-      "n_cols": 40000,
-      "predicted_row1_control": 13867,
-      "reported_predicted_row0": 35000,
-      "tie_indices": [
-        0,
-        35000
-      ]
+      "exit_code": 1,
+      "reason": "cpu_tensor_pointer_error"
     },
     "event_id": "t13",
-    "status": "confirmed",
-    "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
-    "supports": "confirmed",
-    "tool_event_id": "t13"
-  }
-- `finalize_probe_evidence -> t17 ok`
-  Args:
-  {
-    "data": {
-      "kernel_loss": [
-        1.7524,
-        2.2115,
-        1.737,
-        1.4388
-      ],
-      "max_rel_err": 0.75,
-      "n_rows": 4,
-      "ref_over_kernel_ratio": [
-        4.0,
-        4.0,
-        4.0,
-        4.0
-      ],
-      "ref_per_row": [
-        7.0096,
-        8.8461,
-        6.9481,
-        5.7551
-      ],
-      "scaling_bug": true
-    },
-    "event_id": "t14",
-    "status": "confirmed",
-    "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
-    "supports": "confirmed"
-  }
-  Output summary:
-  {
-    "claim_id": "c3",
-    "claim_status": "confirmed",
-    "evidence_id": "c3.e1",
-    "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
-    "supports": "confirmed",
-    "tool_event_id": "t14"
-  }
-- `finalize_probe_evidence -> t18 ok`
-  Args:
-  {
-    "data": {
-      "loss": "NaN",
-      "n_cols": 40000,
-      "out_of_range": false,
-      "predicted_all_neg_inf_row": 32768
-    },
-    "event_id": "t15",
     "status": "inconclusive",
-    "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
+    "summary": "Probe failed with ValueError: CPU tensor pointers not accessible from Triton; no measurement taken. Inconclusive \u2014 retry with .cuda() tensors.",
     "supports": "inconclusive"
   }
   Output summary:
   {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "claim_status": "inconclusive",
-    "evidence_id": "c1.e1",
-    "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
+    "evidence_id": "c2.e1",
+    "summary": "Probe failed with ValueError: CPU tensor pointers not accessible from Triton; no measurement taken. Inconclusive \u2014 retry with .cuda() tensors.",
     "supports": "inconclusive",
-    "tool_event_id": "t15"
+    "tool_event_id": "t13"
   }
 
-### Turn 9 - `skeptic` (7.87171836899995s, in=43462 out=262)
+### Turn 11 - `skeptic` (8.105992339999943s, in=28679 out=355)
 
 Message:
 
 ```text
-This is the final review turn. Both in-scope claims (c2 cross-block tie violation, c3 per-row loss scaling) are confirmed with direct runtime evidence tied to the contract's stated tie rule and per-row loss definition; the remaining claim (c1) is inconclusive on a reference-undefined degenerate case and cannot support a reject. No new material, in-scope problem is exposed by the latest evidence.
+This is the final review turn. The open in-scope claim c2 (eps placed outside the sqrt at line 26, deviating from the contract's 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime) still captures the only material defect. The latest probe evidence is inconclusive only due to a probe infrastructure error (CPU tensors passed to Triton), not any new kernel behavior — the source-level divergence itself is already established. No new material, testable in-scope problem has surfaced.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t15 ok`
+  Args:
+  {
+    "reason": "Final review: the only material in-scope defect is already covered by open in-scope claim c2 \u2014 kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), which deviates from problem.txt's stated formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows. The latest probe (t13) was inconclusive solely because tensors were left on CPU (Triton pointer error), an infrastructure failure that exposes no new kernel behavior; the source-level algebraic divergence remains established. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No additional material, testable, in-scope problem is exposed by the latest evidence.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
+  }
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Final review: the only material in-scope defect is already covered by open in-scope claim c2 \u2014 kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), which deviates from problem.txt's stated formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows. The latest probe (t13) was inconclusive solely because tensors were left on CPU (Triton pointer error), an infrastructure failure that exposes no new kernel behavior; the source-level algebraic divergence remains established. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No additional material, testable, in-scope problem is exposed by the latest evidence.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 14,
+    "turn": 11
+  }
+
+### Turn 12 - `judge` (12.826125551000018s, in=29162 out=648)
+
+Message:
+
+```text
+The kernel source is unambiguous: line 26 computes `rstd = 1.0 / (tl.sqrt(var) + eps)` — eps added outside the sqrt — while problem.txt's operative contract explicitly states `rstd = 1 / sqrt(var + eps)` and explicitly protects the near-zero-variance regime. For small nonzero variance (e.g. var ~ 1e-6, eps=1e-5), the kernel's normalizer is ~3x the contract's, and since (x-mean) ≠ 0 for such rows, this factor multiplies directly into the returned y — the only contractual output. The runtime probe (t13) was inconclusive only due to a CPU-tensor infrastructure error, but the source-level algebraic divergence is decisive on its own, and the artifact has no test.py/get_inputs narrowing the domain, so problem.txt is the operative contract. Claim c1 (aux-buffer divergence at var=0) is confirmed but out of scope, and y=bias there either way. I'm recording a reject verdict based on claim c2.
+```
+
+Tool calls:
+
+- `record_verdict -> t16 error`
+  Args:
+  {
+    "confidence": 0.9,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "kernel.py line 26 computes rstd = 1.0/(tl.sqrt(var)+eps), placing eps outside the square root, while the operative contract (problem.txt \u2014 the artifact contains no test.py/get_inputs, so problem.txt is the full contract) explicitly requires rstd = 1/sqrt(var+eps) and explicitly protects the near-zero-variance regime (\"as the row variance approaches zero\"). For rows with small nonzero variance this yields a multiplicative error of order eps/(2*var) in the normalizer (e.g. ~3x at var=1e-6, eps=1e-5), which propagates directly into the returned y = (x-mean)*rstd*weight + bias since (x-mean) != 0. The runtime probe (t13) was inconclusive solely due to a CPU-tensor infrastructure error, but source inspection is deci
+  ...[truncated 453 chars]
+  Output summary:
+  {
+    "error_type": "ValueError",
+    "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c2: status=inconclusive, scope=in_scope"
+  }
+
+### Turn 13 - `judge` (9.419990052999992s, in=29435 out=397)
+
+Message:
+
+```text
+The verdict attempt failed because claim c2 is still `inconclusive` — its only runtime probe died on an infrastructure error (CPU tensors passed to a Triton kernel), so the ledger never recorded a confirmed measurement. The source-level algebra is unambiguous, but per the claim lifecycle rules I can't reject on an inconclusive claim, and I cannot mutate claims myself. The right move is to request another debate round focused on running the corrected CUDA probe so c2 can be confirmed or rebutted with actual runtime evidence.
+```
+
+Tool calls:
+
+- `request_more_debate -> t17 ok`
+  Args:
+  {
+    "focus_claims": [
+      "c2"
+    ],
+    "reason": "Claim c2 (eps placed outside the sqrt at kernel.py line 26, producing multi-x output error for small-nonzero-variance rows) is in_scope and material, but its status is `inconclusive`: the only runtime probe (t13) failed with a CPU-tensor Triton pointer error before taking any measurement. A reject verdict requires a confirmed in-scope claim with test-domain evidence. The Experimenter already drafted a corrected GPU probe (constant row plus one perturbed element, delta sweep, randn control); it needs to be run with .cuda() tensors so c2 can be confirmed or rebutted with actual output-vs-contract-formula error measurements."
+  }
+  Output summary:
+  {
+    "reason": "Claim c2 (eps placed outside the sqrt at kernel.py line 26, producing multi-x output error for small-nonzero-variance rows) is in_scope and material, but its status is `inconclusive`: the only runtime probe (t13) failed with a CPU-tensor Triton pointer error before taking any measurement. A reject verdict requires a confirmed in-scope claim with test-domain evidence. The Experimenter already drafted a corrected GPU probe (constant row plus one perturbed element, delta sweep, randn control); it needs to be run with .cuda() tensors so c2 can be confirmed or rebutted with actual output-vs-contract-formula error measurements.",
+    "request": "more_debate"
+  }
+
+### Turn 14 - `describer` (18.257654480999918s, in=25149 out=886)
+
+Message:
+
+```text
+I'll record a description update focused on what the corrected CUDA probe for claim c2 should measure and what outcomes would confirm or rebut it.
+```
+
+Tool calls:
+
+- `record_description_update -> t18 ok`
+  Args:
+  {
+    "kernel_model": [
+      "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps), eps outside the sqrt, vs contract 1/sqrt(var+eps) (problem.txt)",
+      "kernel model is identical to du2: Triton one-program-per-row, BLOCK=256, fp32 two-pass stats, correct cols<N masking; the eps placement is the sole material deviation",
+      "Concrete expected numbers for the planned CUDA probe (N=512, eps=1e-5, w,b ~ randn scale): single-perturb delta=1e-3 -> var ~ delta^2*(N-1)/N^2 ~ 2.0e-9, kernel/contract rstd ratio ~ (1/(std+eps))/(1/sqrt(var+eps)) ~ 100x, so y on perturbed columns differs from the contract y by roughly 100x the (x-mean)*w term; delta=1e-2 -> var ~ 2e-7, ratio ~ 3x; delta=1e-4 -> ratio ~ up to ~300x; randn control (var ~ 1) ratio ~ 1+eps/2 ~ 1.000005, max abs err ~ 1e-5 scale",
+      "Pro
+  ...[truncated 2376 chars]
+  Output summary:
+  {
+    "contract_model": [],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps), eps outside the sqrt, vs contract 1/sqrt(var+eps) (problem.txt)",
+      "kernel model is identical to du2: Triton one-program-per-row, BLOCK=256, fp32 two-pass stats, correct cols<N masking; the eps placement is the sole material deviation",
+      "Concrete expected numbers for the planned CUDA probe (N=512, eps=1e-5, w,b ~ randn scale): single-perturb delta=1e-3 -> var ~ delta^2*(N-1)/N^2 ~ 2.0e-9, kernel/contract rstd ratio ~ (1/(std+eps))/(1/sqrt(var+eps)) ~ 100x, so y on perturbed columns differs from the contract y by roughly 100x the (x-mean)*w term; delta=1e-2 -> var ~ 2e-7, ratio ~ 3x; delta=1e-4 -> ratio ~ up to ~300x; randn control (var ~ 1) ratio ~ 1+eps/2 ~ 1.000005, max abs err ~ 1e-5 scale",
+      "Probe must move ALL tensors (x, weight, bias, and thus y, plus the ref computed on GPU or moved to CPU) to CUDA; layer_norm internally allocates mean/rstd on x.device, so only the caller-side tensors needed the .cuda() fix"
+    ],
+    "open_questions": [
+      "No unresolved kernel-description facts; the open item is purely the runtime measurement itself, w
+  ...[truncated 2090 chars]
+
+### Turn 15 - `skeptic` (9.496019789000002s, in=32381 out=419)
+
+Message:
+
+```text
+The reopened round's focus claim c2 already fully captures the only material defect: kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) with eps outside the sqrt, deviating from problem.txt's stated formula 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime, with the error multiplying directly into the returned y. The describer's du3 update adds expected probe numbers but exposes no new kernel behavior or contract surface — the sole open item is the runtime measurement, which belongs to the Experimenter's corrected CUDA probe, not to new claims. Claim c1 (aux rstd buffer at var=0) remains confirmed and out of scope.
 ```
 
 Tool calls:
@@ -513,243 +508,337 @@ Tool calls:
 - `record_no_new_claims -> t19 ok`
   Args:
   {
-    "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
-    "reviewed_claims": [
-      "c1",
-      "c2",
-      "c3"
-    ]
-  }
+    "reason": "Reopened round on c2: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du3 update (expected CUDA probe numbers, device-placement guidance) introduces no new kernel behavior or contract surface; the remaining gap is purely the runtime measurement, which the Experimenter's corrected CUDA probe will supply. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope, and the known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent with no new evidence changing that. No additional materia
+  ...[truncated 91 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
+    "reason": "Reopened round on c2: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du3 update (expected CUDA probe numbers, device-placement guidance) introduces no new kernel behavior or contract surface; the remaining gap is purely the runtime measurement, which the Experimenter's corrected CUDA probe will supply. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope, and the known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent with no new evidence changing that. No additional material, testable, in-scope claim is warranted.",
     "reviewed_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
     "reviewed_tool_event_count": 18,
-    "turn": 9
+    "turn": 15
   }
 
-### Turn 10 - `judge` (9.955728631999932s, in=43689 out=463)
+### Turn 16 - `judge` (10.506522317000076s, in=31626 out=459)
 
 Message:
 
 ```text
-The ledger has two confirmed in-scope defects with direct runtime evidence: c2 (cross-block tie violation — the `>=` at line 160 lets a later equal-max block overwrite the lowest tied index, observed predicted=35000 vs required 0) and c3 (per-row loss divided by n_non_ignore, observed exact ratio 4.0 vs the contract's per-row -log softmax). c1 is inconclusive on a reference-undefined degenerate case and cannot affect the verdict. Skeptic signed off with no new claims, and no open claims lack evidence. I'll record the verdict.
+The corrected CUDA probe was never actually executed — claim c2 (the decisive in-scope defect) is still `inconclusive`, so I cannot reject on it. The describer and skeptic rounds produced guidance and sign-off, but the runtime measurement is the missing piece. I'm requesting another debate round specifically so the Experimenter runs the corrected GPU probe.
 ```
 
 Tool calls:
 
-- `record_verdict -> t20 ok`
+- `request_more_debate -> t20 ok`
   Args:
   {
-    "confidence": 0.95,
-    "decisive_claims": [
-      "c2",
-      "c3"
+    "focus_claims": [
+      "c2"
     ],
-    "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log soft
-  ...[truncated 488 chars]
+    "reason": "The previous request_more_debate round (t17) produced description update du3 and skeptic sign-off (t19), but the Experimenter never actually ran the corrected CUDA probe for claim c2. Its only evidence (t13) remains inconclusive due to the CPU-tensor infrastructure error. Claim c2 is in_scope and material (kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), explicitly protected regime per problem.txt), but a reject verdict requires it to be confirmed with test-domain runtime evidence. The Experimenter must now run the du3-specified GPU probe: x/weight/bias on CUDA, constant rows plus single/symmetric perturbations with delta in {1e-4, 1e-3, 1e-2}, eps=1e-5, comparing returned y against the contract 
+  ...[truncated 172 chars]
   Output summary:
   {
-    "confidence": 0.95,
-    "decisive_claims": [
-      "c2",
-      "c3"
+    "reason": "The previous request_more_debate round (t17) produced description update du3 and skeptic sign-off (t19), but the Experimenter never actually ran the corrected CUDA probe for claim c2. Its only evidence (t13) remains inconclusive due to the CPU-tensor infrastructure error. Claim c2 is in_scope and material (kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), explicitly protected regime per problem.txt), but a reject verdict requires it to be confirmed with test-domain runtime evidence. The Experimenter must now run the du3-specified GPU probe: x/weight/bias on CUDA, constant rows plus single/symmetric perturbations with delta in {1e-4, 1e-3, 1e-2}, eps=1e-5, comparing returned y against the contract formula, plus a randn control. Expected: rstd ratio ~3x\u2013300x on small-variance rows with corresponding y-level abs/rel errors, while randn agrees to ~1e-5 relative.",
+    "request": "more_debate"
+  }
+
+### Turn 17 - `describer` (13.449439608000034s, in=30417 out=717)
+
+Message:
+
+```text
+The description model already fully covers this artifact (du1–du3); the only outstanding item is the runtime CUDA measurement for claim c2, which belongs to the Experimenter. I'll record a short update reaffirming that no new kernel or contract facts exist and restating the concrete expected probe outcomes so the pending measurement can be interpreted directly.
+```
+
+Tool calls:
+
+- `record_description_update -> t21 ok`
+  Args:
+  {
+    "kernel_model": [
+      "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps outside the sqrt, vs contract 1/sqrt(var+eps) per problem.txt; this remains the sole material deviation",
+      "Kernel otherwise faithful: one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking, y cast to x.dtype on store, wrapper assumes 2D contiguous-last-dim input",
+      "Math prediction stands from du3: at eps=1e-5, N=512, single-perturb rows give kernel-vs-contract rstd ratios of roughly 300x (delta=1e-4), 100x (delta=1e-3), 3x (delta=1e-2), while randn control agrees to ~1e-5 relative"
     ],
-    "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set a
-  ...[truncated 88 chars]
+    "open_questions": [
+      "The only open item is the runtime measurement itself (Experimenter's CUDA probe); no unresolved kernel-description facts remain",
+      "Still unknown 
+  ...[truncated 1718 chars]
+  Output summary:
+  {
+    "contract_model": [],
+    "impact_on_claims": [],
+    "kernel_model": [
+      "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps outside the sqrt, vs contract 1/sqrt(var+eps) per problem.txt; this remains the sole material deviation",
+      "Kernel otherwise faithful: one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking, y cast to x.dtype on store, wrapper assumes 2D contiguous-last-dim input",
+      "Math prediction stands from du3: at eps=1e-5, N=512, single-perturb rows give kernel-vs-contract rstd ratios of roughly 300x (delta=1e-4), 100x (delta=1e-3), 3x (delta=1e-2), while randn control agrees to ~1e-5 relative"
+    ],
+    "open_questions": [
+      "The only open item is the runtime measurement itself (Experimenter's CUDA probe); no unresolved kernel-description facts remain",
+      "Still unknown whether the benchmark's hidden tolerance regime includes near-zero-variance rows, but problem.txt's explicit 'variance approaches zero' wording makes that regime contractually protected regardless"
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "The decisive probe must use CUDA tensors for x, weight, and bias (kernel.py allocates mean/rstd/y on x
+  ...[truncated 1432 chars]
+
+### Turn 18 - `skeptic` (7.423979909999957s, in=36832 out=312)
+
+Message:
+
+```text
+The reopened round remains focused solely on running the corrected CUDA probe for claim c2. The eps-outside-sqrt defect at kernel.py line 26 is already recorded as in-scope claim c2 with problem.txt scope evidence; the describer's du4 introduces no new kernel or contract facts, and no new evidence has appeared. No additional claims are warranted.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t22 ok`
+  Args:
+  {
+    "reason": "Reopened c2 round: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du4 reaffirms the stable description model and expected probe numbers; no new kernel behavior, contract surface, or runtime evidence has appeared since du3. The remaining gap is purely the Experimenter's corrected CUDA runtime measurement for c2. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope; known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent wi
+  ...[truncated 132 chars]
+  Output summary:
+  {
+    "decision": "no_new_claims",
+    "reason": "Reopened c2 round: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du4 reaffirms the stable description model and expected probe numbers; no new kernel behavior, contract surface, or runtime evidence has appeared since du3. The remaining gap is purely the Experimenter's corrected CUDA runtime measurement for c2. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope; known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent with no new evidence. No additional material, testable, in-scope claim is warranted.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 21,
+    "turn": 18
+  }
+
+### Turn 19 - `judge` (19.71678081799996s, in=35829 out=819)
+
+Message:
+
+```text
+The final round is here: the source-level algebra is decisive (kernel.py line 26 computes 1/(sqrt(var)+eps), deviating from problem.txt's stated 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime), but the only in-scope claim c2 remains `inconclusive` — its lone runtime probe died on a CPU-tensor infrastructure error and was never re-run despite two reopened rounds. My previous reject attempt was rejected by the system precisely because c2 is not confirmed, and I cannot mutate claims myself. Per the lifecycle rules, an inconclusive material in-scope claim must yield needs_more_evidence, not reject.
+```
+
+Tool calls:
+
+- `record_verdict -> t23 ok`
+  Args:
+  {
+    "confidence": 0.7,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "The kernel source (kernel.py line 26) computes rstd = 1.0/(tl.sqrt(var)+eps), placing eps outside the square root, while the operative contract (problem.txt, the only contract since the artifact has no test.py/get_inputs) explicitly requires rstd = 1/sqrt(var+eps) and explicitly protects the near-zero-variance regime (\"as the row variance approaches zero\"). For rows with small nonzero variance this yields a multiplicative normalizer error of order eps/(2*var) (~3x at var=1e-6, eps=1e-5) that propagates directly into the returned y = (x-mean)*rstd*weight + bias since (x-mean) != 0 there. However, the decisive in-scope claim c2 is stuck at `inconclusive`: its only runtime probe (t13) failed on an infrastructure error 
+  ...[truncated 769 chars]
+  Output summary:
+  {
+    "confidence": 0.7,
+    "decisive_claims": [
+      "c2"
+    ],
+    "reason": "The kernel source (kernel.py line 26) computes rstd = 1.0/(tl.sqrt(var)+eps), placing eps outside the square root, while the operative contract (problem.txt, the only contract since the artifact has no test.py/get_inputs) explicitly requires rstd = 1/sqrt(var+eps) and explicitly protects the near-zero-variance regime (\"as the row variance approaches zero\"). For rows with small nonzero variance this yields a multiplicative normalizer error of order eps/(2*var) (~3x at var=1e-6, eps=1e-5) that propagates directly into the returned y = (x-mean)*rstd*weight + bias since (x-mean) != 0 there. However, the decisive in-scope claim c2 is stuck at `inconclusive`: its only runtime probe (t13) failed on an infrastructure error (CPU tensors passed to Triton) and the corrected CUDA probe was never executed despite two reopened debate rounds and an explicit prediction from the describer (rstd ratio ~3x-300x for delta 1e-2..1e-4 at eps=1e-5, randn control agreeing to ~1e-5 relative). Per claim lifecycle rules I cannot record a reject on an inconclusive claim, and I cannot mutate claims. Claim c1 (316x divergence in the inte
+  ...[truncated 369 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
-    "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper.",
-    "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract."
+    "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+    "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero (constant rows must not blow up)",
+    "Affine parameters weight and bias are applied per column after normalization",
+    "Only the forward layer_norm() output y is contractual; mean/rstd buffers are internal",
+    "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero; the contract explicitly protects the near-zero-variance regime",
+    "Only the returned y is contractual; the Mean/Rstd buffers are internal kernel artifacts"
   ],
   "kernel_model": [
-    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
-    "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching the contract math.",
-    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block (note: X_block is the fp32-cast/loaded value, so equality is on the fp32 view).",
-    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block with block_max EQUAL to the running max replaces the earlier argmax, so cross-block ties report the later block's lowest index, not the global lowe
-...[truncated 6415 chars]
+    "Triton kernel with one program per row (grid = (n_rows,)), BLOCK=256, looped over N in chunks with cols<N masking",
+    "Computes mean and variance in float32 with two-pass accumulation; masked lanes contribute 0 to sums, and variance pass zeroes out-of-range lanes via tl.where before squaring",
+    "Line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps): eps is added OUTSIDE the sqrt, i.e. to the denominator after sqrt, not as sqrt(var + eps)",
+    "Writes mean and rstd to auxiliary float32 tensors Mean/Rstd, though these are not part of the returned output",
+    "Output y is stored back in the input tensor's dtype via torch.empty_like(x); (a-mean)*rstd*w+b computed in fp32 then cast on store",
+    "Wrapper assumes x is 2D (n_rows, n_cols = x.shape) and passes x.stride(0) as the row stride; weight/bias are assumed length-N, contiguous",
+    "Triton kernel, one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking (other=0.0 and tl.where before squaring)",
+    "Line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps added outside the sqrt, so the normalizer is 1/(std+eps) instead of 1/sqrt(var+eps)",
+    "For var >> eps the two formulas agree to relative order eps/(2*var); for small nonzero var (var ~ eps) the 
+...[truncated 7829 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Described Liger-style fused cross-entropy kernel (case_19) focusing on the argmax/predicted-token tie contract: per-block argmax picks lowest index, but cross-block accumulation uses >= so a tie spanning blocks reports the later block's index.
-- `du2` tasks=`initial`: Refined case_19 description after re-examining the loss path: the wrapper's reduction='mean' divides each row's stored loss by n_non_ignore (lines 307-311), so the returned loss vector is the per-row -log softmax scaled by 1/N — the contract's loss[i] has no such division. Also clarified that the skeptic's two strongest claims (cross-block tie via >= at line 160, and this mean-reduction loss scaling) failed to be recorded due to missing scope_rationale and need re-recording; only the -inf masked-lane claim c1 is currently in the ledger.
+- `du1` tasks=`initial`: Description of case_20 layer norm forward kernel: math is structurally correct, but eps is added outside the square root (1/(sqrt(var)+eps)) instead of inside (1/sqrt(var+eps)), deviating from the stated contract.
+- `du2` tasks=`initial`: Refined description for case_20 to support evidence gathering on open claim c2: the eps-outside-sqrt bug at kernel.py line 26 produces a smooth multiplicative error in rstd of relative order eps/(2*var), invisible on randn-scale inputs and cancelling on exactly-constant rows, but contract-violating for small-nonzero-variance rows.
+- `du3` tasks=`initial`: Support update for the reopened round on claim c2: the corrected CUDA probe must place x/weight/bias on the GPU (kernel.py allocates mean/rstd/y on x.device internally, so caller tensors are the only device concern). The description math predicts, at eps=1e-5, N=512: single-perturb delta=1e-3 gives var≈2.0e-9 and a kernel-vs-contract rstd ratio ≈100x; delta=1e-2 gives var≈2.0e-7 and ratio ≈3x; delta=1e-4 gives var≈2.0e-13 and ratio ≈300x; the randn control (var≈1) should agree to ~1e-5 relative. Confirmation of c2 requires the y-level abs/rel errors to track these predicted rstd ratios on the perturbed columns; rebuttal requires y agreeing with the contract formula despite nonzero small variance.
+- `du4` tasks=`initial`: Reaffirmation for the reopened c2 round: no new kernel or contract facts have appeared since du3; the description model is stable. The remaining blocker is purely the runtime CUDA probe for claim c2 (t13 died on CPU tensors before measuring). Confirmation of c2 requires y-level abs/rel errors on perturbed columns tracking the predicted rstd ratios (~3x–300x at eps=1e-5 for delta 1e-2..1e-4) with the randn control agreeing to ~1e-5 relative; rebuttal requires y agreeing with 1/sqrt(var+eps) despite genuinely small nonzero var.
 
 ## Claims
 
-### c1 - `inconclusive`
+### c1 - `confirmed`
 
-Statement: For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.
+Statement: The kernel's auxiliary rstd buffer is 1/(sqrt(var)+eps), which for a constant row (var=0) equals 1/eps instead of the contract's 1/sqrt(eps), so any consumer comparing the rstd normalizer against the reference formula diverges by a factor of 1/sqrt(eps) (~316x for eps=1e-5).
 
-Scope: `unknown`
+Scope: `out_of_scope`
 
-Rationale: Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.
+Scope rationale: problem.txt asks only whether layer_norm()'s output satisfies the formula; the Mean/Rstd buffers are internal artifacts of the kernel, and for constant rows y equals bias in both implementations, so this divergence does not affect the contractual output.
+
+Rationale: At var=0, contract rstd = 1/sqrt(eps) while kernel rstd = 1/eps; with eps=1e-5 these are ~316 vs 100000, a 316x difference. However, only y is contractual per the problem statement, and at var=0 the output y equals bias in both cases, so this divergence is visible only in the internal Mean/Rstd buffers the kernel writes.
 
 Evidence:
-- `c1.e1` runtime_probe supports `inconclusive`, tool_event_id=t15: All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) — in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.
+- `c1.e1` source_inspection supports `confirmed`: kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps). For a constant row, var == 0 exactly (two-pass variance with masked lanes contributing 0), so kernel rstd = 1/eps = 1e5 for eps=1e-5, while the contract formula 1/sqrt(var+eps) gives 1/sqrt(eps) ≈ 316.23 — a 316.23x divergence in the auxiliary Rstd buffer. Note this buffer is internal: for var=0 the store at line 36 writes (0)*rstd*w + b = b, so the returned y equals bias either way, consistent with the claim's out-of-scope classification.
 
-### c2 - `confirmed`
+### c2 - `inconclusive`
 
-Statement: When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.
+Statement: For rows with small nonzero variance (e.g. var ~ 1e-6, eps = 1e-5), the returned layer_norm() output y deviates from the contract formula 1/sqrt(var+eps) because the kernel computes rstd = 1/(sqrt(var)+eps) at line 26, giving an error of order eps/(2*var) in the normalizer (~3x for var=1e-6), which multiplies directly into y = (x-mean)*rstd*weight + bias.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.
+Scope rationale: problem.txt's stated formula is rstd = 1/sqrt(var + eps) and it explicitly names the near-zero-variance regime ("as the row variance approaches zero") as the case eps must handle; rows with small nonzero variance are squarely inside this stated contract, and the returned y (the only contractual output per problem.txt) then deviates from the formula's value.
 
 Scope evidence:
-- `problem.txt`: Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks.
+- `problem.txt`: Contract states rstd = 1 / sqrt(var + eps) and y = (x-mean)*rstd*weight + bias, and explicitly says eps 'must keep the normalizer finite as the row variance approaches zero' — the near-zero-variance regime is the contract's stated protected domain, so output accuracy there is required.
 
-Rationale: Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.
-
-Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.
-
-### c3 - `confirmed`
-
-Statement: The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.
-
-Scope evidence:
-- `problem.txt`: cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] — a per-row quantity with no division by the number of rows.
-
-Rationale: Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.
+Rationale: Line 26 computes rstd = 1.0/(tl.sqrt(var)+eps) instead of 1/sqrt(var+eps). For a row with small nonzero variance, e.g. var = 1e-6 (std 1e-3) and eps=1e-5, contract rstd = 1/sqrt(1.1e-5) ≈ 302 while kernel rstd = 1/(1e-3+1e-5) ≈ 990 — a >3x error in the normalizer. Since (x-mean) != 0 for such rows, y = (x-mean)*rstd*w + b differs from the contract by the same >3x factor on the normalized component, far beyond any typical allclose tolerance. The error vanishes only for normal-variance rows (var >> eps) and for exactly-constant rows (where (x-mean)=0).
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t14: Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row — the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.
+- `c2.e1` runtime_probe supports `inconclusive`, tool_event_id=t13: Probe failed with ValueError: CPU tensor pointers not accessible from Triton; no measurement taken. Inconclusive — retry with .cuda() tensors.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_19"
+  "entry": "case_20"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks.",
-    "Reduction/loss is per-row forward loss with mean over non-ignored tokens; no gradients/z-loss/weights/softcap are requested by the wrapper."
+    "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+    "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero (constant rows must not blow up)",
+    "Affine parameters weight and bias are applied per column after normalization",
+    "Only the forward layer_norm() output y is contractual; mean/rstd buffers are internal"
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, no softcap; returns (loss fp32 zeros-initialized, predicted int32 zeros-initialized).",
-    "Loss is computed via online (flash) softmax: block-wise max m and running denominator d, then loss = lse - x_y (lines 127-177, 284), matching the contract math.",
-    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block (note: X_block is the fp32-cast/loaded value, so equality is on the fp32 view).",
-    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block with block_max EQUAL to the running max replaces the earlier argmax, so cross-block ties report the later block's lowest index, not the global lowest index.",
-    "Only RETURN_PREDICTED_TOKENS is enabled, so the argmax code executes; masked-out lanes load as -inf and never spuriously equal a finite block_max 
-...[truncated 2463 chars]
+    "Triton kernel with one program per row (grid = (n_rows,)), BLOCK=256, looped over N in chunks with cols<N masking",
+    "Computes mean and variance in float32 with two-pass accumulation; masked lanes contribute 0 to sums, and variance pass zeroes out-of-range lanes via tl.where before squaring",
+    "Line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps): eps is added OUTSIDE the sqrt, i.e. to the denominator after sqrt, not as sqrt(var + eps)",
+    "Writes mean and rstd to auxiliary float32 tensors Mean/Rstd, though these are not part of the returned output",
+    "Output y is stored back in the input tensor's dtype via torch.empty_like(x); (a-mean)*rstd*w+b computed in fp32 then cast on store",
+    "Wrapper assumes x is 2D (n_rows, n_cols = x.shape) and passes x.stride(0) as the row stride; weight/bias are assumed length-N, contiguous"
+  ],
+  "open_questions": [],
+  "resolved_tasks": [],
+  "risk_map": [
+    "eps placement mismatch: kernel uses 1/(sqrt(var)+eps) vs contract 1/sqrt(var+eps). For normal rows the difference is tiny, but for constant/zero-variance rows: contract gives y = bias exactly (since (x-mean)=0), while kernel also gives (x-mean)=0 so output is still bias -- output equal despite rstd differing numerically; the rstd value itself differs (1/eps vs 1/sqrt(eps)). If tests compare rstd/mean aux outputs or intermediate normalizer, this diverges; also for small nonzero var, kernel's rstd differs at first order in eps",
+    "Potential division/variance 
+...[truncated 1440 chars]
 
-### t6 - read_claim_ledger - ok
-
-### t7 - record_claim - error
+### t6 - record_claim - error
 
 {
   "error_type": "LedgerError",
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t8 - record_claim - ok
+### t7 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Lines 154-158 set is_max_mask = X_block == block_max and do not exclude offsets >= n_cols; masked lanes load other=-inf, so if the block's maximum is also -inf (row entirely -inf), masked_offsets include n_cols and tl.min can return n_cols, stored as predicted[i] out of valid range. However this requires a degenerate all -inf row whose reference loss is NaN, so reference behavior is undefined.",
-  "scope": "unknown",
+  "rationale": "At var=0, contract rstd = 1/sqrt(eps) while kernel rstd = 1/eps; with eps=1e-5 these are ~316 vs 100000, a 316x difference. However, only y is contractual per the problem statement, and at var=0 the output y equals bias in both cases, so this divergence is visible only in the internal Mean/Rstd buffers the kernel writes.",
+  "scope": "out_of_scope",
   "scope_evidence": [],
-  "scope_rationale": "",
-  "statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
+  "scope_rationale": "problem.txt asks only whether layer_norm()'s output satisfies the formula; the Mean/Rstd buffers are internal artifacts of the kernel, and for constant rows y equals bias in both implementations, so this divergence does not affect the contractual output.",
+  "statement": "The kernel's auxiliary rstd buffer is 1/(sqrt(var)+eps), which for a constant row (var=0) equals 1/eps instead of the contract's 1/sqrt(eps), so any consumer comparing the rstd normalizer against the reference formula diverges by a factor of 1/sqrt(eps) (~316x for eps=1e-5).",
   "status": "open"
 }
 
-### t9 - record_claim - error
+### t8 - append_evidence - ok
 
 {
-  "error_type": "LedgerError",
-  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  "id": "c1.e1",
+  "summary": "kernel.py line 26 computes rstd = 1.0 / (tl.sqrt(var) + eps). For a constant row, var == 0 exactly (two-pass variance with masked lanes contributing 0), so kernel rstd = 1/eps = 1e5 for eps=1e-5, while the contract formula 1/sqrt(var+eps) gives 1/sqrt(eps) \u2248 316.23 \u2014 a 316.23x divergence in the auxiliary Rstd buffer. Note this buffer is internal: for var=0 the store at line 36 writes (0)*rstd*w + b = b, so the returned y equals bias either way, consistent with the claim's out-of-scope classification.",
+  "supports": "confirmed"
 }
 
-### t10 - record_description_update - ok
+### t9 - update_claim_status - ok
 
 {
-  "contract_model": [
-    "cross_entropy_with_predictions(logits, target) must return loss[i] = -log softmax(logits[i])[target[i]] and predicted[i] = argmax_j logits[i,j].",
-    "The contract defines loss[i] as a per-row quantity with NO division by the number of non-ignored tokens; a mean-reduction scaling of the returned vector is not part of the contract.",
-    "Tie rule: when multiple vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index; the choice is contractually meaningful because downstream decoding gathers a distinct embedding row.",
-    "Input domain: n_cols (vocab size) may exceed the kernel block size (MAX_FUSED_SIZE = 32768), so a row spans multiple blocks and tied maxima may fall in different blocks."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Wrapper (kernel.py:328-353) launches one program per row with RETURN_PREDICTED_TOKENS=1, RETURN_TOKEN_ACCURACY=0, HAS_GRADIENTS=False, HAS_WEIGHT=False, reduction='mean', label_smoothing=0, lse_square_scale=0, no softcap; returns (loss fp32, predicted int32).",
-    "Loss path: online softmax computes lse (lines 127-177), loss = lse - ori_X_y (line 284); then because reduction=='mean' and HAS_WEIGHT is False, loss is divided by n_non_ignore at lines 307-311 before being stored per row (line 316). The stored loss vector is therefore each row's -log softmax scaled by 1/N, NOT the contract's per-row value. (Note: this was previously described as 'mean over non-ignored tokens' matching the contract; it does not \u2014 the contract has no N scaling.)",
-    "Argmax accumulation (lines 152-161): per block, is_max_mask = X_block == block_max, masked_offsets = where(is_max_mask, X_offsets, n_cols), current_block_argmax = tl.min(masked_offsets) \u2014 picks the LOWEST index within the current block, on the fp32-cast view of the logits.",
-    "Across blocks, is_new_max = block_max >= m and argmax_idx = where(is_new_max, current_block_argmax_idx, argmax_idx) \u2014 a later block
-...[truncated 3971 chars]
+  "id": "c1",
+  "status": "confirmed"
+}
 
-### t11 - record_claim - ok
+### t10 - record_claim - ok
 
 {
   "id": "c2",
-  "rationale": "Line 160 uses block_max >= m, so a later block whose max equals the running max replaces the running argmax_idx with the later block's lowest index; with the max attained at tied entries in both an earlier and a later block, the reported index is not globally lowest.",
+  "rationale": "Line 26 computes rstd = 1.0/(tl.sqrt(var)+eps) instead of 1/sqrt(var+eps). For a row with small nonzero variance, e.g. var = 1e-6 (std 1e-3) and eps=1e-5, contract rstd = 1/sqrt(1.1e-5) \u2248 302 while kernel rstd = 1/(1e-3+1e-5) \u2248 990 \u2014 a >3x error in the normalizer. Since (x-mean) != 0 for such rows, y = (x-mean)*rstd*w + b differs from the contract by the same >3x factor on the normalized component, far beyond any typical allclose tolerance. The error vanishes only for normal-variance rows (var >> eps) and for exactly-constant rows (where (x-mean)=0).",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Tie rule: when several vocabulary entries attain the row maximum, predicted must be the LOWEST such index. Input domain: n_cols may exceed the kernel's block size, so a row spans several blocks and a tie may fall in different blocks."
+      "summary": "Contract states rstd = 1 / sqrt(var + eps) and y = (x-mean)*rstd*weight + bias, and explicitly says eps 'must keep the normalizer finite as the row variance approaches zero' \u2014 the near-zero-variance regime is the contract's stated protected domain, so output accuracy there is required."
     }
   ],
-  "scope_rationale": "problem.txt's tie rule explicitly requires the LOWEST tied index, and its input domain explicitly admits n_cols exceeding the block size with ties in different blocks, so this case violates a stated contract requirement.",
-  "statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.",
+  "scope_rationale": "problem.txt's stated formula is rstd = 1/sqrt(var + eps) and it explicitly names the near-zero-variance regime (\"as the row variance approaches zero\") as the case eps must handle; rows with small nonzero variance are squarely inside this stated contract, and the returned y (the only contractual output per problem.txt) then deviates from the formula's value.",
+  "statement": "For rows with small nonzero variance (e.g. var ~ 1e-6, eps = 1e-5), the returned layer_norm() output y deviates from the contract formula 1/sqrt(var+eps) because the kernel computes rstd = 1/(sqrt(var)+eps) at line 26, giving an error of order eps/(2*var) in the normalizer (~3x for var=1e-6), which multiplies directly into y = (x-mean)*rstd*weight + bias.",
   "status": "open"
 }
 
-### t12 - record_claim - ok
+### t11 - record_description_update - ok
 
 {
-  "id": "c3",
-  "rationale": "Wrapper passes reduction='mean' and the kernel divides each row's loss by n_non_ignore before storing to loss_ptr; the returned loss vector is therefore scaled by 1/N, e.g. with n_rows=4 all losses are 4x smaller than the per-row -log softmax.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "cross_entropy_with_predictions returns loss[i] = -log softmax(logits[i])[target[i]] \u2014 a per-row quantity with no division by the number of rows."
-    }
+  "contract_model": [
+    "Row-wise layer norm: mean = sum(x)/N, var = sum((x-mean)^2)/N, rstd = 1/sqrt(var + eps), y = (x-mean)*rstd*weight + bias",
+    "eps must be inside the sqrt so the normalizer stays finite as row variance approaches zero; the contract explicitly protects the near-zero-variance regime",
+    "Only the returned y is contractual; the Mean/Rstd buffers are internal kernel artifacts"
   ],
-  "scope_rationale": "problem.txt defines loss[i] elementwise as -log softmax(logits[i])[target[i]] with no batch normalization, so a 1/n_non_ignore scaling violates the stated output contract for any batch with >1 non-ignored token.",
-  "statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
-  "status": "open"
+  "impact_on_claims": [],
+  "kernel_model": [
+    "Triton kernel, one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking (other=0.0 and tl.where before squaring)",
+    "Line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps added outside the sqrt, so the normalizer is 1/(std+eps) instead of 1/sqrt(var+eps)",
+    "For var >> eps the two formulas agree to relative order eps/(2*var); for small nonzero var (var ~ eps) the kernel's rstd is larger by a factor ~1+eps/(2*var) up to ~3x at var=1e-6, and this factor multiplies (x-mean)*w in y",
+    "For exactly-constant rows (var=0), (x-mean)=0 so y=bias in both implementations; divergence appears only in the internal Rstd buffer",
+    "Wrapper assumes 2D x, contiguous last dim; y cast to x.dtype on store"
+  ],
+  "open_questions": [
+    "Whether the benchmark's tolerance regime or hidden test inputs include near-zero-variance rows (test_code is empty, so the only contract evidence is the problem.txt formula and its explicit near-zero-variance wording)"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Decisive probe surface for the eps-placement divergence (claim c2): construct a row with controlled small variance, e.g. a constant row plus one element perturbed by delta, giving var = delta^2*(N-1)/N^2; sweep delta from 1e-4 to 1e-2 with eps=1e-5 so var spans ~1e-10 to ~1e-4 and the rstd ratio 1/(std+eps) vs 1/sqrt(var+eps) ranges from ~300x down to ~1x; compare y against the exact contract formula",
+    "Mean-subtraction caveat: any probe must ensure (x-mean) != 0 on the perturbed columns,
+...[truncated 1201 chars]
+
+### t12 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Final review: the only material in-scope defect \u2014 rstd = 1/(sqrt(var)+eps) at kernel.py line 26 instead of 1/sqrt(var+eps), which deviates from the contract formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows \u2014 is already recorded as open in-scope claim c2 with contract scope evidence. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No new evidence from the latest description update or probes exposes an additional material, testable in-scope problem.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 11,
+  "turn": 8
 }
 
 ### t13 - run_claim_probe - ok
@@ -760,30 +849,24 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t13_probe.py",
-      "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
+      "sha256": "1a6b5b75f656b9ade19cba0e5469b9414b9765f154c86e1bce2b717d3f30d946"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t13_stdout.txt",
-      "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t13_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t13_json_result.json",
-      "sha256": "51471496f592e0c816b6a8457256c81600e8d954ac1ec4c480fa2d0c91891d41"
+      "sha256": "5509a05e2d02fdbaf00a086f4084a02929d5e52c6a04d9a0fe778d2bb66238d7"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "When the row maximum is attained at tied entries located in different blocks (e.g. n_cols > 32768 with the max at index 0 and a tied copy at index 40000), cross_entropy_with_predictions reports the later block's index instead of the globally lowest tied index, violating the contract's LOWEST-index tie rule.",
-  "duration_s": 9.141824,
+  "claim_statement": "For rows with small nonzero variance (e.g. var ~ 1e-6, eps = 1e-5), the returned layer_norm() output y deviates from the contract formula 1/sqrt(var+eps) because the kernel computes rstd = 1/(sqrt(var)+eps) at line 26, giving an error of order eps/(2*var) in the normalizer (~3x for var=1e-6), which multiplies directly into y = (x-mean)*rstd*weight + bias.",
+  "duration_s": 4.506198,
   "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
@@ -793,195 +876,165 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t13_probe.py",
-          "sha256": "1b99909903eda1814f6e6910006b6ac2b116abd2e08e54a055c5854e6329209e"
+          "sha256": "1a6b5b75f656b9ade19cba0e5469b9414b9765f154c86e1bce2b717d3f30d946"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t13_stdout.txt",
-          "sha256": "903a32f052bbd402cd6ec806270ff9235e1af99ee46176ed6adb746278cc7070"
-        },
-        {
-          "description": "Captured stderr from the probe proc
-...[truncated 1854 chars]
-
-### t14 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t14_probe.py",
-      "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t14_stdout.txt",
-      "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t14_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t14_json_result.json",
-      "sha256": "baad4c8bccdd61a41960775e0d548e6568ac41d1199fdc556d1d6873b33fb719"
-    }
-  ],
-  "claim_id": "c3",
-  "claim_statement": "The returned per-row loss is divided by n_non_ignore (reduction='mean' path at kernel lines 307-311), so loss[i] is N times smaller than the contract-required value -log softmax(logits[i])[target[i]] for any batch with more than one non-ignored token.",
-  "duration_s": 6.8632,
-  "event_id": "t14",
-  "evidence_draft": {
-    "claim_id": "c3",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t14_probe.py",
-          "sha256": "94e1c0725612fb5663bb2d00d7937482cca544d86ccf7920a2977a1f02287738"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t14_stdout.txt",
-          "sha256": "b970ab799f3edbbcf70917143d7a81640019821d3cdaea57ae4d2b8c5063d688"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probe
-...[truncated 2707 chars]
+          "path": "probes/t13_stderr.txt",
+          "sha256": "5509a05e2d02fdbaf00a086f4084a02929d5e52c6a04d9a0fe778d2bb66238d7"
+        }
+      ],
+      "duration_s
+...[truncated 2505 chars]
 
-### t15 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t15_probe.py",
-      "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t15_stdout.txt",
-      "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t15_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t15_json_result.json",
-      "sha256": "f5c498b877dd67117aebeff17e035cf0cda85957ca086df46e7a3a0ca79ca29b"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "For a row where all valid logits equal float('-inf') (or a trailing masked remainder block where block_max == -inf), the kernel may report predicted[i] = n_cols (out-of-range index) because masked lanes with X_block == -inf == block_max are not excluded from the argmax mask.",
-  "duration_s": 5.580913,
-  "event_id": "t15",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t15_probe.py",
-          "sha256": "63419518505f419b8a73ade7eefeea417073d1353b7c6c5d6fd24cb170d4595c"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t15_stdout.txt",
-          "sha256": "544ea9954124777cd0f1d76a95eaa473ec2a136212d6d0903ecef62adf99d816"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr"
-...[truncated 1741 chars]
-
-### t16 - finalize_probe_evidence - ok
+### t14 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
-  "claim_status": "confirmed",
+  "claim_status": "inconclusive",
   "evidence_id": "c2.e1",
-  "summary": "Cross-block tie probe (n_cols=40000, BLOCK_SIZE=32768): row 0 had tied max 5.0 at indices 0 and 35000. Kernel reported predicted[0]=35000 (later block's index) while the contract's LOWEST tied index is 0 (torch.argmax gives 0). Tie violation confirmed; control row 1 (no tie) predicted correctly at 13867.",
-  "supports": "confirmed",
+  "summary": "Probe failed with ValueError: CPU tensor pointers not accessible from Triton; no measurement taken. Inconclusive \u2014 retry with .cuda() tensors.",
+  "supports": "inconclusive",
   "tool_event_id": "t13"
 }
 
-### t17 - finalize_probe_evidence - ok
+### t15 - record_no_new_claims - ok
 
 {
-  "claim_id": "c3",
-  "claim_status": "confirmed",
-  "evidence_id": "c3.e1",
-  "summary": "Loss scaling probe (n_rows=4, n_cols=1000, all targets valid so n_non_ignore=4): ref_over_kernel_ratio is exactly 4.0 for every row \u2014 the returned per-row loss equals -log softmax / 4, i.e. 1/n_non_ignore, while the contract requires the unscaled per-row -log softmax. 75% relative error elementwise.",
-  "supports": "confirmed",
-  "tool_event_id": "t14"
+  "decision": "no_new_claims",
+  "reason": "Final review: the only material in-scope defect is already covered by open in-scope claim c2 \u2014 kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), which deviates from problem.txt's stated formula and its explicitly protected near-zero-variance regime for small-nonzero-variance rows. The latest probe (t13) was inconclusive solely because tensors were left on CPU (Triton pointer error), an infrastructure failure that exposes no new kernel behavior; the source-level algebraic divergence remains established. Claim c1 (rstd buffer divergence at var=0) is confirmed but out of scope. No additional material, testable, in-scope problem is exposed by the latest evidence.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 14,
+  "turn": 11
 }
 
-### t18 - finalize_probe_evidence - ok
+### t16 - record_verdict - error
 
 {
-  "claim_id": "c1",
-  "claim_status": "inconclusive",
-  "evidence_id": "c1.e1",
-  "summary": "All-(-inf) row probe (n_cols=40000): kernel reported predicted[0]=32768 (the first masked lane index, BLOCK_SIZE) \u2014 in-range but arguably still arbitrary; the reference loss is NaN and reference argmax on an all-(-inf) row is undefined/implementation-defined, so per scope policy (reference-undefined case) this cannot decide the claim. The specific n_cols-value prediction was not observed; noted as a degenerate-case observation only, out-of-scope for a reject.",
-  "supports": "inconclusive",
-  "tool_event_id": "t15"
+  "error_type": "ValueError",
+  "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c2: status=inconclusive, scope=in_scope"
 }
+
+### t17 - request_more_debate - ok
+
+{
+  "reason": "Claim c2 (eps placed outside the sqrt at kernel.py line 26, producing multi-x output error for small-nonzero-variance rows) is in_scope and material, but its status is `inconclusive`: the only runtime probe (t13) failed with a CPU-tensor Triton pointer error before taking any measurement. A reject verdict requires a confirmed in-scope claim with test-domain evidence. The Experimenter already drafted a corrected GPU probe (constant row plus one perturbed element, delta sweep, randn control); it needs to be run with .cuda() tensors so c2 can be confirmed or rebutted with actual output-vs-contract-formula error measurements.",
+  "request": "more_debate"
+}
+
+### t18 - record_description_update - ok
+
+{
+  "contract_model": [],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps), eps outside the sqrt, vs contract 1/sqrt(var+eps) (problem.txt)",
+    "kernel model is identical to du2: Triton one-program-per-row, BLOCK=256, fp32 two-pass stats, correct cols<N masking; the eps placement is the sole material deviation",
+    "Concrete expected numbers for the planned CUDA probe (N=512, eps=1e-5, w,b ~ randn scale): single-perturb delta=1e-3 -> var ~ delta^2*(N-1)/N^2 ~ 2.0e-9, kernel/contract rstd ratio ~ (1/(std+eps))/(1/sqrt(var+eps)) ~ 100x, so y on perturbed columns differs from the contract y by roughly 100x the (x-mean)*w term; delta=1e-2 -> var ~ 2e-7, ratio ~ 3x; delta=1e-4 -> ratio ~ up to ~300x; randn control (var ~ 1) ratio ~ 1+eps/2 ~ 1.000005, max abs err ~ 1e-5 scale",
+    "Probe must move ALL tensors (x, weight, bias, and thus y, plus the ref computed on GPU or moved to CPU) to CUDA; layer_norm internally allocates mean/rstd on x.device, so only the caller-side tensors needed the .cuda() fix"
+  ],
+  "open_questions": [
+    "No unresolved kernel-description facts; the open item is purely the runtime measurement itself, which belongs to the Experimenter, not to the description model"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Probe execution risk (not kernel risk): the t13 probe failed because caller tensors were CPU; the kernel's internal torch.empty/empty_like allocations already follow x.device, so passing CUDA x/weight/bias is the complete fix",
+    "If the CUDA probe instead shows y agreeing with the contract formula even at small variance, that would imply var is not actually small on those rows (check the probe's reported var) \u2014 the description math predicts disagreement whenever 0 < var << eps",
+    "Edge behavior to keep in-mind but not re-claim: at var=0 exactly, y=bias in both implementations (c1 already covers the aux-buffer divergence); a probe row with a single perturbed element s
+...[truncated 1290 chars]
 
 ### t19 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: c2 (cross-block tie violation of the LOWEST-index rule, predicted=35000 instead of 0 with a tie at indices 0 and 35000, n_cols=40000) and c3 (per-row loss divided by n_non_ignore, ratio exactly 4.0 vs the contract's per-row -log softmax) are both confirmed in-scope with direct runtime evidence. c1 (all -inf row) is inconclusive under a reference-undefined degenerate case and cannot affect the verdict. No additional material, testable, in-scope claims are needed.",
+  "reason": "Reopened round on c2: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du3 update (expected CUDA probe numbers, device-placement guidance) introduces no new kernel behavior or contract surface; the remaining gap is purely the runtime measurement, which the Experimenter's corrected CUDA probe will supply. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope, and the known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent with no new evidence changing that. No additional material, testable, in-scope claim is warranted.",
   "reviewed_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
   "reviewed_tool_event_count": 18,
-  "turn": 9
+  "turn": 15
 }
 
-### t20 - record_verdict - ok
+### t20 - request_more_debate - ok
 
 {
-  "confidence": 0.95,
-  "decisive_claims": [
-    "c2",
-    "c3"
+  "reason": "The previous request_more_debate round (t17) produced description update du3 and skeptic sign-off (t19), but the Experimenter never actually ran the corrected CUDA probe for claim c2. Its only evidence (t13) remains inconclusive due to the CPU-tensor infrastructure error. Claim c2 is in_scope and material (kernel.py line 26 computes rstd = 1/(sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps), explicitly protected regime per problem.txt), but a reject verdict requires it to be confirmed with test-domain runtime evidence. The Experimenter must now run the du3-specified GPU probe: x/weight/bias on CUDA, constant rows plus single/symmetric perturbations with delta in {1e-4, 1e-3, 1e-2}, eps=1e-5, comparing returned y against the contract formula, plus a randn control. Expected: rstd ratio ~3x\u2013300x on small-variance rows with corresponding y-level abs/rel errors, while randn agrees to ~1e-5 relative.",
+  "request": "more_debate"
+}
+
+### t21 - record_description_update - ok
+
+{
+  "contract_model": [],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "kernel.py line 26: rstd = 1.0 / (tl.sqrt(var) + eps) \u2014 eps outside the sqrt, vs contract 1/sqrt(var+eps) per problem.txt; this remains the sole material deviation",
+    "Kernel otherwise faithful: one program per row, BLOCK=256, fp32 two-pass mean/variance with correct cols<N masking, y cast to x.dtype on store, wrapper assumes 2D contiguous-last-dim input",
+    "Math prediction stands from du3: at eps=1e-5, N=512, single-perturb rows give kernel-vs-contract rstd ratios of roughly 300x (delta=1e-4), 100x (delta=1e-3), 3x (delta=1e-2), while randn control agrees to ~1e-5 relative"
   ],
-  "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set aside as a generalization note; it does not affect the verdict.",
-  "verdict": "reject"
+  "open_questions": [
+    "The only open item is the runtime measurement itself (Experimenter's CUDA probe); no unresolved kernel-description facts remain",
+    "Still unknown whether the benchmark's hidden tolerance regime includes near-zero-variance rows, but problem.txt's explicit 'variance approaches zero' wording makes that regime contractually protected regardless"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "The decisive probe must use CUDA tensors for x, weight, and bias (kernel.py allocates mean/rstd/y on x.device internally); CPU caller tensors caused the t13 failure",
+    "Probe rows must have nonzero variance AND nonzero (x-mean) on perturbed columns, else the rstd error cancels out of y",
+    "If the CUDA probe unexpectedly shows y agreeing with the contract formula, check the reported var first \u2014 disagreement is predicted whenever 0 < var << eps",
+    "Passing a randn-only probe is NOT evidence against c2, since var ~ O(1) >> eps makes the two formulas agree to ~1e-5 relative"
+  ],
+  "scope_notes": [
+    "Scope unchanged: forward layer_norm() output y only; no backward, no aux Mean/Rstd contract; test_code is empty so problem.txt is the operative contract",
+    "The corrected CUDA probe is test-domain in-scope evidence for c2 since it compares returned y against the contract formul
+...[truncated 632 chars]
+
+### t22 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "Reopened c2 round: the only material in-scope defect \u2014 kernel.py line 26 computing rstd = 1.0/(tl.sqrt(var)+eps) instead of the contract's 1/sqrt(var+eps) in the explicitly protected near-zero-variance regime \u2014 is already recorded as in-scope claim c2 with problem.txt scope evidence. The describer's du4 reaffirms the stable description model and expected probe numbers; no new kernel behavior, contract surface, or runtime evidence has appeared since du3. The remaining gap is purely the Experimenter's corrected CUDA runtime measurement for c2. Claim c1 (Rstd buffer divergence at var=0) is confirmed and out of scope; known wrapper/generalization risks (non-2D input, non-contiguous last dim, dtype cast) were previously assessed as out of scope or tolerance-dependent with no new evidence. No additional material, testable, in-scope claim is warranted.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 21,
+  "turn": 18
+}
+
+### t23 - record_verdict - ok
+
+{
+  "confidence": 0.7,
+  "decisive_claims": [
+    "c2"
+  ],
+  "reason": "The kernel source (kernel.py line 26) computes rstd = 1.0/(tl.sqrt(var)+eps), placing eps outside the square root, while the operative contract (problem.txt, the only contract since the artifact has no test.py/get_inputs) explicitly requires rstd = 1/sqrt(var+eps) and explicitly protects the near-zero-variance regime (\"as the row variance approaches zero\"). For rows with small nonzero variance this yields a multiplicative normalizer error of order eps/(2*var) (~3x at var=1e-6, eps=1e-5) that propagates directly into the returned y = (x-mean)*rstd*weight + bias since (x-mean) != 0 there. However, the decisive in-scope claim c2 is stuck at `inconclusive`: its only runtime probe (t13) failed on an infrastructure error (CPU tensors passed to Triton) and the corrected CUDA probe was never executed despite two reopened debate rounds and an explicit prediction from the describer (rstd ratio ~3x-300x for delta 1e-2..1e-4 at eps=1e-5, randn control agreeing to ~1e-5 relative). Per claim lifecycle rules I cannot record a reject on an inconclusive claim, and I cannot mutate claims. Claim c1 (316x divergence in the internal Rstd buffer at var=0) is confirmed but out of scope, since y equals bias for exactly-constant rows in both implementations. The verdict is needs_more_evidence: a single correctly-executed CUDA probe comparing returned y against the contract formula on small-nonzero-variance rows would settle c2 and likely justify rejection.",
+  "verdict": "needs_more_evidence"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-30T08:29:57Z",
+  "confidence": 0.7,
+  "created_at": "2026-09-30T08:32:15Z",
   "decisive_claims": [
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reason": "Two confirmed, in-scope contract violations backed by runtime evidence: (1) c2 \u2014 the cross-block argmax accumulation uses block_max >= m (kernel.py line 160), so when the row maximum is tied across blocks the later block's index replaces the earlier one; the probe (n_cols=40000, ties at indices 0 and 35000) showed predicted=35000 while problem.txt's tie rule explicitly requires the LOWEST tied index and its stated input domain explicitly admits n_cols exceeding the block size with ties in different blocks. (2) c3 \u2014 the wrapper passes reduction='mean' and the kernel divides each stored per-row loss by n_non_ignore (lines 307-311), so the returned loss[i] is 1/N times the contract-required -log softmax(logits[i])[target[i]]; the probe showed ref_over_kernel_ratio exactly 4.0 for every row (75% relative error). Since no test.py/get_inputs exist in the artifact, problem.txt is the operative contract and both violations are of behaviors it explicitly requires. c1 (all -inf row) remains inconclusive \u2014 the reference loss is NaN there, a reference-undefined degenerate case \u2014 and is set aside as a generalization note; it does not affect the verdict.",
-  "verdict": "reject"
+  "forced_final_round": {
+    "skeptic_signed_off": true,
+    "unresolved_claims": []
+  },
+  "reason": "The kernel source (kernel.py line 26) computes rstd = 1.0/(tl.sqrt(var)+eps), placing eps outside the square root, while the operative contract (problem.txt, the only contract since the artifact has no test.py/get_inputs) explicitly requires rstd = 1/sqrt(var+eps) and explicitly protects the near-zero-variance regime (\"as the row variance approaches zero\"). For rows with small nonzero variance this yields a multiplicative normalizer error of order eps/(2*var) (~3x at var=1e-6, eps=1e-5) that propagates directly into the returned y = (x-mean)*rstd*weight + bias since (x-mean) != 0 there. However, the decisive in-scope claim c2 is stuck at `inconclusive`: its only runtime probe (t13) failed on an infrastructure error (CPU tensors passed to Triton) and the corrected CUDA probe was never executed despite two reopened debate rounds and an explicit prediction from the describer (rstd ratio ~3x-300x for delta 1e-2..1e-4 at eps=1e-5, randn control agreeing to ~1e-5 relative). Per claim lifecycle rules I cannot record a reject on an inconclusive claim, and I cannot mutate claims. Claim c1 (316x divergence in the internal Rstd buffer at var=0) is confirmed but out of scope, since y equals bias for exactly-constant rows in both implementations. The verdict is needs_more_evidence: a single correctly-executed CUDA probe comparing returned y against the contract formula on small-nonzero-variance rows would settle c2 and likely justify rejection.",
+  "verdict": "needs_more_evidence"
 }

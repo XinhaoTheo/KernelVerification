@@ -15,7 +15,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_144": "trust", "case_145": "reject"}
+EXPECTED = {"case_71": "trust", "case_72": "reject"}
 MAX_ROWS, MAX_COLUMNS, MAX_ELEMENTS = 65536, 4096, 262144
 
 
@@ -53,7 +53,7 @@ def key_audit():
     ordered_bits, ordered_values = bits[order], values[order]
     equal = ordered_values[1:] == ordered_values[:-1]
     variants = {}
-    for name, canonicalize in (("case_144", True), ("case_145", False)):
+    for name, canonicalize in (("case_71", True), ("case_72", False)):
         ranks = _ranks(ordered_bits, canonicalize)
         differences = np.diff(ranks.astype(np.int64))
         strict_errors = (~equal) & (differences <= 0)
@@ -78,8 +78,8 @@ def key_audit():
     ties = np.uint64(0xffffffff) - indices
     assert np.all(ties[:-1] > ties[1:])
     assert np.array_equal(np.uint64(0xffffffff) - ties, indices)
-    assert variants["case_144"]["order_and_equality_preserved"]
-    assert variants["case_145"]["equal_value_rank_failures"] == 1
+    assert variants["case_71"]["order_and_equality_preserved"]
+    assert variants["case_72"]["equal_value_rank_failures"] == 1
     assert all(v["minimum_valid_rank"] > 0 for v in variants.values())
     # Exhaust every legal N and the maximal M for that N. The source's
     # row*N+column and row output index remain int32-safe and in bounds.
@@ -188,12 +188,12 @@ def cpu_audit(case_root):
     witness = np.array([[-0.0,+0.0]],dtype=np.float16)
     raw = witness.view(np.uint16)
     candidate_winners = {}
-    for name,canonicalize in (("case_144",True),("case_145",False)):
+    for name,canonicalize in (("case_71",True),("case_72",False)):
         ranks = _ranks(raw,canonicalize).astype(np.uint64)
         ties = np.uint64(0xffffffff)-np.arange(2,dtype=np.uint64)
         packed = (ranks << np.uint64(32)) | ties
         candidate_winners[name] = int(np.argmax(packed[0]))
-    assert candidate_winners == {"case_144":0,"case_145":1}
+    assert candidate_winners == {"case_71":0,"case_72":1}
     return {"passed":True,"key_audit":audit,"plans":rows,
             "legal_witness":{"input_bits":["0x8000","0x0000"],"reference_index":0,
                              "candidate_cpu_indices":candidate_winners},

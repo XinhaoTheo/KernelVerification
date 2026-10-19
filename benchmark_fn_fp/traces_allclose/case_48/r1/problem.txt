@@ -1,0 +1,53 @@
+Compute an INT4 weight-only linear projection from canonical stored GPTQ-format
+buffers. The target is the matrix decoded from these buffers, not a comparison
+to any original, pre-quantization matrix. Input row order may be activation-order
+permuted with respect to the quantization groups.
+
+Inputs and complete canonical format:
+- x: finite FP16 [M,K], every magnitude <=0.5.
+- qweight: int32 [ceil(K/8),N]. Interpret each int32 as a 32-bit bit pattern:
+    q[k,n] = (qweight[k//8,n] >> (4*(k%8))) & 15.
+  Thus eight unsigned 4-bit weight codes are packed along K, low nibble first.
+- scales: FP16 [G,N], each finite stored value in (0,1/32].
+- qzeros: int32 [G,ceil(N/8)]. The zero point is stored minus one:
+    z[g,n] = ((qzeros[g,n//8] >> (4*(n%8))) & 15) + 1.
+  Actual zero points range from1 through16; there is no wrap after adding one.
+- g_idx: int32 [K]. This assigns each ORIGINAL activation/weight row k to
+  group g_idx[k]. It need not be monotone. Each value lies in [0,G).
+- group_size: a Python int in {16,32,64}; G=ceil(K/group_size).
+  Group g occurs exactly min(group_size,K-g*group_size) times in g_idx.
+  The group histogram is fixed, while its order is unrestricted.
+- 1<=M<=65, 1<=K<=128, 1<=N<=96.
+The unused high weight nibbles in the final K pack and unused zero-point nibbles
+past N are arbitrary and must not affect the result. Any int32 bit pattern,
+including negative signed words, is valid in qweight/qzeros. Packed word
+endianness here is defined by numerical shifts, not by host byte reinterpretation.
+
+All five tensors must be ordinary torch.Tensor objects (not subclasses), dense,
+strided, contiguous, on one CUDA device, with disjoint occupied byte ranges.
+Contiguous views with nonzero storage offsets are legal. Inputs must have
+requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls
+run in ordinary non-inference mode without concurrent external input writes.
+This is forward execution on materialized buffers and does not provide autograd.
+
+For each k,n, define the decoded weight
+  D[k,n] = H16((q[k,n]-z[g_idx[k],n]) * scales[g_idx[k],n]),
+where the product uses the exact stored scale value and H16 means one IEEE
+binary16 round-to-nearest, ties-to-even. This decoded FP16 weight is part of the
+target definition, not permission to round arbitrary later intermediates.
+Define the target in real arithmetic on those stored/decoded values:
+  target[m,n] = sum(k=0..K-1) x[m,k] * D[k,n].
+Return a fresh finite FP32 CUDA [M,N] tensor, preserving every input. Each output
+must obey abs(actual-target) <= 0.01 + 0.001*abs(target).
+The domain implies |D|<=0.5 and |target|<=32. The tolerance accommodates the
+bounded FP16-input/FP32-accumulation implementation including small subnormal
+contributions. It does not change the canonical packing, group assignment or
+specified decoded-weight definition.
+
+The implementation may reorder rows, change internal packing and tile the GEMM;
+these choices must preserve the complete target. Correctness is one verdict for
+this fixed implementation over the full legal domain, not a verdict per input.
+validate_inputs() enforces the public domain and is called by run(). reference()
+decodes the canonical buffers directly in original order and computes the FP64
+target; it also accepts CPU inputs. make_inputs() is only an example generator.
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

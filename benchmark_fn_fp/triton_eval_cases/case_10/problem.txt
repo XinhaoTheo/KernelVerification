@@ -1,15 +1,15 @@
-Operation: top-k selection over candidate block scores, implemented with the
-bitonic sort network used by Native Sparse Attention's selection branch
-(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).
+Operation: rotary position embeddings (RoPE)
+(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).
 
-`sorted_topk_indices(scores, k)` must return the indices of the k
-highest-scoring candidates, in descending score order.
+`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature
+dimensions of x by the position-dependent angle encoded in cos/sin, so that
+the dot product of a rotated query and a rotated key depends on their relative
+position.
 
-Contract on ties: when two candidates have exactly equal scores, the
-LOWER index must be the one kept.
+Two pairings are in use in the field and the kernel implements both behind the
+`interleaved` flag:
+  - interleaved=False: dimension i is paired with dimension i + headdim/2
+  - interleaved=True:  dimension 2i is paired with dimension 2i+1
 
-Downstream, the selected indices gather value vectors that are averaged
-together, so the selection feeds a continuous output.
-
-Input domain: `scores` has a power-of-two number of columns (the bitonic
-network this kernel family uses is defined only for power-of-two extents).
+The specification does not mandate which pairing a model uses; it requires
+only that a given model apply the same one consistently to both q and k.

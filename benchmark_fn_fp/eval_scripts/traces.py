@@ -228,10 +228,12 @@ def iter_trace_records(benchmark_dir: Path | None = None, *, include_archived: b
     """Read active cases by default; archived storage is an explicit opt-in."""
     try:
         from .models import PROFILES
-        from .case_registry import archived_case_groups, is_active_case, load_registry, resolve_trace_case
+        from .case_registry import (archived_case_groups, case_aliases, is_active_case,
+                                    load_registry, resolve_trace_case)
     except ImportError:
         from models import PROFILES
-        from case_registry import archived_case_groups, is_active_case, load_registry, resolve_trace_case
+        from case_registry import (archived_case_groups, case_aliases, is_active_case,
+                                   load_registry, resolve_trace_case)
     benchmark = Path(benchmark_dir) if benchmark_dir is not None else BENCHMARK_DIR
     registry = load_registry(benchmark)
     legacy_models = {"traces_glm": "z-ai/glm-5.3-flash",
@@ -284,6 +286,7 @@ def iter_trace_records(benchmark_dir: Path | None = None, *, include_archived: b
             trial = leaf_trial if leaf_trial.startswith("r") and leaf_trial[1:].isdigit() else meta.get("trial", leaf_trial)
             yield {"path": directory, "metadata": meta,
                 "case": case, "original_case": original_case,
+                "case_aliases": sorted(case_aliases(case, registry.get("case_details", {}).get(case, {}))),
                 "arm": meta.get("arm", parts[arm_index]),
                 "trial": trial,
                 "original_trial": meta.get("original_trial") or meta.get("trial") or leaf_trial,

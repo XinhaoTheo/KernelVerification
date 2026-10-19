@@ -1,4 +1,4 @@
-"""Independent pseudo-Huber qualification for fixed case_138/139.
+"""Independent pseudo-Huber qualification for fixed case_65/139.
 
 Mixed absolute/relative tolerance is handled here without altering older
 families or the shared absolute-only scalar oracle. The mathematical oracle
@@ -21,7 +21,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_138": "trust", "case_139": "reject"}
+EXPECTED = {"case_65": "trust", "case_66": "reject"}
 ATOL = 1e-8
 RTOL = 1e-5
 REFERENCE_BUDGET = 1e-10
@@ -146,8 +146,8 @@ def cpu_screen():
     square = np.multiply(x, x, dtype=np.float32)
     root = np.sqrt(np.add(np.float32(1), square, dtype=np.float32), dtype=np.float32)
     candidates = [
-        ("case_138", "rationalized", np.divide(square, np.add(root, np.float32(1), dtype=np.float32), dtype=np.float32)),
-        ("case_139", "direct_subtraction", np.subtract(root, np.float32(1), dtype=np.float32)),
+        ("case_65", "rationalized", np.divide(square, np.add(root, np.float32(1), dtype=np.float32), dtype=np.float32)),
+        ("case_66", "direct_subtraction", np.subtract(root, np.float32(1), dtype=np.float32)),
     ]
     return [{"case": name, "expression": expression, "evaluation": "CPU NumPy FP32 separate operations; GPU sqrt may differ", **compare(result, bits)}
             for name, expression, result in candidates]

@@ -1,0 +1,26 @@
+Compute the elementwise mathematical complex quotient of two input tensors.
+
+Each input has shape [N,2]. Row [a,b] represents a+i*b. For numerator row [a,b] and denominator row [c,d], return
+
+    real = (a*c + b*d) / (c*c + d*d)
+    imag = (b*c - a*d) / (c*c + d*d).
+
+These expressions define exact real arithmetic. Compare EACH output component separately against its mathematical value. The requirement is
+
+    abs(actual - target) <= 1e-7 + 5e-7 * abs(target).
+
+The tolerance does not depend on the magnitude of the other component. A small real component must meet its own tolerance even when the imaginary component is large, and conversely. Any mathematically equivalent algorithm and internal precision are permitted if they meet this requirement.
+
+Inputs and complete public domain:
+- numerator and denominator are ordinary torch.Tensor objects with dtype float16 and shape [N,2], where 1<=N<=131072.
+- EVERY combination of finite FP16 component values is legal, including signed zeros, subnormals and both extrema. In each denominator row, c and d must not both be zero. No other magnitude, conditioning, distribution, seed or correlation restriction applies.
+- Both tensors are dense, strided, contiguous and on the same CUDA device. Contiguous views with nonzero storage offsets are legal. The inputs may share backing storage.
+- Both tensors have requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls use ordinary non-inference mode without concurrent external writes. There is no autograd requirement.
+
+Return a fresh float32 tensor with shape [N,2] on the input device. Preserve both inputs and their backing storage. Every output must be finite. Signed zeros are numerically equal for comparison. Correctness is one fixed accept/reject verdict for the implementation over this complete domain; individual inputs supply evidence, not labels.
+
+validate_inputs() enforces the full domain and run() calls it. reference() evaluates the direct formulas in FP64 and also supports CPU inputs. make_inputs() only supplies examples.
+
+Complex division is used in signal processing and numerical linear algebra. This is an original synthetic Triton implementation of standard real-arithmetic complex division, not an upstream kernel or a claimed historical bug. The componentwise accuracy requirement is explicit for this benchmark; it is not a claim about every library's complex-division API.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

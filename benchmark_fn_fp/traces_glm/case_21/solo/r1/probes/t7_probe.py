@@ -1,31 +1,21 @@
-import torch, sys, importlib.util
-spec = importlib.util.spec_from_file_location("kernel", "/root/cases/case_21/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-
+import torch, json
+from kernel import splitk_dot
 torch.manual_seed(0)
-num_pages, page_size, head_dim = 16, 4, 8
-num_seqs, max_blocks = 3, 5
-kv = torch.randn(num_pages, page_size, head_dim, device="cuda")
-# permuted (non-identity) block table, distinct pages
-perm = torch.randperm(num_pages)[:num_seqs*max_blocks] if num_pages >= num_seqs*max_blocks else torch.randperm(num_pages).repeat(2)
-bt = perm[:num_seqs*max_blocks].reshape(num_seqs, max_blocks).to(torch.int32).cuda()
-seq_len = 13  # fits within max_blocks pages
-
-out = m.paged_gather(kv, bt, seq_len)
-
-# contract reference
-t = torch.arange(seq_len, device="cuda")
-phys = bt[:, t // page_size]  # [num_seqs, seq_len]
-ref = kv[phys, t % page_size]
-
-mism = (out != ref).any(dim=-1)
-print(torch.cuda.is_available())
-print({"max_abs_err": (out - ref).abs().max().item(),
-       "mismatch_frac": mism.float().mean().item()})
-# also identity-mapping sanity check
-bt_ident = torch.arange(num_seqs*max_blocks, dtype=torch.int32, device="cuda").reshape(num_seqs, max_blocks)
-kv2 = torch.randn(num_seqs*max_blocks, page_size, head_dim, device="cuda")
-out2 = m.paged_gather(kv2, bt_ident, seq_len)
-phys2 = bt_ident[:, t // page_size]
-ref2 = kv2[phys2, t % page_size]
-print("identity_ok", bool(torch.allclose(out2, ref2)))
+res=[]
+for K in [0, 1, 7, 255, 256, 257, 511, 512, 513, 4096, 100000, 1000003]:
+    a = torch.randn(K, device='cuda', dtype=torch.float32)
+    b = torch.randn(K, device='cuda', dtype=torch.float32)
+    if K == 0:
+        a = torch.zeros(0, device='cuda'); b = torch.zeros(0, device='cuda')
+    got = splitk_dot(a, b)
+    ref64 = (a.double() * b.double()).sum().item()
+    got = got.item()
+    rel = abs(got - ref64) / max(abs(ref64), 1e-30)
+    res.append({"K": K, "got": got, "ref64": ref64, "abs_err": abs(got-ref64), "rel_err": rel})
+# also a magnitude-heavy case: values ~1e-3 and ~1e3
+K = 100000
+a = (torch.randn(K, device='cuda')*1e-3).float(); b=(torch.randn(K, device='cuda')*1e3).float()
+got = splitk_dot(a,b).item(); ref64=(a.double()*b.double()).sum().item()
+res.append({"K": K, "dist": "scaled 1e-3/1e3", "got": got, "ref64": ref64, "abs_err": abs(got-ref64), "rel_err": abs(got-ref64)/max(abs(ref64),1e-30)})
+for r in res: print(json.dumps(r))
+print("max_rel_err", max(r["rel_err"] for r in res))

@@ -21,22 +21,23 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: layer normalization forward
-(Dao-AILab/flash-attention, flash_attn/ops/triton/layer_norm.py; the same
-formula is used by Liger-Kernel and by every transformer implementation).
+Operation: gather cached key/value tokens for a batch of sequences out of a
+paged KV cache, the block-table indirection used by paged-attention inference
+engines.
 
-For each row x:
+    kv_cache     : [num_pages, page_size, head_dim]
+    block_table  : [num_seqs, max_blocks], int32
+                   block_table[s, b] is the PHYSICAL page holding logical block b
+                   of sequence s
+    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]
 
-    mean = sum(x) / N
-    var  = sum((x - mean)^2) / N
-    rstd = 1 / sqrt(var + eps)
-    y    = (x - mean) * rstd * weight + bias
+Pages are allocated on demand, so the physical pages of one sequence are not
+contiguous and are generally interleaved with those of other sequences.
 
-The epsilon is the standard stabilizer: it must keep the normalizer finite as
-the row variance approaches zero, so that a constant row does not blow the
-output up.
+Input domain: `seq_len` may be any length that fits within `max_blocks` pages,
+and the block table may map any sequence to any physical page.
 
-Does layer_norm() satisfy this contract?
+Does paged_gather() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -48,48 +49,32 @@ import triton.language as tl
 
 
 @triton.jit
-def _layer_norm_kernel(X, Y, W, B, Mean, Rstd, stride, N, eps, BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    X += row * stride
-    Y += row * stride
+def _paged_gather_kernel(KV, BlockTable, Out, max_blocks, page_size,
+                         stride_kv_page, stride_out_seq,
+                         HEAD_DIM: tl.constexpr):
+    seq = tl.program_id(0)
+    slot = tl.program_id(1)
+    logical_block = slot // page_size
+    within = slot % page_size
 
-    mean = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        mean += tl.sum(a, axis=0)
-    mean = mean / N
-
-    var = 0.0
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        a = tl.load(X + cols, mask=cols < N, other=0.0).to(tl.float32)
-        a = tl.where(cols < N, a - mean, 0.0)
-        var += tl.sum(a * a, axis=0)
-    var = var / N
-    rstd = 1.0 / (tl.sqrt(var) + eps)
-
-    tl.store(Mean + row, mean)
-    tl.store(Rstd + row, rstd)
-    for off in range(0, N, BLOCK):
-        cols = off + tl.arange(0, BLOCK)
-        mask = cols < N
-        w = tl.load(W + cols, mask=mask)
-        b = tl.load(B + cols, mask=mask)
-        a = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        tl.store(Y + cols, (a - mean) * rstd * w + b, mask=mask)
+    physical = seq * max_blocks + logical_block
+    offs = tl.arange(0, HEAD_DIM)
+    src = KV + physical * stride_kv_page + within * HEAD_DIM + offs
+    dst = Out + seq * stride_out_seq + slot * HEAD_DIM + offs
+    tl.store(dst, tl.load(src))
 
 
-def layer_norm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
-               eps: float = 1e-5) -> torch.Tensor:
-    """Row-wise layer normalization with affine parameters."""
-    n_rows, n_cols = x.shape
-    y = torch.empty_like(x)
-    mean = torch.empty(n_rows, device=x.device, dtype=torch.float32)
-    rstd = torch.empty(n_rows, device=x.device, dtype=torch.float32)
-    _layer_norm_kernel[(n_rows,)](x, y, weight, bias, mean, rstd,
-                                  x.stride(0), n_cols, eps, BLOCK=256)
-    return y
+def paged_gather(kv_cache: torch.Tensor, block_table: torch.Tensor,
+                 seq_len: int) -> torch.Tensor:
+    """Gather `seq_len` cached tokens for each sequence through its block table."""
+    num_pages, page_size, head_dim = kv_cache.shape
+    num_seqs, max_blocks = block_table.shape
+    out = torch.empty((num_seqs, seq_len, head_dim), device=kv_cache.device,
+                      dtype=kv_cache.dtype)
+    _paged_gather_kernel[(num_seqs, seq_len)](
+        kv_cache, block_table, out, max_blocks, page_size,
+        kv_cache.stride(0), out.stride(0), HEAD_DIM=head_dim)
+    return out
 
 ```
 
@@ -97,20 +82,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-Eps added to sqrt(var) instead of inside sqrt. For var=0 constant row: rstd = 1/(0+eps) = 1/eps — same effect as reference? Reference: 1/sqrt(0+eps) ≈ 1/sqrt(eps). Both finite, differ numerically. Contract says keep finite; but does the implementation match reference formula? The contract states rstd = 1/sqrt(var+eps). Implementation gives 1/(sqrt(var)+eps) — different values generally, e.g. var=1: ref 1/sqrt(1.00001)≈0.999995; impl 1/(1+1e-5)≈0.99999 — differs by ~5e-11 at eps=1e-5? Actually 1/1.00001 vs 1/sqrt(1.00001): sqrt(1.00001)≈1.000005, so impl ≈0.99999, ref≈0.999995. Difference ~5e-6 relative — that could fail typical tolerance? At 1e-5 eps, difference ~eps/2 ≈ 5e-6, borderline. Typical test tolerance rtol=1e-5... Hmm. But also masked lanes: in mean loop, other=0.0 fine; var handled with where. The mean accumulation: mean += tl.sum(a) — a includes zeros. Fine.
-
-Main issue: eps placement. Verdict? The contract explicitly says var + eps inside sqrt. This differs. I'd say reject: rstd = 1/(sqrt(var)+eps) violates the stated formula, differing by O(eps) relative. Confidence moderate.
+(not supplied)
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 0.8, "reason": "The epsilon is placed incorrectly: the kernel computes rstd = 1/(sqrt(var) + eps), whereas the contract specifies rstd = 1/sqrt(var + eps), so results differ by O(eps) relative error for every non-degenerate row (not just degenerate ones)."}
+{"verdict": "reject", "confidence": 0.98, "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 0.8,
-  "reason": "The epsilon is placed incorrectly: the kernel computes rstd = 1/(sqrt(var) + eps), whereas the contract specifies rstd = 1/sqrt(var + eps), so results differ by O(eps) relative error for every non-degenerate row (not just degenerate ones)."
+  "confidence": 0.98,
+  "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."
 }
 
 ## Usage and stop reason
@@ -120,22 +103,22 @@ Main issue: eps placement. Verdict? The contract explicitly says var + eps insid
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 0.8,
-    "reason": "The epsilon is placed incorrectly: the kernel computes rstd = 1/(sqrt(var) + eps), whereas the contract specifies rstd = 1/sqrt(var + eps), so results differ by O(eps) relative error for every non-degenerate row (not just degenerate ones)."
+    "confidence": 0.98,
+    "reason": "The kernel never actually reads the block table; it computes 'physical = seq * max_blocks + logical_block', i.e., treats block_table's memory layout as a physical page index, which is wrong. It should load block_table[seq, logical_block] to get the physical page."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 961,
-    "output_tokens": 439
+    "input_tokens": 775,
+    "output_tokens": 80
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 375.582663499983,
-  "kernel_sha256": "d648a0ac76ec6d3970150973f07191750319b915e35b60b9d843ed738ab51a8c",
-  "problem_sha256": "75f84aee2bc2164a2ae12e45984ca77b47a7603bfbe88767bd93cec0f0bb8f9d",
+  "elapsed_s": 2.1992775830440223,
+  "kernel_sha256": "7555884853e6219ba8f534238d23c127df7576bdb5ec6c79d824bb953ae5f27a",
+  "problem_sha256": "878eecd616332b65a3c12263b238b8116e028ad04907c614d52d807b39c76c59",
   "prompt_variant": "original",
-  "estimated_usd": 0.003277,
+  "estimated_usd": 0.001437,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

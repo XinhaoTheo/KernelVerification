@@ -1,244 +1,169 @@
 [
   {
-    "created_at": "2026-09-30T08:17:22Z",
+    "created_at": "2026-09-30T08:18:52Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-30T08:17:59Z",
-        "data": {
-          "artifacts": [
-            {
-              "description": "Python probe code executed by local runtime.",
-              "kind": "probe_code",
-              "path": "probes/t8_probe.py",
-              "sha256": "6c97042f5ec33aec6db4013fc94cc3900e549c694910ae588b7783bee0a9e5a3"
-            },
-            {
-              "description": "Captured stdout from the probe process.",
-              "kind": "stdout",
-              "path": "probes/t8_stdout.txt",
-              "sha256": "a80a4cdee80bd03cc945be8a7e1445c959d1b36a96bd683def7bfdc004c8255e"
-            },
-            {
-              "description": "Captured stderr from the probe process.",
-              "kind": "stderr",
-              "path": "probes/t8_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t8_json_result.json",
-              "sha256": "9ab8d609aaf04479812b462050050e1a7bb768edba0374b51a914216a0e7fdcd"
-            }
-          ],
-          "duration_s": 5.33958,
-          "exit_code": 0,
-          "expected_signal": "final state deviates from exact FP reference by up to ~2.5e-3 per chunk, error growing with nchunks",
-          "json_parse_error": null,
-          "json_result": {
-            "nchunks256_dim8": {
-              "dim": 8,
-              "max_abs_err": 0.00567057728767395,
-              "max_rel_err": 0.042213961482048035,
-              "mean_abs_err": 0.0035548917949199677,
-              "n_chunks": 256,
-              "on_grid_frac": 1.0
-            },
-            "nchunks64_dim32": {
-              "dim": 32,
-              "max_abs_err": 0.020241260528564453,
-              "max_rel_err": 0.04379585012793541,
-              "mean_abs_err": 0.006441847421228886,
-              "n_chunks": 64,
-              "on_grid_frac": 1.0
-            },
-            "nchunks8_dim16": {
-              "dim": 16,
-              "max_abs_err": 0.004717707633972168,
-              "max_rel_err": 0.015723776072263718,
-              "mean_abs_err": 0.00233918777666986,
-              "n_chunks": 8,
-              "on_grid_frac": 1.0
-            }
-          },
-          "max_abs_err_256c": 0.00567057728767395,
-          "max_abs_err_64c": 0.020241260528564453,
-          "max_abs_err_8c": 0.004717707633972168,
-          "max_rel_err_64c": 0.04379585012793541,
-          "on_grid_frac": 1.0,
-          "quant_step": 0.005,
-          "stderr": "",
-          "stdout": "{\"nchunks8_dim16\": {\"max_abs_err\": 0.004717707633972168, \"mean_abs_err\": 0.00233918777666986, \"max_rel_err\": 0.015723776072263718, \"n_chunks\": 8, \"dim\": 16, \"on_grid_frac\": 1.0}, \"nchunks64_dim32\": {\"max_abs_err\": 0.020241260528564453, \"mean_abs_err\": 0.006441847421228886, \"max_rel_err\": 0.04379585012793541, \"n_chunks\": 64, \"dim\": 32, \"on_grid_frac\": 1.0}, \"nchunks256_dim8\": {\"max_abs_err\": 0.00567057728767395, \"mean_abs_err\": 0.0035548917949199677, \"max_rel_err\": 0.042213961482048035, \"n_chunks\": 256, \"dim\": 8, \"on_grid_frac\": 1.0}}\n",
-          "timed_out": false,
-          "timeout_s": 60
-        },
-        "id": "c1.e1",
-        "kind": "runtime_probe",
-        "summary": "Final state deviates from exact FP reference for generic random inputs at all tested sequence lengths: max abs err 4.7e-3 at 8 chunks, 2.0e-2 at 64 chunks, 5.7e-3 at 256 chunks; outputs are exactly on the 5e-3 grid (on_grid_frac=1.0), confirming the round-to-grid quantization as the error source, with error far above FP rounding scale and growing with nchunks.",
-        "supports": "confirmed",
-        "tool_event_id": "t8"
-      }
-    ],
-    "id": "c1",
-    "raised_by": "skeptic",
-    "rationale": "Problem text says \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length,\" yet kernel lines 5 and 32 implement tl.floor(states/QUANT_STEP + 0.5)*QUANT_STEP after every chunk update, which is an approximation step, so the final state can deviate from the reference by up to 2.5e-3 per chunk (accumulating).",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\""
-      },
-      {
-        "source": "kernel.py line 32",
-        "summary": "states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied unconditionally after each chunk update, before the final-state store."
-      }
-    ],
-    "scope_rationale": "problem.txt requires exactness at any sequence length for any contract-admitted input (e.g. nchunks>=2, dim>=1, generic random values), so a nonzero grid-rounding error in the returned final state is a contract violation.",
-    "statement": "The kernel's unconditional round-to-grid quantization (QUANT_STEP=5e-3, kernel.py lines 5, 32, 36) makes the returned final state deviate from the exact recurrence state <- exp(dA_cs[c])*state + new_states[c] whenever any chunk update produces a state value not already on the 5e-3 grid.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T08:17:59Z"
-  },
-  {
-    "created_at": "2026-09-30T08:17:22Z",
-    "evidence": [
-      {
-        "artifacts": [],
-        "created_at": "2026-09-30T08:17:59Z",
+        "created_at": "2026-09-30T08:20:39Z",
         "data": {
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t9_probe.py",
-              "sha256": "76fa0ba7b9aa5675599acc76643483a783a644bbd0f1a26134765bb7e839bdc7"
+              "sha256": "10658294dbafe9fa37d52f1c2b5cb3e1334726eb7255fcadbd0de1e1849bba4d"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t9_stdout.txt",
-              "sha256": "b178cc5549dab4628a3c17bc2dce9d0460864edaf17c1d37dfa63d69573e20c1"
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
               "description": "Captured stderr from the probe process.",
               "kind": "stderr",
               "path": "probes/t9_stderr.txt",
+              "sha256": "64561f04bfa148a7dba66b1ce7dc241f9011031be598e6687f01025f3b204f61"
+            }
+          ],
+          "duration_s": 4.866047,
+          "exit_code": 1,
+          "expected_signal": "kernel output matches (q - zero - 1)*scale but deviates from contract formula (q - zero)*scale, confirming the +1 zero-point offset",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 36, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t9_probe.py\", line 32, in pack\n    packed[i // vals_per_word, :] |= (x[i, :] & 15) << ((i % vals_per_word) * bits)\n    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe bug: pack() built zeros_packed with 0 rows because it packed z_vals (shape (groups,N)) along dim0/8. No kernel output obtained; not evidence for or against c1. Relaunching corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n] with no +1 offset, but kernel line 46 unconditionally does `zeros = zeros + 1` before subtracting, so every column whose stored zero-point is nonzero gets a systematically wrong dequantized weight.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "The contract formula is 'dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]' \u2014 no +1 adjustment to the zero-point appears anywhere in the stated contract."
+      }
+    ],
+    "scope_rationale": "The stated contract in problem.txt defines the exact dequantization formula; the kernel deviates from it by adding +1 to the zero-point, so for any stored zero != 0 the output C differs from the contracted C = A @ dequant(B). This is a deviation from a stated required behavior, in-scope even without a test file.",
+    "statement": "The kernel adds +1 to the unpacked zero-point (kernel.py line 46, \"zeros = zeros + 1\") before computing b = (q - zeros) * scales, so for any stored packed zero value z the effective zero-point is z+1 instead of z, violating the contract formula dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n].",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:20:39Z"
+  },
+  {
+    "created_at": "2026-09-30T08:18:52Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-30T08:20:39Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "d70999cf8c633a3aa25c623faf1efbc5ac2b55c7814f13680a35fd8ee9c25ad6"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
               "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
             },
             {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t9_json_result.json",
-              "sha256": "bc21dc64a8a8fc22d54e765df96d4127b23987e4551002578364562a37056a86"
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "3a80e2b0a44668a42b27eee3c481dd964c8925b655a050775b3d49cb98aa2892"
             }
           ],
-          "duration_s": 5.100973,
-          "exit_code": 0,
-          "expected_signal": "small-magnitude true states snap to 0.0, producing large (up to 100%) relative error",
-          "json_parse_error": null,
-          "json_result": {
-            "strong_decay": {
-              "kernel_final": [
-                -0.6549999713897705,
-                1.649999976158142,
-                -0.6100000143051147,
-                -0.5,
-                1.25,
-                -0.3100000023841858,
-                0.03999999910593033,
-                -0.06499999761581421
-              ],
-              "max_abs_err": 0.002222936600446701,
-              "max_rel_err": 0.052647609263658524,
-              "ref_final": [
-                -0.6534335017204285,
-                1.6494196653366089,
-                -0.610783576965332,
-                -0.5012956261634827,
-                1.2486979961395264,
-                -0.3115837872028351,
-                0.04222293570637703,
-                -0.06656432151794434
-              ],
-              "ref_max_abs": 1.6494196653366089
-            },
-            "tiny_new_states": {
-              "kernel_final": [
-                0.0,
-                0.0,
-                0.004999999888241291,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0
-              ],
-              "max_abs_err": 0.003461373969912529,
-              "max_rel_err": 2.249652862548828,
-              "ref_final": [
-                -0.0001952950842678547,
-                0.0009007854387164116,
-                0.0015386258019134402,
-                0.0011158442357555032,
-                -0.0005514519289135933,
-                -0.0003086308133788407,
-                -0.002993066795170307,
-                0.001024095923639834
-              ],
-              "ref_max_abs": 0.002993066795170307,
-              "zeros_in_kernel": 7,
-              "zeros_in_ref": 0
-            }
-          },
-          "kernel_final_example": [
-            0.0,
-            0.0,
-            0.004999999888241291,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0
-          ],
-          "kernel_zeros": 7,
-          "max_rel_err_tiny": 2.249652862548828,
-          "ref_final_example": [
-            -0.000195,
-            0.000901,
-            0.001539,
-            0.001116,
-            -0.000551,
-            -0.000309,
-            -0.002993,
-            0.001024
-          ],
-          "ref_max_abs": 0.002993066795170307,
-          "ref_zeros": 0,
-          "stderr": "",
-          "stdout": "{\"tiny_new_states\": {\"kernel_final\": [0.0, 0.0, 0.004999999888241291, 0.0, 0.0, 0.0, 0.0, 0.0], \"ref_final\": [-0.0001952950842678547, 0.0009007854387164116, 0.0015386258019134402, 0.0011158442357555032, -0.0005514519289135933, -0.0003086308133788407, -0.002993066795170307, 0.001024095923639834], \"zeros_in_kernel\": 7, \"zeros_in_ref\": 0, \"max_abs_err\": 0.003461373969912529, \"max_rel_err\": 2.249652862548828, \"ref_max_abs\": 0.002993066795170307}, \"strong_decay\": {\"kernel_final\": [-0.6549999713897705, 1.649999976158142, -0.6100000143051147, -0.5, 1.25, -0.3100000023841858, 0.03999999910593033, -0.06499999761581421], \"ref_final\": [-0.6534335017204285, 1.6494196653366089, -0.610783576965332, -0.5012956261634827, 1.2486979961395264, -0.3115837872028351, 0.04222293570637703, -0.06656432151794434], \"max_abs_err\": 0.002222936600446701, \"max_rel_err\": 0.052647609263658524, \"ref_max_abs\": 1.6494196653366089}}\n",
+          "duration_s": 3.903096,
+          "exit_code": 1,
+          "expected_signal": "K=56 (K%16!=0) produces wrong C or a crash due to unmasked out-of-bounds tail loads",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t10_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+          "stdout": "",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "Flush-to-zero confirmed: with tiny new_states (ref final magnitudes ~3e-4 to 3e-3), kernel output is 0.0 for 7 of 8 lanes while the exact reference has no zeros (max_rel_err 2.25, i.e. 225% relative error); remaining lane snapped to 0.005, also off the exact value. This is a snap-to-zero of true sub-half-grid states.",
-        "supports": "confirmed",
-        "tool_event_id": "t9"
+        "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c2. Relaunching corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t10"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "The fixed absolute grid step means tiny (contract-admissible) state magnitudes get snapped to 0, a relative error of up to 100% in the final state; this is the flush-to-zero tail of the same quantization bug and may not show up in large-magnitude random probes.",
-    "scope": "in_scope",
-    "scope_evidence": [
+    "rationale": "The K-loop iterates cdiv(K, BLOCK_SIZE_K) times but never masks loads on offs_k < K, so the last block only contributes its first K % 16... actually the loop covers all of K only because cdiv rounds up; the real hazard is out-of-bounds reads of a, b, g for offs_k >= K in the final iteration when K % 16 != 0, which can read garbage (or crash) into the accumulator for in-bounds m,n outputs.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt does not state shape constraints (K multiple of 16 or of the 8-values-per-word packing), and no test/get_inputs is provided, so whether non-multiple-of-16 K is in the verification domain cannot be determined from the artifact.",
+    "statement": "If the contraction dimension K is not a multiple of BLOCK_SIZE_K=16, the final K-loop iteration loads a, b, and g at offs_k >= K unmasked, reading out-of-bounds memory and accumulating garbage into valid output entries (and b's word index k//8 may point past b_packed's rows), producing wrong C values or a crash.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:20:39Z"
+  },
+  {
+    "created_at": "2026-09-30T08:18:52Z",
+    "evidence": [
       {
-        "source": "problem.txt",
-        "summary": "Exact recurrence with no approximation at any sequence length; no restriction is placed on state magnitudes, so small-magnitude states are contract-admitted."
+        "artifacts": [],
+        "created_at": "2026-09-30T08:20:39Z",
+        "data": {
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "2e2af86ebe515839f92b0d4b06e1ac11092461dc2930f4645b1b325806401b88"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "22c6f967d2d260dcaaccfe353aba298336e73522b4f5aaca0b42046d6d594e17"
+            }
+          ],
+          "duration_s": 3.903301,
+          "exit_code": 1,
+          "expected_signal": "N=40 (N%32!=0) produces wrong C or a crash due to unmasked N-dimension loads",
+          "json_parse_error": "stdout has no non-empty lines",
+          "json_result": null,
+          "stderr": "Traceback (most recent call last):\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 29, in <module>\n    zeros_packed = pack(z_vals)\n                   ^^^^^^^^^^^^\n  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_07/debate/probes/t11_probe.py\", line 25, in pack\n    packed[i // vpw, :] |= (x[i, :] & 15) << ((i % vpw) * bits)\n    ~~~~~~^^^^^^^^^^^^^\nIndexError: index 0 is out of bounds for dimension 0 with size 0\n",
+          "stdout": "",
+          "timed_out": false,
+          "timeout_s": 60
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "Probe bug: zeros packed along wrong dimension (0 rows). No kernel output; inconclusive for c3. Relaunching corrected probe.",
+        "supports": "inconclusive",
+        "tool_event_id": "t11"
       }
     ],
-    "scope_rationale": "Inputs that decay the state toward zero (e.g. strongly negative dA_cs) are ordinary contract inputs; the problem demands exactness there too, and relative error of the final state is unbounded.",
-    "statement": "For contract-admitted inputs where the true carried state magnitude is below 2.5e-3 at any chunk (e.g. small new_states or strongly decaying dA_cs), the kernel's floor-based quantization snaps the state to 0.0, producing up to 100% relative error in the returned final state even for short sequences.",
-    "status": "confirmed",
-    "updated_at": "2026-09-30T08:17:59Z"
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "All N-dimension loads (b, scales, zeros) lack offs_bn < N masks, unlike the final store which is masked; garbage scales/zeros values would be multiplied into lanes that do get stored for offs_bn < N when the block straddles N.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "No test harness or get_inputs exists in the artifact and problem.txt does not constrain N, so whether N % 32 != 0 inputs are in the verification domain is unknown.",
+    "statement": "If the output dimension N is not a multiple of BLOCK_SIZE_N=32, the unmasked loads of b (b_ptrs), scales (scales_ptrs), and zeros (zeros_ptrs) at offs_bn >= N read out-of-bounds; for b_packed rows the index offs_bn//8 past the last word reads past the tensor, potentially crashing or corrupting accumulation, since only the store to C is masked.",
+    "status": "inconclusive",
+    "updated_at": "2026-09-30T08:20:39Z"
   }
 ]

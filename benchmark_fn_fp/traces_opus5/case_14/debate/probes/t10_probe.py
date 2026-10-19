@@ -1,43 +1,27 @@
 
-import json, torch, importlib.util, traceback
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_14/kernel.py")
-k = importlib.util.module_from_spec(spec)
-out = {}
-try:
-    spec.loader.exec_module(k)
-    torch.manual_seed(0)
-    x = torch.randn(8, 256, device="cuda", dtype=torch.float32)
-    got = k.quant_dequant_int8(x)
+import json, importlib.util, torch
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_15/kernel.py")
+k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
 
-    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)
-    scale = absmax / 127.0
-    q = torch.clamp(torch.round(x / scale), -127, 127)
-    ref = q * scale
+def ref(x, gs):
+    y = torch.empty_like(x); n = x.shape[1]
+    for s in range(0, n, gs):
+        e = min(s+gs, n); g = x[:, s:e]
+        am = g.abs().amax(dim=1, keepdim=True)
+        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)
+        y[:, s:e] = torch.round(g/sc).clamp(-127,127)*sc
+    return y
 
-    err = (got - ref).abs()
-    # implied step per row = smallest nonzero |out| value
-    def implied(t):
-        res = []
-        for r in range(t.shape[0]):
-            v = t[r].abs()
-            nz = v[v > 0]
-            res.append(float(nz.min()) if nz.numel() else 0.0)
-        return res
-    out = {
-        "metric": "max_abs_err_vs_per_row_quantized_reference",
-        "shape": list(x.shape),
-        "dtype": str(got.dtype),
-        "row_absmax": [round(float(v), 5) for v in absmax.flatten()],
-        "ref_step_per_row": [round(float(v), 6) for v in scale.flatten()],
-        "kernel_implied_step_per_row": [round(v, 7) for v in implied(got)],
-        "ref_implied_step_per_row": [round(v, 7) for v in implied(ref)],
-        "max_abs_err": float(err.max()),
-        "mean_abs_err": float(err.mean()),
-        "ref_max_quant_err_vs_x": float((ref - x).abs().max()),
-        "kernel_max_quant_err_vs_x": float((got - x).abs().max()),
-        "frac_elems_differ": float((err > 1e-6).float().mean()),
-        "allclose_rtol0_atol_refstep": bool(torch.allclose(got, ref, rtol=0, atol=float(scale.max()))),
-    }
-except Exception as e:
-    out = {"error": repr(e), "tb": traceback.format_exc()[-1500:]}
-print(json.dumps(out))
+torch.manual_seed(1)
+x = torch.randn(4, 40, device="cuda", dtype=torch.float32)
+out = k.group_quant_dequant(x, 64)
+r = ref(x, 64)
+print(json.dumps({
+ "shape": list(x.shape), "group_size": 64,
+ "out_nonzero_count": int((out != 0).sum().item()),
+ "out_total": out.numel(),
+ "ref_nonzero_count": int((r != 0).sum().item()),
+ "max_abs_err": (out-r).abs().max().item(),
+ "ref_max_abs": r.abs().max().item(),
+ "allclose_atol1e-3": bool(torch.allclose(out, r, atol=1e-3))
+}))

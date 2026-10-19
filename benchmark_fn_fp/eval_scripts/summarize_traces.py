@@ -28,7 +28,8 @@ OUT = REPO / "benchmark_fn_fp" / "eval_scripts" / "scoreboard.json"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from traces import experiment_trial  # noqa: E402
 from models import PROFILES, profile_for, profile_for_trace  # noqa: E402
-from case_registry import case_sort_key, is_active_case, load_registry, validation_path  # noqa: E402
+from case_registry import (case_sort_key, is_active_case, load_registry,
+                           validation_cases, validation_path)  # noqa: E402
 
 
 def profile_for_tree(traces_dir: str):
@@ -215,7 +216,7 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
             if validated_labels.exists():
                 labels[dataset] = {
                     case: row["ground_truth"]
-                    for case, row in json.loads(validated_labels.read_text())["cases"].items()
+                    for case, row in validation_cases(root, dataset).items()
                 }
         # Archived labels remain readable even when their original answer-side
         # source folders have moved. This does not relabel historical trials.

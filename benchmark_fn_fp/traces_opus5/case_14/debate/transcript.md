@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_14`
-- Turns: 7
+- Entry: `case_15`
+- Turns: 8
 - Tool events: 17
 - Claims: 3
 - Description updates: 1
-- LLM time: 162.651s across 6 calls | tokens: in=238740 out=12922 total=251662
-- Cache tokens: created=0 read=32852
+- LLM time: 169.698s across 7 calls | tokens: in=256700 out=13641 total=270341
+- Cache tokens: created=0 read=39115
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.96
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,48 +27,42 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
   Output summary:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
   Output summary:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
   Output summary:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_14",
+    "entry": "case_15",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_14"
+    "entry": "case_15"
   }
 
-### Turn 2 - `describer` (41.460892102s, in=3673 out=2942)
-
-Message:
-
-```text
-Reading the artifact context already provided, the deviation is visible directly in source, so I'll record the structured description model rather than spend a turn re-reading files.
-```
+### Turn 2 - `describer` (42.82678241799999s, in=3634 out=3028)
 
 Tool calls:
 
@@ -76,39 +70,37 @@ Tool calls:
   Args:
   {
     "contract_model": [
-      "Input is a 2D tensor x of shape (M, N); output is the dequantized reconstruction with the same shape/layout.",
-      "Scale must be per-row and derived from that row's own data: absmax = max(max(|x_row|), 1e-10).",
-      "scale = absmax / 127; q = clamp(round(x_row / scale), -127, 127); out = q * scale.",
-      "Explicit invariant stated in problem.txt: 'no value in the row is clipped by its own scale', i.e. the row max maps to +/-127 exactly and never saturates.",
-      "The 1e-10 floor implies an all-zero row must be handled without div-by-zero and must return zeros.",
-      "Symmetric int8 range is -127..127 (not -128), so the quantized codes must be clamped to that range."
+      "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
+      "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
+      "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
+      "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
+      "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
     ],
     "kernel_model": [
-      "kernel.py:5 defines a module-level constant _STALE_ABSMAX = 4.0 w
-  ...[truncated 6275 chars]
+      "Grid is (n_rows,), one program per row; r
+  ...[truncated 5644 chars]
   Output summary:
   {
     "contract_model": [
-      "Input is a 2D tensor x of shape (M, N); output is the dequantized reconstruction with the same shape/layout.",
-      "Scale must be per-row and derived from that row's own data: absmax = max(max(|x_row|), 1e-10).",
-      "scale = absmax / 127; q = clamp(round(x_row / scale), -127, 127); out = q * scale.",
-      "Explicit invariant stated in problem.txt: 'no value in the row is clipped by its own scale', i.e. the row max maps to +/-127 exactly and never saturates.",
-      "The 1e-10 floor implies an all-zero row must be handled without div-by-zero and must return zeros.",
-      "Symmetric int8 range is -127..127 (not -128), so the quantized codes must be clamped to that range."
+      "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
+      "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
+      "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
+      "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
+      "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "kernel.py:5 defines a module-level constant _STALE_ABSMAX = 4.0 with a comment describing it as 'an EMA scale that hasn't caught up to the current batch'.",
-      "kernel.py:19-21 sets absmax = STALE_ABSMAX unconditionally; there is no tl.max over the loaded row and no use of |x| anywhere, so the scale is identical (4/127 ~= 0.0314961) for every row of every input.",
-      "kernel.py:22 does clamp(round(x * 127/4), -127, 127), so any |x| >
-  ...[truncated 5965 chars]
+      "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
+      "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
+  
+  ...[truncated 5334 chars]
 
-### Turn 3 - `skeptic` (26.031205332000013s, in=20076 out=2049)
+### Turn 3 - `skeptic` (24.39172567500009s, in=18131 out=1974)
 
 Message:
 
 ```text
-The source shows a hardcoded constant scale replacing the required per-row absmax; I'll record the three most directly testable contract violations.
+Recording the highest-risk, directly testable claims from the contract's explicit non-multiple `n_cols` domain.
 ```
 
 Tool calls:
@@ -116,145 +108,134 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "kernel.py:19 sets absmax = STALE_ABSMAX (=4.0, kernel.py:5) unconditionally; there is no tl.max/tl.abs reduction anywhere in the kernel, so the scale is data-independent.",
+    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: 'the scale is per-row and derived from THAT row's own magnitude: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; out = q*scale'."
+        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
       },
       {
-        "source": "kernel.py:5,19-21",
-        "summary": "absmax is the module constant 4.0; no reduction over |x| exists."
-      }
-    ],
-    "scope_rationale": "problem.txt is the only contract source (test.py absent) and it explicitly states the scale must be derived from THAT row's own magnitude via absmax = max(max(|x_row|),1e-10). Ordinary 2D float t
-  ...[truncated 633 chars]
+        "so
+  ...[truncated 828 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "kernel.py:19 sets absmax = STALE_ABSMAX (=4.0, kernel.py:5) unconditionally; there is no tl.max/tl.abs reduction anywhere in the kernel, so the scale is data-independent.",
+    "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Contract: 'the scale is per-row and derived from THAT row's own magnitude: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; out = q*scale'."
+        "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
       },
       {
-        "source": "kernel.py:5,19-21",
-        "summary": "absmax is the module constant 4.0; no reduction over |x| exists."
+        "source": "problem.txt",
+        "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
       }
     ],
-    "scope_rationale": "problem.txt is the only contract source (test.py absent) and it explicitly states the scale must be derived from THAT row's own magnitude via absmax = max(max(|x_row|),1e-10). Ordinary 2D float tensors of moderate size are exactly the admitted input domain, so a plain randn input is representative and in-scope.",
-    "statement": "For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned reconstruction differs from the contract ref
-  ...[truncated 267 chars]
+    "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative
+  ...[truncated 462 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "kernel.py:22 clamps round(x*127/4) to [-127,127]; with a fixed denominator of 4.0 any |x|>4 exceeds code 127 and is hard-clipped, which the correct per-row scale can never do.",
+    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States q = clamp(round(x_row/scale), -127, 127) with scale from the row's own absmax 'so no value in the row is clipped by its own scale'."
-      },
-      {
-        "source": "kernel.py:21-22",
-        "summary": "x_q = x*(127/4.0) then clamped to [-127,127], so |x|>4 saturates to +/-4.0 on dequant."
+        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
       }
     ],
-    "scope_rationale": "problem.txt states the invariant explicitly ('so no value in the row is clipped by its own scale') and imposes no magnitude bound on inputs; activation rows with outliers are th
-  ...[truncated 648 chars]
+    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
+    "statement": "When n_cols &l
+  ...[truncated 228 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "kernel.py:22 clamps round(x*127/4) to [-127,127]; with a fixed denominator of 4.0 any |x|>4 exceeds code 127 and is hard-clipped, which the correct per-row scale can never do.",
+    "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States q = clamp(round(x_row/scale), -127, 127) with scale from the row's own absmax 'so no value in the row is clipped by its own scale'."
-      },
-      {
-        "source": "kernel.py:21-22",
-        "summary": "x_q = x*(127/4.0) then clamped to [-127,127], so |x|>4 saturates to +/-4.0 on dequant."
+        "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
       }
     ],
-    "scope_rationale": "problem.txt states the invariant explicitly ('so no value in the row is clipped by its own scale') and imposes no magnitude bound on inputs; activation rows with outliers are the operator's stated domain (per-token activation quantization). A representative input the contract admits is randn*5 or a row with a large outlier.",
-    "statement": "For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs them as e
-  ...[truncated 282 chars]
+    "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
+    "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
+    "status": "open"
+  }
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "With a constant scale, rows whose absmax is far below 4.0 use few or zero of the 127 codes; kernel.py has no per-row normalization, so total information loss for small rows is possible while absolute error stays under 0.0157 and could be masked by an atol-based check.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "absmax = max(max(|x_row|), 1e-10) explicitly contemplates arbitrarily small row magnitudes down to 1e-10 and still requires scale = absmax/127."
-      },
-      {
-        "source": "kernel.py:20-22",
-        "summary": "Fixed scale 4/127 means any |x| < ~0.0157 rounds to code 0."
-      }
-    ],
-    "scope_rationale": "problem.txt admits arbitrary-magnitude float rows and requires the row max to map to code +/-127 (absmax f
-  ...[truncated 561 chars]
+    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
+    "scope": "unknown",
+    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
+    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so 
+  ...[truncated 238 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "With a constant scale, rows whose absmax is far below 4.0 use few or zero of the 127 codes; kernel.py has no per-row normalization, so total information loss for small rows is possible while absolute error stays under 0.0157 and could be masked by an atol-based check.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "absmax = max(max(|x_row|), 1e-10) explicitly contemplates arbitrarily small row magnitudes down to 1e-10 and still requires scale = absmax/127."
-      },
-      {
-        "source": "kernel.py:20-22",
-        "summary": "Fixed scale 4/127 means any |x| < ~0.0157 rounds to code 0."
-      }
-    ],
-    "scope_rationale": "problem.txt admits arbitrary-magnitude float rows and requires the row max to map to code +/-127 (absmax floored only at 1e-10), so a row with absmax 0.01 is inside the stated domain and the contract fixes the required output exactly.",
-    "statement": "For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract reference with scale = 0.01/127 
-  ...[truncated 195 chars]
+    "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
+    "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+    "status": "open"
+  }
 
-### Turn 4 - `experimenter` (38.27528650600004s, in=27809 out=3562)
+### Turn 4 - `experimenter` (27.880424401000028s, in=24538 out=2659)
 
 Message:
 
 ```text
-Recording the source-level facts first, then launching all three probes together — c1 (constant scale), c2 (clipping of |x|>4), and c3 (small-row flush-to-zero) are independent input regimes and cannot confound each other, so no reason to hold any back.
+Three claims are independent in design: c1 (tail truncation, n_cols=100), c2 (n_cols<group_size), and c3 (rounding ties, tested on an exact-multiple n_cols=64 so the tail bug cannot confound it). Launching all three now.
 ```
 
 Tool calls:
 
-- `append_evidence -> t9 ok`
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c1",
-    "data": {
-      "constant_scale": 0.031496063,
-      "kernel_lines": "5,19-22",
-      "reduction_ops_present": 0,
-      "stale_absmax_const": 4.0
-    },
-    "kind": "source_inspection",
-    "summary": "kernel.py:5 defines _STALE_ABSMAX = 4.0; kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body (lines 15-24), so scale_x = 4/127 for every row and x_q = x*(127/4). The contract in problem.txt requires absmax = max(max(|x_row|),1e-10). Source alone shows the scale is data-independent; runtime probe pending.",
-    "supports": "confirmed"
-  }
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, gs):\n    y = torch.empty_like(x)\n    n = x.shape[1]\n    for s in range(0, n, gs):\n        e = min(s+gs, n)\n        g = x[:, s:e]\n        am = g.abs().amax(dim=1, keepdim=True)\n        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)\n        q = torch.round(g/sc).clamp(-127,127)\n        y[:, s:e] = q*sc\n    return y\n\ntorch.manual_seed(0)\nx = torch.randn(4, 100, device=\"cuda\", dtype=torch.float32)\nout = k.group_quant_dequant(x, 64)\nr = ref(x, 64)\nhead_err = (out[:, :64]-r[:, :64]).abs().max().item()\ntail_err = (out[:, 64:]-r[
+  ...[truncated 729 chars]
   Output summary:
   {
-    "id": "c1.e1",
-    "summary": "kernel.py:5 defines _STALE_ABSMAX = 4.0; kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body (lines 15-24), so scale_x = 4/127 for every row and x_q = x*(127/4). The contract in problem.txt requires absmax = max(max(|x_row|),1e-10). Source alone shows the scale is data-independent; runtime probe pending.",
-    "supports": "confirmed"
-  }
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t9_probe.py",
+        "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t9_stdout.txt",
+        "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t9_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t9_json_result.json",
+        "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group
+  ...[truncated 3344 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "\nimport json, torch, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_14/kernel.py\")\nk = importlib.util.module_from_spec(spec)\nout = {}\ntry:\n    spec.loader.exec_module(k)\n    torch.manual_seed(0)\n    x = torch.randn(8, 256, device=\"cuda\", dtype=torch.float32)\n    got = k.quant_dequant_int8(x)\n\n    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)\n    scale = absmax / 127.0\n    q = torch.clamp(torch.round(x / scale), -127, 127)\n    ref = q * scale\n\n    err = (got - ref).abs()\n    # implied step per row = smallest nonzero |out| value\n    def implied(t):\n        res = []\n        for r in range(t.shape[0]):\n            v = t[r].abs()\n            nz = v[v > 0]\n            res.a
-  ...[truncated 1273 chars]
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\ndef ref(x, gs):\n    y = torch.empty_like(x); n = x.shape[1]\n    for s in range(0, n, gs):\n        e = min(s+gs, n); g = x[:, s:e]\n        am = g.abs().amax(dim=1, keepdim=True)\n        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)\n        y[:, s:e] = torch.round(g/sc).clamp(-127,127)*sc\n    return y\n\ntorch.manual_seed(1)\nx = torch.randn(4, 40, device=\"cuda\", dtype=torch.float32)\nout = k.group_quant_dequant(x, 64)\nr = ref(x, 64)\nprint(json.dumps({\n \"shape\": list(x.shape), \"group_size\": 64,\n \"out_nonzero_count\": int((out != 0).su
+  ...[truncated 382 chars]
   Output summary:
   {
     "artifacts": [
@@ -262,13 +243,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "c74f6f11c5edfb0188397c97e7bd596b79e72ba38a83f433987649e401bbbcc3"
+        "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "a692c903669635b6fe5af9c2121594f4a969aad3f86746476f9a8dd6eb32b40d"
+        "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -280,18 +261,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "1cd92be10a8dd896be13086adde7b69c0ed7aafe5ccedcea492dc1175a7fee5d"
+        "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned rec
-  ...[truncated 6056 chars]
+    "claim_id": "c2",
+    "claim_statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quanti
+  ...[truncated 2925 chars]
 - `run_claim_probe -> t11 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "\nimport json, torch, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_14/kernel.py\")\nk = importlib.util.module_from_spec(spec)\nout = {}\ntry:\n    spec.loader.exec_module(k)\n    torch.manual_seed(1)\n    x = torch.randn(4, 128, device=\"cuda\", dtype=torch.float32) * 5.0\n    x[0, 7] = 50.0\n    x[1, 3] = -30.0\n    got = k.quant_dequant_int8(x)\n\n    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)\n    scale = absmax / 127.0\n    ref = torch.clamp(torch.round(x / scale), -127, 127) * scale\n\n    clipped = x.abs() > 4.0\n    # saturated reconstruction magnitude should be exactly 4.0 (=127*4/127)\n    sat = (got.abs() - 4.0).abs() < 1e-5\n    out = {\n        \"metric\": \"saturation_count_
-  ...[truncated 1170 chars]
+    "claim_id": "c3",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsc = 1.0/8.0   # exactly representable; absmax = 127*sc\nvals = []\n# ties at +/- (m + 0.5)*sc for m = 0..30\nfor m in range(31):\n    vals.append((m+0.5)*sc)\n    vals.append(-(m+0.5)*sc)\nvals = vals[:63]\nvals.append(127*sc)   # set absmax so scale == sc exactly\nx = torch.tensor([vals], device=\"cuda\", dtype=torch.float32)\nassert x.shape == (1,64)\n\nam = x.abs().amax(dim=1, keepdim=True)\nscale = am/127.0\nratio = x/scale\nhalf_even = torch.round(ratio).clamp(-127,127)*scale          # torch.round = half-to-even\nhalf_away = torch.where(ratio>=0, torch.f
+  ...[truncated 1148 chars]
   Output summary:
   {
     "artifacts": [
@@ -299,229 +280,205 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "a37d07ad5602cdf1a9b9ca46927ab8b7aa9b476e13b026bdb576855382748ad5"
+        "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "a1909c5e4d5c54455b981e9925fd3cfccf34b860a8852640ef02d84e3fbf6c3b"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t11_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t11_json_result.json",
-        "sha256": "1cc2baf2c862d386090240c23407bceed1d3ce49a6a11c382b20164758e207c2"
+        "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
       }
     ],
+    "claim_id": "c3",
+    "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+    "duration_s": 3.276405,
+    "event_id": "t11",
+    "evidence_draft": {
+      "claim_id": "c3",
+      "data": {
+        "artif
+  ...[truncated 2298 chars]
+
+### Turn 5 - `experimenter` (30.772091065999803s, in=35623 out=2852)
+
+Message:
+
+```text
+c1 and c2 both returned decisive results; finalizing them now. The c3 probe crashed on my own shape assertion (I generated 63 values, not 64), so I'm relaunching it with a corrected construction in the same response.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t12 ok`
+  Args:
+  {
+    "data": {
+      "allclose_atol_1e-3": false,
+      "dtype": "float32",
+      "group_size": 64,
+      "head_max_abs_err": 0.0,
+      "shape": [
+        4,
+        100
+      ],
+      "tail_exact_zero_count": 144,
+      "tail_input_nonzero_count": 144,
+      "tail_max_abs_err": 3.12982439994812,
+      "tail_ref_max_abs": 3.12982439994812,
+      "tail_total": 144
+    },
+    "event_id": "t9",
+    "status": "confirmed",
+    "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclo
+  ...[truncated 156 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
+    "supports": "confirmed",
+    "tool_event_id": "t9"
+  }
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "allclose_atol_1e-3": false,
+      "dtype": "float32",
+      "group_size": 64,
+      "max_abs_err": 2.78844952583313,
+      "out_nonzero_count": 0,
+      "out_total": 160,
+      "ref_max_abs": 2.78844952583313,
+      "ref_nonzero_count": 160,
+      "shape": [
+        4,
+        40
+      ]
+    },
+    "event_id": "t10",
+    "status": "confirmed",
+    "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
     "claim_id": "c2",
-    "claim_statement": "For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs
-  ...[truncated 4776 chars]
-- `run_claim_probe -> t12 ok`
+    "claim_status": "confirmed",
+    "evidence_id": "c2.e1",
+    "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
+    "supports": "confirmed",
+    "tool_event_id": "t10"
+  }
+- `run_claim_probe -> t14 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "\nimport json, torch, importlib.util, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_14/kernel.py\")\nk = importlib.util.module_from_spec(spec)\nout = {}\ntry:\n    spec.loader.exec_module(k)\n    torch.manual_seed(2)\n    base = torch.randn(4, 256, device=\"cuda\", dtype=torch.float32)\n    base = base / base.abs().amax(dim=1, keepdim=True)   # each row absmax = 1\n    mults = torch.tensor([[1e-3], [1e-2], [1.0], [1e3]], device=\"cuda\")\n    x = base * mults\n    got = k.quant_dequant_int8(x)\n\n    absmax = x.abs().amax(dim=1, keepdim=True).clamp_min(1e-10)\n    scale = absmax / 127.0\n    ref = torch.clamp(torch.round(x / scale), -127, 127) * scale\n\n    def relerr(a, b):\n        return [round(float((a[r]-b[r]).norm
-  ...[truncated 1054 chars]
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_15/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\n\nsc = 0.125  # exactly representable; absmax = 127*sc = 15.875\nvals = []\nfor m in range(32):\n    vals.append((m + 0.5) * sc)\n    vals.append(-(m + 0.5) * sc)\nvals = vals[:63]\nvals.append(127 * sc)  # absmax element so that scale == 0.125 exactly\nx = torch.tensor([vals], device=\"cuda\", dtype=torch.float32)\nassert tuple(x.shape) == (1, 64), tuple(x.shape)\n\nam = x.abs().amax(dim=1, keepdim=True)\nscale = am / 127.0\nstep = scale.item()\nratio = x / scale\nhalf_even = torch.round(ratio).clamp(-127, 127) * scale\nhalf_away = torch.where(ratio >= 0, torch.
+  ...[truncated 1724 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "56eb531e6b4cf6e31f9d8b32f99cf1e6082bd487d8306dcb38c870a9b4f71efa"
+        "path": "probes/t14_probe.py",
+        "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "f94b68a2d42a59bc8389d01de10d7124dc7e615532be2854587f33e555986095"
+        "path": "probes/t14_stdout.txt",
+        "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
+        "path": "probes/t14_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "a80c4c5c6933d99439d60e51e9fd0f1ae0f5746ade14113a3342f4e854d21415"
+        "path": "probes/t14_json_result.json",
+        "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract re
-  ...[truncated 5097 chars]
+    "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some 
+  ...[truncated 5581 chars]
 
-### Turn 5 - `experimenter` (27.45204959800003s, in=45151 out=2319)
+### Turn 6 - `experimenter` (19.18037270700006s, in=50714 out=1494)
 
 Message:
 
 ```text
-All three probes returned decisive results; finalizing c1, c2, and c3 together. No further probes are needed — the constant-scale bug is confirmed at runtime across the benign, outlier, and small-magnitude regimes, so no claim remains uncovered.
+t14 returned a decisive result for c3: the kernel's output matches the half-up (`floor(r+0.5)`) reference exactly on all 64 elements, while differing from `torch.round` (half-to-even) on 31 of 63 exact ties by exactly one quantization step, and from half-away-from-zero on all 31 negative ties. Finalizing as confirmed on the mechanism; note the claim's scope remains `unknown` because problem.txt does not fix a tie-break rule, so this is a tie-only, one-step difference and is much weaker than the c1/c2 tail-truncation failures. No further probes are needed — all three claims (c1, c2, c3) now carry direct runtime evidence.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t13 ok`
-  Args:
-  {
-    "data": {
-      "allclose_rtol0_atol_max_ref_step": false,
-      "dtype": "torch.float32",
-      "expected_const_4_over_127": 0.031496063,
-      "frac_elems_differ_gt_1e-6": 0.98828125,
-      "kernel_implied_step_all_rows": 0.0314961,
-      "kernel_max_quant_err_vs_x": 0.0157393217086792,
-      "max_abs_err_vs_ref": 0.026192426681518555,
-      "mean_abs_err_vs_ref": 0.009047586470842361,
-      "metric": "max_abs_err_vs_per_row_quantized_reference",
-      "ref_max_quant_err_vs_x": 0.01287233829498291,
-      "ref_step_per_row_max": 0.026107,
-      "ref_step_per_row_min": 0.018498,
-      "row_absmax_max": 3.31565,
-      "row_absmax_min": 2.34924,
-      "shape": [
-        8,
-        256
-      ]
-    },
-    "event_id": "t10",
-    "status": "confirmed",
-    "summary": "Runtime confirms the constant scale on a benign in-domain input (ra
-  ...[truncated 612 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e2",
-    "summary": "Runtime confirms the constant scale on a benign in-domain input (randn(8,256) fp32). The kernel's implied quantization step is exactly 0.0314961 = 4/127 for all 8 rows, while the contract reference step is row_absmax/127 and varies per row (0.018498..0.026107, row absmax 2.349..3.316). 98.8% of elements differ from the contract reference by more than 1e-6; max |kernel-ref| = 0.02619, which exceeds the reference's own worst quantization error vs x (0.01287) and is larger than the largest reference step, so allclose(rtol=0, atol=max_ref_step) is False. This is not a rounding artifact: the scale is data-independent, exactly as the source shows.",
-    "supports": "confirmed",
-    "tool_event_id": "t10"
-  }
-- `finalize_probe_evidence -> t14 ok`
-  Args:
-  {
-    "data": {
-      "abs_err_at_50": 46.0,
-      "kernel_out_at_x_50": 4.0,
-      "kernel_out_at_x_m30": -4.0,
-      "kernel_row_max_abs_out": [
-        4.0,
-        4.0,
-        4.0,
-        4.0
-      ],
-      "max_abs_err_vs_ref": 46.0,
-      "max_shrink_below_x": 46.0,
-      "metric": "saturation_count_and_abs_err_at_outliers",
-      "n_elems_absx_gt_4": 237,
-      "n_saturated_to_exactly_4": 237,
-      "ref_out_at_x_50": 50.0,
-      "ref_out_at_x_m30": -30.0,
-      "ref_row_max_abs_out": [
-        50.0,
-        30.0,
-        12.18173,
-        16.3729
-      ],
-      "row_absmax_x": [
-        50.0,
-        30.0,
-        12.18173,
-        16.3729
-      ],
-      "saturation_fraction_of_gt4": 1.0
-    },
-    "event_id": "t11",
-    "status": "confirmed",
-    "summary": "Runtime confirms hard clipping, the strongest non-tolerance-hideable failure. With x = r
-  ...[truncated 541 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "Runtime confirms hard clipping, the strongest non-tolerance-hideable failure. With x = randn(4,128)*5 plus outliers 50.0 and -30.0, all 237 elements with |x| > 4.0 (237/237) reconstruct at exactly +/-4.0. Kernel row max |out| = 4.0 for every row while the true row absmax is 50.0 / 30.0 / 12.18 / 16.37 and the contract reference reproduces those row maxima exactly (row max maps to code +/-127). Absolute error at the 50.0 outlier is 46.0 and max |kernel-ref| = 46.0; max shrink |x|-|out| = 46.0. This directly violates the problem.txt invariant \"no value in the row is clipped by its own scale\".",
-    "supports": "confirmed",
-    "tool_event_id": "t11"
-  }
 - `finalize_probe_evidence -> t15 ok`
   Args:
   {
     "data": {
-      "kernel_relerr_vs_ref_per_row": [
-        1.0,
-        1.0,
-        0.038614,
-        0.990693
+      "dtype": "float32",
+      "exact_tie_count": 63,
+      "group_size": 64,
+      "max_abs_err_vs_half_away": 0.125,
+      "max_abs_err_vs_half_even": 0.125,
+      "max_err_in_steps_vs_half_even": 1.0,
+      "mismatch_negative_ties_vs_half_away": 31,
+      "mismatch_negative_ties_vs_half_even": 15,
+      "mismatch_positive_ties_vs_half_even": 16,
+      "mismatch_vs_half_away_from_zero": 31,
+      "mismatch_vs_half_up_floor_kernel_semantics": 0,
+      "mismatch_vs_torch_round_half_even": 31,
+      "n_elems": 64,
+      "quantization_step": 0.125,
+      "sample_half_away_first8": [
+        0.125,
+        -0.125,
+        0.25,
+        -0.25,
+        0.375,
+        -0.375,
+        0.5,
+        -0.5
       ],
-      "kernel_relerr_vs_x_per_row": [
-        1.0,
-        1.0,
-        0.035045,
-        0.990688
-      ],
-      "kernel_row_absmax_out": [
+      "sample_half_even_first8": [
         0.0,
-        0.0,
-        1.0078740119934082,
-        4.0
-      ],
-      "kernel_zero_frac_per_row": [
-        1.0,
-        1.0,
-        0.043,
-        0.0
-      ],
-      "max_abs_err_vs_ref": 996.0,
-      "metric": "zero_code_fraction_and_per_row_relative_error",
-      "ref_relerr_vs_x_per_row": [
-        0.00661,
-        0.006733,
-        0.008647,
-        0.006982
-      ],
-      "ref_zero_frac_per_row": [
-        0.0156,
-        0.0039,
-        0.0078,
-        0.0156
-      ],
-      "row_absmax": [
-        0.001,
-        0.01,
-        1.0,
-        1000.0
-      ]
-    },
-    "event_id": "t12",
-    "status": "confi
-  ...[truncated 908 chars]
+        -0.0,
+        0.25,
+        -0.25,
+        0.25,
+        -0.25,
+        0.5,
+    
+  ...[truncated 1216 chars]
   Output summary:
   {
     "claim_id": "c3",
     "claim_status": "confirmed",
     "evidence_id": "c3.e1",
-    "summary": "Runtime confirms total information loss for small-magnitude rows and saturation for large ones, using per-row multipliers 1e-3/1e-2/1/1e3 on rows normalized to absmax 1. Rows with absmax 0.001 and 0.01 come back 100% zeros from the kernel (zero fraction 1.0, relative error vs both x and the contract reference = 1.0), whereas the contract reference reconstructs those same rows to 0.66% and 0.67% relative error with only 1.6%/0.4% zero codes. The absmax=1e3 row is clipped to 4.0 everywhere (relerr 0.9907, max |kernel-ref| = 996.0). Only the row whose absmax happens to be near the hardcoded 4.0 regime (absmax 1) is roughly usable (relerr 0.0386 vs ref, still ~4.5x the reference's own 0.0086). Comparison is against the correctly quantized per-row reference, not raw FP32, so this is a genuine contract violation rather than an int8 lossiness artifact.",
+    "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
     "supports": "confirmed",
-    "tool_event_id": "t12"
+    "tool_event_id": "t14"
   }
 
-### Turn 6 - `skeptic` (11.738896289999957s, in=69881 out=741)
+### Turn 7 - `skeptic` (10.816902527000138s, in=60966 out=659)
 
 Message:
 
 ```text
-All three claims (c1 constant scale, c2 clipping, c3 small-row flush-to-zero) are confirmed with runtime evidence against the correctly-quantized per-row reference. The root cause is a single source-level defect (`_STALE_ABSMAX = 4.0` replacing the required per-row absmax reduction), and the three regimes already cover the benign, outlier, and small-magnitude cases. Remaining risk-map items (libdevice.round tie behavior, output dtype, non-contiguous strides, BLOCK sizing) are either secondary to the confirmed bug or outside the stated contract, so nothing new is worth holding up the verdict.
+This is my final review turn. c1 and c2 are confirmed, in-scope contract violations (trailing partial group left as zeros; entire output zero when n_cols < group_size), and c3's tie-break difference is confirmed as a mechanism but bounded to one LSB with no contract-specified tie rule. Nothing in the new evidence points to an uncovered, material, in-scope defect, so I'm not holding up the verdict.
 ```
 
 Tool calls:
@@ -529,27 +486,26 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "This round's probes decisively confirmed all three recorded claims against the contract-correct per-row-quantized reference: constant implied step 4/127 on benign randn input (c1), 237/237 elements with |x|>4 saturated to exactly +/-4.0 with max |kernel-ref| = 46.0 (c2), and 100% zero rows for absmax 0.001/0.01 plus max |kernel-ref| = 996.0 for the absmax=1e3 row (c3). All three trace to the same single source defect (kernel.py:5,19 hardcoded _STALE_ABSMAX = 4.0 with no tl.max reduction), so additional claims would be duplicative. Remaining risk-map items are either strictly secondary to the confirmed scale bug (libdevice.round half-away-from-zero tie behavior on a grid the kernel already gets wrong) or not required by problem.txt's stated input/output contract (output dtype
-  ...[truncated 306 chars]
+    "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence 
+  ...[truncated 341 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "This round's probes decisively confirmed all three recorded claims against the contract-correct per-row-quantized reference: constant implied step 4/127 on benign randn input (c1), 237/237 elements with |x|>4 saturated to exactly +/-4.0 with max |kernel-ref| = 46.0 (c2), and 100% zero rows for absmax 0.001/0.01 plus max |kernel-ref| = 996.0 for the absmax=1e3 row (c3). All three trace to the same single source defect (kernel.py:5,19 hardcoded _STALE_ABSMAX = 4.0 with no tl.max reduction), so additional claims would be duplicative. Remaining risk-map items are either strictly secondary to the confirmed scale bug (libdevice.round half-away-from-zero tie behavior on a grid the kernel already gets wrong) or not required by problem.txt's stated input/output contract (output dtype policy for fp16/bf16 inputs, non-contiguous last dim, very large N BLOCK sizing), so they are generalization notes rather than in-scope decisive claims. No new evidence contradicts any confirmed status, and nothing warrants delaying the verdict.",
+    "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence upgrades it. Remaining unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16 dtype, non-contiguous strides, missing explicit clamp) are either out of the stated contract or add nothing beyond the already-confirmed failure, so no further claims are warranted.",
     "reviewed_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reviewed_tool_event_count": 15,
-    "turn": 6
-  }
+    "reviewed_tool_event_count
+  ...[truncated 20 chars]
 
-### Turn 7 - `judge` (17.692426911999974s, in=72150 out=1309)
+### Turn 8 - `judge` (13.829638014000011s, in=63094 out=975)
 
 Message:
 
 ```text
-All three claims are confirmed with runtime evidence against the contract-correct per-row-quantized reference, coverage is complete, and the Skeptic signed off with no new claims. The artifact ships no test.py, so problem.txt is the operative contract, and it explicitly requires a per-row absmax scale and the no-clipping invariant.
+Claim coverage is complete, Skeptic recorded no new claims after reviewing all evidence, and two in-scope claims are confirmed with direct runtime evidence. Recording the verdict.
 ```
 
 Tool calls:
@@ -557,171 +513,160 @@ Tool calls:
 - `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.96,
     "decisive_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
-    "reason": "The artifact contains only kernel.py, meta.json, and problem.txt (no test.py/get_inputs), so problem.txt is the operative contract. It explicitly requires absmax = max(max(|x_row|), 1e-10), scale = absmax/127, q = clamp(round(x_row/scale), -127, 127), out = q*scale, and states the invariant that 'no value in the row is clipped by its own scale'. The kernel does not implement this: kernel.py:5 defines _STALE_ABSMAX = 4.0 and kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body, so the scale is data-independent (c1.e1, source inspection).\n\nRuntime evidence confirms all three in-scope claims against the correctly quantized per-row reference (not a r
-  ...[truncated 1957 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, i
+  ...[truncated 1265 chars]
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.96,
     "decisive_claims": [
       "c1",
-      "c2",
-      "c3"
+      "c2"
     ],
-    "reason": "The artifact contains only kernel.py, meta.json, and problem.txt (no test.py/get_inputs), so problem.txt is the operative contract. It explicitly requires absmax = max(max(|x_row|), 1e-10), scale = absmax/127, q = clamp(round(x_row/scale), -127, 127), out = q*scale, and states the invariant that 'no value in the row is clipped by its own scale'. The kernel does not implement this: kernel.py:5 defines _STALE_ABSMAX = 4.0 and kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body, so the scale is data-independent (c1.e1, source inspection).\n\nRuntime evidence confirms all three in-scope claims against the correctly quantized per-row reference (not a raw FP32 reference with a magic tolerance), so this is not a low-precision/quantization artifact the contract accounts for:\n- c1 (t10): on a plain randn(8,256) fp32 input, the kernel's implied step is exactly 0.0314961 = 4/127 for every row while the contract step is row_absmax/127 and varies (0.018498..0.026107); 98.8% of elements deviate, max |kernel-ref| = 0.02619 exceeds even the largest refer
-  ...[truncated 1557 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs again
+  ...[truncated 865 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Input is a 2D tensor x of shape (M, N); output is the dequantized reconstruction with the same shape/layout.",
-    "Scale must be per-row and derived from that row's own data: absmax = max(max(|x_row|), 1e-10).",
-    "scale = absmax / 127; q = clamp(round(x_row / scale), -127, 127); out = q * scale.",
-    "Explicit invariant stated in problem.txt: 'no value in the row is clipped by its own scale', i.e. the row max maps to +/-127 exactly and never saturates.",
-    "The 1e-10 floor implies an all-zero row must be handled without div-by-zero and must return zeros.",
-    "Symmetric int8 range is -127..127 (not -128), so the quantized codes must be clamped to that range."
+    "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
+    "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
+    "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
+    "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
+    "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
   ],
   "kernel_model": [
-    "kernel.py:5 defines a module-level constant _STALE_ABSMAX = 4.0 with a comment describing it as 'an EMA scale that hasn't caught up to the current batch'.",
-    "kernel.py:19-21 sets absmax = STALE_ABSMAX unconditionally; there is no tl.max over the loaded row and no use of |x| anywhere, so the scale is identical (4/127 ~= 0.0314961) for every row of every input.",
-    "kernel.py:22 does clamp(round(x * 127/4), -127, 127), so any |x| > 4.0 saturates and is reconstructed as +/-4.0 exactly; quantization step is fixed at ~0.0315 regardless of row magnitude.",
-    "Rows whose absmax << 4.0 lose resolution: e.g. a row with max |x| = 0.1 uses only ~3 of 127 codes, and values below ~0.0157 round to 0.",
-    "kernel.py:24 stores the same constant scale per row; scales tensor is float32 (kernel.py:30) so the .to(element_ty) cast is a no-op.",
-    "kernel.py:16-17 uses a single tl.arange(0, BLOCK) with BLOCK = next_power_of_2(N) (kernel.py:31) and masks cols < N, so the whole row must fit in one block; there is no looped reduction/store path.",
-    "Column addressing assumes unit stride along dim 1 (x_ptr + row*stride_x + cols) while honoring the row stride from x.stride(0) (kernel.py:32).",
-    "kernel.py:33 dequantizes in PyTorch: x_q.float() * scales.u
-...[truncated 4810 chars]
+    "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
+    "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
+    "Output buffer is torch.zeros_like(x) (kernel.py:28), so any column never stored keeps the value 0.0 rather than being an obvious garbage read.",
+    "BLOCK is passed equal to GROUP (kernel.py:30), so the `in_group = arange < GROUP` mask (kernel.py:16) is always all-true and the `cols < n_cols` mask is also always true for full groups; both masks are effectively dead for the executed iterations.",
+    "Scale: absmax/127 with a where(absmax==0, 1.0, ...) guard (kernel.py:19), so all-zero groups dequantize to 0 without division by zero.",
+    "Rounding is tl.floor(x/scale + 0.5) (kernel.py:20), i.e. round-half-up, then cast to int8; no explicit clamp is applied, relying on |x/scale| <= 127 by construction.",
+    "Dequant is done in fp32 (kernel.py:21) and stored into the output dtype implicitly by tl.store."
+  ],
+...[truncated 3917 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Kernel claims to implement sglang per-token INT8 activation quantize+dequantize, but replaces the required per-row absmax with a hardcoded constant scale (_STALE_ABSMAX = 4.0), so the scale is not data-dependent and rows with |x| > 4.0 are clipped.
+- `du1` tasks=`initial`: case_15 implements per-group symmetric INT8 quant-dequant in Triton, one program per row looping over n_cols // GROUP full groups. The contract explicitly requires the trailing partial group (n_cols not a multiple of group_size) to be quantized with its own scale, but the loop bound truncates, so tail columns appear to be left at the zeros of the preallocated output. Secondary surfaces: round-half-up vs torch.round half-to-even, tl.arange power-of-two requirement on group_size, and contiguity assumptions.
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned reconstruction differs from the contract reference q*scale computed with per-row absmax; metric: max |kernel_out - reference_out| over the tensor, and per-row implied scale (recoverable as the smallest nonzero |out| gap) should equal row_absmax/127 but will equal ~0.0314961 for all rows.
+Statement: For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt is the only contract source (test.py absent) and it explicitly states the scale must be derived from THAT row's own magnitude via absmax = max(max(|x_row|),1e-10). Ordinary 2D float tensors of moderate size are exactly the admitted input domain, so a plain randn input is representative and in-scope.
+Scope rationale: problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group "is still a group with its own scale". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.
 
 Scope evidence:
-- `problem.txt`: Contract: 'the scale is per-row and derived from THAT row's own magnitude: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; out = q*scale'.
-- `kernel.py:5,19-21`: absmax is the module constant 4.0; no reduction over |x| exists.
+- `problem.txt`: "`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale."
+- `problem.txt`: "Every column of the input must be quantized under the scale of the group it belongs to."
 
-Rationale: kernel.py:19 sets absmax = STALE_ABSMAX (=4.0, kernel.py:5) unconditionally; there is no tl.max/tl.abs reduction anywhere in the kernel, so the scale is data-independent.
+Rationale: kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.
 
 Evidence:
-- `c1.e1` source_inspection supports `confirmed`: kernel.py:5 defines _STALE_ABSMAX = 4.0; kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body (lines 15-24), so scale_x = 4/127 for every row and x_q = x*(127/4). The contract in problem.txt requires absmax = max(max(|x_row|),1e-10). Source alone shows the scale is data-independent; runtime probe pending.
-- `c1.e2` runtime_probe supports `confirmed`, tool_event_id=t10: Runtime confirms the constant scale on a benign in-domain input (randn(8,256) fp32). The kernel's implied quantization step is exactly 0.0314961 = 4/127 for all 8 rows, while the contract reference step is row_absmax/127 and varies per row (0.018498..0.026107, row absmax 2.349..3.316). 98.8% of elements differ from the contract reference by more than 1e-6; max |kernel-ref| = 0.02619, which exceeds the reference's own worst quantization error vs x (0.01287) and is larger than the largest reference step, so allclose(rtol=0, atol=max_ref_step) is False. This is not a rounding artifact: the scale is data-independent, exactly as the source shows.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.
 
 ### c2 - `confirmed`
 
-Statement: For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs them as exactly +/-4.0, violating the stated invariant that no value in the row is clipped by its own scale; metric: count of entries where |out| < |x| - step yet |x| is the row max, and max |out - reference| at the outlier positions (expected ~46 for a 50.0 outlier).
+Statement: When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt states the invariant explicitly ('so no value in the row is clipped by its own scale') and imposes no magnitude bound on inputs; activation rows with outliers are the operator's stated domain (per-token activation quantization). A representative input the contract admits is randn*5 or a row with a large outlier.
+Scope rationale: problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.
 
 Scope evidence:
-- `problem.txt`: States q = clamp(round(x_row/scale), -127, 127) with scale from the row's own absmax 'so no value in the row is clipped by its own scale'.
-- `kernel.py:21-22`: x_q = x*(127/4.0) then clamped to [-127,127], so |x|>4 saturates to +/-4.0 on dequant.
+- `problem.txt`: Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale.
 
-Rationale: kernel.py:22 clamps round(x*127/4) to [-127,127]; with a fixed denominator of 4.0 any |x|>4 exceeds code 127 and is hard-clipped, which the correct per-row scale can never do.
+Rationale: Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Runtime confirms hard clipping, the strongest non-tolerance-hideable failure. With x = randn(4,128)*5 plus outliers 50.0 and -30.0, all 237 elements with |x| > 4.0 (237/237) reconstruct at exactly +/-4.0. Kernel row max |out| = 4.0 for every row while the true row absmax is 50.0 / 30.0 / 12.18 / 16.37 and the contract reference reproduces those row maxima exactly (row max maps to code +/-127). Absolute error at the 50.0 outlier is 46.0 and max |kernel-ref| = 46.0; max shrink |x|-|out| = 46.0. This directly violates the problem.txt invariant "no value in the row is clipped by its own scale".
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.
 
 ### c3 - `confirmed`
 
-Statement: For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract reference with scale = 0.01/127 preserves the row up to ~0.4% relative error; metric: fraction of entries mapped to code 0 and relative error ||out - ref|| / ||ref|| per row, expected ~1.0 for the kernel.
+Statement: The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.
 
-Scope: `in_scope`
+Scope: `unknown`
 
-Scope rationale: problem.txt admits arbitrary-magnitude float rows and requires the row max to map to code +/-127 (absmax floored only at 1e-10), so a row with absmax 0.01 is inside the stated domain and the contract fixes the required output exactly.
+Scope rationale: problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.
 
-Scope evidence:
-- `problem.txt`: absmax = max(max(|x_row|), 1e-10) explicitly contemplates arbitrarily small row magnitudes down to 1e-10 and still requires scale = absmax/127.
-- `kernel.py:20-22`: Fixed scale 4/127 means any |x| < ~0.0157 rounds to code 0.
-
-Rationale: With a constant scale, rows whose absmax is far below 4.0 use few or zero of the 127 codes; kernel.py has no per-row normalization, so total information loss for small rows is possible while absolute error stays under 0.0157 and could be masked by an atol-based check.
+Rationale: floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t12: Runtime confirms total information loss for small-magnitude rows and saturation for large ones, using per-row multipliers 1e-3/1e-2/1/1e3 on rows normalized to absmax 1. Rows with absmax 0.001 and 0.01 come back 100% zeros from the kernel (zero fraction 1.0, relative error vs both x and the contract reference = 1.0), whereas the contract reference reconstructs those same rows to 0.66% and 0.67% relative error with only 1.6%/0.4% zero codes. The absmax=1e3 row is clipped to 4.0 everywhere (relerr 0.9907, max |kernel-ref| = 996.0). Only the row whose absmax happens to be near the hardcoded 4.0 regime (absmax 1) is roughly usable (relerr 0.0386 vs ref, still ~4.5x the reference's own 0.0086). Comparison is against the correctly quantized per-row reference, not raw FP32, so this is a genuine contract violation rather than an int8 lossiness artifact.
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t14: x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_14"
+  "entry": "case_15"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_14"
+  "entry": "case_15"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_14"
+  "entry": "case_15"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_14"
+  "entry": "case_15"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Input is a 2D tensor x of shape (M, N); output is the dequantized reconstruction with the same shape/layout.",
-    "Scale must be per-row and derived from that row's own data: absmax = max(max(|x_row|), 1e-10).",
-    "scale = absmax / 127; q = clamp(round(x_row / scale), -127, 127); out = q * scale.",
-    "Explicit invariant stated in problem.txt: 'no value in the row is clipped by its own scale', i.e. the row max maps to +/-127 exactly and never saturates.",
-    "The 1e-10 floor implies an all-zero row must be handled without div-by-zero and must return zeros.",
-    "Symmetric int8 range is -127..127 (not -128), so the quantized codes must be clamped to that range."
+    "Input is a 2-D tensor x plus group_size; output y has same shape/dtype, y = q*scale computed per group of group_size consecutive columns within each row.",
+    "Per-group scale = max(|x| over group) / 127; q = round(x/scale) clamped to int8 range; symmetric, zero-point-free.",
+    "Problem text states n_cols may be ANY positive integer and is NOT required to be a multiple of group_size; the trailing shorter group is a first-class group with its own scale computed over only its own (shorter) span.",
+    "Implicit: every column of every row must be written; no column may be left unquantized or zeroed.",
+    "Degenerate all-zero group must map to zeros (scale choice must not produce NaN/inf)."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "kernel.py:5 defines a module-level constant _STALE_ABSMAX = 4.0 with a comment describing it as 'an EMA scale that hasn't caught up to the current batch'.",
-    "kernel.py:19-21 sets absmax = STALE_ABSMAX unconditionally; there is no tl.max over the loaded row and no use of |x| anywhere, so the scale is identical (4/127 ~= 0.0314961) for every row of every input.",
-    "kernel.py:22 does clamp(round(x * 127/4), -127, 127), so any |x| > 4.0 saturates and is reconstructed as +/-4.0 exactly; quantization step is fixed at ~0.0315 regardless of row magnitude.",
-    "Rows whose absmax << 4.0 lose resolution: e.g. a row with max |x| = 0.1 uses only ~3 of 127 codes, and values below ~0.0157 round to 0.",
-    "kernel.py:24 stores the same constant scale per row; scales tensor is float32 (kernel.py:30) so the .to(element_ty) cast is a no-op.",
-    "kernel.py:16-17 uses a single tl.arange(0, BLOCK) with BLOCK = next_power_of_2(N) (kernel.py:31) and masks cols < N, so the whole row must fit in one block; there is no looped reduction/store path.",
-    "Column addressing assumes unit stride along dim 1 (x_ptr + row*stride_x + cols) while honoring the row stride from x.stride(0) (kernel.py:32).",
-    "kernel.py:33 dequantizes in PyTor
-...[truncated 5165 chars]
+    "Grid is (n_rows,), one program per row; row base pointers computed from stride_xm/stride_om, so a unit column stride (contiguous last dim) is assumed since `cols` is added directly to the row pointer (kernel.py:10-11,17,22).",
+    "n_groups = n_cols // GROUP (kernel.py:12) and the loop `for g in range(n_groups)` (kernel.py:14) only covers complete groups; there is no epilogue for the remainder n_cols % GROUP.",
+    "Output buffer is torch.zeros_like(x) (kernel.py:28), so any column never stored keeps the value 0.0 rather than being an obvious garbage read.",
+    "BLOCK is passed equal to GROUP (kernel.py:30), so the `in_group = arange < GROUP` mask (kernel.py:16) is always all-true and the `cols < n_cols` mask is also always true for full groups; both masks are effectively dead for the executed iterations.",
+    "Scale: absmax/127 with a where(absmax==0, 1.0, ...) guard (kernel.py:19), so all-zero groups dequantize to 0 without division by zero.",
+    "Rounding is tl.floor(x/scale + 0.5) (kernel.py:20), i.e. round-half-up, then cast to int8; no explicit clamp is applied, relying on |x/scale| <= 127 by construction.",
+    "Dequant is done in fp32 (kernel.py:21) and stored into the output dtype imp
+...[truncated 4534 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "kernel.py:19 sets absmax = STALE_ABSMAX (=4.0, kernel.py:5) unconditionally; there is no tl.max/tl.abs reduction anywhere in the kernel, so the scale is data-independent.",
+  "rationale": "kernel.py:12 computes n_groups by floor division and kernel.py:14 loops only over complete groups; there is no remainder epilogue. out is torch.zeros_like(x) (kernel.py:28), so unwritten columns silently stay 0.0. Probe metric: max abs error on the tail slice x[:, 64:100] versus a reference that computes scale = max|x| over the shorter final group / 127 and y = round(x/scale)*scale; also report the fraction of exactly-zero tail entries where x != 0.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Contract: 'the scale is per-row and derived from THAT row's own magnitude: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; out = q*scale'."
+      "summary": "\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale.\""
     },
     {
-      "source": "kernel.py:5,19-21",
-      "summary": "absmax is the module constant 4.0; no reduction over |x| exists."
+      "source": "problem.txt",
+      "summary": "\"Every column of the input must be quantized under the scale of the group it belongs to.\""
     }
   ],
-  "scope_rationale": "problem.txt is the only contract source (test.py absent) and it explicitly states the scale must be derived from THAT row's own magnitude via absmax = max(max(|x_row|),1e-10). Ordinary 2D float tensors of moderate size are exactly the admitted input domain, so a plain randn input is representative and in-scope.",
-  "statement": "For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned reconstruction differs from the contract reference q*scale computed with per-row absmax; metric: max |kernel_out - reference_out| over the tensor, and per-row implied scale (recoverable as the smallest nonzero |out| gap) should equal row_absmax/127 but will equal ~0.0314961 for all rows.",
+  "scope_rationale": "problem.txt explicitly places non-multiple n_cols in the input domain and states the trailing shorter group \"is still a group with its own scale\". n_cols=100 with the wrapper's default group_size=64 is a representative admitted input; no test.py exists to narrow the domain, so problem.txt is the operative contract.",
+  "statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
   "status": "open"
 }
 
@@ -729,20 +674,16 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "kernel.py:22 clamps round(x*127/4) to [-127,127]; with a fixed denominator of 4.0 any |x|>4 exceeds code 127 and is hard-clipped, which the correct per-row scale can never do.",
+  "rationale": "Same floor-division loop bound (kernel.py:12,14) degenerates to zero iterations; zeros_like output (kernel.py:28) makes the failure silent. Metric: count of nonzero output entries (expected ~all nonzero for random input) and max abs error versus the single-group reference.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "States q = clamp(round(x_row/scale), -127, 127) with scale from the row's own absmax 'so no value in the row is clipped by its own scale'."
-    },
-    {
-      "source": "kernel.py:21-22",
-      "summary": "x_q = x*(127/4.0) then clamped to [-127,127], so |x|>4 saturates to +/-4.0 on dequant."
+      "summary": "Input domain clause: n_cols may be any positive integer and need not be a multiple of group_size; the shorter final group is still a group with its own scale."
     }
   ],
-  "scope_rationale": "problem.txt states the invariant explicitly ('so no value in the row is clipped by its own scale') and imposes no magnitude bound on inputs; activation rows with outliers are the operator's stated domain (per-token activation quantization). A representative input the contract admits is randn*5 or a row with a large outlier.",
-  "statement": "For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs them as exactly +/-4.0, violating the stated invariant that no value in the row is clipped by its own scale; metric: count of entries where |out| < |x| - step yet |x| is the row max, and max |out - reference| at the outlier positions (expected ~46 for a 50.0 outlier).",
+  "scope_rationale": "problem.txt says n_cols may be any positive integer, which admits n_cols smaller than group_size; the trailing (here only) shorter group must still be quantized with its own scale.",
+  "statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
   "status": "open"
 }
 
@@ -750,30 +691,66 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "With a constant scale, rows whose absmax is far below 4.0 use few or zero of the 127 codes; kernel.py has no per-row normalization, so total information loss for small rows is possible while absolute error stays under 0.0157 and could be masked by an atol-based check.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "absmax = max(max(|x_row|), 1e-10) explicitly contemplates arbitrarily small row magnitudes down to 1e-10 and still requires scale = absmax/127."
-    },
-    {
-      "source": "kernel.py:20-22",
-      "summary": "Fixed scale 4/127 means any |x| < ~0.0157 rounds to code 0."
-    }
-  ],
-  "scope_rationale": "problem.txt admits arbitrary-magnitude float rows and requires the row max to map to code +/-127 (absmax floored only at 1e-10), so a row with absmax 0.01 is inside the stated domain and the contract fixes the required output exactly.",
-  "statement": "For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract reference with scale = 0.01/127 preserves the row up to ~0.4% relative error; metric: fraction of entries mapped to code 0 and relative error ||out - ref|| / ||ref|| per row, expected ~1.0 for the kernel.",
+  "rationale": "floor(-1.5+0.5) = -1 while torch.round(-1.5) = -2; floor(2.5+0.5) = 3 while torch.round(2.5) = 2. Testable by constructing a group with absmax = 127*s and other elements at exact half-multiples of s. Metric: number of elements differing by exactly one step (scale) from the torch.round reference, reported separately for positive and negative ties.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "problem.txt only writes `round(x / scale)` without specifying the tie-break rule, so a half-up vs half-even difference may be permitted freedom rather than a contract violation; it also only arises on exactly-representable ties, which random inputs rarely produce.",
+  "statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
   "status": "open"
 }
 
-### t9 - append_evidence - ok
+### t9 - run_claim_probe - ok
 
 {
-  "id": "c1.e1",
-  "summary": "kernel.py:5 defines _STALE_ABSMAX = 4.0; kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body (lines 15-24), so scale_x = 4/127 for every row and x_q = x*(127/4). The contract in problem.txt requires absmax = max(max(|x_row|),1e-10). Source alone shows the scale is data-independent; runtime probe pending.",
-  "supports": "confirmed"
-}
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t9_probe.py",
+      "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t9_stdout.txt",
+      "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t9_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t9_json_result.json",
+      "sha256": "a0c9303cf4efa022731cc9a934eb893f1fc0086b3b06cca56b83d316c924ede5"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "For n_cols not a multiple of group_size (e.g. x of shape (4, 100), group_size=64), the trailing n_cols % group_size columns are never loaded or stored because the loop bound is n_groups = n_cols // GROUP, so group_quant_dequant returns 0.0 in those columns instead of the required partial-group quantize-dequantize values.",
+  "duration_s": 6.796496,
+  "event_id": "t9",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t9_probe.py",
+          "sha256": "fe50e1c19481232b60883a14dbe9e91b903c86f33a907ae8ad32839cfc013aab"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t9_stdout.txt",
+          "sha256": "8a12da777feba9cb5f997e9b4f5093a30eb4f4177c17ddb4c2903eee0337bacd"
+        },
+        {
+          "description": "Captured stderr from the pro
+...[truncated 2544 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -783,13 +760,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "c74f6f11c5edfb0188397c97e7bd596b79e72ba38a83f433987649e401bbbcc3"
+      "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "a692c903669635b6fe5af9c2121594f4a969aad3f86746476f9a8dd6eb32b40d"
+      "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -801,28 +778,34 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "1cd92be10a8dd896be13086adde7b69c0ed7aafe5ccedcea492dc1175a7fee5d"
+      "sha256": "5c6ee1ea1d30c4ddd206c6c439793456d74803e0663d3d9e2c10df759377e044"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "For a 2D float32 input whose rows have absmax != 4.0 (e.g. x = torch.randn(8, 256, device='cuda')), quant_dequant_int8 uses the constant scale 4/127 for every row instead of row_absmax/127, so the returned reconstruction differs from the contract reference q*scale computed with per-row absmax; metric: max |kernel_out - reference_out| over the tensor, and per-row implied scale (recoverable as the smallest nonzero |out| gap) should equal row_absmax/127 but will equal ~0.0314961 for all rows.",
-  "duration_s": 5.769356,
+  "claim_id": "c2",
+  "claim_statement": "When n_cols &lt; group_size (e.g. x of shape (4, 40) with group_size=64), n_groups = 0 so the kernel loop body never executes and group_quant_dequant returns an all-zero tensor for every row, instead of quantizing the single shorter group.",
+  "duration_s": 5.125774,
   "event_id": "t10",
   "evidence_draft": {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "c74f6f11c5edfb0188397c97e7bd596b79e72ba38a83f433987649e401bbbcc3"
+          "sha256": "f5c31f8fa744895ab570ac4080738fc9f7f5703aad4d56ebe2b0c36926d98f5f"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/
-...[truncated 5256 chars]
+          "path": "probes/t10_stdout.txt",
+          "sha256": "65b28c122f294338d960af482aa05c246a0fc5ddd079bb5cf00ab9523fea928b"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t10_stde
+...[truncated 2125 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -832,80 +815,25 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "a37d07ad5602cdf1a9b9ca46927ab8b7aa9b476e13b026bdb576855382748ad5"
+      "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "a1909c5e4d5c54455b981e9925fd3cfccf34b860a8852640ef02d84e3fbf6c3b"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t11_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t11_json_result.json",
-      "sha256": "1cc2baf2c862d386090240c23407bceed1d3ce49a6a11c382b20164758e207c2"
-    }
-  ],
-  "claim_id": "c2",
-  "claim_statement": "For any input row containing values with |x| > 4.0 (e.g. x = torch.randn(4, 128, device='cuda') * 5, or a row with a single outlier of 50.0), the kernel saturates those entries to +/-127 codes and reconstructs them as exactly +/-4.0, violating the stated invariant that no value in the row is clipped by its own scale; metric: count of entries where |out| < |x| - step yet |x| is the row max, and max |out - reference| at the outlier positions (expected ~46 for a 50.0 outlier).",
-  "duration_s": 5.090717,
-  "event_id": "t11",
-  "evidence_draft": {
-    "claim_id": "c2",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t11_probe.py",
-          "sha256": "a37d07ad5602cdf1a9b9ca46927ab8b7aa9b476e13b026bdb576855382748ad5"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-...[truncated 3976 chars]
-
-### t12 - run_claim_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "56eb531e6b4cf6e31f9d8b32f99cf1e6082bd487d8306dcb38c870a9b4f71efa"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "f94b68a2d42a59bc8389d01de10d7124dc7e615532be2854587f33e555986095"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "a80c4c5c6933d99439d60e51e9fd0f1ae0f5746ade14113a3342f4e854d21415"
+      "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "For small-magnitude rows (e.g. a row scaled to absmax = 0.01, admitted by the contract), the kernel's fixed step 4/127 ~= 0.0315 rounds every entry to code 0, returning an all-zero row, whereas the contract reference with scale = 0.01/127 preserves the row up to ~0.4% relative error; metric: fraction of entries mapped to code 0 and relative error ||out - ref|| / ||ref|| per row, expected ~1.0 for the kernel.",
-  "duration_s": 4.680168,
-  "event_id": "t12",
+  "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+  "duration_s": 3.276405,
+  "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
     "data": {
@@ -913,37 +841,100 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "56eb531e6b4cf6e31f9d8b32f99cf1e6082bd487d8306dcb38c870a9b4f71efa"
+          "path": "probes/t11_probe.py",
+          "sha256": "a741fe500142e698c7cb079e224017433fc3b64fc98ccd0ff7d91483dc87ffc3"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.txt",
-          "sha256": "f94b68a2d42a59bc8389d01de10d7124dc7e615532be2
-...[truncated 4297 chars]
+          "path": "probes/t11_stdout.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t11_stderr.txt",
+          "sha256": "1c863fd4838ed0ce6c8cc73f9af4e6226f4b510109f6341a332a300acb11fa5a"
+        }
+      ],
+      "duration_s": 3.276405,
+     
+...[truncated 1498 chars]
 
-### t13 - finalize_probe_evidence - ok
+### t12 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
-  "evidence_id": "c1.e2",
-  "summary": "Runtime confirms the constant scale on a benign in-domain input (randn(8,256) fp32). The kernel's implied quantization step is exactly 0.0314961 = 4/127 for all 8 rows, while the contract reference step is row_absmax/127 and varies per row (0.018498..0.026107, row absmax 2.349..3.316). 98.8% of elements differ from the contract reference by more than 1e-6; max |kernel-ref| = 0.02619, which exceeds the reference's own worst quantization error vs x (0.01287) and is larger than the largest reference step, so allclose(rtol=0, atol=max_ref_step) is False. This is not a rounding artifact: the scale is data-independent, exactly as the source shows.",
+  "evidence_id": "c1.e1",
+  "summary": "x=(4,100) fp32, group_size=64: head columns 0:63 match the reference exactly (max abs err 0.0), but all 144 tail entries (cols 64:100) are exactly 0.0 while the input there is nonzero in all 144 positions and the partial-group reference is nonzero. Tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the kernel output is identically zero over the trailing partial group. allclose(atol=1e-3) False. Confirms the truncated loop bound n_groups = n_cols // GROUP leaves the trailing partial group unwritten.",
   "supports": "confirmed",
-  "tool_event_id": "t10"
+  "tool_event_id": "t9"
 }
 
-### t14 - finalize_probe_evidence - ok
+### t13 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Runtime confirms hard clipping, the strongest non-tolerance-hideable failure. With x = randn(4,128)*5 plus outliers 50.0 and -30.0, all 237 elements with |x| > 4.0 (237/237) reconstruct at exactly +/-4.0. Kernel row max |out| = 4.0 for every row while the true row absmax is 50.0 / 30.0 / 12.18 / 16.37 and the contract reference reproduces those row maxima exactly (row max maps to code +/-127). Absolute error at the 50.0 outlier is 46.0 and max |kernel-ref| = 46.0; max shrink |x|-|out| = 46.0. This directly violates the problem.txt invariant \"no value in the row is clipped by its own scale\".",
+  "summary": "x=(4,40) fp32, group_size=64: kernel output has 0 nonzero entries out of 160, while the single-shorter-group reference has 160 nonzero entries. Max abs err 2.7884 equals the reference max magnitude, i.e. output is identically zero. Confirms that n_cols &lt; group_size yields n_groups = 0 and the entire output stays at the zeros_like initialization.",
   "supports": "confirmed",
-  "tool_event_id": "t11"
+  "tool_event_id": "t10"
 }
+
+### t14 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t14_probe.py",
+      "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t14_stdout.txt",
+      "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t14_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t14_json_result.json",
+      "sha256": "754db32af907d9118eb98a397793306f76d52b70fd7290b06ec7880eaa8c3ef3"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "The rounding tl.floor(x/scale + 0.5) (kernel.py:20) is round-half-up rather than round-half-to-even, so for inputs where x/scale lands exactly on a .5 tie (e.g. a group whose absmax gives scale such that some element equals -1.5*scale or 2.5*scale) the dequantized value differs by one quantization step from a torch.round-based reference.",
+  "duration_s": 6.162171,
+  "event_id": "t14",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t14_probe.py",
+          "sha256": "c1b7ab0842f3c70f0ea95d4f537e197603fbea59123565b956f1272d27ad75fe"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t14_stdout.txt",
+          "sha256": "efc17f7b345bba53583d25372744b4d3ee8d7cba0e6f4d295e3b84562585fafe"
+        },
+        {
+          "description": "Capt
+...[truncated 4781 chars]
 
 ### t15 - finalize_probe_evidence - ok
 
@@ -951,46 +942,44 @@ Evidence:
   "claim_id": "c3",
   "claim_status": "confirmed",
   "evidence_id": "c3.e1",
-  "summary": "Runtime confirms total information loss for small-magnitude rows and saturation for large ones, using per-row multipliers 1e-3/1e-2/1/1e3 on rows normalized to absmax 1. Rows with absmax 0.001 and 0.01 come back 100% zeros from the kernel (zero fraction 1.0, relative error vs both x and the contract reference = 1.0), whereas the contract reference reconstructs those same rows to 0.66% and 0.67% relative error with only 1.6%/0.4% zero codes. The absmax=1e3 row is clipped to 4.0 everywhere (relerr 0.9907, max |kernel-ref| = 996.0). Only the row whose absmax happens to be near the hardcoded 4.0 regime (absmax 1) is roughly usable (relerr 0.0386 vs ref, still ~4.5x the reference's own 0.0086). Comparison is against the correctly quantized per-row reference, not raw FP32, so this is a genuine contract violation rather than an int8 lossiness artifact.",
+  "summary": "x=(1,64) fp32 with 63 values placed on exact .5 ticks and one element at 127*0.125=15.875 so scale is exactly 0.125 (scale_is_exactly_0.125=true, exact_tie_count=63). Kernel output matches the half-up reference floor(r+0.5)*scale on ALL elements (mismatch_vs_half_up_floor=0), confirming kernel.py:20 implements round-half-up. Against torch.round (half-to-even) 31/63 ties differ, each by exactly one quantization step (max_abs_err 0.125 = 1.0 step), split 16 positive / 15 negative. Against half-away-from-zero, all 31 negative ties differ (positives agree), e.g. x=-0.0625 -> kernel 0.0 vs -0.125, x=-0.1875 -> kernel -0.125 vs -0.25: the kernel biases negative ties toward +inf. Mechanism confirmed; magnitude is bounded at one LSB and only occurs on exactly representable ties, and problem.txt does not specify a tie-break rule, so scope stays unknown (weaker than c1/c2).",
   "supports": "confirmed",
-  "tool_event_id": "t12"
+  "tool_event_id": "t14"
 }
 
 ### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "This round's probes decisively confirmed all three recorded claims against the contract-correct per-row-quantized reference: constant implied step 4/127 on benign randn input (c1), 237/237 elements with |x|>4 saturated to exactly +/-4.0 with max |kernel-ref| = 46.0 (c2), and 100% zero rows for absmax 0.001/0.01 plus max |kernel-ref| = 996.0 for the absmax=1e3 row (c3). All three trace to the same single source defect (kernel.py:5,19 hardcoded _STALE_ABSMAX = 4.0 with no tl.max reduction), so additional claims would be duplicative. Remaining risk-map items are either strictly secondary to the confirmed scale bug (libdevice.round half-away-from-zero tie behavior on a grid the kernel already gets wrong) or not required by problem.txt's stated input/output contract (output dtype policy for fp16/bf16 inputs, non-contiguous last dim, very large N BLOCK sizing), so they are generalization notes rather than in-scope decisive claims. No new evidence contradicts any confirmed status, and nothing warrants delaying the verdict.",
+  "reason": "The two decisive claims are already confirmed with direct runtime evidence: c1 (n_cols=100, group_size=64 leaves cols 64:100 exactly 0.0, tail max abs err 3.1298 == tail reference max magnitude) and c2 (n_cols=40 < group_size yields an all-zero output, 0/160 nonzero). Both are tied to problem.txt's explicit statement that n_cols may be any positive integer and the trailing shorter group is still a group with its own scale, so the tail-truncation bug is fully covered and decisive on its own. c3 is confirmed at the mechanism level (kernel matches floor(r+0.5) half-up exactly, differs from torch.round on 31/63 exact ties by exactly one quantization step) but stays scope-unknown since problem.txt writes only `round(x/scale)` without a tie-break rule; nothing in the new evidence upgrades it. Remaining unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16 dtype, non-contiguous strides, missing explicit clamp) are either out of the stated contract or add nothing beyond the already-confirmed failure, so no further claims are warranted.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
   "reviewed_tool_event_count": 15,
-  "turn": 6
+  "turn": 7
 }
 
 ### t17 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.96,
   "decisive_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reason": "The artifact contains only kernel.py, meta.json, and problem.txt (no test.py/get_inputs), so problem.txt is the operative contract. It explicitly requires absmax = max(max(|x_row|), 1e-10), scale = absmax/127, q = clamp(round(x_row/scale), -127, 127), out = q*scale, and states the invariant that 'no value in the row is clipped by its own scale'. The kernel does not implement this: kernel.py:5 defines _STALE_ABSMAX = 4.0 and kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body, so the scale is data-independent (c1.e1, source inspection).\n\nRuntime evidence confirms all three in-scope claims against the correctly quantized per-row reference (not a raw FP32 reference with a magic tolerance), so this is not a low-precision/quantization artifact the contract accounts for:\n- c1 (t10): on a plain randn(8,256) fp32 input, the kernel's implied step is exactly 0.0314961 = 4/127 for every row while the contract step is row_absmax/127 and varies (0.018498..0.026107); 98.8% of elements deviate, max |kernel-ref| = 0.02619 exceeds even the largest reference step and the reference's own worst quantization error (0.01287).\n- c2 (t11): with |x| > 4 present, all 237/237 such elements reconstruct at exactly \u00b14.0; kernel row max |out| = 4.0 for every row while true row absmax is 50.0/30.0/12.18/16.37 and the reference reproduces those maxima exactly. Max |kernel-ref| = 46.0. This is a direct violation of the explicitly stated no-clipping invariant, not a reduction-order or rounding difference.\n- c3 (t12): rows with absmax 0.001 and 0.01 return 100% zeros (relative error 1.0 vs the quantized reference, which achieves 0.66%/0.67%); the absmax=1e3 row is clipped everywhere with max |kernel-ref| = 996.0. The contract's 1e-10 floor explicitly admits such small-magnitude rows.\n\nScope is sound: all three claims cite problem.txt's formula and
-...[truncated 757 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs against a 160/160-nonzero reference \u2014 the entire result is zero. Both cases sit squarely inside the input domain the contract explicitly admits, and both are gross failures, not tolerance artifacts; the reference is finite and well-defined in each.\\n\\nc3 (round-half-up vs torch.round half-to-even) is confirmed only at the mechanism level and its scope remains unknown: problem.txt writes only `round(x/scale)` without fixing a tie-break rule, and the deviation is bounded at one quantization step on exactly-representable ties. I set c3 aside as a non-decisive note; it neither supports nor is needed for this verdict. Unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16, non-contiguous strides, missing explicit clamp) are likewise set aside as they cannot change the al
+...[truncated 65 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-08T15:55:17Z",
+  "confidence": 0.96,
+  "created_at": "2026-09-08T15:02:48Z",
   "decisive_claims": [
     "c1",
-    "c2",
-    "c3"
+    "c2"
   ],
-  "reason": "The artifact contains only kernel.py, meta.json, and problem.txt (no test.py/get_inputs), so problem.txt is the operative contract. It explicitly requires absmax = max(max(|x_row|), 1e-10), scale = absmax/127, q = clamp(round(x_row/scale), -127, 127), out = q*scale, and states the invariant that 'no value in the row is clipped by its own scale'. The kernel does not implement this: kernel.py:5 defines _STALE_ABSMAX = 4.0 and kernel.py:19 assigns absmax = STALE_ABSMAX with no tl.max/tl.abs reduction anywhere in the kernel body, so the scale is data-independent (c1.e1, source inspection).\n\nRuntime evidence confirms all three in-scope claims against the correctly quantized per-row reference (not a raw FP32 reference with a magic tolerance), so this is not a low-precision/quantization artifact the contract accounts for:\n- c1 (t10): on a plain randn(8,256) fp32 input, the kernel's implied step is exactly 0.0314961 = 4/127 for every row while the contract step is row_absmax/127 and varies (0.018498..0.026107); 98.8% of elements deviate, max |kernel-ref| = 0.02619 exceeds even the largest reference step and the reference's own worst quantization error (0.01287).\n- c2 (t11): with |x| > 4 present, all 237/237 such elements reconstruct at exactly \u00b14.0; kernel row max |out| = 4.0 for every row while true row absmax is 50.0/30.0/12.18/16.37 and the reference reproduces those maxima exactly. Max |kernel-ref| = 46.0. This is a direct violation of the explicitly stated no-clipping invariant, not a reduction-order or rounding difference.\n- c3 (t12): rows with absmax 0.001 and 0.01 return 100% zeros (relative error 1.0 vs the quantized reference, which achieves 0.66%/0.67%); the absmax=1e3 row is clipped everywhere with max |kernel-ref| = 996.0. The contract's 1e-10 floor explicitly admits such small-magnitude rows.\n\nScope is sound: all thr
-...[truncated 797 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt \u2014 there is no test.py or get_inputs to narrow the domain, so problem.txt is the operative contract. It explicitly states: \\\"`n_cols` may be any positive integer. It is NOT required to be a multiple of `group_size`; when it is not, the trailing columns form a shorter final group, which is still a group with its own scale,\\\" and \\\"Every column of the input must be quantized under the scale of the group it belongs to.\\\" The kernel's loop bound n_groups = n_cols // GROUP (kernel.py:12,14) has no remainder epilogue, and the output is torch.zeros_like(x) (kernel.py:28), so trailing columns are silently left at zero.\\n\\nc1 (confirmed, in_scope): probe t9 with x=(4,100) fp32, group_size=64 shows head columns 0:63 exact (max abs err 0.0) but all 144 tail entries exactly 0.0 while the input is nonzero in all 144 positions; tail max abs err 3.1298 equals the tail reference max magnitude, i.e. the trailing partial group is never written. c2 (confirmed, in_scope): probe t10 with x=(4,40) < group_size yields 0/160 nonzero outputs against a 160/160-nonzero reference \u2014 the entire result is zero. Both cases sit squarely inside the input domain the contract explicitly admits, and both are gross failures, not tolerance artifacts; the reference is finite and well-defined in each.\\n\\nc3 (round-half-up vs torch.round half-to-even) is confirmed only at the mechanism level and its scope remains unknown: problem.txt writes only `round(x/scale)` without fixing a tie-break rule, and the deviation is bounded at one quantization step on exactly-representable ties. I set c3 aside as a non-decisive note; it neither supports nor is needed for this verdict. Unexplored surfaces (non-power-of-two group_size compile behavior, fp16/bf16, non-contiguous strides, missing explicit clamp) are likewis
+...[truncated 105 chars]

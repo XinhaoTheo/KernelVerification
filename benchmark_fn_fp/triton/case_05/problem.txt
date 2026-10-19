@@ -1,17 +1,13 @@
-Operation: the near-pivot tie-counting primitive used by top-k/top-p sampling
-(vllm-project/vllm, vllm/v1/sample/ops/topk_topp_triton.py::_update_min_larger_stats).
+Operation: the chunked state-passing recurrence of Mamba2/SSD
+(state-spaces/mamba, mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel).
 
-`count_tied_at_boundary(scores, pivot)` must return how many of the values
-strictly above `pivot` are tied with the smallest of them.
+Given per-chunk local states `new_states[c]` and per-chunk cumulative
+log-decays `dA_cs[c]`, the kernel must carry the recurrent state across chunks
+exactly:
 
-Because scores are floating point, "tied" is decided with a tolerance rather
-than exact equality. The specification requires only that values equal at the
-boundary be counted together; it does not fix the numeric value of that
-tolerance.
+    state <- exp(dA_cs[c]) * state + new_states[c]        for c = 0..nchunks-1
 
-Downstream, the returned count determines how a remaining unit of selection
-budget is split among the boundary candidates (1 / count each).
+starting from state = 0, and return the final state after the last chunk.
 
-Input domain: `scores` is a single tile whose length is a power of two; the
-vocabulary-length case is handled by the caller, which feeds this primitive one
-tile at a time.
+The recurrence is exact: it introduces no approximation of its own beyond
+ordinary floating-point arithmetic, at any sequence length.

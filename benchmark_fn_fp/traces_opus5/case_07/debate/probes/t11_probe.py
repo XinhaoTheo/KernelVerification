@@ -1,43 +1,43 @@
 
-import torch, importlib.util, json, traceback
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_07/kernel.py")
-kern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)
-dev='cuda'
-def wrap32(x):
-    x = x & 0xFFFFFFFF
-    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)
+import sys, json, math, torch
+sys.path.insert(0,"/root/cases/case_08")
+from kernel import stochastic_round_to_grid, STEP
+dev="cuda"
+N=4096
+x=torch.full((N,), 0.125, device=dev)  # lower=0.10, p_up=0.5
+lower=torch.floor(x/STEP)*STEP; upper=lower+STEP
+p=float(((x-lower)/STEP)[0])
 
-def run(K, gs, seed=2, M=32, N=64):
-    torch.manual_seed(seed)
-    groups=K//gs
-    q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)
-    zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)
-    scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()
-    g_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)
-    qw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)
-    for k in range(K):
-        qw[k//8] |= (q[k] << ((k%8)*4))
-    qweight = wrap32(qw)
-    qz = torch.zeros((groups,N//8),device=dev,dtype=torch.int64)
-    for n in range(N):
-        qz[:,n//8] |= (zp[:,n] << ((n%8)*4))
-    qzeros = wrap32(qz)
-    a = torch.randn((M,K),device=dev,dtype=torch.float32)
-    gl=g_idx.long()
-    deq = (q.double() - (zp+1)[gl].double()) * scales[gl].double()
-    ref = a.double() @ deq
-    c = kern.gptq_matmul(a, qweight, scales, qzeros, g_idx, bits=4).double()
-    torch.cuda.synchronize()
-    e=(c-ref).abs().max().item(); d=ref.abs().max().item()
-    return {"K":K,"group_size":gs,"max_abs_err":e,"ref_max_abs":d,"max_rel_err":e/d}
+fracs=[]; runs=[]; pats=set(); bits_list=[]
+for s in range(64):
+    o=stochastic_round_to_grid(x, 1000+s)
+    b=(o==upper).to(torch.int8)
+    bits_list.append(b)
+    fracs.append(float(b.double().mean()))
+    bl=b.cpu().numpy()
+    mx=1; cur=1
+    for i in range(1,len(bl)):
+        cur = cur+1 if bl[i]==bl[i-1] else 1
+        mx=max(mx,cur)
+    runs.append(mx)
+    pats.add(bytes(bl.tobytes()))
 
-out={}
-try:
-    out["control_K32"]=run(32,8)
-except Exception as ex:
-    out["control_K32"]={"error":repr(ex)}
-try:
-    out["tail_K24"]=run(24,8)
-except Exception as ex:
-    out["tail_K24"]={"error":repr(ex),"tb":traceback.format_exc()[-400:]}
-print(json.dumps(out))
+B=torch.stack(bits_list).double()
+z=[(f-p)/math.sqrt(p*(1-p)/N) for f in fracs]
+# lag-1 within-seed autocorrelation, averaged
+c=B-B.mean(dim=1,keepdim=True)
+lag1=float(((c[:,:-1]*c[:,1:]).mean(dim=1)/c.var(dim=1,unbiased=False)).mean())
+# repeat check: same seed twice
+o1=stochastic_round_to_grid(x,4242); o2=stochastic_round_to_grid(x,4242)
+res=dict(N=N,p_up=p,seeds=len(fracs),
+ min_frac=min(fracs),max_frac=max(fracs),
+ max_abs_z=max(abs(v) for v in z),
+ max_run_len=max(runs), mean_run_len=sum(runs)/len(runs),
+ distinct_patterns=len(pats),
+ mean_lag1_autocorr=lag1,
+ same_seed_reproducible=bool(torch.equal(o1,o2)),
+ cross_seed_max_pattern_match=float(max(
+     float((bits_list[i]==bits_list[j]).double().mean())
+     for i in range(8) for j in range(8) if i<j)),
+)
+print(json.dumps(res))

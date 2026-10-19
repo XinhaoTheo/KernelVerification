@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_09`
-- Turns: 12
-- Tool events: 19
-- Claims: 2
-- Description updates: 2
-- LLM time: 387.572s across 11 calls | tokens: in=537291 out=28658 total=565949
-- Cache tokens: created=0 read=59858
+- Entry: `case_10`
+- Turns: 7
+- Tool events: 17
+- Claims: 3
+- Description updates: 1
+- LLM time: 250.738s across 6 calls | tokens: in=313552 out=19385 total=332937
+- Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.93
+- Confidence: 0.9
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_09",
+    "entry": "case_10",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_09"
+    "entry": "case_10"
   }
 
-### Turn 2 - `describer` (80.712237492s, in=6008 out=5788)
+### Turn 2 - `describer` (85.036736091s, in=5999 out=6199)
 
 Message:
 
 ```text
-Reading the loaded artifact context is enough here — the kernel is upstream Triton's bitonic `sort`/`argsort` primitive wrapped as a top-1 gate, and the contract adds an explicit tie-break requirement that the upstream network does not obviously honor. Recording the description model now.
+I have the full source and contract in context. The key thing to model is where the tie-break decision actually happens in the comparator, and how the descending flag interacts with it.
 ```
 
 Tool calls:
@@ -75,142 +75,140 @@ Tool calls:
 - `record_description_update -> t5 ok`
   Args:
   {
-    "contract_model": "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1.",
-    "kernel_model": "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20).",
-    "open_questions": "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug.",
-    "risk_map": "Downstream masking effect: because the final answer is mean-pool
-  ...[truncated 1090 chars]
+    "contract_model": [
+      "sorted_topk_indices(scores, k) must return, per row of a 2-D score tensor, the indices of the k largest scores ordered by descending score (problem.txt).",
+      "Tie rule is normative and index-based, not value-based: for exactly equal scores the LOWER column index must be the one kept/selected (problem.txt, 'Contract on ties').",
+      "Because selected indices gather value vectors that are then averaged, a wrong-but-tied index selection changes the downstream continuous output, so tie mis-selection is a real numeric error rather than a cosmetic index permutation.",
+      "Input domain is restricted: number of columns N is a power of two; nothing else about dtype, k<=N, sign, or special values is promised or excluded by the problem text.",
+      "No test_code is supp
+  ...[truncated 7660 chars]
   Output summary:
   {
     "contract_model": [
-      "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1."
+      "sorted_topk_indices(scores, k) must return, per row of a 2-D score tensor, the indices of the k largest scores ordered by descending score (problem.txt).",
+      "Tie rule is normative and index-based, not value-based: for exactly equal scores the LOWER column index must be the one kept/selected (problem.txt, 'Contract on ties').",
+      "Because selected indices gather value vectors that are then averaged, a wrong-but-tied index selection changes the downstream continuous output, so tie mis-selection is a real numeric error rather than a cosmetic index permutation.",
+      "Input domain is restricted: number of columns N is a power of two; nothing else about dtype, k<=N, sign, or special values is promised or excluded by the problem text.",
+      "No test_code is supplied in the artifact (artifact.test_code is empty), so problem.txt is the sole operative contract and the deciding metric must be read from it: exact index identity under the lower-index tie rule."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20)."
-    ],
-    "open_questions": [
-      "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible."
-    ],
-    "scope_notes": [
-      "No test code is provided in t
-  ...[truncated 830 chars]
+      "Host wrapper (lines 61-70): clones scores, builds ids = arange(N) broadcast to (B,N) as int32 contiguous, computes n_dims = int(math.log2(N)), lau
+  ...[truncated 7350 chars]
 
-### Turn 3 - `skeptic` (60.324247963999994s, in=10316 out=4287)
+### Turn 3 - `skeptic` (29.590432069000002s, in=24333 out=2198)
 
 Message:
 
 ```text
-The contract's explicit tie rule is the obvious attack surface, and the descending compare-and-swap predicate fires on equality. Recording that as the primary claim, plus a baseline correctness claim for distinct scores so a passing tie probe isn't confused with a globally correct sort.
+Ledger is empty; recording the highest-risk, directly testable hypotheses from the comparator semantics.
 ```
 
 Tool calls:
 
-- `record_claim -> t6 error`
+- `record_claim -> t6 ok`
   Args:
   {
+    "rationale": "Line 24's predicate is anti-stable for flip=1: equality gives cond=True. The final descending merge passes flip=order=True for every lane, so every tied comparison in that merge swaps, including at the k cutoff.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Explicitly requires lower-index-wins on exactly equal scores, and defines the call as `sorted_topk_indices(scores, k=1)` returning the highest-scoring expert index per token, with `scores` having a power-of-two number of columns."
+        "summary": "Explicit normative tie rule: equal scores -> lower index must be kept; input domain is power-of-two columns; selection feeds an averaged continuous output."
       },
       {
-        "source": "kernel.py lines 24-27, 56, 69",
-        "summary": "Swap predicate `(left > right) != flip` with flip=DESCENDING=1 fires on equality, and the id XOR-swap on line 26 exchanges ids for tied elements; line 69 launches with DESCENDING=True."
+        "source": "kernel.py line 24 / line 56",
+        "summary": "cond = (left > right) != flip with flip=DESCENDING=True in the last merge makes equal-value pairs always swap."
       }
     ],
-    "scope_rationale": "problem.txt states an explicit required behavior: \"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept.\" Per the rules,
-  ...[truncated 1736 chars]
-  Output summary:
-  {
-    "error_type": "ToolRegistryError",
-    "message": "tool record_claim missing required arg: rationale"
-  }
-- `record_claim -> t7 ok`
-  Args:
-  {
-    "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Requires the per-token highest-scoring expert index and 
-  ...[truncated 1432 chars]
+    "scope_rationale": "problem.txt makes the tie rule normative (\"when two candidates have exactly equal score
+  ...[truncated 1043 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
+    "rationale": "Line 24's predicate is anti-stable for flip=1: equality gives cond=True. The final descending merge passes flip=order=True for every lane, so every tied comparison in that merge swaps, including at the k cutoff.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated."
+        "summary": "Explicit normative tie rule: equal scores -> lower index must be kept; input domain is power-of-two columns; selection feeds an averaged continuous output."
       },
       {
-        "source": "kernel.py lines 44-58",
-        "summary": "Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N."
+        "source": "kernel.py line 24 / line 56",
+        "summary": "cond = (left > right) != flip with flip=DESCENDING=True in the last merge makes equal-value pairs always swap."
       }
     ],
-    "scope_rational
-  ...[truncated 1066 chars]
+    "scope_rationale": "problem.txt makes the tie rule normative (\"when two candidates have exactly equal scores, the LOWER index must be the one kept\") and states selected indices feed a continuous averaged output, so a tied swap at the cutoff is a contract violation, not an implementation-defined permutation. A representative admitted input is a fp32 (B,N) score row with N a power of two (e.g. N=16, k=4) containing an exact duplicate straddling the cutoff \u2014 exactly the power-of-two co
+  ...[truncated 677 chars]
+- `record_claim -> t7 ok`
+  Args:
+  {
+    "rationale": "Line 36 builds an alternating flip vector for intermediate merges, so half the lanes are anti-stable at every stage; equal-value groups can be permuted arbitrarily before the final stage, and the final flip=1 merge also swaps ties.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Output must be the k highest indices in descending score order, with the lower index kept on exact ties; no exclusion of duplicate scores."
+      },
+      {
+        "source": "kernel.py lines 34-40",
+        "summary": "order==2 merges use an alternating 0/1 flip vector, so half of each merge's comparators are anti-stable on ties."
+      }
+    ],
+    "scope_rationale": "problem.txt requires the output to be \"in descending score order\" and pins the tie rule
+  ...[truncated 748 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "Line 36 builds an alternating flip vector for intermediate merges, so half the lanes are anti-stable at every stage; equal-value groups can be permuted arbitrarily before the final stage, and the final flip=1 merge also swaps ties.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Output must be the k highest indices in descending score order, with the lower index kept on exact ties; no exclusion of duplicate scores."
+      },
+      {
+        "source": "kernel.py lines 34-40",
+        "summary": "order==2 merges use an alternating 0/1 flip vector, so half of each merge's comparators are anti-stable on ties."
+      }
+    ],
+    "scope_rationale": "problem.txt requires the output to be \"in descending score order\" and pins the tie rule to lower index kept; both together fix the intra-tie ordering of the returned indices. Rows with repeated block scores are admitted inputs (power-of-two N, no restriction against duplicates).",
+    "statement": "For ties fully inside the returned top-k, the flip=1 lanes present in both the final descending merge and the intermediate order==2 merges permute equal-score elements, so the
+  ...[truncated 382 chars]
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "Multiplying by a 0/1 mask is not inf-safe; a single non-finite element can poison both partner values for its whole comparator group and corrupt the sort of finite entries too.",
+    "scope": "unknown",
+    "scope_rationale": "problem.txt fixes only the power-of-two column domain and describes the operator as NSA candidate block scores (where masking with -inf is the usual convention), but it does not explicitly require non-finite inputs and ships no test.py to pin the input distribution. Treating as unknown: relevant as a generalization/robustness finding, not by itself decisive for a reject unless the contract is clarified to admit masked -inf scores.",
+    "statement": "The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(
+  ...[truncated 545 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "Multiplying by a 0/1 mask is not inf-safe; a single non-finite element can poison both partner values for its whole comparator group and corrupt the sort of finite entries too.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt fixes only the power-of-two column domain and describes the operator as NSA candidate block scores (where masking with -inf is the usual convention), but it does not explicitly require non-finite inputs and ships no test.py to pin the input distribution. Treating as unknown: relevant as a generalization/robustness finding, not by itself decisive for a reject unless the contract is clarified to admit masked -inf scores.",
+    "statement": "The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(y * mask, 1)` (lines 11-12), instead of a select. If a row contains -inf or +inf scores (the natural encoding for masked-out NSA candidate blocks), the discarded lane contributes inf * 0 = NaN, so `left`/`right` become NaN, `left > right` is False everywhere, and with flip=1 the pair is swapped regardless of value \u2014 producing a mis-sorted row and wrong to
+  ...[truncated 203 chars]
 
-### Turn 4 - `experimenter` (29.232102679999997s, in=16118 out=2546)
+### Turn 4 - `experimenter` (48.898686404s, in=32113 out=4393)
 
 Message:
 
 ```text
-Only c1 is open (the skeptic's tie claim failed to record due to a tool error, so it isn't in the ledger). I'm launching the c1 baseline probe (all-distinct float32 rows across N = 2…1024, checking k=1 vs argmax plus full-row permutation validity and monotonicity) and, in parallel, an untied exploratory probe of the exact-tie behavior so the tie surface is measured this turn even though no claim currently holds it. The two probes use disjoint input families (strictly distinct vs. deliberately tied), so neither confounds the other.
+Ledger has three untested claims, and their probe designs are mutually independent (c1: tie straddling the cutoff; c2: tie ordering fully inside the top-k; c3: non-finite inputs through the arithmetic-mask partner select). None of their input constructions depend on another claim's outcome, so I'm launching all three now and will finalize together next turn. Reference in every probe is an explicit CPU stable descending sort (lower-index-wins), not torch.topk, per the contract.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `run_claim_probe -> t9 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nres = {}\noverall = {\"argmax_mismatch_rows\": 0, \"invalid_perm_rows\": 0, \"inversion_rows\": 0, \"total_rows\": 0}\nerr = None\nfor nd in range(1, 11):\n    N = 2**nd\n    B = 64\n    # strictly distinct values per row: random permutation of a distinct grid, scaled/shifted per row\n    base = torch.randn(B, N, device=\"cuda\", dtype=torch.float32)\n    # enforce distinctness by ranking and rebuilding from a distinct grid\n    order = base.argsort(dim=1)\n    grid = torch.linspace(-3.0, 3.0, N, device=\"cuda\", dtype=torch.float32)\n   
-  ...[truncated 1799 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "b63a74cbd4bb560f8fa41561c8ea0586ba36007d8252d05587d9d8b186d7f05c"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "4e92424add792153e7547036003e515297e78d214a105e1317e32455be0a527f"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512
-  ...[truncated 10028 chars]
-- `run_python_probe -> t9 ok`
-  Args:
-  {
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nrows = []\ncases = []\n# N=4: duplicate max at (i,j) for all i<j, rest lower distinct\nfor N in [2, 4, 8, 16]:\n    for i in range(N):\n        for j in range(i+1, N):\n            r = torch.full((N,), -1.0)\n            r[i] = 1.0; r[j] = 1.0\n            cases.append((N, i, j, r))\nsummary = {}\nfor N in [2, 4, 8, 16]:\n    sub = [(i, j, r) for (n, i, j, r) in cases if n == N]\n    scores = torch.stack([r for (_, _, r) in sub]).cuda()\n    top1 = m.sorted_topk_indices(scores, 1).squeeze(1).cpu()\n    lo = torch.tensor([i for (i, _, _) in sub])\n    hi = torch.tensor([j for (_, 
-  ...[truncated 577 chars]
+    "code": "\nimport json, sys, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_stable(scores, k):\n    v, i = torch.sort(scores.cpu().float(), dim=-1, descending=True, stable=True)\n    return i[:, :k]\n\nres = {}\nN, k = 16, 4\n# Row construction: 3 strictly-largest values, then an exact tie for the 4th/5th slot\n# placed at (low_idx, high_idx), then strictly smaller filler.\ncases = []\nfor (lo, hi) in [(5, 11), (3, 4), (0, 15), (6, 7), (2, 9)]:\n    row = torch.full((N,), 0.0)\n    filler = torch.linspace(-1.0, -0.1, N)\n    row.copy_(filler)\n    # three dominant\n    dom = [j for j in range(N) if j not in (lo, hi)][:3
+  ...[truncated 1673 chars]
   Output summary:
   {
     "artifacts": [
@@ -218,13 +216,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "358c80df1d7f86340d01c672f3971a1f24975ed911928ac3599014de6c3da457"
+        "sha256": "398cf4a40e30a0145dce5a068c6c19e80d256a5b9fe214e12fe1ef398e0b3620"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "5dbfba5a3a39c5fea45a5a892039ad2916400c2820463e231c642c8738d1d79a"
+        "sha256": "f82cabf62d0cf254215bd5fd3abdf0a50c3b625ec9cbd391a16ab2291b1d1720"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -236,580 +234,510 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "9ddca2d5ee7fbe24b29e0ad63da3f56b9aa4e83445b15d6e87cc01648a1ea898"
+        "sha256": "ef47ce386f7578d955024cc97e4de69a4bdfeb8e9b277e3444f6d4dfc1a5fa7a"
       }
     ],
-    "duration_s": 5.539129,
-    "event_id": "t9",
-    "exit_code": 0,
-    "json_result": {
-      "metric": "returned k=1 index vs lowest tied max index (contract: LOWER wins)",
-      "tie_probe": {
-        "16": {
-          "pairs": 120,
-          "returned_higher_index": 
-  ...[truncated 2591 chars]
-
-### Turn 5 - `experimenter` (40.668712579000015s, in=28150 out=3287)
-
-Message:
-
-```text
-Consuming t8 and t9. t8 shows the distinct-value baseline is clean at every N in 2…1024, so c1 is rebutted. The unbound exploratory tie probe (t9) shows real contract violations on exactly-tied maxima (e.g. pairs (0,1),(2,3)… return the *higher* index), but the skeptic's tie claim failed to record (tool error t6), so there is no claim to bind it to — I am attaching it to c1 as a scope-adjacent agent_analysis note so it is not lost, and launching a broader exploratory characterization (realistic quantized/duplicated score rows at larger N plus the downstream mean-pooled effect) to quantify how often that violation fires.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t10 ok`
-  Args:
-  {
-    "data": {
-      "N_tested": [
-        2,
-        4,
-        8,
-        16,
-        32,
-        64,
-        128,
-        256,
-        512,
-        1024
-      ],
-      "argmax_mismatch_rows": 0,
-      "input": "strictly distinct float32 rows, permuted linspace(-3,3,N)",
-      "invalid_perm_rows": 0,
-      "inversion_rows": 0,
-      "launch_or_compile_errors": 0,
-      "metric": "k=1 index vs torch.argmax; full-row permutation validity; non-increasing gathered scores",
-      "rows_per_N": 64,
-      "total_rows": 640
-    },
-    "event_id": "t8",
-    "status": "rebutted",
-    "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile
-  ...[truncated 276 chars]
-  Output summary:
-  {
     "claim_id": "c1",
-    "claim_status": "rebutted",
-    "evidence_id": "c1.e1",
-    "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.",
-    "supports": "rebutted",
-    "tool_event_id": "t8"
-  }
-- `append_evidence -> t11 ok`
+    "claim_statement": "With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. Therefo
+  ...[truncated 8100 chars]
+- `run_claim_probe -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "data": {
-      "contract": "problem.txt: on exactly equal scores the LOWER index must be kept",
-      "note": "evidence attached to c1 only because no tie claim exists in ledger (record_claim tool error t6)",
-      "per_N": {
-        "16": {
-          "higher": 28,
-          "pairs": 120
-        },
-        "2": {
-          "higher": 1,
-          "pairs": 1
-        },
-        "4": {
-          "higher": 1,
-          "pairs": 6
-        },
-        "8": {
-          "higher": 6,
-          "pairs": 28
-        }
-      },
-      "returned_higher_index_total": 36,
-      "returned_neither_total": 0,
-      "source_refs": [
-        "kernel.py:24",
-        "kernel.py:25",
-        "kernel.py:26",
-        "kernel.py:69"
-      ],
-      "tie_pairs_tested": 155,
-      "violation_rate": 0.2323
-    },
-    "kind": "runtime_probe",
-    "summary": "SCOPE
-  ...[truncated 967 chars]
-  Output summary:
-  {
-    "id": "c1.e2",
-    "summary": "SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.",
-    "supports": "inconclusive"
-  }
-- `run_python_probe -> t12 ok`
-  Args:
-  {
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(1)\nout = {}\n# realistic tie-producing gate scores: small integer / quantized value sets\nfor N in [8, 64, 256, 1024]:\n    for nlev in [2, 4, 8]:\n        B = 256\n        scores = torch.randint(0, nlev, (B, N), device=\"cuda\").float()\n        top1 = m.sorted_topk_indices(scores, 1).squeeze(1)\n        ref = scores.argmax(dim=1)  # torch.argmax = first (lowest) occurrence of max\n        mism = (top1 != ref)\n        # confirm mismatches are ties (same value), i.e. contract violation not value error\n        val_ok = int((scores.gather(1, top1[:,None]).squeeze
-  ...[truncated 1337 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "924f49df28b04f0e63ab92c27f720fc77c528ec6825c8807a975e9e0d49a676c"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "41f9fd7d816b577a80871e2a8707076dab618635f3a1893fe711fe8d3d7f83aa"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "388317f687537e8529a40b0c94e1f874883e5d4c447bc9b35225c670c4f6633d"
-      }
-    ],
-    "duration_s": 5.467788,
-    "event_id": "t12",
-    "exit_code": 0,
-    "json_result": {
-      "metric": "k=1 index vs torch.argmax (lowest-index tie-break) on quantized score rows; plus mean-pooled expert-output diff",
-      "quantized_tie_scan": {
-        "N10
-  ...[truncated 3869 chars]
-
-### Turn 6 - `skeptic` (24.359995735999973s, in=48966 out=1765)
-
-Message:
-
-```text
-This is a review turn, but the ledger has a material gap: the tie-break violation demonstrated by probes t9 and t12 has **no home claim** — my original tie claim failed to record due to tool error t6, and c1 (rebutted) is scoped only to all-distinct inputs. The Judge cannot act on a contract violation that no claim carries. Recording exactly that claim now, so the existing evidence has a proper home.
-```
-
-Tool calls:
-
-- `record_claim -> t13 ok`
-  Args:
-  {
-    "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" 
-  ...[truncated 3071 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" with no claim of its own.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER i
-  ...[truncated 2705 chars]
-
-### Turn 7 - `describer` (53.67930096399999s, in=52782 out=3824)
-
-Message:
-
-```text
-No open description tasks, but the ledger state changed materially: c2 is now the home claim for the tie-break finding and it has zero attached evidence, while the decisive data (t9, t12) sits on rebutted c1. I'm updating the description model so the mechanism, the exact failing-pair pattern, and the scope boundary (upstream `argsort` is not stable, but problem.txt adds a hard tie rule) are recorded for the Judge, and flagging the evidence-placement gap.
-```
-
-Tool calls:
-
-- `record_description_update -> t14 ok`
-  Args:
-  {
-    "contract_model": "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector).",
-    "impact_on_claims": "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone.",
-    "kernel_model": "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
-  ...[truncated 1855 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
-    ],
-    "impact_on_claims": [
-      "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone."
-    ],
-    "kernel_model": [
-      "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
-    ],
-    "open_questions": [
-      "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `
+    "claim_id": "c2",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_stable(scores, k):\n    v, i = torch.sort(scores.cpu().float(), dim=-1, descending=True, stable=True)\n    return i[:, :k]\n\nres = {\"cases\": []}\n\ndef run(name, scores, k):\n    sc = scores.cuda()\n    out = m.sorted_topk_indices(sc, k).cpu()\n    ref = ref_stable(sc, k)\n    sel = torch.gather(scores, 1, out)\n    refv = torch.gather(scores, 1, ref)\n    # is kernel output ascending within each equal-value run?\n    asc_ok = True\n    for r in range(out.shape[0]):\n        vals = sel[r].tolist(); idxs = out[r].tolist()\n        run_start = 0\n  
   ...[truncated 1579 chars]
-
-### Turn 8 - `skeptic` (15.484833768000044s, in=58387 out=933)
-
-Message:
-
-```text
-This is a review turn. The tie-break finding now has a proper home claim (c2), and the decisive runtime data (t9: 36/155 enumerated duplicate-max pairs returning the higher index; t12: 10–47% mismatch with `lower_than_ref == 0` in all 12 in-domain configurations, value always still the row max, downstream pooled rel-L2 0.42) plus the source mechanism (line 24 `(left > right) != flip` firing on equality, line 26 XOR-swapping ids) are already in the run record. c1 is settled as rebutted by t8. The remaining surfaces I noted earlier (k>1 tie ordering, non-float32 dtypes, inf/NaN through the `y*mask` sum trick) are generalization curiosity, not required by problem.txt, so they do not justify holding up the verdict.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t15 ok`
-  Args:
-  {
-    "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-flo
-  ...[truncated 557 chars]
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction) are not required by problem.txt, which specifies only k=1 top-1 routing over float32 scores with power-of-two column count, so they are generalization notes rather than decisive claims. Only ledger bookkeeping remains: the t9/t12 evidence is physically attached to rebutted c1
-  ...[truncated 236 chars]
-
-### Turn 9 - `experimenter` (24.93218258799999s, in=60010 out=2363)
-
-Message:
-
-```text
-Only c2 remains open and it has no evidence of its own (the t9/t12 data lives on rebutted c1). I'm launching a single decisive probe bound directly to c2: both the enumerated duplicate-max-pair construction and quantized/low-level-set rows across in-domain power-of-two N, reporting returned index vs lowest-index-tie-break argmax, direction of the mismatch, and the paired check that the returned index's value still equals the row max (tie-break violation vs value error), plus the downstream mean-pooled effect. No other claim is open, so nothing is held back.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t16 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k9\", \"/root/cases/case_09/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\ntorch.manual_seed(7)\nout = {}\n\n# Part A: exhaustive duplicate-max pairs (i<j), rest strictly lower\npartA = {}\ntot_pairs = tot_high = tot_low = tot_other = 0\nfor N in [2, 4, 8, 16, 32]:\n    subs = [(i, j) for i in range(N) for j in range(i+1, N)]\n    rows = []\n    for (i, j) in subs:\n        r = torch.full((N,), -1.0); r[i] = 1.0; r[j] = 1.0\n        rows.append(r)\n    scores = torch.stack(rows).cuda()\n    got = m.sorted_topk_indices(scores, 1).squeeze(1).cpu()\n    lo = torch.tensor([i for (i, _) in subs]); hi = torch.tensor([j for (_, j) in subs])\n
-  ...[truncated 3787 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t16_probe.py",
-        "sha256": "ccf6d49ffb5478fd065ed48d012a5e66933fdc08e8ee4114d6c7e9b1ad8b0dad"
+        "path": "probes/t10_probe.py",
+        "sha256": "25f60a347e98706326586bb15689712ae69f10cd999578b74f62a840a3a9cbc6"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t16_stdout.txt",
-        "sha256": "d1a5c0c954e12730993ad1662262fd6f91d376e21deb41633f0eec646319369f"
+        "path": "probes/t10_stdout.txt",
+        "sha256": "e92223d74197f4e38e55f513a73fdb0a51234ffb302ad8fa6e51376db84e42e4"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t16_stderr.txt",
+        "path": "probes/t10_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t16_json_result.json",
-        "sha256": "84b756e05ee0704336e267fb40f012e8c7577a889c137bcecb0ae194b00e1023"
+        "path": "probes/t10_json_result.json",
+        "sha256": "614fa97f6bf0066bf5ab22412df024451a8079d5210550539f92e53fc02116b9"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-b
-  ...[truncated 22682 chars]
+    "claim_statement": "For ties fully inside the returned top-k, the flip=1 lanes present in both the final descending merge and the intermediate order==2 merges permute equal-score elements, so the returned index order among a grou
+  ...[truncated 9762 chars]
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "\nimport json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_stable(scores, k):\n    v, i = torch.sort(scores.cpu().float(), dim=-1, descending=True, stable=True)\n    return i[:, :k]\n\nres = {\"cases\": []}\n\ndef run(name, scores, k):\n    sc = scores.cuda()\n    out = m.sorted_topk_indices(sc, k).cpu()\n    ref = ref_stable(sc, k)\n    sel = torch.gather(scores, 1, out)\n    refv = torch.gather(scores, 1, ref)\n    finite_mismatch = 0\n    for r in range(out.shape[0]):\n        a = sel[r]; b = refv[r]\n        fm = ((a != b) & torch.isfinite(b)).sum().item()\n        finite_mismatch += fm\n    res[\"cases\
+  ...[truncated 1818 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "a8e63cfe0720bd2ef6b7224e5c7f30c944ef73a57a3e4c259fec5a12477307ff"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "cd730628e5f79bf668dd3ba73e5aab9205621e34e0409f91bc5d26bf2038def8"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "bcbaafca722fbb470bb470137a2bb0947834ae4ef4d5f62d0ebd833a21b4a119"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(y * mask, 1)` (lines 11-12), instead of a select. If a row contains -inf or +inf scores (the natural en
+  ...[truncated 11916 chars]
 
-### Turn 10 - `experimenter` (24.880976883000017s, in=71288 out=1988)
+### Turn 5 - `experimenter` (53.532949144999975s, in=56040 out=4506)
 
 Message:
 
 ```text
-Consuming t16, the probe bound directly to c2. The results are decisive: exhaustive duplicate-max pairs return the higher tied index in 156/651 cases (0 returned a non-tied index, all 651 returned values still equal the row max), quantized in-domain rows show 1098/3840 mismatches with `lower_than_ref == 0` in all 15 configurations and `value_still_max == 3840`, the strictly-distinct control has 0 mismatches (so this is not confounded by an ordering defect — consistent with c1 being rebutted), and downstream mean-pooled rel-L2 is 0.41. That is a tie-break violation, not a value error. No claims remain uncovered after this, so I am not launching further probes.
+Consuming all three probe results now and, in the same response, launching one follow-up sweep to quantify the c1 cutoff-tie violation rate (only 1 of 5 hand-picked tie placements violated, so the exact-pair geometry matters and the Judge needs the rate, not an anecdote).
+
+**c1** (t9): 1/5 cutoff-tie rows kept the HIGHER index (lo=3,hi=4 → kernel picked 4, dropped 3); selected values identical (0.0 diff) but downstream averaged vector differs by 2.0 — exactly the "value-correct, index-wrong" signature.
+**c2** (t10): much stronger than predicted — for an all-equal row the kernel returns indices 8..15 instead of 0..7, i.e. the returned top-k *set* is wrong under the lower-index rule, not merely misordered.
+**c3** (t11): finite baseline sorts exactly, but with a single -inf the kernel selects 5.0 instead of 6.0 (misses a value well above cutoff), and with half the row masked it returns four -inf entries where the reference returns finite scores.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t17 ok`
+- `finalize_probe_evidence -> t12 ok`
   Args:
   {
     "data": {
-      "contract_ref": "problem.txt: on exactly equal scores the LOWER index must be kept",
-      "distinct_control_mismatch_rows": 0,
-      "distinct_control_rows": 256,
-      "downstream_B": 256,
-      "downstream_D": 32,
-      "downstream_N": 64,
-      "downstream_misrouted_tokens": 69,
-      "downstream_pooled_max_abs_diff": 0.3134760558605194,
-      "downstream_pooled_rel_l2": 0.41262760758399963,
-      "metric": "returned k=1 index vs lowest-index-tie-break argmax; direction of mismatch; value-still-max check",
-      "pairwise_N_tested": [
+      "N": 16,
+      "downstream_avg_max_abs_diff": 2.0,
+      "dtype": "float32",
+      "k": 4,
+      "metric": "membership of tied index pair in returned top-k + downstream averaged-vector diff",
+      "n_cases": 5,
+      "n_cases_higher_index_kept": 1,
+      "n_cases_lower_index_kept": 4,
+      "reference": "CPU torch.sort(descending=True, stable=True) = lower-index-wins",
+      "selected_values_max_abs_diff": 0.0,
+      "violating_case_hi_idx": 4,
+      "violating_case_lo_idx": 3,
+      "violating_kernel_topk": [
+        0,
+        1,
         2,
-        4,
-        8,
-        16,
-        32
+        4
       ],
-      "pairwise_example_failures": [
-        [
-          0,
-          1,
-          1
-        ],
-        [
-          4,
-          6,
-          6
-        ],
-        [
-          4,
-          7,
-          7
-        ],
-        [
-          5,
+      "violating_ref_topk": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "event_id": "t9",
+    "status": "confirmed",
+    "summary": "Cutoff-tie probe (N=16, k=4, fp32, 5 rows each with an exact duplicate straddling the k boundary): in 1 of 5 rows 
+  ...[truncated 515 chars]
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "Cutoff-tie probe (N=16, k=4, fp32, 5 rows each with an exact duplicate straddling the k boundary): in 1 of 5 rows the kernel kept the HIGHER tied index and dropped the LOWER one (lo=3/hi=4: kernel top-k [0,1,2,4] vs stable ref [0,1,2,3]), violating the problem.txt tie rule. Selected VALUES are bit-identical to the reference (max abs diff 0.0), so a values-only check would pass, while the downstream gather+average output differs by 2.0. The violation is real but placement-dependent (4/5 rows happened to keep the lower index), so the claim's mechanism is confirmed while its universality is not.",
+    "supports": "confirmed",
+    "tool_event_id": "t9"
+  }
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "all_equal_N16_k8_kernel": [
+        8,
+        9,
+        11,
+        10,
+        14,
+        15,
+        13,
+        12
+      ],
+      "all_equal_N16_k8_ref": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "all_equal_N32_k8_kernel": [
+        16,
+        17,
+        19,
+        18,
+        22,
+        23,
+        21,
+        20
+      ],
+      "all_equal_N32_k8_ref": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "metric": "exact index sequence + index set within equal-score runs vs CPU stable descending sort",
+      "n_cases": 4,
+      "n_cases_ascending_within_equal_runs": 0,
+      "n_cases_index_sequence_matches_stable_ref": 0,
+      "n_cases_topk_set_matches_ref_set": 1,
+      "quantized_3level_N32_k8_kernel": [
+        0,
+        2,
+        11,
      
-  ...[truncated 3155 chars]
+  ...[truncated 973 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_ab
-  ...[truncated 862 chars]
+    "summary": "Tie-ordering probe confirms the claim and exceeds it. All 4 tied-input cases failed the ascending-within-equal-run metric and none matched the stable reference index sequence. Beyond ordering, the returned index SET is wrong under the lower-index rule: all-equal row N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7], and N=32,k=8 returns [16,17,19,18,22,23,21,20] instead of [0..7] \u2014 the kernel selects the highest-indexed half of a tied group. The quantized 3-level N=32 row also returns a wrong set (23 selected, 18 dropped). Selected values are exactly correct in every case (max abs diff 0.0), so value-based checking is blind to this.",
+    "supports": "confirmed",
+    "tool_event_id": "t10"
+  }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "finite_distinct_baseline_index_set_matches": true,
+      "finite_distinct_baseline_mismatches": 0,
+      "half_masked_finite_value_mismatches": 4,
+      "half_masked_kernel_selected_all_neg_inf": true,
+      "half_masked_kernel_topk": [
+        12,
+        13,
+        15,
+        14
+      ],
+      "half_masked_ref_topk": [
+        7,
+        6,
+        5,
+        4
+      ],
+      "metric": "selected values / index set of finite entries vs CPU stable descending reference",
+      "pos_inf_finite_value_mismatches": 3,
+      "scope": "unknown - non-finite inputs not explicitly required by problem.txt",
+      "single_neg_inf_finite_value_mismatches": 2,
+      "single_neg_inf_kernel_selected_values": [
+        9.0,
+        8.0,
+        5.0,
+        7.0
+      ],
+      "single_neg_inf_kernel_topk": [
+        7,
+        12,
+        4,
+   
+  ...[truncated 1182 chars]
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "confirmed",
+    "evidence_id": "c3.e1",
+    "summary": "Non-finite probe confirms the arithmetic-mask (inf*0 -> NaN) corruption. Baseline all-finite distinct row (N=16,k=4) matches the reference exactly (0 mismatches), isolating the cause to non-finite inputs. With ONE -inf present the kernel returns [7,12,4,3] with selected values [9,8,5,7] versus reference [7,12,3,10] / [9,8,7,6]: it misses the value 6.0 at index 10 and admits 5.0, i.e. a finite element far above the cutoff is dropped \u2014 not a tie artifact. With half the row masked to -inf the kernel returns [12,13,15,14], all four selected values -inf, while the reference returns the four largest finite scores. A +inf row also mis-sorts (3 finite mismatches; kernel never selects the +inf at index 5). Note claim scope remains 'unknown': problem.txt does not explicitly admit non-finite scores and no test.py exists to pin the distribution.",
+    "supports": "confirmed",
+    "tool_event_id": "t11"
+  }
+- `run_claim_probe -> t15 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "\nimport json, importlib.util, itertools, torch\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef sweep(N, k):\n    rows, meta = [], []\n    for lo, hi in itertools.combinations(range(N), 2):\n        row = torch.linspace(-1.0, -0.1, N).clone()\n        dom = [j for j in range(N) if j not in (lo, hi)][:k-1]\n        for r, j in enumerate(dom):\n            row[j] = 100.0 - r\n        row[lo] = 50.0; row[hi] = 50.0\n        rows.append(row); meta.append((lo, hi))\n    scores = torch.stack(rows).cuda()\n    out = m.sorted_topk_indices(scores, k).cpu()\n    viol = []\n    for r, (lo, hi) in enumerate(meta):\n        got = set(out[r].tolist())
+  ...[truncated 990 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "c4076944089718cfaefad7cab868df765b002683f11dcd7d49b12f29b2afdf30"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "d858758e400672aad73d82712567d2671606cc09774f94d33cb1d500758d65c6"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "8ee7842e84cbc11ad99f9e2a8e672eafe0444387347ab049a3ecd548c74440cb"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. The
+  ...[truncated 9120 chars]
 
-### Turn 11 - `skeptic` (11.059979813999973s, in=92768 out=736)
+### Turn 6 - `skeptic` (13.200732069999987s, in=96341 out=740)
 
 Message:
 
 ```text
-This is a review turn. c2 now has decisive, directly-bound evidence (t16) and c1 is settled as rebutted; the remaining surfaces I noted are generalization curiosity, not contract requirements.
+This is the final review turn. All three claims I raised are already confirmed with runtime evidence, and the t15 sweep only strengthens c1 (11–77% of tied cutoff placements drop the lower index across N=16/32, k=4/8). The confirmed in-scope tie-contract violations (c1, c2) already fully cover the material defect; c3 is a consistent generalization note. Nothing new to add.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t18 ok`
+- `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly viola
-  ...[truncated 700 chars]
+    "reason": "Review turn: no new in-scope, testable hypotheses remain. c1 (cutoff tie drops the LOWER index) is confirmed by t9 and further quantified by the exhaustive t15 sweep (28/120 violations at N=16,k=4; 92/120 at N=16,k=8; 56/496 at N=32,k=4), directly contradicting the normative problem.txt tie rule on fp32 power-of-two-column rows. c2 (intra-tie index order and, more strongly, wrong index SET for equal-score groups \u2014 all-equal N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7]) is confirmed by t10, with selected values bit-identical (0.0 diff), showing value-only checks are blind to the defect. c3 (inf*0 -> NaN in the arithmetic-mask partner select) is confirmed mechanically by t11 with a clean all-finite baseline isolating the cause, but its scope stays 'unknown' 
+  ...[truncated 411 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly violates problem.txt's stated rule that the LOWER index must be kept on exactly equal scores. c1 remains rebutted by t8 and should not be reopened. No new in-scope claim is warranted: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction, non-power-of-two N) are outside the stated contra
-  ...[truncated 380 chars]
+    "reason": "Review turn: no new in-scope, testable hypotheses remain. c1 (cutoff tie drops the LOWER index) is confirmed by t9 and further quantified by the exhaustive t15 sweep (28/120 violations at N=16,k=4; 92/120 at N=16,k=8; 56/496 at N=32,k=4), directly contradicting the normative problem.txt tie rule on fp32 power-of-two-column rows. c2 (intra-tie index order and, more strongly, wrong index SET for equal-score groups \u2014 all-equal N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7]) is confirmed by t10, with selected values bit-identical (0.0 diff), showing value-only checks are blind to the defect. c3 (inf*0 -> NaN in the arithmetic-mask partner select) is confirmed mechanically by t11 with a clean all-finite baseline isolating the cause, but its scope stays 'unknown' since problem.txt does not explicitly admit non-finite scores; it is a generalization note, not the decisive basis. Remaining curiosities (fp16/bf16 tie density, dtype-specific bitcast paths, N=1) are either out of the stated contract or would not change the verdict given c1/c2 are already confirmed in-scope. No claim is needed to hold up the Judge.",
+    "reviewed_cla
+  ...[truncated 90 chars]
 
-### Turn 12 - `judge` (22.23710922400005s, in=92498 out=1141)
+### Turn 7 - `judge` (20.478256181999996s, in=98726 out=1349)
 
 Message:
 
 ```text
-All claims have evidence, the Skeptic reviewed the latest probe (t16) and recorded no new claims, and c2 is confirmed with directly bound in-domain evidence. Recording the verdict.
+All three claims have runtime evidence, Skeptic signed off with no new claims, and the artifact ships no test.py — so problem.txt's explicit tie rule is the operative contract. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t19 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.93,
+    "confidence": 0.9,
     "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs a
-  ...[truncated 1680 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It states a normative, non-optional requirement: \\\"when two candidates have exactly equal scores, the LOWER index must be the one kept,\\\" with output in descending score order, over the stated input domain of power-of-two column counts. This is precisely the case where the usual 'tie-breaking is unspecified / harmless boundary swap' allowance does NOT apply, because the contract fixes the tie rule.\\n\\nc1 (confirmed, in_scope): the comparator predicate `cond = (left > right) != flip` (line 24) is True for exactly-equal partners whenever flip=1, and the final merge runs
+  ...[truncated 2045 chars]
   Output summary:
   {
-    "confidence": 0.93,
+    "confidence": 0.9,
     "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a 
-  ...[truncated 1280 chars]
+    "reason": "The artifact contains only kernel.py, meta.json and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It states a normative, non-optional requirement: \\\"when two candidates have exactly equal scores, the LOWER index must be the one kept,\\\" with output in descending score order, over the stated input domain of power-of-two column counts. This is precisely the case where the usual 'tie-breaking is unspecified / harmless boundary swap' allowance does NOT apply, because the contract fixes the tie rule.\\n\\nc1 (confirmed, in_scope): the comparator predicate `cond = (left > right) != flip` (line 24) is True for exactly-equal partners whenever flip=1, and the final merge runs with flip=DESCENDING=True (line 56). Probe t9 (fp32, N=16, k=4, power-of-two columns as required) shows a row where the kernel returns top-k [0,1,2,4] while the lower-index-wins reference returns [0,1,2,3]: the LOWER tied index 3 is dropped and the HIGHER index 4 is kept. Selected values are bit-identical (max abs diff 0.0) yet the downstream gather+average output \u2014 the very consumption path
+  ...[truncated 1645 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1.",
-    "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
+    "sorted_topk_indices(scores, k) must return, per row of a 2-D score tensor, the indices of the k largest scores ordered by descending score (problem.txt).",
+    "Tie rule is normative and index-based, not value-based: for exactly equal scores the LOWER column index must be the one kept/selected (problem.txt, 'Contract on ties').",
+    "Because selected indices gather value vectors that are then averaged, a wrong-but-tied index selection changes the downstream continuous output, so tie mis-selection is a real numeric error rather than a cosmetic index permutation.",
+    "Input domain is restricted: number of columns N is a power of two; nothing else about dtype, k<=N, sign, or special values is promised or excluded by the problem text.",
+    "No test_code is supplied in the artifact (artifact.test_code is empty), so problem.txt is the sole operative contract and the deciding metric must be read from it: exact index identity under the lower-index tie rule."
   ],
   "kernel_model": [
-    "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20).",
-    "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
-  ],
-  "open_questions": [
-    "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug.",
-    "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
-  ],
-  "risk_map": [
-    "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible.",
-    "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `ids[:, :k]` list tied indices in descending index 
-...[truncated 686 chars]
+    "Host wrapper (lines 61-70): clones scores, builds ids = arange(N) broadcast to (B,N) as int32 contiguous, computes n_dims = int(math.log2(N)), launches one program per row with stride_row = N, N/N_DIMS/DESCENDING as constexpr, and returns ids[:, :k].long() after the in-place sort.",
+    "Kernel body (lines 51-58) loads a full row of N elements with tl.arange(0, N) and no mask, runs stages i = 1..N_DIMS of _bitonic_merge with order=2 for intermediate stages and order=DESCENDING(=True) for the last stage, then stores x and ids back in place. This mirrors upstream triton argsort's stage loop.",
+    "_bitonic_merge (lines 30-41): for order==2 builds an alternating per-element flip vector via reshape/broadcast of arange(0,2); otherwise flip is the scalar order (True for the final descending merge). It then runs static_range(stage) compare-and-swap sub-steps at level i + (n_dims - stage).",
+    "_compare_and_swap (lines 6-27): extracts partner values/ids by reshap
+...[truncated 5944 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_09 wraps the (self-declared byte-for-byte) Triton/NSA bitonic argsort network in a host helper `sorted_topk_indices(scores, k)` used as a top-1 expert gate. The contract adds a hard tie-break rule (lower index wins on exactly equal scores) that the descending bitonic compare-and-swap does not obviously satisfy: with DESCENDING=True the swap predicate is `(left > right) != 1`, i.e. it fires on `left <= right`, so equal keys DO swap their ids. That is the primary bug surface, plus the `y*(1-mask)`/`y*mask` sum-reduction trick which is not inf/NaN-safe.
-- `du2` tasks=`initial`: case_09 is the Triton/NSA bitonic argsort network wrapped as a top-1 expert gate via `sorted_topk_indices(scores, k)`. Runtime evidence now separates two behaviors cleanly: the network's *ordering* machinery is sound (t8: distinct-valued rows give exact argmax, valid full-row permutation, and non-increasing gathered scores at every N in 2..1024), while its *tie-break* behavior contradicts the contract (t9: 36/155 enumerated duplicate-max pairs return the higher index; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in all 12 configurations and the returned value always still equal to the row max). Mechanism is line 24: `cond = (left > right) != flip` is true on exact equality whenever flip=1, and lines 25-26 XOR-swap both value and id for those lanes, so equal keys exchange positions in descending sub-blocks. Ledger placement issue: claim c2 (the tie claim) currently has zero evidence entries; the decisive t9/t12 data is attached to rebutted c1 and self-labeled "scope-adjacent".
+- `du1` tasks=`initial`: case_10 is a Triton bitonic argsort (essentially upstream triton.language.standard.argsort/_compare_and_swap/_bitonic_merge) wrapped as a per-row descending top-k index selector. The contract explicitly pins tie behavior to "lower index kept", and the comparator's swap predicate `cond = (left > right) != flip` is exactly where that behavior is decided — with DESCENDING=True the final merge uses flip=1, so equal values satisfy cond and are swapped, which is anti-stable rather than stable.
 
 ## Claims
 
-### c1 - `rebutted`
+### c1 - `confirmed`
 
-Statement: Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. Decisive metric: (a) fraction of rows where returned k=1 index != torch.argmax; (b) for a full-row read of `ids`, whether the permutation is valid (each of 0..N-1 exactly once) and whether `scores.gather(1, ids)` is non-increasing along the row.
+Statement: With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. Therefore, for a row where the k-th and (k+1)-th scores are exactly equal, `sorted_topk_indices` returns the HIGHER column index inside ids[:, :k] and drops the LOWER one, violating the stated tie contract. Deciding metric: exact membership of the tied index pair in the returned top-k set (equivalently, the downstream gathered/averaged value vector differing from the lower-index-wins reference).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt defines the required output ("must return, for each token, the index of the highest-scoring expert") and the input domain ("`scores` has a power-of-two number of columns"). Testing distinct-valued float32 rows at several power-of-two N is squarely inside that declared domain, and the claim targets the stated output requirement rather than a generalization beyond it.
+Scope rationale: problem.txt makes the tie rule normative ("when two candidates have exactly equal scores, the LOWER index must be the one kept") and states selected indices feed a continuous averaged output, so a tied swap at the cutoff is a contract violation, not an implementation-defined permutation. A representative admitted input is a fp32 (B,N) score row with N a power of two (e.g. N=16, k=4) containing an exact duplicate straddling the cutoff — exactly the power-of-two column domain problem.txt states.
 
 Scope evidence:
-- `problem.txt`: Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated.
-- `kernel.py lines 44-58`: Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N.
+- `problem.txt`: Explicit normative tie rule: equal scores -> lower index must be kept; input domain is power-of-two columns; selection feeds an averaged continuous output.
+- `kernel.py line 24 / line 56`: cond = (left > right) != flip with flip=DESCENDING=True in the last merge makes equal-value pairs always swap.
 
-Rationale: The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.
+Rationale: Line 24's predicate is anti-stable for flip=1: equality gives cond=True. The final descending merge passes flip=order=True for every lane, so every tied comparison in that merge swaps, including at the k cutoff.
 
 Evidence:
-- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t8: Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.
-- `c1.e2` runtime_probe supports `inconclusive`, tool_event_id=t9: SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t9: Cutoff-tie probe (N=16, k=4, fp32, 5 rows each with an exact duplicate straddling the k boundary): in 1 of 5 rows the kernel kept the HIGHER tied index and dropped the LOWER one (lo=3/hi=4: kernel top-k [0,1,2,4] vs stable ref [0,1,2,3]), violating the problem.txt tie rule. Selected VALUES are bit-identical to the reference (max abs diff 0.0), so a values-only check would pass, while the downstream gather+average output differs by 2.0. The violation is real but placement-dependent (4/5 rows happened to keep the lower index), so the claim's mechanism is confirmed while its universality is not.
 
 ### c2 - `confirmed`
 
-Statement: For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-break rule. Representative in-domain inputs: float32 `scores` of shape (B, N) with N a power of two (N in {2, 8, 64, 256, 1024}), rows built either as a duplicated max at columns i<j or as quantized/small-level-set score rows (e.g. `randint(0, L)` with L in {2,4,8}). Decisive metric: returned k=1 index vs the lowest-index-tie-break argmax (`torch.argmax`, which returns the first occurrence of the row max); report count of rows where they differ and whether the returned index is higher or lower than the reference. A nonzero count of "higher than reference" rows confirms the claim; the paired check that the returned index's value still equals the row max establishes that this is a tie-break violation rather than a value error.
+Statement: For ties fully inside the returned top-k, the flip=1 lanes present in both the final descending merge and the intermediate order==2 merges permute equal-score elements, so the returned index order among a group of exactly-equal scores is not ascending (e.g. reversed or scrambled) rather than the lower-index-first order the contract requires. Deciding metric: exact index sequence within each equal-score run compared to a stable lower-index-wins reference (e.g. an all-equal row, or a row with 4+ copies of one value, N=16/32, k=8).
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt is the operative contract (no test.py exists; test_code is empty and meta.json has passed: null). It states an explicit required behavior: "Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept." Per the rules, a claim that the kernel violates a stated tie-break rule is in-scope even with no test file, using representative inputs the contract admits. The inputs used are exactly the declared domain: 2-D float32 `scores` with a power-of-two number of columns, called as `sorted_topk_indices(scores, k=1)`. Ties are not an exotic or undefined case here — they are the specific case the contract legislates, and the reference behavior is fully specified (lowest index), so this is not a reference-undefined situation.
+Scope rationale: problem.txt requires the output to be "in descending score order" and pins the tie rule to lower index kept; both together fix the intra-tie ordering of the returned indices. Rows with repeated block scores are admitted inputs (power-of-two N, no restriction against duplicates).
 
 Scope evidence:
-- `problem.txt`: States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER index must be kept.
-- `meta.json / artifact_files`: Artifact contains only kernel.py, meta.json, problem.txt; no test.py and empty test_code, so problem.txt alone is the authoritative contract and its written tie rule is the operative requirement.
-- `kernel.py lines 24-27, 56, 69`: Swap predicate `(left > right) != flip` fires on exact equality when flip=DESCENDING=1 (set at line 69, threaded through line 56), and line 26 XOR-swaps the ids for those lanes, so tied keys exchange positions.
-- `tool events t9, t12`: Runtime probes on in-domain power-of-two N show tied-max rows returning the higher index (36/155 enumerated pairs; 10-47% of quantized rows, with lower_than_ref==0 in all 12 configurations and the returned value always still equal to the row max).
+- `problem.txt`: Output must be the k highest indices in descending score order, with the lower index kept on exact ties; no exclusion of duplicate scores.
+- `kernel.py lines 34-40`: order==2 merges use an alternating 0/1 flip vector, so half of each merge's comparators are anti-stable on ties.
 
-Rationale: Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly "scope-adjacent" with no claim of its own.
+Rationale: Line 36 builds an alternating flip vector for intermediate merges, so half the lanes are anti-stable at every stage; equal-value groups can be permuted arbitrarily before the final stage, and the final flip=1 merge also swaps ties.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t16: c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_abs_diff 0.3135, pooled_rel_l2 0.4126 -- the misroute survives batch mean-pooling and is not diluted below any plausible tolerance. (D) Control: strictly-distinct randn rows (B=256, N=64) gave 0 mismatches, so the failure is exclusive to exact ties and does not confound with the ordering machinery (c1, rebutted by t8). Mechanism matches source: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56), and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. problem.txt states "when two experts have exactly equal scores, the LOWER index must be the one kept", so this is a direct violation of the operative contract, with the reference behavior fully specified (not a reference-undefined case).
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: Tie-ordering probe confirms the claim and exceeds it. All 4 tied-input cases failed the ascending-within-equal-run metric and none matched the stable reference index sequence. Beyond ordering, the returned index SET is wrong under the lower-index rule: all-equal row N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7], and N=32,k=8 returns [16,17,19,18,22,23,21,20] instead of [0..7] — the kernel selects the highest-indexed half of a tied group. The quantized 3-level N=32 row also returns a wrong set (23 selected, 18 dropped). Selected values are exactly correct in every case (max abs diff 0.0), so value-based checking is blind to this.
+
+### c3 - `confirmed`
+
+Statement: The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(y * mask, 1)` (lines 11-12), instead of a select. If a row contains -inf or +inf scores (the natural encoding for masked-out NSA candidate blocks), the discarded lane contributes inf * 0 = NaN, so `left`/`right` become NaN, `left > right` is False everywhere, and with flip=1 the pair is swapped regardless of value — producing a mis-sorted row and wrong top-k indices, not merely a tie-order artifact. Deciding metric: returned indices/selected values versus a lower-index-wins reference on a row mixing finite scores with -inf entries.
+
+Scope: `unknown`
+
+Scope rationale: problem.txt fixes only the power-of-two column domain and describes the operator as NSA candidate block scores (where masking with -inf is the usual convention), but it does not explicitly require non-finite inputs and ships no test.py to pin the input distribution. Treating as unknown: relevant as a generalization/robustness finding, not by itself decisive for a reject unless the contract is clarified to admit masked -inf scores.
+
+Rationale: Multiplying by a 0/1 mask is not inf-safe; a single non-finite element can poison both partner values for its whole comparator group and corrupt the sort of finite entries too.
+
+Evidence:
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Non-finite probe confirms the arithmetic-mask (inf*0 -> NaN) corruption. Baseline all-finite distinct row (N=16,k=4) matches the reference exactly (0 mismatches), isolating the cause to non-finite inputs. With ONE -inf present the kernel returns [7,12,4,3] with selected values [9,8,5,7] versus reference [7,12,3,10] / [9,8,7,6]: it misses the value 6.0 at index 10 and admits 5.0, i.e. a finite element far above the cutoff is dropped — not a tie artifact. With half the row masked to -inf the kernel returns [12,13,15,14], all four selected values -inf, while the reference returns the four largest finite scores. A +inf row also mis-sorts (3 finite mismatches; kernel never selects the +inf at index 5). Note claim scope remains 'unknown': problem.txt does not explicitly admit non-finite scores and no test.py exists to pin the distribution.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_09"
+  "entry": "case_10"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Reference semantics presumably match `scores.argmax(dim=-1)` / `torch.topk`-with-lower-index tie-break, or a full descending stable sort's first k columns for k>1."
+    "sorted_topk_indices(scores, k) must return, per row of a 2-D score tensor, the indices of the k largest scores ordered by descending score (problem.txt).",
+    "Tie rule is normative and index-based, not value-based: for exactly equal scores the LOWER column index must be the one kept/selected (problem.txt, 'Contract on ties').",
+    "Because selected indices gather value vectors that are then averaged, a wrong-but-tied index selection changes the downstream continuous output, so tie mis-selection is a real numeric error rather than a cosmetic index permutation.",
+    "Input domain is restricted: number of columns N is a power of two; nothing else about dtype, k<=N, sign, or special values is promised or excluded by the problem text.",
+    "No test_code is supplied in the artifact (artifact.test_code is empty), so problem.txt is the sole operative contract and the deciding metric must be read from it: exact index identity under the lower-index tie rule."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Assumptions with no runtime checks: scores is exactly 2-D, N is a power of two and small enough to fit one row per program in registers, k <= N, scores contiguous-compatible (it clones+contiguous so stride is fine), ids fit in int32, and `x.dtype.primitive_bitwidth` has a matching signed int type for the bitcast (line 20)."
-  ],
-  "open_questions": [
-    "What is the largest N the harness uses? Large N with one row per program and unmasked `tl.arange(0, N)` may hit register/compile limits rather than a numeric bug."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Downstream masking effect: because the final answer is mean-pooled over the batch, a single tied-row misroute may be diluted; a pooled-output allclose with loose tolerance could pass while indices are wrong. Prefer per-row index evidence, or a pooled comparison with expert vectors chosen to make the misroute visible."
-  ],
-  "scope_notes": [
-    "No test code is provided in the artifact (`test_code` is empty, meta.json has `passed: null`), so the operative contract is problem.txt alone; tie-break behavior must be judged against the written rule, not an observed test tolerance."
-  ],
-  "summary": "case_09 wraps the (self-declared byte-for-byte) Triton/NSA bitonic argsort network in a host helper `sorted_topk_indices(scores, k)` used as a top-1 expert gate. The contract adds a hard tie-break rule (lower index wins on exactly equal scores) that the descending bitonic compare-and-swap does not obviously satisfy: with DESCENDING=True the swap predicate is `(left > right) != 1`, i.e. it fires on `left <= right`, so equal keys DO swap their ids. That is the primary bug surface, plus the `y*(1-mask)`/`y*mask` sum-reduction trick which is not inf/NaN-safe.",
-  "task_id
-...[truncated 30 chars]
+    "Host wrapper (lines 61-70): clones scores, builds ids = arange(N) broadcast to (B,N) as int32 contiguous, computes n_dims = int(math.log2(N)), launches one program per row with stride_row = N, N/N_DIMS/DESCENDING as constexpr, and returns ids[:, :k].long() after the in-place sort.",
+    "Kernel body (lines 51-58) loads a full row of N elements with tl.arange(0, N) and no mask, runs stages i = 1..N_DIMS of _bitonic_merge with order=2 for intermediate stages and order=DESCENDING(=True) for the last stage, then stores x and ids back in place. This mirrors upstream triton argsort's stage loop.",
+    "_bitonic_merge (lines 30-41): for order==2 builds an alternating per-element flip vector via reshape/broadcast of arange(0,2); otherwise flip is the scalar order (True for the final descending merge). It then runs static_range(stage) compare-and-swap sub-steps at level i + (n_dims - stage).",
+    "_compare_and_swap (lines 6-27): extracts pa
+...[truncated 6550 chars]
 
-### t6 - record_claim - error
+### t6 - record_claim - ok
 
 {
-  "error_type": "ToolRegistryError",
-  "message": "tool record_claim missing required arg: rationale"
+  "id": "c1",
+  "rationale": "Line 24's predicate is anti-stable for flip=1: equality gives cond=True. The final descending merge passes flip=order=True for every lane, so every tied comparison in that merge swaps, including at the k cutoff.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Explicit normative tie rule: equal scores -> lower index must be kept; input domain is power-of-two columns; selection feeds an averaged continuous output."
+    },
+    {
+      "source": "kernel.py line 24 / line 56",
+      "summary": "cond = (left > right) != flip with flip=DESCENDING=True in the last merge makes equal-value pairs always swap."
+    }
+  ],
+  "scope_rationale": "problem.txt makes the tie rule normative (\"when two candidates have exactly equal scores, the LOWER index must be the one kept\") and states selected indices feed a continuous averaged output, so a tied swap at the cutoff is a contract violation, not an implementation-defined permutation. A representative admitted input is a fp32 (B,N) score row with N a power of two (e.g. N=16, k=4) containing an exact duplicate straddling the cutoff \u2014 exactly the power-of-two column domain problem.txt states.",
+  "statement": "With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. Therefore, for a row where the k-th and (k+1)-th scores are exactly equal, `sorted_topk_indices` returns the HIGHER column index inside ids[:, :k] and drops the LOWER one, violating the stated tie contract. Deciding metric: exact membership of the tied index pair in the returned top-k set (equivalently, the downstream gathered/averaged value vector differing from the lower-index-wins reference).",
+  "status": "open"
 }
 
 ### t7 - record_claim - ok
 
 {
-  "id": "c1",
-  "rationale": "The kernel's own comment admits N_DIMS was hoisted out of the upstream `tl.log2(x.shape[dim])` path and the launcher was rewritten (one program per row, `stride_row` passed as N, unmasked `tl.arange(0, N)`), so the surrounding plumbing is not the upstream code even if the merge primitives are. Off-by-one in the stage index `i + (n_dims - stage)` (line 40) or a mismatch between N_DIMS and the actual row extent would silently yield a partially sorted row, and top-1 would still look plausible on random data at small N. This baseline must be established so that a tie-focused result is not mistaken for overall soundness.",
+  "id": "c2",
+  "rationale": "Line 36 builds an alternating flip vector for intermediate merges, so half the lanes are anti-stable at every stage; equal-value groups can be permuted arbitrarily before the final stage, and the final flip=1 merge also swaps ties.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "Requires the per-token highest-scoring expert index and declares the input domain as scores with a power-of-two number of columns; no upper bound on N is stated."
+      "summary": "Output must be the k highest indices in descending score order, with the lower index kept on exact ties; no exclusion of duplicate scores."
     },
     {
-      "source": "kernel.py lines 44-58",
-      "summary": "Launcher/comment state N_DIMS is supplied host-side instead of the upstream log2 path, and the per-row load/store uses an unmasked tl.arange(0, N) with stride_row supplied as N."
+      "source": "kernel.py lines 34-40",
+      "summary": "order==2 merges use an alternating 0/1 flip vector, so half of each merge's comparators are anti-stable on ties."
     }
   ],
-  "scope_rationale": "problem.txt defines the required output (\"must return, for each token, the index of the highest-scoring expert\") and the input domain (\"`scores` has a power-of-two number of columns\"). Testing distinct-valued float32 rows at several power-of-two N is squarely inside that declared domain, and the claim targets the stated output requirement rather than a generalization beyond it.",
-  "statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. De
-...[truncated 266 chars]
+  "scope_rationale": "problem.txt requires the output to be \"in descending score order\" and pins the tie rule to lower index kept; both together fix the intra-tie ordering of the returned indices. Rows with repeated block scores are admitted inputs (power-of-two N, no restriction against duplicates).",
+  "statement": "For ties fully inside the returned top-k, the flip=1 lanes present in both the final descending merge and the intermediate order==2 merges permute equal-score elements, so the returned index order among a group of exactly-equal scores is not ascending (e.g. reversed or scrambled) rather than the lower-index-first order the contract requires. Deciding metric: exact index sequence within each equal-score run compared to a stable lower-index-wins reference (e.g. an all-equal row, or a row with 4+ copies of one value, N=16/32, k=8).",
+  "status": "open"
+}
 
-### t8 - run_claim_probe - ok
+### t8 - record_claim - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "b63a74cbd4bb560f8fa41561c8ea0586ba36007d8252d05587d9d8b186d7f05c"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "4e92424add792153e7547036003e515297e78d214a105e1317e32455be0a527f"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "Even with all-distinct float32 scores, the row-wise bitonic network may not produce a fully correct descending argsort for every power-of-two N in the contract's domain (test N = 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024), so `sorted_topk_indices(scores, k=1)` could return a non-argmax index, and `ids[:, :k]` for k>1 could be out of descending order or contain duplicated/missing indices. Decisive metric: (a) fraction of rows where returned k=1 index != torch.argmax; (b) for a full-row read of `ids`, whether the permutation is valid (each of 0..N-1 exactly once) and whether `scores.gather(1, ids)` is non-increasing along the row.",
-  "duration_s": 32.160729,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "6eee1b813fc50ed7e91c5aac901ce7d5bbca4be05677b1099447520abcfd30ce"
-       
-...[truncated 9228 chars]
+  "id": "c3",
+  "rationale": "Multiplying by a 0/1 mask is not inf-safe; a single non-finite element can poison both partner values for its whole comparator group and corrupt the sort of finite entries too.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "problem.txt fixes only the power-of-two column domain and describes the operator as NSA candidate block scores (where masking with -inf is the usual convention), but it does not explicitly require non-finite inputs and ships no test.py to pin the input distribution. Treating as unknown: relevant as a generalization/robustness finding, not by itself decisive for a reject unless the contract is clarified to admit masked -inf scores.",
+  "statement": "The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(y * mask, 1)` (lines 11-12), instead of a select. If a row contains -inf or +inf scores (the natural encoding for masked-out NSA candidate blocks), the discarded lane contributes inf * 0 = NaN, so `left`/`right` become NaN, `left > right` is False everywhere, and with flip=1 the pair is swapped regardless of value \u2014 producing a mis-sorted row and wrong top-k indices, not merely a tie-order artifact. Deciding metric: returned indices/selected values versus a lower-index-wins reference on a row mixing finite scores with -inf entries.",
+  "status": "open"
+}
 
-### t9 - run_python_probe - ok
+### t9 - run_claim_probe - ok
 
 {
   "artifacts": [
@@ -817,13 +745,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "358c80df1d7f86340d01c672f3971a1f24975ed911928ac3599014de6c3da457"
+      "sha256": "398cf4a40e30a0145dce5a068c6c19e80d256a5b9fe214e12fe1ef398e0b3620"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "5dbfba5a3a39c5fea45a5a892039ad2916400c2820463e231c642c8738d1d79a"
+      "sha256": "f82cabf62d0cf254215bd5fd3abdf0a50c3b625ec9cbd391a16ab2291b1d1720"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -835,294 +763,232 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "9ddca2d5ee7fbe24b29e0ad63da3f56b9aa4e83445b15d6e87cc01648a1ea898"
+      "sha256": "ef47ce386f7578d955024cc97e4de69a4bdfeb8e9b277e3444f6d4dfc1a5fa7a"
     }
   ],
-  "duration_s": 5.539129,
-  "event_id": "t9",
-  "exit_code": 0,
-  "json_result": {
-    "metric": "returned k=1 index vs lowest tied max index (contract: LOWER wins)",
-    "tie_probe": {
-      "16": {
-        "pairs": 120,
-        "returned_higher_index": 28,
-        "returned_lower_index": 92,
-        "returned_neither": 0,
-        "sample": [
-          [
-            0,
-            1,
-            1
-          ],
-          [
-            0,
-            2,
-            0
-          ],
-          [
-            0,
-            3,
-            0
-          ],
-          [
-            0,
-            4,
-            0
-          ],
-          [
-            0,
-            5,
-            0
-          ],
-          [
-            0,
-            6,
-            0
-          ]
-        ]
-      },
-      "2": {
-        "pairs": 1,
-        "returned_higher_index": 1,
-        "returned_lower_index": 0,
-        "returned_neither": 0,
-        "sample": [
-          [
-            0,
-            1,
-            1
-          ]
-        ]
-      },
-      "4": {
-        "pairs": 6,
-  
-...[truncated 1791 chars]
-
-### t10 - finalize_probe_evidence - ok
-
-{
   "claim_id": "c1",
-  "claim_status": "rebutted",
-  "evidence_id": "c1.e1",
-  "summary": "Strictly distinct float32 rows (permuted linspace(-3,3,N)), B=64 per N, N=2..1024: returned k=1 index matched torch.argmax on all 640 rows; full-row ids was a valid permutation of 0..N-1 on all rows; gathered scores non-increasing on all rows. No compile/launch error at any N up to 1024. The bitonic network plumbing (host-side N_DIMS, stage index i+(n_dims-stage), one-program-per-row launcher) is therefore correct for distinct inputs across the whole power-of-two domain tested, so c1 is rebutted.",
-  "supports": "rebutted",
-  "tool_event_id": "t8"
-}
+  "claim_statement": "With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. Therefore, for a row where the k-th and (k+1)-th scores are exactly equal, `sorted_topk_indices` returns the HIGHER column index inside ids[:, :k] and drops the LOWER one, violating the stated tie contract. Deciding metric: exact membership of the tied index pair in the returned top-k set (equivalently, the downstream gathered/averaged value vector differing from the lower-index-wins reference).",
+  "duration_s": 7.639278,
+  "event_id": "t9",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t9_probe.py",
+          "sha256": "398cf4a40e30a0145dce5a068c6c19e80d256a5b9fe214e12fe1ef398e0b3620"
+        },
+        {
+          "descrip
+...[truncated 7300 chars]
 
-### t11 - append_evidence - ok
-
-{
-  "id": "c1.e2",
-  "summary": "SCOPE-ADJACENT FINDING (not decisive for c1, which is scoped to all-distinct inputs; the skeptic's tie claim failed to record via tool error t6, so this has no home claim). Exploratory probe t9 enumerated every duplicate-max pair (i<j) in rows of form -1 everywhere except 1.0 at i and j, for N=2,4,8,16. The contract requires the LOWER tied index. Results: N=2 1/1 pairs returned the HIGHER index; N=4 1/6; N=8 6/28; N=16 28/120 returned the higher index (36/155 total violations, 23.2%); 0 cases returned a non-tied index. Failing pairs are the adjacent-in-first-compare-stage pairs (e.g. (0,1),(2,3),... per sample [[0,1,1],[0,2,0],...]), consistent with kernel.py line 24 `cond = (left > right) != flip` firing on exact equality in descending regions and lines 25-26 XOR-swapping both values and ids. This is a real violation of the stated tie-break rule but must be judged under a properly recorded tie claim.",
-  "supports": "inconclusive"
-}
-
-### t12 - run_python_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "924f49df28b04f0e63ab92c27f720fc77c528ec6825c8807a975e9e0d49a676c"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "41f9fd7d816b577a80871e2a8707076dab618635f3a1893fe711fe8d3d7f83aa"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "388317f687537e8529a40b0c94e1f874883e5d4c447bc9b35225c670c4f6633d"
-    }
-  ],
-  "duration_s": 5.467788,
-  "event_id": "t12",
-  "exit_code": 0,
-  "json_result": {
-    "metric": "k=1 index vs torch.argmax (lowest-index tie-break) on quantized score rows; plus mean-pooled expert-output diff",
-    "quantized_tie_scan": {
-      "N1024_lev2": {
-        "higher_than_ref": 107,
-        "index_mismatch_rows": 107,
-        "lower_than_ref": 0,
-        "mismatch_rate": 0.418,
-        "rows": 256,
-        "rows_where_value_still_max": 256,
-        "tied_max_rows": 256
-      },
-      "N1024_lev4": {
-        "higher_than_ref": 66,
-        "index_mismatch_rows": 66,
-        "lower_than_ref": 0,
-        "mismatch_rate": 0.2578,
-        "rows": 256,
-        "rows_where_value_still_max": 256,
-        "tied_max_rows": 256
-      },
-      "N1024_lev8": {
-        "higher_than_ref": 45,
-        "index_mismatch_rows": 45,
-        "lower_than_ref": 0,
-        "mismatch_rate": 0.1758,
-        "rows": 256,
-        "rows_where_value_still_max": 256,
-        "tied_max_rows": 256
-      },
-      "N256_lev2": {
-        "higher_than_ref": 110,
-
-...[truncated 3069 chars]
-
-### t13 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "Line 24 computes `cond = (left > right) != flip`; with DESCENDING=True the final merge passes flip=1, so `cond` is true whenever `left <= right`, including exact equality, and lines 25-26 then XOR-swap both the value and the id for those lanes. The descending network is therefore anti-stable: equal keys exchange ids rather than keeping the lower-index element earlier. Existing probe output already points this way (t9: 36/155 duplicate-max pairs returned the higher index at N=2..16; t12: 10-47% of quantized rows mismatch `torch.argmax` with `lower_than_ref == 0` in every configuration and `rows_where_value_still_max == 256` everywhere, plus a downstream mean-pooled rel-L2 of 0.42), but that evidence is currently parked on rebutted claim c1 as explicitly \"scope-adjacent\" with no claim of its own.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "States the required call `sorted_topk_indices(scores, k=1)` must return the highest-scoring expert index per token, declares the input domain as scores with a power-of-two number of columns, and adds an explicit hard rule: on exactly equal scores the LOWER index must be kept."
-    },
-    {
-      "source": "meta.json / artifact_files",
-      "summary": "Artifact contains only kernel.py, meta.json, problem.txt; no test.py and empty test_code, so problem.txt alone is the authoritative contract and its written tie rule is the operative requirement."
-    },
-    {
-      "source": "kernel.py lines 24-27, 56, 69",
-      "summary": "Swap predicate `(left > right) != flip` fires on exact equality when flip=DESCENDING=1 (set at line 69, threaded through line 56), and line 26 XOR-swaps the ids for those lanes, so tied keys exchange positions."
-    },
-    {
-      "source": "tool events t9, t12",
-      "summary": "Runtime probes on in-domain power-of-two N show tied-max rows returning the higher index (36/155 enumerated pairs; 10-47% of quantized rows, wit
-...[truncated 1905 chars]
-
-### t14 - record_description_update - ok
-
-{
-  "contract_model": [
-    "Downstream the chosen expert vectors are mean-pooled over the batch into one representation, so contract compliance is observable both per-token (index) and in aggregate (pooled vector)."
-  ],
-  "impact_on_claims": [
-    "c1: rebutted by t8 and consistent with the source reading \u2014 the ordering network itself is correct, which sharpens rather than weakens c2 by isolating the defect to tie handling alone."
-  ],
-  "kernel_model": [
-    "Unchecked host-side assumptions (lines 61-70): `scores` exactly 2-D, N an exact power of two (`int(math.log2(N))` silently truncates otherwise), one row per program with unmasked `tl.arange(0, N)`, ids in int32, and a signed int type matching `x.dtype.primitive_bitwidth` for the line-20/21 bitcast. t8 confirms no compile/launch failure through N=1024."
-  ],
-  "open_questions": [
-    "Untested: k>1 behavior on ties \u2014 whether `ids[:, :k]` returns tied indices in ascending order as a stable sort would, and whether any downstream use in this problem depends on it (the stated use is k=1 only)."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Untested residual surfaces if anyone wants breadth: k>1 tie ordering (does `ids[:, :k]` list tied indices in descending index order?), non-float32 dtypes through the line-20 bitcast, and inf/NaN inputs through the `y*(1-mask)` / `y*mask` sum-reduction trick on lines 11-12, which is not inf/NaN-safe."
-  ],
-  "scope_notes": [
-    "c1 is settled and should not be reopened: the distinct-value baseline (host-side N_DIMS, the `i + (n_dims - stage)` stage index, the one-program-per-row launcher) was clean on 640/640 rows across the whole power-of-two range tested."
-  ],
-  "summary": "case_09 is the Triton/NSA bitonic argsort network wrapped as a top-1 expert gate via `sorted_topk_indices(scores, k)`. Runtime evidence now separates two behaviors cleanly: the network's *ordering* machinery is sound (t8: distinct-valued rows give exact argmax, valid full-row permutation, an
-...[truncated 779 chars]
-
-### t15 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "Review turn: the round's evidence is fully covered by existing claims. c1 is rebutted by t8 (distinct-valued rows: 640/640 exact argmax, valid permutations, non-increasing gathered scores at every N in 2..1024), and c2 now carries the tie-break violation with mechanism (kernel.py:24 `cond = (left > right) != flip` true on exact equality when flip=DESCENDING=1; kernel.py:26 XOR-swaps ids) plus runtime data (t9: 36/155 duplicate-max pairs return the higher index; t12: 10-47% of quantized in-domain rows mismatch torch.argmax with lower_than_ref==0 in all 12 configs and rows_where_value_still_max==256 everywhere, proving tie-break rather than value error; downstream mean-pooled rel-L2 0.42). No further in-scope claim is available: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction) are not required by problem.txt, which specifies only k=1 top-1 routing over float32 scores with power-of-two column count, so they are generalization notes rather than decisive claims. Only ledger bookkeeping remains: the t9/t12 evidence is physically attached to rebutted c1 and self-labeled \"scope-adjacent\"; it should be read as supporting c2, whose statement and scope_evidence cite those exact tool events.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 14,
-  "turn": 8
-}
-
-### t16 - run_claim_probe - ok
+### t10 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t16_probe.py",
-      "sha256": "ccf6d49ffb5478fd065ed48d012a5e66933fdc08e8ee4114d6c7e9b1ad8b0dad"
+      "path": "probes/t10_probe.py",
+      "sha256": "25f60a347e98706326586bb15689712ae69f10cd999578b74f62a840a3a9cbc6"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t16_stdout.txt",
-      "sha256": "d1a5c0c954e12730993ad1662262fd6f91d376e21deb41633f0eec646319369f"
+      "path": "probes/t10_stdout.txt",
+      "sha256": "e92223d74197f4e38e55f513a73fdb0a51234ffb302ad8fa6e51376db84e42e4"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t16_stderr.txt",
+      "path": "probes/t10_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t16_json_result.json",
-      "sha256": "84b756e05ee0704336e267fb40f012e8c7577a889c137bcecb0ae194b00e1023"
+      "path": "probes/t10_json_result.json",
+      "sha256": "614fa97f6bf0066bf5ab22412df024451a8079d5210550539f92e53fc02116b9"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For a row of `scores` containing two or more exactly equal maximal values, `sorted_topk_indices(scores, k=1)` returns a HIGHER tied index instead of the lowest tied index, violating the contract's stated tie-break rule. Representative in-domain inputs: float32 `scores` of shape (B, N) with N a power of two (N in {2, 8, 64, 256, 1024}), rows built either as a duplicated max at columns i<j or as quantized/small-level-set score rows (e.g. `randint(0, L)` with L in {2,4,8}). Decisive metric: returned k=1 index vs the lowest-index-tie-break argmax (`torch.argmax`, which returns the first occurrence of the row max); report count of rows where they differ and whether the returned index is higher or lower than the reference. A nonzero count of \"higher than reference\" rows confirms the claim; the paired check that the returned index's value still equals the row max establishes that this is a tie-break violation rather than a value error.",
-  "duration_s": 6.524888,
-  "event_id": "t16",
-  "evidence_dra
-...[truncated 21882 chars]
+  "claim_statement": "For ties fully inside the returned top-k, the flip=1 lanes present in both the final descending merge and the intermediate order==2 merges permute equal-score elements, so the returned index order among a group of exactly-equal scores is not ascending (e.g. reversed or scrambled) rather than the lower-index-first order the contract requires. Deciding metric: exact index sequence within each equal-score run compared to a stable lower-index-wins reference (e.g. an all-equal row, or a row with 4+ copies of one value, N=16/32, k=8).",
+  "duration_s": 5.929065,
+  "event_id": "t10",
+  "evidence_draft": {
+    "claim_id": "c2",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t10_probe.py",
+          "sha256": "25f60a347e98706326586bb15689712ae69f10cd999578b74f62a840a3a9cbc6"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kin
+...[truncated 8962 chars]
 
-### t17 - finalize_probe_evidence - ok
+### t11 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "a8e63cfe0720bd2ef6b7224e5c7f30c944ef73a57a3e4c259fec5a12477307ff"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "cd730628e5f79bf668dd3ba73e5aab9205621e34e0409f91bc5d26bf2038def8"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "bcbaafca722fbb470bb470137a2bb0947834ae4ef4d5f62d0ebd833a21b4a119"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "The partner-selection in _compare_and_swap uses arithmetic masking, `tl.sum(y * (1 - mask), 1)` / `tl.sum(y * mask, 1)` (lines 11-12), instead of a select. If a row contains -inf or +inf scores (the natural encoding for masked-out NSA candidate blocks), the discarded lane contributes inf * 0 = NaN, so `left`/`right` become NaN, `left > right` is False everywhere, and with flip=1 the pair is swapped regardless of value \u2014 producing a mis-sorted row and wrong top-k indices, not merely a tie-order artifact. Deciding metric: returned indices/selected values versus a lower-index-wins reference on a row mixing finite scores with -inf entries.",
+  "duration_s": 5.090358,
+  "event_id": "t11",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t11_probe.py",
+          "sha256": "a8e63cfe0720bd2ef6b7224e5c7f30c944ef73a57a3e4c259fec5a1
+...[truncated 11116 chars]
+
+### t12 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "Cutoff-tie probe (N=16, k=4, fp32, 5 rows each with an exact duplicate straddling the k boundary): in 1 of 5 rows the kernel kept the HIGHER tied index and dropped the LOWER one (lo=3/hi=4: kernel top-k [0,1,2,4] vs stable ref [0,1,2,3]), violating the problem.txt tie rule. Selected VALUES are bit-identical to the reference (max abs diff 0.0), so a values-only check would pass, while the downstream gather+average output differs by 2.0. The violation is real but placement-dependent (4/5 rows happened to keep the lower index), so the claim's mechanism is confirmed while its universality is not.",
+  "supports": "confirmed",
+  "tool_event_id": "t9"
+}
+
+### t13 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "c2 CONFIRMED by probe t16, bound directly to the claim. Three independent in-domain constructions plus a control. (A) Exhaustive duplicate-max pairs (row = -1.0 everywhere, 1.0 at columns i<j), N=2,4,8,16,32: 651 pairs total, 156 returned the HIGHER tied index (violation rate 23.96%), 495 returned the lower index, 0 returned a non-tied index, and rows_where_value_still_max == pairs at every N (1/1, 6/6, 28/28, 120/120, 496/496) -- so the returned element is always a true row max and the defect is purely the tie-break direction. Failing pairs are the adjacent-in-first-compare-stage pairs, e.g. (0,1)->1, (4,6)->6, (4,7)->7, (5,6)->6, (5,7)->7. (B) Quantized rows randint(0,L) with L in {2,4,8} at N=2,8,64,256,1024, B=256 each: 3840 rows, 1098 mismatches vs torch.argmax (lowest-index tie-break), higher_than_ref == 1098 and lower_than_ref == 0 in every one of the 15 configurations, rows_where_value_still_max == 3840 (100%). Per-config mismatch rate ranges 0.0898 (N=8,L=8) to 0.5156 (N=2,L=2). (C) Downstream mean-pooled expert representation (N=64, B=256, D=32): 69 misrouted tokens, pooled_max_abs_diff 0.3135, pooled_rel_l2 0.4126 -- the misroute survives batch mean-pooling and is not diluted below any plausible tolerance. (D) Control: strictly-distinct randn rows (B=256, N=64) gave 0 mismatches, so the failure is exclusive to exact ties and does not confound with the ordering machinery (c1, rebutted by t8). Mechanism matches source: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56), and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. problem.txt states \"when two experts have exactly equal scores, the LOWER index must be the one kept\", so this is a direct violation of the operative contract, with the reference behavior fully specified (not a reference-undefined 
-...[truncated 62 chars]
+  "summary": "Tie-ordering probe confirms the claim and exceeds it. All 4 tied-input cases failed the ascending-within-equal-run metric and none matched the stable reference index sequence. Beyond ordering, the returned index SET is wrong under the lower-index rule: all-equal row N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7], and N=32,k=8 returns [16,17,19,18,22,23,21,20] instead of [0..7] \u2014 the kernel selects the highest-indexed half of a tied group. The quantized 3-level N=32 row also returns a wrong set (23 selected, 18 dropped). Selected values are exactly correct in every case (max abs diff 0.0), so value-based checking is blind to this.",
+  "supports": "confirmed",
+  "tool_event_id": "t10"
+}
 
-### t18 - record_no_new_claims - ok
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "confirmed",
+  "evidence_id": "c3.e1",
+  "summary": "Non-finite probe confirms the arithmetic-mask (inf*0 -> NaN) corruption. Baseline all-finite distinct row (N=16,k=4) matches the reference exactly (0 mismatches), isolating the cause to non-finite inputs. With ONE -inf present the kernel returns [7,12,4,3] with selected values [9,8,5,7] versus reference [7,12,3,10] / [9,8,7,6]: it misses the value 6.0 at index 10 and admits 5.0, i.e. a finite element far above the cutoff is dropped \u2014 not a tie artifact. With half the row masked to -inf the kernel returns [12,13,15,14], all four selected values -inf, while the reference returns the four largest finite scores. A +inf row also mis-sorts (3 finite mismatches; kernel never selects the +inf at index 5). Note claim scope remains 'unknown': problem.txt does not explicitly admit non-finite scores and no test.py exists to pin the distribution.",
+  "supports": "confirmed",
+  "tool_event_id": "t11"
+}
+
+### t15 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t15_probe.py",
+      "sha256": "c4076944089718cfaefad7cab868df765b002683f11dcd7d49b12f29b2afdf30"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t15_stdout.txt",
+      "sha256": "d858758e400672aad73d82712567d2671606cc09774f94d33cb1d500758d65c6"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t15_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t15_json_result.json",
+      "sha256": "8ee7842e84cbc11ad99f9e2a8e672eafe0444387347ab049a3ecd548c74440cb"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "With DESCENDING=True, the final merge uses scalar flip=1, so `cond = (left > right) != flip` (line 24) is True for exactly-equal partners and tied elements are unconditionally swapped along with their ids. Therefore, for a row where the k-th and (k+1)-th scores are exactly equal, `sorted_topk_indices` returns the HIGHER column index inside ids[:, :k] and drops the LOWER one, violating the stated tie contract. Deciding metric: exact membership of the tied index pair in the returned top-k set (equivalently, the downstream gathered/averaged value vector differing from the lower-index-wins reference).",
+  "duration_s": 5.591913,
+  "event_id": "t15",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t15_probe.py",
+          "sha256": "c4076944089718cfaefad7cab868df765b002683f11dcd7d49b12f29b2afdf30"
+        },
+        {
+          "d
+...[truncated 8320 chars]
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: t16 is bound directly to c2 and settles it. Exhaustive duplicate-max pairs at N=2,4,8,16,32 gave 156/651 returns of the HIGHER tied index (0 non-tied returns, rows_where_value_still_max == pairs at every N), quantized rows across N=2..1024 and L in {2,4,8} gave 1098/3840 mismatches with higher_than_ref==1098 and lower_than_ref==0 in all 15 configs and value_still_max==3840, the strictly-distinct control had 0 mismatches, and the downstream mean-pooled representation still differs (rel-L2 0.41, 69 misrouted tokens), so the defect is not diluted by pooling. This matches the source mechanism at kernel.py:24 (`cond = (left > right) != flip` true on equality when flip=DESCENDING=1, set line 69, threaded line 56) and kernel.py:26 (XOR-swap of ids), and directly violates problem.txt's stated rule that the LOWER index must be kept on exactly equal scores. c1 remains rebutted by t8 and should not be reopened. No new in-scope claim is warranted: the residual surfaces (k>1 tie ordering, non-float32 dtypes through the line-20 bitcast, inf/NaN through the lines 11-12 mask-sum reduction, non-power-of-two N) are outside the stated contract (top-1 routing, float32 scores, power-of-two columns) and are generalization notes only. Ledger note for the Judge: the earlier exploratory t9/t12 data is physically attached to rebutted c1 as \"scope-adjacent\"; it corroborates c2 but c2 stands on its own bound evidence c2.e1.",
+  "reason": "Review turn: no new in-scope, testable hypotheses remain. c1 (cutoff tie drops the LOWER index) is confirmed by t9 and further quantified by the exhaustive t15 sweep (28/120 violations at N=16,k=4; 92/120 at N=16,k=8; 56/496 at N=32,k=4), directly contradicting the normative problem.txt tie rule on fp32 power-of-two-column rows. c2 (intra-tie index order and, more strongly, wrong index SET for equal-score groups \u2014 all-equal N=16,k=8 returns [8,9,11,10,14,15,13,12] instead of [0..7]) is confirmed by t10, with selected values bit-identical (0.0 diff), showing value-only checks are blind to the defect. c3 (inf*0 -> NaN in the arithmetic-mask partner select) is confirmed mechanically by t11 with a clean all-finite baseline isolating the cause, but its scope stays 'unknown' since problem.txt does not explicitly admit non-finite scores; it is a generalization note, not the decisive basis. Remaining curiosities (fp16/bf16 tie density, dtype-specific bitcast paths, N=1) are either out of the stated contract or would not change the verdict given c1/c2 are already confirmed in-scope. No claim is needed to hold up the Judge.",
   "reviewed_claims": [
+    "c1",
+    "c2",
+    "c3"
+  ],
+  "reviewed_tool_event_count": 15,
+  "turn": 6
+}
+
+### t17 - record_verdict - ok
+
+{
+  "confidence": 0.9,
+  "decisive_claims": [
     "c1",
     "c2"
   ],
-  "reviewed_tool_event_count": 17,
-  "turn": 11
-}
-
-### t19 - record_verdict - ok
-
-{
-  "confidence": 0.93,
-  "decisive_claims": [
-    "c2"
-  ],
-  "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a true row max so this is purely a tie-break-direction defect, not a value error; (C) the misroute survives the contract's batch mean-pooling (69 misrouted tokens, pooled rel-L2 0.41, max abs diff 0.31), so it is not diluted below any plausible tolerance; (D) a strictly-distinct control had 0 mismatches, isolating the defect to exact ties. The source mechanism matches: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56) and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. The reference behavior is fully specified (lowest index), so this is not a reference-undefined or unspecified-tie-break case that the safe-harbor rules would excuse; the contract explicitly legislates the exac
-...[truncated 480 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It states a normative, non-optional requirement: \\\"when two candidates have exactly equal scores, the LOWER index must be the one kept,\\\" with output in descending score order, over the stated input domain of power-of-two column counts. This is precisely the case where the usual 'tie-breaking is unspecified / harmless boundary swap' allowance does NOT apply, because the contract fixes the tie rule.\\n\\nc1 (confirmed, in_scope): the comparator predicate `cond = (left > right) != flip` (line 24) is True for exactly-equal partners whenever flip=1, and the final merge runs with flip=DESCENDING=True (line 56). Probe t9 (fp32, N=16, k=4, power-of-two columns as required) shows a row where the kernel returns top-k [0,1,2,4] while the lower-index-wins reference returns [0,1,2,3]: the LOWER tied index 3 is dropped and the HIGHER index 4 is kept. Selected values are bit-identical (max abs diff 0.0) yet the downstream gather+average output \u2014 the very consumption path problem.txt describes \u2014 differs by 2.0, so this is an observable numeric error, not a cosmetic permutation. The exhaustive follow-up sweep (t15) quantifies the mechanism rather than leaving it anecdotal: 28/120 tied-pair placements violate at N=16,k=4; 92/120 at N=16,k=8; 56/496 at N=32,k=4.\\n\\nc2 (confirmed, in_scope): probe t10 shows the failure is not limited to ordering. For an all-equal row (N=16, k=8) the kernel returns indices [8,9,11,10,14,15,13,12] instead of [0..7], and at N=32,k=8 it returns [16..23] instead of [0..7] \u2014 the returned index SET is the high-indexed half of the tied group, the exact inverse of the required rule. A quantized 3-level row also returns a wrong set (23 selected, 18 dropped). All four cases fail the ascending-within-equal-run metric with sele
+...[truncated 845 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.93,
-  "created_at": "2026-09-08T15:54:11Z",
+  "confidence": 0.9,
+  "created_at": "2026-09-08T15:53:41Z",
   "decisive_claims": [
+    "c1",
     "c2"
   ],
-  "reason": "problem.txt is the operative contract here: the artifact contains only kernel.py, meta.json and problem.txt, test_code is empty, so there is no test.py narrowing the domain. That contract states an explicit, non-negotiable requirement: \\\"Contract on ties: when two experts have exactly equal scores, the LOWER index must be the one kept,\\\" and declares the input domain as scores with a power-of-two number of columns. Confirmed claim c2 (in_scope, scope evidence citing problem.txt's tie clause plus the declared power-of-two column domain) shows the kernel does not implement that rule. Probe t16, bound directly to c2, gives three independent in-domain constructions plus a control: (A) exhaustive duplicate-max pairs at N=2,4,8,16,32 returned the HIGHER tied index in 156/651 cases (23.96%), with 0 non-tied returns and rows_where_value_still_max == pairs at every N; (B) quantized rows (randint(0,L), L in {2,4,8}) at N=2,8,64,256,1024 gave 1098/3840 mismatches vs torch.argmax with higher_than_ref==1098 and lower_than_ref==0 in all 15 configurations and value_still_max==3840, i.e. the returned element is always a true row max so this is purely a tie-break-direction defect, not a value error; (C) the misroute survives the contract's batch mean-pooling (69 misrouted tokens, pooled rel-L2 0.41, max abs diff 0.31), so it is not diluted below any plausible tolerance; (D) a strictly-distinct control had 0 mismatches, isolating the defect to exact ties. The source mechanism matches: kernel.py:24 `cond = (left > right) != flip` is true on exact equality when flip=DESCENDING=1 (set line 69, threaded line 56) and kernel.py:26 XOR-swaps the ids for those lanes, making the descending network anti-stable. The reference behavior is fully specified (lowest index), so this is not a reference-undefined or unspecified-tie-break case that the safe-harbor rules would excuse; the
-...[truncated 520 chars]
+  "reason": "The artifact contains only kernel.py, meta.json and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It states a normative, non-optional requirement: \\\"when two candidates have exactly equal scores, the LOWER index must be the one kept,\\\" with output in descending score order, over the stated input domain of power-of-two column counts. This is precisely the case where the usual 'tie-breaking is unspecified / harmless boundary swap' allowance does NOT apply, because the contract fixes the tie rule.\\n\\nc1 (confirmed, in_scope): the comparator predicate `cond = (left > right) != flip` (line 24) is True for exactly-equal partners whenever flip=1, and the final merge runs with flip=DESCENDING=True (line 56). Probe t9 (fp32, N=16, k=4, power-of-two columns as required) shows a row where the kernel returns top-k [0,1,2,4] while the lower-index-wins reference returns [0,1,2,3]: the LOWER tied index 3 is dropped and the HIGHER index 4 is kept. Selected values are bit-identical (max abs diff 0.0) yet the downstream gather+average output \u2014 the very consumption path problem.txt describes \u2014 differs by 2.0, so this is an observable numeric error, not a cosmetic permutation. The exhaustive follow-up sweep (t15) quantifies the mechanism rather than leaving it anecdotal: 28/120 tied-pair placements violate at N=16,k=4; 92/120 at N=16,k=8; 56/496 at N=32,k=4.\\n\\nc2 (confirmed, in_scope): probe t10 shows the failure is not limited to ordering. For an all-equal row (N=16, k=8) the kernel returns indices [8,9,11,10,14,15,13,12] instead of [0..7], and at N=32,k=8 it returns [16..23] instead of [0..7] \u2014 the returned index SET is the high-indexed half of the tied group, the exact inverse of the required rule. A quantized 3-level row also returns a wrong set (23 selected, 18 dropped). All four cases fail the asc
+...[truncated 885 chars]

@@ -12,7 +12,7 @@ import sys
 import torch
 
 
-GROUND_TRUTH = {"case_106": "reject", "case_107": "trust"}
+GROUND_TRUTH = {"case_33": "reject", "case_34": "trust"}
 
 
 def _load(case_root: Path, case_id: str):

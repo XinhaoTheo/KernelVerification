@@ -15,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
+from case_registry import load_registry, remap_validation_cases
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trace_selection_key
@@ -132,11 +133,13 @@ def _construction_summary(root):
 
 def derive(root=ROOT, *, cases=None):
     root = Path(root)
+    benchmark = benchmark_root(root)
     validation = _read(root / "private_data" / "validation_gpu.json")
+    validation = {**validation, "cases": remap_validation_cases(
+        validation.get("cases", {}), DATASET, load_registry(benchmark))}
     if cases is not None:
         validation = {**validation, "cases": {case: row for case, row in validation["cases"].items() if case in cases}}
     labels = validation["cases"]
-    benchmark = benchmark_root(root)
     records = [record for record in iter_trace_records(benchmark_dir=benchmark, include_archived=True)
                if record["dataset"] == DATASET and (cases is None or record["case"] in cases)]
     common = build_report(records=records, benchmark_dir=benchmark, include_archived=True,
@@ -270,7 +273,7 @@ def render(report):
     fixes = sum(row["debate_corrects_solo_wrong_verdict"] for row in comparisons)
     reverse = sum(row["solo_corrects_debate_wrong_verdict"] for row in comparisons)
     lines = [f"生成时间：{report['generated_at']}", "",
-        "初始组 case_38–case_43；后续两组采用各自约定的实验协议。"
+        "初始组 case_95–case_100；后续两组采用各自约定的实验协议。"
         "协议与固定复验窗口见本页说明。", "",
         compact_results(report["rows"]),
         f"固定窗口复验门槛： **{'通过' if gate['passed'] else '未达到'}**; "
@@ -282,7 +285,7 @@ def render(report):
 
 
 def main(*, export_json=False):
-    report = derive(cases=tuple(f"case_{i:02d}" for i in range(38, 44)))
+    report = derive(cases=tuple(f"case_{i:02d}" for i in range(95, 101)))
     replace_results(ROOT, "MAIN RESULTS", render(report))
     if export_json:
         output = ROOT / "private_data" / "reports" / "scoreboard.json"

@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_12`
-- Turns: 5
-- Tool events: 8
+- Entry: `case_13`
+- Turns: 6
+- Tool events: 9
 - Claims: 1
 - Description updates: 0
-- LLM time: 26.757s across 4 calls | tokens: in=38769 out=1341 total=40110
+- LLM time: 49.186s across 5 calls | tokens: in=45138 out=1146 total=46284
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.97
+- Confidence: 0.99
 
 ## Timeline
 
@@ -25,154 +25,174 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_12",
+    "entry": "case_13",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_12"
+    "entry": "case_13"
   }
 
-### Turn 2 - `solo` (8.306104144000017s, in=6864 out=422)
+### Turn 2 - `solo` (29.23589163700001s, in=6548 out=267)
 
 Message:
 
 ```text
-The contract explicitly requires `rstd = 1 / sqrt(mean_square + eps)`, but the kernel computes `rstd = 1.0 / (sqrt(mean_square) + eps)` — epsilon added outside the square root. That's a formula deviation. I'll record the claim and test it against a reference.
+The kernel computes `kv_head = q_head % num_kv_heads`, but the contract requires consecutive grouping: query heads 0..n_rep-1 map to KV head 0, i.e. `kv_head = q_head // n_rep`. I'll record the claim and test it.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "The kernel source line 23 computes 1.0 / (_sqrt(mean_square) + eps), adding eps to the square root instead of inside it, which yields different rstd whenever mean_square > 0 and fails the explicit formula in the contract.",
+    "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "rstd = 1 / sqrt(mean_square + eps) \u2014 epsilon must be inside the square root; problem.txt explicitly requires this formula."
+        "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
       }
     ],
-    "scope_rationale": "The problem statement explicitly defines the formula rstd = 1 / sqrt(mean_square + eps); the kernel implements 1 / (sqrt(mean_square) + eps), violating the declared formula.",
-    "statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-r
-  ...[truncated 76 chars]
+    "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1."
+  }
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+  }
+
+### Turn 3 - `solo` (4.089505449999933s, in=7201 out=220)
+
+Tool calls:
+
+- `record_claim -> t6 ok`
+  Args:
+  {
+    "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
+      }
+    ],
+    "scope_rationale": "The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.",
+    "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_h
+  ...[truncated 12 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "The kernel source line 23 computes 1.0 / (_sqrt(mean_square) + eps), adding eps to the square root instead of inside it, which yields different rstd whenever mean_square > 0 and fails the explicit formula in the contract.",
+    "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "rstd = 1 / sqrt(mean_square + eps) \u2014 epsilon must be inside the square root; problem.txt explicitly requires this formula."
+        "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
       }
     ],
-    "scope_rationale": "The problem statement explicitly defines the formula rstd = 1 / sqrt(mean_square + eps); the kernel implements 1 / (sqrt(mean_square) + eps), violating the declared formula.",
-    "statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.",
+    "scope_rationale": "The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.",
+    "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
     "status": "open"
   }
 
-### Turn 3 - `solo` (5.241549324999994s, in=8049 out=331)
-
-Message:
-
-```text
-I'll run a probe comparing the kernel output against the contract-required formula.
-```
+### Turn 4 - `solo` (3.2764331700000184s, in=8350 out=154)
 
 Tool calls:
 
-- `run_claim_probe -> t6 ok`
+- `run_claim_probe -> t7 ok`
   Args:
   {
     "claim_id": "c1",
-    "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_12\")\nfrom kernel import rms_norm_forward\n\ntorch.manual_seed(0)\nX = torch.randn(64, 128, device=\"cuda\", dtype=torch.float32)\neps = 1e-6\nY = rms_norm_forward(X, eps)\nms = (X*X).sum(-1, keepdim=True) / X.shape[1]\nref = X / torch.sqrt(ms + eps)\nrel = ((Y - ref).abs() / ref.abs()).max().item()\nabs_err = (Y - ref).abs().max().item()\n\n# also eps-sensitive case: row with small norm\nX2 = torch.full((1, 128), 1e-4, device=\"cuda\")\nY2 = rms_norm_forward(X2, 1e-5)\nms2 = (X2*X2).sum(-1, keepdim=True)/128\nref2 = X2 / torch.sqrt(ms2 + 1e-5)\nrel2 = ((Y2-ref2).abs()/ref2.abs()).max().item()\n\nprint(json.dumps({\"max_abs_err\": abs_err, \"max_rel_err\": rel, \"small_row_rel_err\": rel2,\n   
-  ...[truncated 92 chars]
+    "code": "import torch, sys\nsys.path.insert(0, '/root/cases/case_13')\nfrom kernel import gqa_gather\n\nkv = torch.arange(2*4, dtype=torch.float32, device='cuda').reshape(2,4)\nout = gqa_gather(kv, 4)\nref = torch.repeat_interleave(kv, 2, dim=0)\nprint(out)\nprint(ref)\nmismatch = (out != ref).sum().item()\nprint({\"mismatched_elements\": mismatch, \"total\": ref.numel(), \"num_kv_heads\": 2, \"num_q_heads\": 4})\nassert mismatch > 0\n"
+  }
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t6_probe.py",
-        "sha256": "c2218d1b6003dbcce75d74d422568c54b3ce8aacdc2c35d87f1810c9046f6720"
+        "path": "probes/t7_probe.py",
+        "sha256": "d47c1420065b89b00b83596535bd7adab2f63f916b8d44a0e08e5b4e0993e37a"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t6_stdout.txt",
-        "sha256": "cf7a8f27fc7695b4fd0a72d9f05a834614457f15b5d6efdb3a02a8d3112fa316"
+        "path": "probes/t7_stdout.txt",
+        "sha256": "b6f7ef89fe0d627fb421db4edf20843ac8f25e7e22102b8fcdf381f36e20d5fc"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t6_stderr.txt",
+        "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t6_json_result.json",
-        "sha256": "ff0fbf633e1add6dd6558a9d85f96069052a82b442cc21d92a2548ebd56bb115"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.",
-    "duration_s": 5.207023,
-    "even
-  ...[truncated 2484 chars]
+    "claim_statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
+    "duration_s": 8.847861,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "d47c1420065b89b00b83596535bd7ad
+  ...[truncated 1902 chars]
 
-### Turn 4 - `solo` (6.395635101000039s, in=10246 out=320)
+### Turn 5 - `solo` (5.455435526999963s, in=10033 out=227)
 
 Message:
 
 ```text
-The probe confirms the formula deviation: near-zero rows with meaningful eps produce output that is off by nearly 28× relative error, far beyond floating-point noise. I'll finalize the evidence and record the verdict.
+The probe decisively shows the modulo mapping: for num_kv_heads=2, num_q_heads=4, 8 of 16 elements differ from the consecutive-grouping reference. I'll finalize this evidence and record the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t7 ok`
+- `finalize_probe_evidence -> t8 ok`
   Args:
   {
     "data": {
-      "kernel_impl": "1/(sqrt(ms)+eps)",
-      "max_abs_err": 2.15e-06,
-      "max_rel_err": 7e-07,
-      "ref_formula": "1/sqrt(ms+eps)",
-      "small_row_max_rel_err": 27.76
+      "metric": "elementwise mismatch vs torch.repeat_interleave reference",
+      "mismatched_elements": 8,
+      "num_kv_heads": 2,
+      "num_q_heads": 4,
+      "total_elements": 16
     },
-    "event_id": "t6",
+    "event_id": "t7",
     "status": "confirmed",
-    "summary": "Kernel output deviates from the contract formula 1/sqrt(ms+eps): on randn inputs max rel err 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error is 27.76 (~2776%), consistent with 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). The contract's stated purpose of eps (keep normalizer finite for near-zero rows) is violated numerically.",
+    "summary": "With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].",
     "supports": "confirmed"
   }
   Output summary:
@@ -180,38 +200,38 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Kernel output deviates from the contract formula 1/sqrt(ms+eps): on randn inputs max rel err 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error is 27.76 (~2776%), consistent with 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). The contract's stated purpose of eps (keep normalizer finite for near-zero rows) is violated numerically.",
+    "summary": "With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].",
     "supports": "confirmed",
-    "tool_event_id": "t6"
+    "tool_event_id": "t7"
   }
 
-### Turn 5 - `solo` (6.8140026250000005s, in=13610 out=268)
+### Turn 6 - `solo` (7.128950193000037s, in=13006 out=278)
 
 Message:
 
 ```text
-The single claim is confirmed with decisive in-scope runtime evidence (probe t6: eps outside the sqrt, ~2776% relative error on near-zero rows). The kernel violates the contract's explicit formula, so I'll record the reject verdict.
+The decisive claim is confirmed and fully resolved: the kernel uses `q % num_kv_heads` instead of `q // n_rep`, violating the contract's explicit consecutive-grouping requirement (runtime probe t7: 8/16 elements mismatch for num_kv_heads=2, num_q_heads=4). No further probes needed — record the verdict.
 ```
 
 Tool calls:
 
-- `record_verdict -> t8 ok`
+- `record_verdict -> t9 ok`
   Args:
   {
-    "confidence": 0.97,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) explicitly requires rstd = 1/sqrt(mean_square + eps). Kernel source line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), placing eps outside the square root. Runtime probe t6 compared kernel output to the contract formula on CUDA: on torch.randn inputs max rel err was 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error was 27.76 (~2776%), exactly consistent with the misplaced eps and violating the contract's stated purpose that eps must stabilize the normalizer as the row norm approaches zero. This is an explicit formula deviation on inputs the contract admits, so the kernel is rejected.",
+    "reason": "The contract (problem.txt) explicitly requires consecutive GQA grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads. Runtime probe t7 (num_kv_heads=2, num_q_heads=4, dim=4) showed the kernel returns rows [kv0,kv1,kv0,kv1] while torch.repeat_interleave reference gives [kv0,kv0,kv1,kv1] \u2014 8 of 16 elements mismatch. Claim c1 is confirmed and in_scope with contract scope evidence, so the kernel violates a required behavior.",
     "verdict": "reject"
   }
   Output summary:
   {
-    "confidence": 0.97,
+    "confidence": 0.99,
     "decisive_claims": [
       "c1"
     ],
-    "reason": "The contract (problem.txt) explicitly requires rstd = 1/sqrt(mean_square + eps). Kernel source line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), placing eps outside the square root. Runtime probe t6 compared kernel output to the contract formula on CUDA: on torch.randn inputs max rel err was 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error was 27.76 (~2776%), exactly consistent with the misplaced eps and violating the contract's stated purpose that eps must stabilize the normalizer as the row norm approaches zero. This is an explicit formula deviation on inputs the contract admits, so the kernel is rejected.",
+    "reason": "The contract (problem.txt) explicitly requires consecutive GQA grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads. Runtime probe t7 (num_kv_heads=2, num_q_heads=4, dim=4) showed the kernel returns rows [kv0,kv1,kv0,kv1] while torch.repeat_interleave reference gives [kv0,kv0,kv1,kv1] \u2014 8 of 16 elements mismatch. Claim c1 is confirmed and in_scope with contract scope evidence, so the kernel violates a required behavior.",
     "verdict": "reject"
   }
 
@@ -223,96 +243,97 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.
+Statement: gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.
 
 Scope: `in_scope`
 
-Scope rationale: The problem statement explicitly defines the formula rstd = 1 / sqrt(mean_square + eps); the kernel implements 1 / (sqrt(mean_square) + eps), violating the declared formula.
+Scope rationale: The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.
 
 Scope evidence:
-- `problem.txt`: rstd = 1 / sqrt(mean_square + eps) — epsilon must be inside the square root; problem.txt explicitly requires this formula.
+- `problem.txt`: Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read.
 
-Rationale: The kernel source line 23 computes 1.0 / (_sqrt(mean_square) + eps), adding eps to the square root instead of inside it, which yields different rstd whenever mean_square > 0 and fails the explicit formula in the contract.
+Rationale: Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.
 
 Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t6: Kernel output deviates from the contract formula 1/sqrt(ms+eps): on randn inputs max rel err 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error is 27.76 (~2776%), consistent with 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). The contract's stated purpose of eps (keep normalizer finite for near-zero rows) is violated numerically.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_12"
+  "entry": "case_13"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "The kernel source line 23 computes 1.0 / (_sqrt(mean_square) + eps), adding eps to the square root instead of inside it, which yields different rstd whenever mean_square > 0 and fails the explicit formula in the contract.",
+  "rationale": "Source line 9 uses modulo instead of floor-division by n_rep; for num_kv_heads > 1 and n_rep > 1 these mappings differ for most query heads.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "rstd = 1 / sqrt(mean_square + eps) \u2014 epsilon must be inside the square root; problem.txt explicitly requires this formula."
+      "summary": "Contract: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1 (consecutive grouping); gqa_gather must return the KV row each query head is supposed to read."
     }
   ],
-  "scope_rationale": "The problem statement explicitly defines the formula rstd = 1 / sqrt(mean_square + eps); the kernel implements 1 / (sqrt(mean_square) + eps), violating the declared formula.",
-  "statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.",
+  "scope_rationale": "The contract explicitly defines consecutive grouping (q // n_rep); the kernel's modulo mapping violates this for any case with num_kv_heads > 1, e.g. num_kv_heads=2, num_q_heads=4.",
+  "statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
   "status": "open"
 }
 
-### t6 - run_claim_probe - ok
+### t7 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t6_probe.py",
-      "sha256": "c2218d1b6003dbcce75d74d422568c54b3ce8aacdc2c35d87f1810c9046f6720"
+      "path": "probes/t7_probe.py",
+      "sha256": "d47c1420065b89b00b83596535bd7adab2f63f916b8d44a0e08e5b4e0993e37a"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t6_stdout.txt",
-      "sha256": "cf7a8f27fc7695b4fd0a72d9f05a834614457f15b5d6efdb3a02a8d3112fa316"
+      "path": "probes/t7_stdout.txt",
+      "sha256": "b6f7ef89fe0d627fb421db4edf20843ac8f25e7e22102b8fcdf381f36e20d5fc"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t6_stderr.txt",
+      "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t6_json_result.json",
-      "sha256": "ff0fbf633e1add6dd6558a9d85f96069052a82b442cc21d92a2548ebd56bb115"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The kernel adds eps outside the square root (rstd = 1/(sqrt(mean_square)+eps)) instead of the contract-required 1/sqrt(mean_square+eps), producing numerically incorrect outputs.",
-  "duration_s": 5.207023,
-  "event_id": "t6",
+  "claim_statement": "gqa_gather maps query head q to KV head q % num_kv_heads instead of q // n_rep, producing wrong rows whenever num_kv_heads > 1.",
+  "duration_s": 8.847861,
+  "event_id": "t7",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -320,52 +341,61 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t6_probe.py",
-          "sha256": "c2218d1b6003dbcce75d74d422568c54b3ce8aacdc2c35d87f1810c9046f6720"
+          "path": "probes/t7_probe.py",
+          "sha256": "d47c1420065b89b00b83596535bd7adab2f63f916b8d44a0e08e5b4e0993e37a"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t6_stdout.txt",
-          "sha256": "cf7a8f27fc7695b4fd0a72d9f05a834614457f15b5d6efdb3a02a8d3112fa316"
+          "path": "probes/t7_stdout.txt",
+          "sha256": "b6f7ef89fe0d627fb421db4edf20843ac8f25e7e22102b8fcdf381f36e20d5fc"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t6_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4
-...[truncated 1684 chars]
+          "path": "probes/t7_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "duration_s": 8.847861,
+      "exit_code": 0,
+      "expected_signal": null,
+      "json_parse_error": "last stdout line is not JSON: Expecting property name enclosed in double quotes",
+      "json_result": null,
+      "stderr": "",
+      "stdout":
+...[truncated 1102 chars]
 
-### t7 - finalize_probe_evidence - ok
+### t8 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c1",
   "claim_status": "confirmed",
   "evidence_id": "c1.e1",
-  "summary": "Kernel output deviates from the contract formula 1/sqrt(ms+eps): on randn inputs max rel err 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error is 27.76 (~2776%), consistent with 1/(sqrt(ms)+eps) vs 1/sqrt(ms+eps). The contract's stated purpose of eps (keep normalizer finite for near-zero rows) is violated numerically.",
+  "summary": "With num_kv_heads=2, num_q_heads=4, dim=4, the kernel output alternates KV heads (q%num_kv_heads) while the contract's consecutive grouping expects repeat_interleave rows; 8 of 16 elements mismatch. Kernel out rows: [kv0,kv1,kv0,kv1]; correct: [kv0,kv0,kv1,kv1].",
   "supports": "confirmed",
-  "tool_event_id": "t6"
+  "tool_event_id": "t7"
 }
 
-### t8 - record_verdict - ok
+### t9 - record_verdict - ok
 
 {
-  "confidence": 0.97,
+  "confidence": 0.99,
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) explicitly requires rstd = 1/sqrt(mean_square + eps). Kernel source line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), placing eps outside the square root. Runtime probe t6 compared kernel output to the contract formula on CUDA: on torch.randn inputs max rel err was 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error was 27.76 (~2776%), exactly consistent with the misplaced eps and violating the contract's stated purpose that eps must stabilize the normalizer as the row norm approaches zero. This is an explicit formula deviation on inputs the contract admits, so the kernel is rejected.",
+  "reason": "The contract (problem.txt) explicitly requires consecutive GQA grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads. Runtime probe t7 (num_kv_heads=2, num_q_heads=4, dim=4) showed the kernel returns rows [kv0,kv1,kv0,kv1] while torch.repeat_interleave reference gives [kv0,kv0,kv1,kv1] \u2014 8 of 16 elements mismatch. Claim c1 is confirmed and in_scope with contract scope evidence, so the kernel violates a required behavior.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.97,
-  "created_at": "2026-09-30T08:22:36Z",
+  "confidence": 0.99,
+  "created_at": "2026-09-30T08:24:53Z",
   "decisive_claims": [
     "c1"
   ],
-  "reason": "The contract (problem.txt) explicitly requires rstd = 1/sqrt(mean_square + eps). Kernel source line 23 computes rstd = 1.0/(_sqrt(mean_square) + eps), placing eps outside the square root. Runtime probe t6 compared kernel output to the contract formula on CUDA: on torch.randn inputs max rel err was 7e-7, but on a near-zero row (X=1e-4, eps=1e-5) the max relative error was 27.76 (~2776%), exactly consistent with the misplaced eps and violating the contract's stated purpose that eps must stabilize the normalizer as the row norm approaches zero. This is an explicit formula deviation on inputs the contract admits, so the kernel is rejected.",
+  "reason": "The contract (problem.txt) explicitly requires consecutive GQA grouping: query heads 0..n_rep-1 read KV head 0, n_rep..2*n_rep-1 read KV head 1, i.e. kv_head = q // n_rep. Kernel line 9 computes kv_head = q_head % num_kv_heads. Runtime probe t7 (num_kv_heads=2, num_q_heads=4, dim=4) showed the kernel returns rows [kv0,kv1,kv0,kv1] while torch.repeat_interleave reference gives [kv0,kv0,kv1,kv1] \u2014 8 of 16 elements mismatch. Claim c1 is confirmed and in_scope with contract scope evidence, so the kernel violates a required behavior.",
   "verdict": "reject"
 }

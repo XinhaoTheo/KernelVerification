@@ -4,6 +4,7 @@
   "cases": {
     "case_01": "case_01",
     "case_02": "case_02",
+    "case_03": "case_03",
     "case_04": "case_04",
     "case_05": "case_05",
     "case_06": "case_06",
@@ -32,8 +33,7 @@
     "case_29": "case_29",
     "case_30": "case_30",
     "case_31": "case_31",
-    "case_32": "case_32",
-    "case_33": "case_33"
+    "case_32": "case_32"
   },
   "case_details": {
     "case_01": {
@@ -44,7 +44,12 @@
       "public_dir": "triton_eval_cases/case_01",
       "answer_dir": "triton/case_01",
       "mechanism": "The real kernel computes `prob = tl.maximum(target_prob - draft_prob, 0.0)` before the Gumbel-max argmax race. Dropping the clamp lets tokens where the draft over-proposed (target < draft) win the race whenever the accompanying Gumbel noise (1/q) is large enough -- a token that should have zero recovery probability can still be sampled. On mild draft/target pairs (draft never over-proposes) the clamp is a no-op and the bug is invisible.",
-      "title": "拒绝采样的负概率截断"
+      "title": "拒绝采样的负概率截断",
+      "aliases": [
+        "case_01",
+        "fn2_vllm_rejection_sampler_missing_clip"
+      ],
+      "validation_case_id": "case_01"
     },
     "case_02": {
       "dataset": "benchmark_fn_fp",
@@ -54,315 +59,1518 @@
       "public_dir": "triton_eval_cases/case_02",
       "answer_dir": "triton/case_02",
       "mechanism": "The SAME real, unmodified mamba recurrence kernel is run twice on mathematically equivalent inputs at different chunk granularities: many small chunks (fine) vs fewer, pre-aggregated larger chunks (coarse). In exact arithmetic the results are identical (this is an exact recurrence, not an approximation); in floating point, the different number/order of multiply-accumulate steps introduces drift that grows with the number of fine subdivisions.",
-      "title": "Mamba 分块粒度与舍入"
+      "title": "Mamba 分块粒度与舍入",
+      "aliases": [
+        "case_02",
+        "fp3_mamba_state_passing_chunk_granularity"
+      ],
+      "validation_case_id": "case_02"
     },
-    "case_04": {
+    "case_03": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_04",
       "source_name": "fp6_liger_rmsnorm_relative_error_near_zero",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_04",
-      "answer_dir": "triton/case_04",
+      "public_dir": "triton_eval_cases/case_03",
+      "answer_dir": "triton/case_03",
       "mechanism": "The real, correct RMSNorm kernel run on an FP32 input and the same real kernel run on a BF16-rounded copy of that input are both correct for their declared precision. On an input row close to (but not exactly) zero, the true output is extremely small, so an ordinary BF16 rounding difference of the input becomes a large relative error in the output even though the absolute difference is negligible -- an artifact of the comparison metric, not a kernel defect.",
-      "title": "RMSNorm 近零相对误差"
+      "title": "RMSNorm 近零相对误差",
+      "aliases": [
+        "case_04",
+        "fp6_liger_rmsnorm_relative_error_near_zero"
+      ],
+      "validation_case_id": "case_04"
     },
-    "case_05": {
+    "case_04": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_05",
       "source_name": "fp1_vllm_topp_tie_epsilon",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_05",
-      "answer_dir": "triton/case_05",
+      "public_dir": "triton_eval_cases/case_04",
+      "answer_dir": "triton/case_04",
       "mechanism": "The real kernel tracks how many values are within `1e-9` of the running pivot (`tl.abs(data - tile_min) < 1e-9`) to correctly count ties at the top-p/top-k cutoff. Two equally valid implementations can use a different (but still reasonable) epsilon for this tie tolerance; when probabilities are close to -- but not exactly at -- the cutoff, the two epsilons include a different number of near-pivot candidates in the selected set, changing a downstream probability-weighted result well beyond a naive tolerance, even though neither implementation violates the (epsilon-unspecified) contract.",
-      "title": "Top-p 并列候选的容差"
+      "title": "Top-p 并列候选的容差",
+      "aliases": [
+        "case_05",
+        "fp1_vllm_topp_tie_epsilon"
+      ],
+      "validation_case_id": "case_05"
     },
-    "case_06": {
+    "case_05": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_06",
       "source_name": "fn6_mamba_state_passing_lowbit_drift",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_06",
-      "answer_dir": "triton/case_06",
+      "public_dir": "triton_eval_cases/case_05",
+      "answer_dir": "triton/case_05",
       "mechanism": "The real kernel's recurrence is `states = scale * states + new_states` across chunks (scale = exp(cumulative log-decay)). The bug rounds `states` to a coarse grid after every chunk (simulating a low-bit KV-cache-style compression of the recurrent state). The per-step rounding error is tiny; over a short rollout it stays inside tolerance, but it compounds across many chunks.",
-      "title": "Mamba 低精度状态误差累积"
+      "title": "Mamba 低精度状态误差累积",
+      "aliases": [
+        "case_06",
+        "fn6_mamba_state_passing_lowbit_drift"
+      ],
+      "validation_case_id": "case_06"
     },
-    "case_07": {
+    "case_06": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_07",
       "source_name": "fp4_gptq_int4_quant_tolerance",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_07",
-      "answer_dir": "triton/case_07",
+      "public_dir": "triton_eval_cases/case_06",
+      "answer_dir": "triton/case_06",
       "mechanism": "The real INT4 dequant-matmul kernel is correct; INT4 quantization intentionally introduces rounding noise as the cost of 4-bit weights. A tolerance calibrated for FP32 GEMM (rtol=1e-2, atol=1e-2) can still be exceeded by ordinary, expected INT4 quantization error at larger K, even though the kernel has no defect.",
-      "title": "INT4 量化的合法误差"
+      "title": "INT4 量化的合法误差",
+      "aliases": [
+        "case_07",
+        "fp4_gptq_int4_quant_tolerance"
+      ],
+      "validation_case_id": "case_07"
     },
-    "case_08": {
+    "case_07": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_08",
       "source_name": "fp5_stochastic_rounding_philox",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_08",
-      "answer_dir": "triton/case_08",
+      "public_dir": "triton_eval_cases/case_07",
+      "answer_dir": "triton/case_07",
       "mechanism": "The kernel intentionally rounds each value up or down to a coarse grid with probability proportional to its distance from each grid point, using a counter-based Philox RNG seeded per call. Two runs of the exact same correct kernel therefore legitimately produce different elementwise outputs; comparing one run against another with allclose is a false positive on intended nondeterminism.",
-      "title": "随机舍入的统计正确性"
+      "title": "随机舍入的统计正确性",
+      "aliases": [
+        "case_08",
+        "fp5_stochastic_rounding_philox"
+      ],
+      "validation_case_id": "case_08"
     },
-    "case_09": {
+    "case_08": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_09",
       "source_name": "fn1_nsa_bitonic_gate_tie_pooled",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_09",
-      "answer_dir": "triton/case_09",
+      "public_dir": "triton_eval_cases/case_08",
+      "answer_dir": "triton/case_08",
       "mechanism": "Same real, unmodified NSA sort kernel used as a top-1 gate (e.g. MoE-style routing on block scores). Its real tie-break (higher index wins) flips one token's routing decision away from the stipulated lower-index-wins contract; averaged into a large batch-mean pooled output, the single wrong routing decision is invisible.",
-      "title": "Top-1 并列选择与下游误差稀释"
+      "title": "Top-1 并列选择与下游误差稀释",
+      "aliases": [
+        "case_09",
+        "fn1_nsa_bitonic_gate_tie_pooled"
+      ],
+      "validation_case_id": "case_09"
     },
-    "case_10": {
+    "case_09": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_10",
       "source_name": "fn1_nsa_bitonic_topk_tie_dilution",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_10",
-      "answer_dir": "triton/case_10",
+      "public_dir": "triton_eval_cases/case_09",
+      "answer_dir": "triton/case_09",
       "mechanism": "This benchmark stipulates a tie-break contract (on an exact score tie, the lower-index candidate must be kept). The REAL, unmodified fla-org comparator `cond = (left > right) != flip` resolves this bitonic-network tie differently from a `>=` comparator that enforces the contract -- verified on-device to disagree on this exact tied pair -- so kernel.py, the real kernel byte for byte, silently violates the stipulated contract. Averaging the swapped block's value with k-1 correctly selected blocks dilutes the error below the default allclose tolerance.",
-      "title": "Top-k 并列选择与下游误差稀释"
+      "title": "Top-k 并列选择与下游误差稀释",
+      "aliases": [
+        "case_10",
+        "fn1_nsa_bitonic_topk_tie_dilution"
+      ],
+      "validation_case_id": "case_10"
     },
-    "case_11": {
+    "case_10": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_11",
       "source_name": "fp2_flashattn_rope_neox_vs_gptj",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_11",
-      "answer_dir": "triton/case_11",
+      "public_dir": "triton_eval_cases/case_10",
+      "answer_dir": "triton/case_10",
       "mechanism": "The real flash-attention rotary kernel implements BOTH RoPE conventions in one file via the INTERLEAVED flag: split-half (GPT-NeoX) and interleaved-pairs (GPT-J). Both are mathematically valid as long as q and k use the SAME convention consistently. Comparing the raw rotated tensors element-by-element across conventions fails almost everywhere, even though the resulting attention scores agree once the same permutation is applied to both q and k.",
-      "title": "RoPE 两种合法布局"
+      "title": "RoPE 两种合法布局",
+      "aliases": [
+        "case_11",
+        "fp2_flashattn_rope_neox_vs_gptj"
+      ],
+      "validation_case_id": "case_11"
     },
-    "case_12": {
+    "case_11": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_12",
       "source_name": "fn7_liger_rmsnorm_eps_placement",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_12",
-      "answer_dir": "triton/case_12",
+      "public_dir": "triton_eval_cases/case_11",
+      "answer_dir": "triton/case_11",
       "mechanism": "The real kernel computes `rstd = rsqrt(mean_square + eps)`. The bug moves eps outside the sqrt: `rstd = 1 / (sqrt(mean_square) + eps)`. At ordinary magnitudes the two formulas are numerically indistinguishable; only a near-all-zero row (padding, pruned embeddings) makes the two denominators differ by orders of magnitude.",
-      "title": "RMSNorm epsilon 位置"
+      "title": "RMSNorm epsilon 位置",
+      "aliases": [
+        "case_12",
+        "fn7_liger_rmsnorm_eps_placement"
+      ],
+      "validation_case_id": "case_12"
     },
-    "case_13": {
+    "case_12": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_13",
       "source_name": "fn4_gqa_head_mapping_homogeneous",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_13",
-      "answer_dir": "triton/case_13",
+      "public_dir": "triton_eval_cases/case_12",
+      "answer_dir": "triton/case_12",
       "mechanism": "The correct GQA mapping groups consecutive query heads onto the same KV head via floor division: kv_head = query_head // n_rep -- the same style of integer div/mod head-decomposition vLLM's real unified attention kernel uses to split a flattened index into (sequence position, head-in-group) via `// num_queries_per_kv` and `% num_queries_per_kv`. The bug uses modulo instead (kv_head = query_head % num_kv_heads), which is invisible when every KV head holds identical/homogeneous data.",
-      "title": "GQA 头映射"
+      "title": "GQA 头映射",
+      "aliases": [
+        "case_13",
+        "fn4_gqa_head_mapping_homogeneous"
+      ],
+      "validation_case_id": "case_13"
     },
-    "case_14": {
+    "case_13": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_14",
       "source_name": "fn5_sglang_int8_quant_stale_scale",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_14",
-      "answer_dir": "triton/case_14",
+      "public_dir": "triton_eval_cases/case_13",
+      "answer_dir": "triton/case_13",
       "mechanism": "The real kernel computes `absmax = max(max(|x|), 1e-10)` from the CURRENT row and scales by absmax/127. The bug replaces this with a stale, precomputed constant (simulating an EMA scale that has not adapted to the current batch). On mild data whose true absmax happens to equal the stale constant, both produce bit-identical output; a real outlier value the stale constant hasn't seen gets severely clipped.",
-      "title": "INT8 量化的过期 scale"
+      "title": "INT8 量化的过期 scale",
+      "aliases": [
+        "case_14",
+        "fn5_sglang_int8_quant_stale_scale"
+      ],
+      "validation_case_id": "case_14"
     },
-    "case_15": {
+    "case_14": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_15",
       "source_name": "fn10_int8_group_quant_short_final_group",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_15",
-      "answer_dir": "triton/case_15",
+      "public_dir": "triton_eval_cases/case_14",
+      "answer_dir": "triton/case_14",
       "mechanism": "The group loop runs `n_cols // GROUP` times. When group_size divides n_cols every column belongs to a visited group; otherwise the trailing short group is never visited and those columns are left at their initial value instead of being quantized under their own scale.",
-      "title": "INT8 量化最后一个短分组"
+      "title": "INT8 量化最后一个短分组",
+      "aliases": [
+        "case_15",
+        "fn10_int8_group_quant_short_final_group"
+      ],
+      "validation_case_id": "case_15"
     },
-    "case_16": {
+    "case_15": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_16",
       "source_name": "fn9_tiled_matmul_k_tail_unmasked",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_16",
-      "answer_dir": "triton/case_16",
+      "public_dir": "triton_eval_cases/case_15",
+      "answer_dir": "triton/case_15",
       "mechanism": "The K loop runs `K // BLOCK_K` iterations instead of cdiv. When K is a multiple of BLOCK_K the two agree; otherwise the final partial K tile is never accumulated, so the product silently omits the last (K mod BLOCK_K) terms of every dot product.",
-      "title": "矩阵乘法 K 维尾块掩码"
+      "title": "矩阵乘法 K 维尾块掩码",
+      "aliases": [
+        "case_16",
+        "fn9_tiled_matmul_k_tail_unmasked"
+      ],
+      "validation_case_id": "case_16"
     },
-    "case_17": {
+    "case_16": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_17",
       "source_name": "fn11_chunked_scan_short_final_chunk",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_17",
-      "answer_dir": "triton/case_17",
+      "public_dir": "triton_eval_cases/case_16",
+      "answer_dir": "triton/case_16",
       "mechanism": "The chunk loop runs `seqlen // CHUNK` times, so a sequence length that is not a multiple of the chunk size leaves its trailing positions unwritten. Benchmarks use round sequence lengths, where floor and ceiling division agree.",
-      "title": "分块 scan 的最后一个短块"
+      "title": "分块 scan 的最后一个短块",
+      "aliases": [
+        "case_17",
+        "fn11_chunked_scan_short_final_chunk"
+      ],
+      "validation_case_id": "case_17"
     },
-    "case_18": {
+    "case_17": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_18",
       "source_name": "fn8_fused_softmax_block_tail",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_18",
-      "answer_dir": "triton/case_18",
+      "public_dir": "triton_eval_cases/case_17",
+      "answer_dir": "triton/case_17",
       "mechanism": "The normalizing sum runs `n_cols // BLOCK` blocks while the max and store passes run cdiv. When n_cols is a multiple of BLOCK the two agree and the kernel is exact; otherwise the trailing partial block contributes to no denominator, so every entry of the row is scaled by a denominator that is too small and the row sums to about 1.10 instead of 1. Because softmax entries are ~1/n_cols, an atol of 1e-2 swallows the entire error: allclose passes at the irregular shape too, and only the sums-to-one invariant exposes it.",
-      "title": "Softmax 尾块归一化"
+      "title": "Softmax 尾块归一化",
+      "aliases": [
+        "case_18",
+        "fn8_fused_softmax_block_tail"
+      ],
+      "validation_case_id": "case_18"
     },
-    "case_19": {
+    "case_18": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_19",
       "source_name": "fn12_liger_cross_entropy_argmax_tie",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_19",
-      "answer_dir": "triton/case_19",
+      "public_dir": "triton_eval_cases/case_18",
+      "answer_dir": "triton/case_18",
       "mechanism": "One character: the cross-block argmax update uses `is_new_max = block_max >= m` where the contract's lowest-index tie rule requires `>`. A tie only reaches this line when the tied maxima fall in different blocks, which needs a vocabulary larger than the kernel's block size (65536). Random logits produce exact ties with probability ~0, so a conventional test never enters the branch.",
-      "title": "交叉熵 argmax 并列规则"
+      "title": "交叉熵 argmax 并列规则",
+      "aliases": [
+        "case_19",
+        "fn12_liger_cross_entropy_argmax_tie"
+      ],
+      "validation_case_id": "case_19"
     },
-    "case_20": {
+    "case_19": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_20",
       "source_name": "fn14_layer_norm_eps_outside_sqrt",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_20",
-      "answer_dir": "triton/case_20",
+      "public_dir": "triton_eval_cases/case_19",
+      "answer_dir": "triton/case_19",
       "mechanism": "rstd is computed as 1/(sqrt(var) + eps) instead of 1/sqrt(var + eps). At ordinary variances the two agree to within float noise; only a row whose variance approaches zero separates them by orders of magnitude.",
-      "title": "LayerNorm epsilon 位置"
+      "title": "LayerNorm epsilon 位置",
+      "aliases": [
+        "case_20",
+        "fn14_layer_norm_eps_outside_sqrt"
+      ],
+      "validation_case_id": "case_20"
     },
-    "case_21": {
+    "case_20": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_21",
       "source_name": "fn13_paged_kv_block_table_homogeneous",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_21",
-      "answer_dir": "triton/case_21",
+      "public_dir": "triton_eval_cases/case_20",
+      "answer_dir": "triton/case_20",
       "mechanism": "The kernel never reads the block table: it computes the physical page as seq * max_blocks + logical_block, i.e. it assumes pages were handed out contiguously in sequence order. Whether that assumption holds is a property of the block_table INPUT, not of the source, so nothing in the kernel text distinguishes a correct gather from a wrong one. A test that builds the table as arange() -- the natural lazy choice -- makes the assumption true and the defect invisible.",
-      "title": "Paged KV 页表映射"
+      "title": "Paged KV 页表映射",
+      "aliases": [
+        "case_21",
+        "fn13_paged_kv_block_table_homogeneous"
+      ],
+      "validation_case_id": "case_21"
     },
-    "case_22": {
+    "case_21": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_22",
       "source_name": "fp8_splitk_atomic_accumulation_order",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_22",
-      "answer_dir": "triton/case_22",
+      "public_dir": "triton_eval_cases/case_21",
+      "answer_dir": "triton/case_21",
       "mechanism": "Partitioning the sum and combining the partials with float atomics makes the addition order depend on how the partitions happen to be scheduled, so the result differs in its low bits between runs. A CI check that pins a golden value rejects the kernel; every run is nonetheless within the rounding the reordering can account for.",
-      "title": "Split-K 原子累加顺序"
+      "title": "Split-K 原子累加顺序",
+      "aliases": [
+        "case_22",
+        "fp8_splitk_atomic_accumulation_order"
+      ],
+      "validation_case_id": "case_22"
     },
-    "case_23": {
+    "case_22": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_23",
       "source_name": "fp7_nchw_nhwc_channel_scale_layout",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_23",
-      "answer_dir": "triton/case_23",
+      "public_dir": "triton_eval_cases/case_22",
+      "answer_dir": "triton/case_22",
       "mechanism": "The kernel is channels-last while the reference is NCHW. Reinterpreting the raw output buffer as NCHW reports a large mismatch; the same output compared under the layout the kernel declares matches exactly.",
-      "title": "NCHW/NHWC 合法布局差异"
+      "title": "NCHW/NHWC 合法布局差异",
+      "aliases": [
+        "case_23",
+        "fp7_nchw_nhwc_channel_scale_layout"
+      ],
+      "validation_case_id": "case_23"
     },
-    "case_24": {
+    "case_23": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_24",
       "source_name": "fp9_cosine_similarity_near_zero",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_24",
-      "answer_dir": "triton/case_24",
+      "public_dir": "triton_eval_cases/case_23",
+      "answer_dir": "triton/case_23",
       "mechanism": "For near-orthogonal rows the true cosine is ~0, so a negligible absolute difference becomes an enormous relative error. A relative-error-only comparison rejects a correct kernel; a scale-aware comparison accepts it.",
-      "title": "余弦相似度近零误差"
+      "title": "余弦相似度近零误差",
+      "aliases": [
+        "case_24",
+        "fp9_cosine_similarity_near_zero"
+      ],
+      "validation_case_id": "case_24"
     },
-    "case_25": {
+    "case_24": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_25",
       "source_name": "fn15_int8_requant_round_toward_zero_drift",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_25",
-      "answer_dir": "triton/case_25",
+      "public_dir": "triton_eval_cases/case_24",
+      "answer_dir": "triton/case_24",
       "mechanism": "Rounding uses tl.floor instead of round-to-nearest, so every store is biased down by up to one level. A single round trip stays inside the tolerance; used as the storage step of an optimizer it truncates each small update, and after many steps the parameter has tracked only part of the accumulated gradient.",
-      "title": "INT8 再量化舍入与累积"
+      "title": "INT8 再量化舍入与累积",
+      "aliases": [
+        "case_25",
+        "fn15_int8_requant_round_toward_zero_drift"
+      ],
+      "validation_case_id": "case_25"
     },
-    "case_26": {
+    "case_25": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_26",
       "source_name": "fp10_topk_boundary_tie_admits_all",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_26",
-      "answer_dir": "triton/case_26",
+      "public_dir": "triton_eval_cases/case_25",
+      "answer_dir": "triton/case_25",
       "mechanism": "When several entries share the value at the k-th position the kernel admits all of them, while the reference admits exactly k and breaks the tie by index. The specification fixes neither choice; both keep every admitted entry at least as large as every dropped one.",
-      "title": "Top-k 合同允许的并列选择"
+      "title": "Top-k 合同允许的并列选择",
+      "aliases": [
+        "case_26",
+        "fp10_topk_boundary_tie_admits_all"
+      ],
+      "validation_case_id": "case_26"
     },
-    "case_27": {
+    "case_26": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_27",
       "source_name": "fn16_masked_softmax_fully_masked_row",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_27",
-      "answer_dir": "triton/case_27",
+      "public_dir": "triton_eval_cases/case_26",
+      "answer_dir": "triton/case_26",
       "mechanism": "A fully masked row leaves every exponential at zero, so the kernel divides by a zero denominator and returns NaN where the contract requires an all-zero row. Random masks essentially never empty a row, so a conventional test never enters that branch, and the NaN then propagates silently through the value average.",
-      "title": "全掩码 Softmax 行"
+      "title": "全掩码 Softmax 行",
+      "aliases": [
+        "case_27",
+        "fn16_masked_softmax_fully_masked_row"
+      ],
+      "validation_case_id": "case_27"
     },
-    "case_28": {
+    "case_27": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_28",
       "source_name": "fn17_int8_percentile_calibration_outliers",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_28",
-      "answer_dir": "triton/case_28",
+      "public_dir": "triton_eval_cases/case_27",
+      "answer_dir": "triton/case_27",
       "mechanism": "The scale is calibrated by stepping down from the maximum twice rather than on the true absmax, so the largest entries fall outside the representable range and are clamped. On IID Gaussian rows the clamped tail carries almost none of the row's energy and the reconstruction stays within 5%; on activations with the outlier channels real transformers have, the clamped outlier carries most of the row's energy and the reconstruction error is larger than the signal.",
-      "title": "INT8 分位数量化的离群值"
+      "title": "INT8 分位数量化的离群值",
+      "aliases": [
+        "case_28",
+        "fn17_int8_percentile_calibration_outliers"
+      ],
+      "validation_case_id": "case_28"
     },
-    "case_29": {
+    "case_28": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_29",
       "source_name": "fp11_fp8_e4m3_rounding_within_format",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_29",
-      "answer_dir": "triton/case_29",
+      "public_dir": "triton_eval_cases/case_28",
+      "answer_dir": "triton/case_28",
       "mechanism": "Rounding to the e4m3 grid produces relative errors up to about 6%, which is the declared behaviour of a 3-mantissa-bit format. A tolerance calibrated for float32 kernels rejects it; measured against the format's own error model every value is within half a mantissa step.",
-      "title": "FP8 格式允许的舍入"
+      "title": "FP8 格式允许的舍入",
+      "aliases": [
+        "case_29",
+        "fp11_fp8_e4m3_rounding_within_format"
+      ],
+      "validation_case_id": "case_29"
     },
-    "case_30": {
+    "case_29": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_30",
       "source_name": "fn18_moe_top1_routing_tie",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_30",
-      "answer_dir": "triton/case_30",
+      "public_dir": "triton_eval_cases/case_29",
+      "answer_dir": "triton/case_29",
       "mechanism": "The running-best update admits a later expert on an exact tie, so the highest tied index wins where the contract requires the lowest. Float32 router logits essentially never tie; the reduced-precision logits real routers compute do.",
-      "title": "MoE 专家并列路由"
+      "title": "MoE 专家并列路由",
+      "aliases": [
+        "case_30",
+        "fn18_moe_top1_routing_tie"
+      ],
+      "validation_case_id": "case_30"
     },
-    "case_31": {
+    "case_30": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_31",
       "source_name": "fn19_hbsattn_varlen_even_block_flag",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_31",
-      "answer_dir": "triton/case_31",
+      "public_dir": "triton_eval_cases/case_30",
+      "answer_dir": "triton/case_30",
       "mechanism": "The Triton kernel body is unmodified and correct: it masks the partial final K block whenever the EVEN_SEQ_KBLOCK flag says the sequences are not block-aligned. One line of the launch wrapper computes that flag from the TOTAL packed length instead of from each sequence length. For a uniform batch the two agree. For a packed batch whose lengths are 100 and 156 the total (256) is a multiple of the 64-wide block while neither sequence is, so the flag is wrongly true and the kernel attends to keys belonging to the next sequence. Whether the flag is correct is a property of the cu_k_seqlens INPUT, not of anything visible in the kernel.",
-      "title": "变长 Attention 的整块分支"
+      "title": "变长 Attention 的整块分支",
+      "aliases": [
+        "case_31",
+        "fn19_hbsattn_varlen_even_block_flag"
+      ],
+      "validation_case_id": "case_31"
     },
-    "case_32": {
+    "case_31": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_32",
       "source_name": "fn20_sdm_stable_argsort_tie_order",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_32",
-      "answer_dir": "triton/case_32",
+      "public_dir": "triton_eval_cases/case_31",
+      "answer_dir": "triton/case_31",
       "mechanism": "One token: the stable comparison `(keys == p_key) & (perm < p_perm)` becomes `perm > p_perm`, so a tie is won by the HIGHER original index and the sort is no longer stable. The keys still come out sorted, so any check that only verifies ordering passes. Wide-range random keys essentially never tie; the quantized scores this kernel is written for do.",
-      "title": "稳定排序的并列顺序"
+      "title": "稳定排序的并列顺序",
+      "aliases": [
+        "case_32",
+        "fn20_sdm_stable_argsort_tie_order"
+      ],
+      "validation_case_id": "case_32"
     },
-    "case_33": {
+    "case_32": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_33",
       "source_name": "fn21_gptq_group_count_floor_division",
       "category": "original_fn_fp",
-      "public_dir": "triton_eval_cases/case_33",
-      "answer_dir": "triton/case_33",
+      "public_dir": "triton_eval_cases/case_32",
+      "answer_dir": "triton/case_32",
       "mechanism": "The Triton kernel body is the real AutoGPTQ one and gathers per-column scales through the g_idx table it is handed. The host wrapper in kernel.py now derives that table itself, and counts the groups with `K // group_size` instead of ceil(K / group_size). The trailing columns of a non-divisible K are then clamped into the previous group and dequantized with the wrong scale, while the final row of `scales`/`zeros` is never read. On a divisible K floor and ceil coincide and the output is bit-identical to the reference.",
-      "title": "GPTQ 最后一个量化分组"
+      "title": "GPTQ 最后一个量化分组",
+      "aliases": [
+        "case_33",
+        "fn21_gptq_group_count_floor_division"
+      ],
+      "validation_case_id": "case_33"
+    },
+    "case_33": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_106",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_33",
+      "title": "状态滑动窗口并行读写与别名",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/state_pair_source.json",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确；工具提供反例但未增加正确题数。",
+      "aliases": [
+        "case_106"
+      ],
+      "validation_case_id": "case_106"
     },
     "case_34": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_107",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_34",
+      "title": "状态写回：张量状态支持遗漏（补审发现）",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/state_pair_source.json",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均漏检；另有合同与 scope policy 的范围解释问题。",
+      "aliases": [
+        "case_107"
+      ],
+      "validation_case_id": "case_107"
+    },
+    "case_35": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_108",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_35",
+      "title": "RMSNorm：逻辑视图支持遗漏（补审发现）",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/norm_pair_source.json",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均漏检逻辑负视图。",
+      "aliases": [
+        "case_108"
+      ],
+      "validation_case_id": "case_108"
+    },
+    "case_36": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_109",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_36",
+      "title": "RMSNorm：半精度梯度归约误差",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/norm_pair_source.json",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "本轮 solo＋工具正确拒绝、无工具错误接受；debate 无最终判断。仅为一次观察。",
+      "aliases": [
+        "case_109"
+      ],
+      "validation_case_id": "case_109"
+    },
+    "case_37": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_110",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_37",
+      "title": "状态更新：并行读写与张量状态均已修复",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over unchanged public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/state_contract_audit_source.json",
+      "added_after_contract_audit": true,
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；未体现工具或 debate 增益。",
+      "aliases": [
+        "case_110"
+      ],
+      "validation_case_id": "case_110"
+    },
+    "case_38": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_111",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_38",
+      "title": "RMSNorm backward：归约与逻辑视图均已修复",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over unchanged public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/norm_contract_audit_source.json",
+      "added_after_contract_audit": true,
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；未体现工具或 debate 增益。",
+      "aliases": [
+        "case_111"
+      ],
+      "validation_case_id": "case_111"
+    },
+    "case_39": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_112",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_39",
+      "title": "分段递推：跨 chunk 状态传递",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/segmented_state_source.json",
+      "cohort": "boundary",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；执行覆盖有差别，未体现准确率增益。",
+      "aliases": [
+        "case_112"
+      ],
+      "validation_case_id": "case_112"
+    },
+    "case_40": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_113",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_40",
+      "title": "分段递推：段标识选取错误",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/segmented_state_source.json",
+      "cohort": "boundary",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确拒绝；solo正确定位，single_call/debate根因解释有误，未体现标签准确率增益。",
+      "aliases": [
+        "case_113"
+      ],
+      "validation_case_id": "case_113"
+    },
+    "case_41": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_114",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_41",
+      "title": "分页 Attention：窗口外 V 遮罩遗漏",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/paged_attention_source.json",
+      "cohort": "boundary",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "成功案例，继续单独保留：本轮solo及debate正确拒绝、无工具错误接受，均有合法NaN反例。当前优先比较带工具流程与无工具单次调用；纯工具因果归因及debate额外优势暂不作为入选门槛。",
+      "aliases": [
+        "case_114"
+      ],
+      "validation_case_id": "case_114"
+    },
+    "case_42": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_115",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_42",
+      "title": "分页 Attention：窗口外 V 遮罩修复",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/paged_attention_source.json",
+      "cohort": "boundary",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；修复对照保留，工具探测覆盖与自述仍有差距。",
+      "aliases": [
+        "case_115"
+      ],
+      "validation_case_id": "case_115"
+    },
+    "case_43": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_116",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_43",
+      "title": "Split-K GEMM：半精度中间缓冲",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/splitk_source.json",
+      "cohort": "splitk_moe",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "无工具/solo均正确拒绝；debate反例生成失败后弃答。solo有合法数值反例，未体现相对无工具的标签准确率增益。",
+      "aliases": [
+        "case_116"
+      ],
+      "validation_case_id": "case_116"
+    },
+    "case_44": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_117",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_44",
+      "title": "Split-K GEMM：FP32 中间缓冲",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/splitk_source.json",
+      "cohort": "splitk_moe",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；工具测试覆盖有局限，未体现相对无工具的标签准确率增益。",
+      "aliases": [
+        "case_117"
+      ],
+      "validation_case_id": "case_117"
+    },
+    "case_45": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_118",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_45",
+      "title": "MoE grouped GEMM：完整路由与尾组调度",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/moe_source.json",
+      "cohort": "splitk_moe",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；debate补测未正式finalize，claim状态与最终说明不一致。未体现标签准确率增益。",
+      "aliases": [
+        "case_118"
+      ],
+      "validation_case_id": "case_118"
+    },
+    "case_46": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_119",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_46",
+      "title": "MoE grouped GEMM：尾组输出 tile 遗漏",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/moe_source.json",
+      "cohort": "splitk_moe",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确拒绝，均在执行前发现尾组除数问题；工具另提供合法反例，未体现标签准确率增益。",
+      "aliases": [
+        "case_119"
+      ],
+      "validation_case_id": "case_119"
+    },
+    "case_47": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_120",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_47",
+      "title": "INT4 GEMM：完整 GPTQ 到 Marlin 布局转换",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/int4_source.json",
+      "cohort": "int4_pipeline",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；无工具完成布局互逆静态推导，工具组提供有限域执行证据。未体现最终判断增益。",
+      "aliases": [
+        "case_120"
+      ],
+      "validation_case_id": "case_120"
+    },
+    "case_48": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_121",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_48",
+      "title": "INT4 GEMM：重排器与消费端格式不匹配",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/int4_source.json",
+      "cohort": "int4_pipeline",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确拒绝；无工具用20,041输出token手推位排列错配，工具组用合法GPU反例确认错误。未体现最终判断增益。",
+      "aliases": [
+        "case_121"
+      ],
+      "validation_case_id": "case_121"
+    },
+    "case_49": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_122",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_49",
+      "title": "时间融合 Stencil：有限域镜像展开",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_stencil.json",
+      "cohort": "stencil",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均判断正确，未体现最终标签准确率增益；solo在GPU证据后纠正初始错误假设。完整traces与独立验收保留。",
+      "aliases": [
+        "case_122"
+      ],
+      "validation_case_id": "case_122"
+    },
+    "case_50": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_123",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_50",
+      "title": "时间融合 Stencil：边界扩展与融合不兼容",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_stencil.json",
+      "cohort": "stencil",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均判断正确，未体现最终标签准确率增益；solo在GPU证据后纠正初始错误假设。完整traces与独立验收保留。",
+      "aliases": [
+        "case_123"
+      ],
+      "validation_case_id": "case_123"
+    },
+    "case_51": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_124",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_51",
+      "title": "整数重定标：两级舍入与串联进位",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_requant.json",
+      "cohort": "requant",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "无工具与solo正确接受；debate正常阶段输出截断导致JSON解析失败，无最终判定。未观察到工具增益，保留完整失败记录。",
+      "aliases": [
+        "case_124"
+      ],
+      "validation_case_id": "case_124"
+    },
+    "case_52": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_125",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_52",
+      "title": "整数重定标：拆分进位的依赖错误",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_requant.json",
+      "cohort": "requant",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "无工具与debate正确拒绝；solo测试生成器漏掉关键边界，错误接受。局部debate胜solo，但没有超过无工具，保留为普通候选。",
+      "aliases": [
+        "case_125"
+      ],
+      "validation_case_id": "case_125"
+    },
+    "case_53": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_126",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_53",
+      "title": "erf 快速近似：全有限 FP16 域精度",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_erf.json",
+      "cohort": "erf",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三组均正确接受；保留为正确对照与普通候选。工具覆盖全部有限FP16标量值，但单次标量枚举不等于整个张量合同证明。",
+      "aliases": [
+        "case_126"
+      ],
+      "validation_case_id": "case_126"
+    },
+    "case_54": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_127",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_54",
+      "title": "erf 快速近似：系数表序列化精度",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_erf.json",
+      "cohort": "erf",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "成功案例：无工具误用原公式误差界而错误接受；solo及debate实际GPU枚举后正确拒绝，反例由独立MPFR区间验收确认。单次配对实验，未观察到debate超过solo。",
+      "aliases": [
+        "case_127"
+      ],
+      "validation_case_id": "case_127"
+    },
+    "case_55": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_128",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_55",
+      "title": "GELU：五位系数的全域精度",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "gelu",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "三轮探索第1轮：无工具把松上界当实际反例而误拒绝；solo/debate全域数值实测后正确接受。固定数学合同，独立T4验收通过。",
+      "aliases": [
+        "case_128"
+      ],
+      "validation_case_id": "case_128"
+    },
+    "case_56": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_129",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_56",
+      "title": "GELU：归一化参数序列化误差",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "gelu",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三轮探索第1轮：三组均正确拒绝；无工具长推导识别参数扰动，工具有合法反例但部分机制与属性证据表述需纠正。",
+      "aliases": [
+        "case_129"
+      ],
+      "validation_case_id": "case_129"
+    },
+    "case_57": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_130",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_57",
+      "title": "SiLU：稳定尾项与完整换底常数",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "silu",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三轮探索第2轮：三组均判断正确，未观察到分类增益；无工具已能识别标准换底常数的敏感度，工具补充实际数值证据。",
+      "aliases": [
+        "case_130"
+      ],
+      "validation_case_id": "case_130"
+    },
+    "case_58": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_131",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_58",
+      "title": "SiLU：指数换底常数保存精度",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "silu",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三轮探索第2轮：三组均判断正确，未观察到分类增益；无工具已能识别标准换底常数的敏感度，工具补充实际数值证据。",
+      "aliases": [
+        "case_131"
+      ],
+      "validation_case_id": "case_131"
+    },
+    "case_59": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_132",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_59",
+      "title": "正弦：分拆常数与融合参数缩减",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "sine",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三轮探索第3轮：三组均正确接受。无工具自行推导精确高位乘积和 FMA 的误差界；solo 枚举全标量域，debate 只测大值子集，完整合同覆盖表述仍需纠正。",
+      "aliases": [
+        "case_132"
+      ],
+      "validation_case_id": "case_132"
+    },
+    "case_60": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_133",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_60",
+      "title": "正弦：分步舍入的稀疏超差",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public contract domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
+      "cohort": "sine",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "三轮探索第3轮：三组均正确拒绝，未体现分类增益。无工具误归因于精确的高位乘法；solo/debate 找到真实稀疏反例 ±63168，但最终原因也有错误，判断正确与机制正确分开记录。",
+      "aliases": [
+        "case_133"
+      ],
+      "validation_case_id": "case_133"
+    },
+    "case_61": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_134",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_61",
+      "title": "倒平方根归一化：三次 Newton 修正",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_hypot_pair.json",
+      "cohort": "hypot",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。",
+      "aliases": [
+        "case_134"
+      ],
+      "validation_case_id": "case_134"
+    },
+    "case_62": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_135",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_62",
+      "title": "倒平方根归一化：两次 Newton 修正",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_hypot_pair.json",
+      "cohort": "hypot",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "r1 无工具错误接受、solo/debate正确拒绝；r2三组均正确拒绝，区分度未复现。保留历史成功，标为不稳定。两轮工具均实测20,050个超差编码；完整对照见README复测段。",
+      "replication_status": "separation_not_reproduced_r2",
+      "aliases": [
+        "case_135"
+      ],
+      "validation_case_id": "case_135"
+    },
+    "case_63": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_136",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_63",
+      "title": "Softplus：范围缩减与七阶对数近似",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_softplus.json",
+      "cohort": "softplus",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。",
+      "aliases": [
+        "case_136"
+      ],
+      "validation_case_id": "case_136"
+    },
+    "case_64": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_137",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_64",
+      "title": "Softplus：范围缩减与五阶对数近似",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_softplus.json",
+      "cohort": "softplus",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。",
+      "aliases": [
+        "case_137"
+      ],
+      "validation_case_id": "case_137"
+    },
+    "case_65": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_138",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_65",
+      "title": "Pseudo-Huber：消去误差补偿",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_compensated.json",
+      "cohort": "compensated",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。",
+      "aliases": [
+        "case_138"
+      ],
+      "validation_case_id": "case_138"
+    },
+    "case_66": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_139",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_66",
+      "title": "Pseudo-Huber：直接相减",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/experiment_compensated.json",
+      "cohort": "compensated",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。",
+      "aliases": [
+        "case_139"
+      ],
+      "validation_case_id": "case_139"
+    },
+    "case_67": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_140",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_67",
+      "title": "FastDivmod：完整 uint32 域的向下倒数修正",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_fastdiv_pair.json",
+      "cohort": "fastdiv",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。",
+      "aliases": [
+        "case_140"
+      ],
+      "validation_case_id": "case_140"
+    },
+    "case_68": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_141",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_68",
+      "title": "FastDivmod：窄域向上倒数用于完整 uint32",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_fastdiv_pair.json",
+      "cohort": "fastdiv",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "保留历史工具收益，但区分度不稳定：r1/r2/r4 无工具错误接受，r3/r5 正确拒绝；solo/debate 五轮均正确拒绝并有合法 GPU 反例。新增固定三轮单独统计：无工具 2/3，solo 3/3，debate 3/3。",
+      "replication_status": "separation_intermittent_r1_r5",
+      "aliases": [
+        "case_141"
+      ],
+      "validation_case_id": "case_141"
+    },
+    "case_69": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_142",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_69",
+      "title": "Walsh–Hadamard：正确 sequency 排序",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_butterfly_pair.json",
+      "cohort": "butterfly",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。",
+      "aliases": [
+        "case_142"
+      ],
+      "validation_case_id": "case_142"
+    },
+    "case_70": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_143",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_70",
+      "title": "Walsh–Hadamard：重排组合顺序错误",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_butterfly_pair.json",
+      "cohort": "butterfly",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。",
+      "aliases": [
+        "case_143"
+      ],
+      "validation_case_id": "case_143"
+    },
+    "case_71": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_144",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_71",
+      "title": "Argmax 位编码：数值相等时保留首个索引",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_packed_argmax_pair.json",
+      "cohort": "packed_argmax",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "r1 无工具与 solo 正确接受；debate 首次响应工具参数 JSON 损坏，无最终答案。保留失败记录与费用，不重跑改善结果。",
+      "aliases": [
+        "case_144"
+      ],
+      "validation_case_id": "case_144"
+    },
+    "case_72": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_145",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_72",
+      "title": "Argmax 位编码：正负零的相等关系遗漏",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_packed_argmax_pair.json",
+      "cohort": "packed_argmax",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。",
+      "aliases": [
+        "case_145"
+      ],
+      "validation_case_id": "case_145"
+    },
+    "case_73": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_146",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_73",
+      "title": "Atan：五位有效数字的分段有理逼近",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_atan_pair.json",
+      "cohort": "atan",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。",
+      "aliases": [
+        "case_146"
+      ],
+      "validation_case_id": "case_146"
+    },
+    "case_74": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_147",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_74",
+      "title": "Atan：四位有效数字的分段有理逼近",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_atan_pair.json",
+      "cohort": "atan",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate5/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
+      "replication_status": "separation_intermittent_r1_r6",
+      "aliases": [
+        "case_147"
+      ],
+      "validation_case_id": "case_147"
+    },
+    "case_75": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_148",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_75",
+      "title": "Sigmoid：FP64计算后正确舍入到FP16",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_rounding_pair.json",
+      "cohort": "rounding",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。",
+      "aliases": [
+        "case_148"
+      ],
+      "validation_case_id": "case_148"
+    },
+    "case_76": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_149",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_76",
+      "title": "Sigmoid：FP32计算后的FP16舍入边界",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_rounding_pair.json",
+      "cohort": "rounding",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate4/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
+      "replication_status": "separation_intermittent_r1_r6",
+      "aliases": [
+        "case_149"
+      ],
+      "validation_case_id": "case_149"
+    },
+    "case_77": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_150",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_77",
+      "title": "NTT：融合蝶形的Montgomery表示转换",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_ntt_pair.json",
+      "cohort": "ntt",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。",
+      "aliases": [
+        "case_150"
+      ],
+      "validation_case_id": "case_150"
+    },
+    "case_78": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_151",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_78",
+      "title": "NTT：融合系数多保留一个Montgomery因子",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_ntt_pair.json",
+      "cohort": "ntt",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具0/5，solo5/5，debate5/5。通过本次五轮全部复现标准；不是跨模型或总体稳定性保证。",
+      "replication_status": "separation_reproduced_five_fresh_trials",
+      "aliases": [
+        "case_151"
+      ],
+      "validation_case_id": "case_151"
+    },
+    "case_79": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_152",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_79",
+      "title": "CRC：并行分块的反射多项式合并",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_crc_pair.json",
+      "cohort": "crc",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。",
+      "aliases": [
+        "case_152"
+      ],
+      "validation_case_id": "case_152"
+    },
+    "case_80": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_153",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_80",
+      "title": "CRC：多项式幂的表示不一致",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_crc_pair.json",
+      "cohort": "crc",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。",
+      "aliases": [
+        "case_153"
+      ],
+      "validation_case_id": "case_153"
+    },
+    "case_81": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_154",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_81",
+      "title": "复数除法：FP32 直接乘积与除法",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_complex_pair.json",
+      "cohort": "complex",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错误拒绝、solo/debate正确接受且有合法GPU数值检查。固定新增五轮正确数：无工具5/5，solo5/5，debate5/5。未通过五轮全部复现标准；保留首轮观察，不宣称稳定工具优势。",
+      "replication_status": "initial_gap_not_reproduced_in_five_fresh_trials",
+      "aliases": [
+        "case_154"
+      ],
+      "validation_case_id": "case_154"
+    },
+    "case_82": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_155",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_82",
+      "title": "复数除法：比值重写与分量抵消",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_complex_pair.json",
+      "cohort": "complex",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。",
+      "aliases": [
+        "case_155"
+      ],
+      "validation_case_id": "case_155"
+    },
+    "case_83": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_156",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_83",
+      "title": "INT8 重量化：整数单次舍入",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_requant_compose_pair.json",
+      "cohort": "requant_compose",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。",
+      "aliases": [
+        "case_156"
+      ],
+      "validation_case_id": "case_156"
+    },
+    "case_84": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_157",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_84",
+      "title": "INT8 重量化：FP64 中间乘积与精确舍入",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_requant_compose_pair.json",
+      "cohort": "requant_compose",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "无工具正确拒绝但所给反例有算术错误；Solo找到合法GPU反例并正确拒绝；Debate的测试未覆盖有效舍入边界而错误接受。保留负结果和完整traces，不计为工具增益案例。",
+      "aliases": [
+        "case_157"
+      ],
+      "validation_case_id": "case_157"
+    },
+    "case_85": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_158",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_85",
+      "title": "并行仿射递推：顺序一致的分块合并",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_affine_scan_pair.json",
+      "cohort": "affine_scan",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。",
+      "aliases": [
+        "case_158"
+      ],
+      "validation_case_id": "case_158"
+    },
+    "case_86": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_159",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_86",
+      "title": "并行仿射递推：分块组合顺序错误",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_affine_scan_pair.json",
+      "cohort": "affine_scan",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate4/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
+      "replication_status": "separation_intermittent_r1_r6",
+      "aliases": [
+        "case_159"
+      ],
+      "validation_case_id": "case_159"
+    },
+    "case_87": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_160",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_87",
+      "title": "Winograd 卷积：一致的变换排列",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_winograd_pair.json",
+      "cohort": "winograd",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。",
+      "aliases": [
+        "case_160"
+      ],
+      "validation_case_id": "case_160"
+    },
+    "case_88": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_161",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_88",
+      "title": "Winograd 卷积：变换排列不匹配",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_winograd_pair.json",
+      "cohort": "winograd",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。",
+      "aliases": [
+        "case_161"
+      ],
+      "validation_case_id": "case_161"
+    },
+    "case_89": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_162",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_89",
+      "title": "实数 FFT：频率排列与共轭配对",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_realfft_pair.json",
+      "cohort": "realfft",
+      "curation_status": "ordinary_candidate",
+      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。",
+      "aliases": [
+        "case_162"
+      ],
+      "validation_case_id": "case_162"
+    },
+    "case_90": {
+      "dataset": "real_kernel_challenges",
+      "collection": "real_kernel_challenges",
+      "previous_id": "case_163",
+      "category": "purpose_built_kernel_verification",
+      "public_dir": "triton_eval_cases/case_90",
+      "title": "实数 FFT：频率排列与共轭配对错误",
+      "purpose_built": true,
+      "label_scope": "fixed implementation over entire public input domain",
+      "provenance_file": "real_kernel_challenges/private_data/source_realfft_pair.json",
+      "cohort": "realfft",
+      "curation_status": "tool_gain_observed",
+      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate5/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
+      "replication_status": "separation_intermittent_r1_r6",
+      "aliases": [
+        "case_163"
+      ],
+      "validation_case_id": "case_163"
+    },
+    "case_91": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_34",
       "source_name": "fn22_fp32_atomic_bitwise",
       "category": "original_fn_fp",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_34",
-      "answer_dir": "archive/input_specific/triton/case_34",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_91",
+      "answer_dir": "archive/input_specific/triton/case_91",
       "mechanism": "The same kernel as the paired case, on a domain where nothing makes the partial sums exactly representable. Float addition is not associative, the order in which the per-block atomics land is not fixed, and the contract asks for bitwise identical results across calls, so the returned bits move between runs while the value stays well within any reasonable accuracy budget. A check that only compares against a reference within a tolerance reports nothing.",
       "title": "FP32 原子累加的逐位复现",
       "status": "archived",
@@ -371,15 +1579,20 @@
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_34",
       "previous_answer_dir": "triton/case_34",
-      "archive_reason": "Identical atomic-sum implementation receives opposite labels only by changing the allowed input-value domain."
+      "archive_reason": "Identical atomic-sum implementation receives opposite labels only by changing the allowed input-value domain.",
+      "aliases": [
+        "case_34",
+        "fn22_fp32_atomic_bitwise"
+      ],
+      "validation_case_id": "case_34"
     },
-    "case_35": {
+    "case_92": {
       "dataset": "benchmark_fn_fp",
       "previous_id": "case_35",
       "source_name": "fp12_int8_grid_atomic_bitwise",
       "category": "original_fn_fp",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_35",
-      "answer_dir": "archive/input_specific/triton/case_35",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_92",
+      "answer_dir": "archive/input_specific/triton/case_92",
       "mechanism": "Float atomics land in an order the scheduler does not fix, which is the standard reason a bitwise-reproducibility contract and atomic accumulation are held to be incompatible. On this input domain they are not. Every element is an integer multiple of one power of two, so every partial sum and every intermediate value of the accumulator is an integer multiple of that same power of two; the largest such integer reachable is 127 * 65536 = 8.32e6, inside the 2^24 = 1.68e7 range fp32 represents exactly. Exact addition is associative, so every landing order produces the same bits. The property belongs to the declared domain, not to int8 quantisation in general: repeat the same sum with a non-power-of-two scale and the orders diverge.",
       "title": "整数网格上原子累加的精确性",
       "status": "archived",
@@ -388,13 +1601,18 @@
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_35",
       "previous_answer_dir": "triton/case_35",
-      "archive_reason": "Identical atomic-sum implementation receives opposite labels only by changing the allowed input-value domain."
+      "archive_reason": "Identical atomic-sum implementation receives opposite labels only by changing the allowed input-value domain.",
+      "aliases": [
+        "case_35",
+        "fp12_int8_grid_atomic_bitwise"
+      ],
+      "validation_case_id": "case_35"
     },
-    "case_36": {
+    "case_93": {
       "dataset": "correlation_pair",
-      "previous_id": "case_a",
+      "previous_id": "case_36",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_36",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_93",
       "title": "两路量化误差相加与抵消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -402,13 +1620,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_36",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_36",
+        "case_a"
+      ],
+      "validation_case_id": "case_36"
     },
-    "case_37": {
+    "case_94": {
       "dataset": "correlation_pair",
-      "previous_id": "case_b",
+      "previous_id": "case_37",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_37",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_94",
       "title": "两路量化误差相加与抵消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -416,13 +1639,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_37",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_37",
+        "case_b"
+      ],
+      "validation_case_id": "case_37"
     },
-    "case_38": {
+    "case_95": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_c",
+      "previous_id": "case_38",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_38",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_95",
       "title": "Attention logits 量化误差",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -430,13 +1658,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_38",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_38",
+        "case_c"
+      ],
+      "validation_case_id": "case_38"
     },
-    "case_39": {
+    "case_96": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_d",
+      "previous_id": "case_39",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_39",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_96",
       "title": "Attention logits 量化误差",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -444,13 +1677,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_39",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_39",
+        "case_d"
+      ],
+      "validation_case_id": "case_39"
     },
-    "case_40": {
+    "case_97": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_e",
+      "previous_id": "case_40",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_40",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_97",
       "title": "FP16 递推舍入误差传播",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -458,13 +1696,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_40",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_40",
+        "case_e"
+      ],
+      "validation_case_id": "case_40"
     },
-    "case_41": {
+    "case_98": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_f",
+      "previous_id": "case_41",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_41",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_98",
       "title": "FP16 递推舍入误差传播",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -472,13 +1715,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_41",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_41",
+        "case_f"
+      ],
+      "validation_case_id": "case_41"
     },
-    "case_42": {
+    "case_99": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_g",
+      "previous_id": "case_42",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_42",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_99",
       "title": "FP32 求和顺序",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -486,13 +1734,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_42",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_42",
+        "case_g"
+      ],
+      "validation_case_id": "case_42"
     },
-    "case_43": {
+    "case_100": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_h",
+      "previous_id": "case_43",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_43",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_100",
       "title": "FP32 求和顺序",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -500,13 +1753,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_43",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_43",
+        "case_h"
+      ],
+      "validation_case_id": "case_43"
     },
-    "case_44": {
+    "case_101": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_i",
+      "previous_id": "case_44",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_44",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_101",
       "title": "LayerNorm 方差相消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -514,13 +1772,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_44",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_44",
+        "case_i"
+      ],
+      "validation_case_id": "case_44"
     },
-    "case_45": {
+    "case_102": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_j",
+      "previous_id": "case_45",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_45",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_102",
       "title": "LayerNorm 方差相消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -528,13 +1791,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_45",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_45",
+        "case_j"
+      ],
+      "validation_case_id": "case_45"
     },
-    "case_46": {
+    "case_103": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_k",
+      "previous_id": "case_46",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_46",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_103",
       "title": "固定步数线性求解",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -542,13 +1810,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_46",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_46",
+        "case_k"
+      ],
+      "validation_case_id": "case_46"
     },
-    "case_47": {
+    "case_104": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_l",
+      "previous_id": "case_47",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_47",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_104",
       "title": "固定步数线性求解",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -556,13 +1829,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_47",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_47",
+        "case_l"
+      ],
+      "validation_case_id": "case_47"
     },
-    "case_48": {
+    "case_105": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_m",
+      "previous_id": "case_48",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_48",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_105",
       "title": "Horner 多项式舍入",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -570,13 +1848,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_48",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_48",
+        "case_m"
+      ],
+      "validation_case_id": "case_48"
     },
-    "case_49": {
+    "case_106": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_n",
+      "previous_id": "case_49",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_49",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_106",
       "title": "Horner 多项式舍入",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -584,13 +1867,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_49",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_49",
+        "case_n"
+      ],
+      "validation_case_id": "case_49"
     },
-    "case_50": {
+    "case_107": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_o",
+      "previous_id": "case_50",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_50",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_107",
       "title": "近共线投影与归一化",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -598,13 +1886,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_50",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_50",
+        "case_o"
+      ],
+      "validation_case_id": "case_50"
     },
-    "case_51": {
+    "case_108": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_p",
+      "previous_id": "case_51",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_51",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_108",
       "title": "近共线投影与归一化",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -612,13 +1905,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_51",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_51",
+        "case_p"
+      ],
+      "validation_case_id": "case_51"
     },
-    "case_52": {
+    "case_109": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_q",
+      "previous_id": "case_52",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_52",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_109",
       "title": "量化最近邻与路由",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -626,13 +1924,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_52",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_52",
+        "case_q"
+      ],
+      "validation_case_id": "case_52"
     },
-    "case_53": {
+    "case_110": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_r",
+      "previous_id": "case_53",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_53",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_110",
       "title": "量化最近邻与路由",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -640,13 +1943,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_53",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_53",
+        "case_r"
+      ],
+      "validation_case_id": "case_53"
     },
-    "case_54": {
+    "case_111": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_s",
+      "previous_id": "case_54",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_54",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_111",
       "title": "固定网格积分欠采样",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -654,13 +1962,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_54",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_54",
+        "case_s"
+      ],
+      "validation_case_id": "case_54"
     },
-    "case_55": {
+    "case_112": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_t",
+      "previous_id": "case_55",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_55",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_112",
       "title": "固定网格积分欠采样",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -668,13 +1981,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_55",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_55",
+        "case_t"
+      ],
+      "validation_case_id": "case_55"
     },
-    "case_56": {
+    "case_113": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_u",
+      "previous_id": "case_56",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_56",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_113",
       "title": "Fourier 频带截断",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -682,13 +2000,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_56",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_56",
+        "case_u"
+      ],
+      "validation_case_id": "case_56"
     },
-    "case_57": {
+    "case_114": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_v",
+      "previous_id": "case_57",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_57",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_114",
       "title": "Fourier 频带截断",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -696,13 +2019,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_57",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_57",
+        "case_v"
+      ],
+      "validation_case_id": "case_57"
     },
-    "case_58": {
+    "case_115": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_w",
+      "previous_id": "case_58",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_58",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_115",
       "title": "病态矩阵 logdet",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -710,13 +2038,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_58",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_58",
+        "case_w"
+      ],
+      "validation_case_id": "case_58"
     },
-    "case_59": {
+    "case_116": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_x",
+      "previous_id": "case_59",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_59",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_116",
       "title": "病态矩阵 logdet",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -724,13 +2057,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_59",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_59",
+        "case_x"
+      ],
+      "validation_case_id": "case_59"
     },
-    "case_60": {
+    "case_117": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_y",
+      "previous_id": "case_60",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_60",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_117",
       "title": "RBF 距离展开相消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -738,13 +2076,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_60",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_60",
+        "case_y"
+      ],
+      "validation_case_id": "case_60"
     },
-    "case_61": {
+    "case_118": {
       "dataset": "numerical_challenges",
-      "previous_id": "case_z",
+      "previous_id": "case_61",
       "category": "tools_vs_single_call",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_61",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_118",
       "title": "RBF 距离展开相消",
       "collection": "single_call_vs_tools_challenges",
       "status": "archived",
@@ -752,13 +2095,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_61",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_61",
+        "case_z"
+      ],
+      "validation_case_id": "case_61"
     },
-    "case_62": {
+    "case_119": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e01",
+      "previous_id": "case_62",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_62",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_119",
       "title": "协方差回归的参考独立性",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -766,13 +2114,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_62",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_62",
+        "case_e01"
+      ],
+      "validation_case_id": "case_62"
     },
-    "case_63": {
+    "case_120": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e02",
+      "previous_id": "case_63",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_63",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_120",
       "title": "协方差回归的参考独立性",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -780,13 +2133,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_63",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_63",
+        "case_e02"
+      ],
+      "validation_case_id": "case_63"
     },
-    "case_64": {
+    "case_121": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e03",
+      "previous_id": "case_64",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_64",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_121",
       "title": "缓存状态序列覆盖",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -794,13 +2152,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_64",
-      "archive_reason": "Identical cache implementation with selected fixed numeric inputs and permutations; enumerating operation words does not remove the input-dependent label construction."
+      "archive_reason": "Identical cache implementation with selected fixed numeric inputs and permutations; enumerating operation words does not remove the input-dependent label construction.",
+      "aliases": [
+        "case_64",
+        "case_e03"
+      ],
+      "validation_case_id": "case_64"
     },
-    "case_65": {
+    "case_122": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e04",
+      "previous_id": "case_65",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_65",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_122",
       "title": "缓存状态序列覆盖",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -808,13 +2171,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_65",
-      "archive_reason": "Identical cache implementation with selected fixed numeric inputs and permutations; enumerating operation words does not remove the input-dependent label construction."
+      "archive_reason": "Identical cache implementation with selected fixed numeric inputs and permutations; enumerating operation words does not remove the input-dependent label construction.",
+      "aliases": [
+        "case_65",
+        "case_e04"
+      ],
+      "validation_case_id": "case_65"
     },
-    "case_66": {
+    "case_123": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e05",
+      "previous_id": "case_66",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_66",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_123",
       "title": "四阶联合分布",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -822,13 +2190,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_66",
-      "archive_reason": "Identical dropout implementation with selected fixed mask/offset tables and activations; input tables determine the joint-law label."
+      "archive_reason": "Identical dropout implementation with selected fixed mask/offset tables and activations; input tables determine the joint-law label.",
+      "aliases": [
+        "case_66",
+        "case_e05"
+      ],
+      "validation_case_id": "case_66"
     },
-    "case_67": {
+    "case_124": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e06",
+      "previous_id": "case_67",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_67",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_124",
       "title": "四阶联合分布",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -836,13 +2209,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_67",
-      "archive_reason": "Identical dropout implementation with selected fixed mask/offset tables and activations; input tables determine the joint-law label."
+      "archive_reason": "Identical dropout implementation with selected fixed mask/offset tables and activations; input tables determine the joint-law label.",
+      "aliases": [
+        "case_67",
+        "case_e06"
+      ],
+      "validation_case_id": "case_67"
     },
-    "case_68": {
+    "case_125": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e07",
+      "previous_id": "case_68",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_68",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_125",
       "title": "局部匹配与全局共同变换",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -850,13 +2228,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_68",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_68",
+        "case_e07"
+      ],
+      "validation_case_id": "case_68"
     },
-    "case_69": {
+    "case_126": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e08",
+      "previous_id": "case_69",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_69",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_126",
       "title": "局部匹配与全局共同变换",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -864,13 +2247,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_69",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_69",
+        "case_e08"
+      ],
+      "validation_case_id": "case_69"
     },
-    "case_70": {
+    "case_127": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e09",
+      "previous_id": "case_70",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_70",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_127",
       "title": "历史输出被后续更新覆盖",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -878,13 +2266,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_70",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_70",
+        "case_e09"
+      ],
+      "validation_case_id": "case_70"
     },
-    "case_71": {
+    "case_128": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e10",
+      "previous_id": "case_71",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_71",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_128",
       "title": "历史输出被后续更新覆盖",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -892,13 +2285,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_71",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_71",
+        "case_e10"
+      ],
+      "validation_case_id": "case_71"
     },
-    "case_72": {
+    "case_129": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e11",
+      "previous_id": "case_72",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_72",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_129",
       "title": "连续输入域的最坏情况",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -906,13 +2304,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_72",
-      "archive_reason": "Identical pruned implementation; selected fixed parameter inputs change the target and whole-box error bound. This is not a single-X test, but the labels still depend on chosen parameter data."
+      "archive_reason": "Identical pruned implementation; selected fixed parameter inputs change the target and whole-box error bound. This is not a single-X test, but the labels still depend on chosen parameter data.",
+      "aliases": [
+        "case_72",
+        "case_e11"
+      ],
+      "validation_case_id": "case_72"
     },
-    "case_73": {
+    "case_130": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e12",
+      "previous_id": "case_73",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_73",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_130",
       "title": "连续输入域的最坏情况",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -920,13 +2323,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_73",
-      "archive_reason": "Identical pruned implementation; selected fixed parameter inputs change the target and whole-box error bound. This is not a single-X test, but the labels still depend on chosen parameter data."
+      "archive_reason": "Identical pruned implementation; selected fixed parameter inputs change the target and whole-box error bound. This is not a single-X test, but the labels still depend on chosen parameter data.",
+      "aliases": [
+        "case_73",
+        "case_e12"
+      ],
+      "validation_case_id": "case_73"
     },
-    "case_74": {
+    "case_131": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e13",
+      "previous_id": "case_74",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_74",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_131",
       "title": "FP64 求和参考失真",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -934,13 +2342,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_74",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_74",
+        "case_e13"
+      ],
+      "validation_case_id": "case_74"
     },
-    "case_75": {
+    "case_132": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e14",
+      "previous_id": "case_75",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_75",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_132",
       "title": "FP64 求和参考失真",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -948,13 +2361,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_75",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_75",
+        "case_e14"
+      ],
+      "validation_case_id": "case_75"
     },
-    "case_76": {
+    "case_133": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e15",
+      "previous_id": "case_76",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_76",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_133",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -962,13 +2380,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_76",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_76",
+        "case_e15"
+      ],
+      "validation_case_id": "case_76"
     },
-    "case_77": {
+    "case_134": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e16",
+      "previous_id": "case_77",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_77",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_134",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -976,13 +2399,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_77",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_77",
+        "case_e16"
+      ],
+      "validation_case_id": "case_77"
     },
-    "case_78": {
+    "case_135": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e17",
+      "previous_id": "case_78",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_78",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_135",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -990,13 +2418,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_78",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_78",
+        "case_e17"
+      ],
+      "validation_case_id": "case_78"
     },
-    "case_79": {
+    "case_136": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e18",
+      "previous_id": "case_79",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_79",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_136",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -1004,13 +2437,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_79",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_79",
+        "case_e18"
+      ],
+      "validation_case_id": "case_79"
     },
-    "case_80": {
+    "case_137": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e19",
+      "previous_id": "case_80",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_80",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_137",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -1018,13 +2456,18 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "trust",
       "previous_public_dir": "triton_eval_cases/case_80",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_80",
+        "case_e19"
+      ],
+      "validation_case_id": "case_80"
     },
-    "case_81": {
+    "case_138": {
       "dataset": "evidence_challenges",
-      "previous_id": "case_e20",
+      "previous_id": "case_81",
       "category": "solo_vs_debate",
-      "public_dir": "archive/input_specific/triton_eval_cases/case_81",
+      "public_dir": "archive/input_specific/triton_eval_cases/case_138",
       "title": "求和参考失真：新输入确认",
       "collection": "solo_vs_debate_challenges",
       "status": "archived",
@@ -1032,1049 +2475,535 @@
       "archived_on": "2026-10-19",
       "archived_ground_truth": "reject",
       "previous_public_dir": "triton_eval_cases/case_81",
-      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain."
-    },
-    "case_82": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_01",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_82",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_83": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_02",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_83",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_84": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_03",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_84",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_85": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_04",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_85",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_86": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_05",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_86",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_87": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_06",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_87",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_88": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_07",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_88",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_89": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_08",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_89",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_90": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_09",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_90",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_91": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_10",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_91",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_92": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_11",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_92",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_93": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_12",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_93",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_94": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_13",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_94",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_95": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_14",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_95",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_96": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_15",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_96",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_97": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_16",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_97",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_98": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_17",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_98",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_99": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_18",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_99",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_100": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_19",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_100",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_101": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_20",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_101",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_102": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_21",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_102",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_103": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_22",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_103",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_104": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_23",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_104",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_105": {
-      "dataset": "numerical_pilot",
-      "previous_id": "case_24",
-      "category": "early_numerical_pilot",
-      "public_dir": "archive/numerical_pilot/eval_cases/case_105",
-      "title": "早期数值 pilot：",
-      "status": "archived",
-      "archive_root": "archive/numerical_pilot"
-    },
-    "case_106": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_106",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_106",
-      "title": "状态滑动窗口并行读写与别名",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/state_pair_source.json",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确；工具提供反例但未增加正确题数。"
-    },
-    "case_107": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_107",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_107",
-      "title": "状态写回：张量状态支持遗漏（补审发现）",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/state_pair_source.json",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均漏检；另有合同与 scope policy 的范围解释问题。"
-    },
-    "case_108": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_108",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_108",
-      "title": "RMSNorm：逻辑视图支持遗漏（补审发现）",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/norm_pair_source.json",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均漏检逻辑负视图。"
-    },
-    "case_109": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_109",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_109",
-      "title": "RMSNorm：半精度梯度归约误差",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/norm_pair_source.json",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "本轮 solo＋工具正确拒绝、无工具错误接受；debate 无最终判断。仅为一次观察。"
-    },
-    "case_110": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_110",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_110",
-      "title": "状态更新：并行读写与张量状态均已修复",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over unchanged public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/state_contract_audit_source.json",
-      "added_after_contract_audit": true,
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；未体现工具或 debate 增益。"
-    },
-    "case_111": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_111",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_111",
-      "title": "RMSNorm backward：归约与逻辑视图均已修复",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over unchanged public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/norm_contract_audit_source.json",
-      "added_after_contract_audit": true,
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；未体现工具或 debate 增益。"
-    },
-    "case_112": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_112",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_112",
-      "title": "分段递推：跨 chunk 状态传递",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/segmented_state_source.json",
-      "cohort": "boundary",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；执行覆盖有差别，未体现准确率增益。"
-    },
-    "case_113": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_113",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_113",
-      "title": "分段递推：段标识选取错误",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/segmented_state_source.json",
-      "cohort": "boundary",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确拒绝；solo正确定位，single_call/debate根因解释有误，未体现标签准确率增益。"
-    },
-    "case_114": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_114",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_114",
-      "title": "分页 Attention：窗口外 V 遮罩遗漏",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/paged_attention_source.json",
-      "cohort": "boundary",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "成功案例，继续单独保留：本轮solo及debate正确拒绝、无工具错误接受，均有合法NaN反例。当前优先比较带工具流程与无工具单次调用；纯工具因果归因及debate额外优势暂不作为入选门槛。"
-    },
-    "case_115": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_115",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_115",
-      "title": "分页 Attention：窗口外 V 遮罩修复",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/paged_attention_source.json",
-      "cohort": "boundary",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；修复对照保留，工具探测覆盖与自述仍有差距。"
-    },
-    "case_116": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_116",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_116",
-      "title": "Split-K GEMM：半精度中间缓冲",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/splitk_source.json",
-      "cohort": "splitk_moe",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "无工具/solo均正确拒绝；debate反例生成失败后弃答。solo有合法数值反例，未体现相对无工具的标签准确率增益。"
-    },
-    "case_117": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_117",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_117",
-      "title": "Split-K GEMM：FP32 中间缓冲",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/splitk_source.json",
-      "cohort": "splitk_moe",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；工具测试覆盖有局限，未体现相对无工具的标签准确率增益。"
-    },
-    "case_118": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_118",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_118",
-      "title": "MoE grouped GEMM：完整路由与尾组调度",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/moe_source.json",
-      "cohort": "splitk_moe",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；debate补测未正式finalize，claim状态与最终说明不一致。未体现标签准确率增益。"
-    },
-    "case_119": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_119",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_119",
-      "title": "MoE grouped GEMM：尾组输出 tile 遗漏",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/moe_source.json",
-      "cohort": "splitk_moe",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确拒绝，均在执行前发现尾组除数问题；工具另提供合法反例，未体现标签准确率增益。"
-    },
-    "case_120": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_120",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_120",
-      "title": "INT4 GEMM：完整 GPTQ 到 Marlin 布局转换",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/int4_source.json",
-      "cohort": "int4_pipeline",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；无工具完成布局互逆静态推导，工具组提供有限域执行证据。未体现最终判断增益。"
-    },
-    "case_121": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_121",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_121",
-      "title": "INT4 GEMM：重排器与消费端格式不匹配",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/int4_source.json",
-      "cohort": "int4_pipeline",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确拒绝；无工具用20,041输出token手推位排列错配，工具组用合法GPU反例确认错误。未体现最终判断增益。"
-    },
-    "case_122": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_122",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_122",
-      "title": "时间融合 Stencil：有限域镜像展开",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_stencil.json",
-      "cohort": "stencil",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均判断正确，未体现最终标签准确率增益；solo在GPU证据后纠正初始错误假设。完整traces与独立验收保留。"
-    },
-    "case_123": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_123",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_123",
-      "title": "时间融合 Stencil：边界扩展与融合不兼容",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_stencil.json",
-      "cohort": "stencil",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均判断正确，未体现最终标签准确率增益；solo在GPU证据后纠正初始错误假设。完整traces与独立验收保留。"
-    },
-    "case_124": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_124",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_124",
-      "title": "整数重定标：两级舍入与串联进位",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_requant.json",
-      "cohort": "requant",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "无工具与solo正确接受；debate正常阶段输出截断导致JSON解析失败，无最终判定。未观察到工具增益，保留完整失败记录。"
-    },
-    "case_125": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_125",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_125",
-      "title": "整数重定标：拆分进位的依赖错误",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_requant.json",
-      "cohort": "requant",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "无工具与debate正确拒绝；solo测试生成器漏掉关键边界，错误接受。局部debate胜solo，但没有超过无工具，保留为普通候选。"
-    },
-    "case_126": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_126",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_126",
-      "title": "erf 快速近似：全有限 FP16 域精度",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_erf.json",
-      "cohort": "erf",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三组均正确接受；保留为正确对照与普通候选。工具覆盖全部有限FP16标量值，但单次标量枚举不等于整个张量合同证明。"
-    },
-    "case_127": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_127",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_127",
-      "title": "erf 快速近似：系数表序列化精度",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_erf.json",
-      "cohort": "erf",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "成功案例：无工具误用原公式误差界而错误接受；solo及debate实际GPU枚举后正确拒绝，反例由独立MPFR区间验收确认。单次配对实验，未观察到debate超过solo。"
-    },
-    "case_128": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_128",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_128",
-      "title": "GELU：五位系数的全域精度",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "gelu",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "三轮探索第1轮：无工具把松上界当实际反例而误拒绝；solo/debate全域数值实测后正确接受。固定数学合同，独立T4验收通过。"
-    },
-    "case_129": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_129",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_129",
-      "title": "GELU：归一化参数序列化误差",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "gelu",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三轮探索第1轮：三组均正确拒绝；无工具长推导识别参数扰动，工具有合法反例但部分机制与属性证据表述需纠正。"
-    },
-    "case_130": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_130",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_130",
-      "title": "SiLU：稳定尾项与完整换底常数",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "silu",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三轮探索第2轮：三组均判断正确，未观察到分类增益；无工具已能识别标准换底常数的敏感度，工具补充实际数值证据。"
-    },
-    "case_131": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_131",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_131",
-      "title": "SiLU：指数换底常数保存精度",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "silu",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三轮探索第2轮：三组均判断正确，未观察到分类增益；无工具已能识别标准换底常数的敏感度，工具补充实际数值证据。"
-    },
-    "case_132": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_132",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_132",
-      "title": "正弦：分拆常数与融合参数缩减",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "sine",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三轮探索第3轮：三组均正确接受。无工具自行推导精确高位乘积和 FMA 的误差界；solo 枚举全标量域，debate 只测大值子集，完整合同覆盖表述仍需纠正。"
-    },
-    "case_133": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_133",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_133",
-      "title": "正弦：分步舍入的稀疏超差",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public contract domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_adaptive_unary.json",
-      "cohort": "sine",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "三轮探索第3轮：三组均正确拒绝，未体现分类增益。无工具误归因于精确的高位乘法；solo/debate 找到真实稀疏反例 ±63168，但最终原因也有错误，判断正确与机制正确分开记录。"
-    },
-    "case_134": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_134",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_134",
-      "title": "倒平方根归一化：三次 Newton 修正",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_hypot_pair.json",
-      "cohort": "hypot",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。"
-    },
-    "case_135": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_135",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_135",
-      "title": "倒平方根归一化：两次 Newton 修正",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_hypot_pair.json",
-      "cohort": "hypot",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "r1 无工具错误接受、solo/debate正确拒绝；r2三组均正确拒绝，区分度未复现。保留历史成功，标为不稳定。两轮工具均实测20,050个超差编码；完整对照见README复测段。",
-      "replication_status": "separation_not_reproduced_r2"
-    },
-    "case_136": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_136",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_136",
-      "title": "Softplus：范围缩减与七阶对数近似",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_softplus.json",
-      "cohort": "softplus",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。"
-    },
-    "case_137": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_137",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_137",
-      "title": "Softplus：范围缩减与五阶对数近似",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_softplus.json",
-      "cohort": "softplus",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。"
-    },
-    "case_138": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_138",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_138",
-      "title": "Pseudo-Huber：消去误差补偿",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_compensated.json",
-      "cohort": "compensated",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。"
+      "archive_reason": "Identical computation is labelled from selected fixed inputs, generator seeds or permutations, not a kernel-wide guarantee over a shared public domain.",
+      "aliases": [
+        "case_81",
+        "case_e20"
+      ],
+      "validation_case_id": "case_81"
     },
     "case_139": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_139",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_139",
-      "title": "Pseudo-Huber：直接相减",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/experiment_compensated.json",
-      "cohort": "compensated",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "2026-10-17：无工具已正确判断，保留为配对对照或普通样本候选；完整三组结果和证据审计见 real_kernel_challenges/README.md。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_82",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_139",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_82",
+        "case_01"
+      ],
+      "validation_case_id": "case_82"
     },
     "case_140": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_140",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_140",
-      "title": "FastDivmod：完整 uint32 域的向下倒数修正",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_fastdiv_pair.json",
-      "cohort": "fastdiv",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_83",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_140",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_83",
+        "case_02"
+      ],
+      "validation_case_id": "case_83"
     },
     "case_141": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_141",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_141",
-      "title": "FastDivmod：窄域向上倒数用于完整 uint32",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_fastdiv_pair.json",
-      "cohort": "fastdiv",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "保留历史工具收益，但区分度不稳定：r1/r2/r4 无工具错误接受，r3/r5 正确拒绝；solo/debate 五轮均正确拒绝并有合法 GPU 反例。新增固定三轮单独统计：无工具 2/3，solo 3/3，debate 3/3。",
-      "replication_status": "separation_intermittent_r1_r5"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_84",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_141",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_84",
+        "case_03"
+      ],
+      "validation_case_id": "case_84"
     },
     "case_142": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_142",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_142",
-      "title": "Walsh–Hadamard：正确 sequency 排序",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_butterfly_pair.json",
-      "cohort": "butterfly",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_85",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_142",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_85",
+        "case_04"
+      ],
+      "validation_case_id": "case_85"
     },
     "case_143": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_143",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_143",
-      "title": "Walsh–Hadamard：重排组合顺序错误",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_butterfly_pair.json",
-      "cohort": "butterfly",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_86",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_143",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_86",
+        "case_05"
+      ],
+      "validation_case_id": "case_86"
     },
     "case_144": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_144",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_144",
-      "title": "Argmax 位编码：数值相等时保留首个索引",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_packed_argmax_pair.json",
-      "cohort": "packed_argmax",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "r1 无工具与 solo 正确接受；debate 首次响应工具参数 JSON 损坏，无最终答案。保留失败记录与费用，不重跑改善结果。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_87",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_144",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_87",
+        "case_06"
+      ],
+      "validation_case_id": "case_87"
     },
     "case_145": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_145",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_145",
-      "title": "Argmax 位编码：正负零的相等关系遗漏",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_packed_argmax_pair.json",
-      "cohort": "packed_argmax",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "r1 三组均正确，未体现判断差距。保留固定标签、独立验收和全部 traces，待归普通集合。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_88",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_145",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_88",
+        "case_07"
+      ],
+      "validation_case_id": "case_88"
     },
     "case_146": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_146",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_146",
-      "title": "Atan：五位有效数字的分段有理逼近",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_atan_pair.json",
-      "cohort": "atan",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_89",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_146",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_89",
+        "case_08"
+      ],
+      "validation_case_id": "case_89"
     },
     "case_147": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_147",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_147",
-      "title": "Atan：四位有效数字的分段有理逼近",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_atan_pair.json",
-      "cohort": "atan",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate5/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
-      "replication_status": "separation_intermittent_r1_r6"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_90",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_147",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_90",
+        "case_09"
+      ],
+      "validation_case_id": "case_90"
     },
     "case_148": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_148",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_148",
-      "title": "Sigmoid：FP64计算后正确舍入到FP16",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_rounding_pair.json",
-      "cohort": "rounding",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_91",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_148",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_91",
+        "case_10"
+      ],
+      "validation_case_id": "case_91"
     },
     "case_149": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_149",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_149",
-      "title": "Sigmoid：FP32计算后的FP16舍入边界",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_rounding_pair.json",
-      "cohort": "rounding",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate4/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
-      "replication_status": "separation_intermittent_r1_r6"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_92",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_149",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_92",
+        "case_11"
+      ],
+      "validation_case_id": "case_92"
     },
     "case_150": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_150",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_150",
-      "title": "NTT：融合蝶形的Montgomery表示转换",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_ntt_pair.json",
-      "cohort": "ntt",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "正确实现对照；保留三组首轮、独立资格验证和全部traces。按完整首轮结果统计，不仅展示成功案例。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_93",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_150",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_93",
+        "case_12"
+      ],
+      "validation_case_id": "case_93"
     },
     "case_151": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_151",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_151",
-      "title": "NTT：融合系数多保留一个Montgomery因子",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_ntt_pair.json",
-      "cohort": "ntt",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具0/5，solo5/5，debate5/5。通过本次五轮全部复现标准；不是跨模型或总体稳定性保证。",
-      "replication_status": "separation_reproduced_five_fresh_trials"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_94",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_151",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_94",
+        "case_13"
+      ],
+      "validation_case_id": "case_94"
     },
     "case_152": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_152",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_152",
-      "title": "CRC：并行分块的反射多项式合并",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_crc_pair.json",
-      "cohort": "crc",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_95",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_152",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_95",
+        "case_14"
+      ],
+      "validation_case_id": "case_95"
     },
     "case_153": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_153",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_153",
-      "title": "CRC：多项式幂的表示不一致",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_crc_pair.json",
-      "cohort": "crc",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_96",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_153",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_96",
+        "case_15"
+      ],
+      "validation_case_id": "case_96"
     },
     "case_154": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_154",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_154",
-      "title": "复数除法：FP32 直接乘积与除法",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_complex_pair.json",
-      "cohort": "complex",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错误拒绝、solo/debate正确接受且有合法GPU数值检查。固定新增五轮正确数：无工具5/5，solo5/5，debate5/5。未通过五轮全部复现标准；保留首轮观察，不宣称稳定工具优势。",
-      "replication_status": "initial_gap_not_reproduced_in_five_fresh_trials"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_97",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_154",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_97",
+        "case_16"
+      ],
+      "validation_case_id": "case_97"
     },
     "case_155": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_155",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_155",
-      "title": "复数除法：比值重写与分量抵消",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_complex_pair.json",
-      "cohort": "complex",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_98",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_155",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_98",
+        "case_17"
+      ],
+      "validation_case_id": "case_98"
     },
     "case_156": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_156",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_156",
-      "title": "INT8 重量化：整数单次舍入",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_requant_compose_pair.json",
-      "cohort": "requant_compose",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "首轮三组均判断正确；未体现工具准确率增益，保留固定标签、资格验证和完整traces。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_99",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_156",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_99",
+        "case_18"
+      ],
+      "validation_case_id": "case_99"
     },
     "case_157": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_157",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_157",
-      "title": "INT8 重量化：FP64 中间乘积与精确舍入",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_requant_compose_pair.json",
-      "cohort": "requant_compose",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "无工具正确拒绝但所给反例有算术错误；Solo找到合法GPU反例并正确拒绝；Debate的测试未覆盖有效舍入边界而错误接受。保留负结果和完整traces，不计为工具增益案例。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_100",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_157",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_100",
+        "case_19"
+      ],
+      "validation_case_id": "case_100"
     },
     "case_158": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_158",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_158",
-      "title": "并行仿射递推：顺序一致的分块合并",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_affine_scan_pair.json",
-      "cohort": "affine_scan",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_101",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_158",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_101",
+        "case_20"
+      ],
+      "validation_case_id": "case_101"
     },
     "case_159": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_159",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_159",
-      "title": "并行仿射递推：分块组合顺序错误",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_affine_scan_pair.json",
-      "cohort": "affine_scan",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate4/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
-      "replication_status": "separation_intermittent_r1_r6"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_102",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_159",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_102",
+        "case_21"
+      ],
+      "validation_case_id": "case_102"
     },
     "case_160": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_160",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_160",
-      "title": "Winograd 卷积：一致的变换排列",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_winograd_pair.json",
-      "cohort": "winograd",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_103",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_160",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_103",
+        "case_22"
+      ],
+      "validation_case_id": "case_103"
     },
     "case_161": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_161",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_161",
-      "title": "Winograd 卷积：变换排列不匹配",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_winograd_pair.json",
-      "cohort": "winograd",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_104",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_161",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_104",
+        "case_23"
+      ],
+      "validation_case_id": "case_104"
     },
     "case_162": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_162",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_162",
-      "title": "实数 FFT：频率排列与共轭配对",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_realfft_pair.json",
-      "cohort": "realfft",
-      "curation_status": "ordinary_candidate",
-      "curation_note": "未达到首轮无工具错误且两工具组均正确并有合法GPU证据的筛选条件；保留固定标签、资格验证和全部三组结果。"
-    },
-    "case_163": {
-      "dataset": "real_kernel_challenges",
-      "collection": "real_kernel_challenges",
-      "previous_id": "case_163",
-      "category": "purpose_built_kernel_verification",
-      "public_dir": "triton_eval_cases/case_163",
-      "title": "实数 FFT：频率排列与共轭配对错误",
-      "purpose_built": true,
-      "label_scope": "fixed implementation over entire public input domain",
-      "provenance_file": "real_kernel_challenges/private_data/source_realfft_pair.json",
-      "cohort": "realfft",
-      "curation_status": "tool_gain_observed",
-      "curation_note": "首轮无工具错、solo/debate正确且有合法GPU证据。固定新增五轮正确数：无工具2/5，solo5/5，debate5/5。未通过本次五轮全部复现标准；保留全部结果，不按首轮宣称稳定。",
-      "replication_status": "separation_intermittent_r1_r6"
+      "dataset": "numerical_pilot",
+      "previous_id": "case_105",
+      "category": "early_numerical_pilot",
+      "public_dir": "archive/numerical_pilot/eval_cases/case_162",
+      "title": "早期数值 pilot：",
+      "status": "archived",
+      "archive_root": "archive/numerical_pilot",
+      "aliases": [
+        "case_105",
+        "case_24"
+      ],
+      "validation_case_id": "case_105"
     }
   },
-  "retired_ids": [
-    "case_03"
-  ],
-  "next_case_number": 164,
+  "retired_ids": [],
+  "next_case_number": 163,
   "numbering_migration": {
-    "date": "2026-09-30",
+    "date": "2026-10-19",
+    "reason": "Compact current cases to 01-90 after input-specific archival; archived cases follow as 91-162.",
+    "previous_to_current": {
+      "case_01": "case_01",
+      "case_02": "case_02",
+      "case_04": "case_03",
+      "case_05": "case_04",
+      "case_06": "case_05",
+      "case_07": "case_06",
+      "case_08": "case_07",
+      "case_09": "case_08",
+      "case_10": "case_09",
+      "case_11": "case_10",
+      "case_12": "case_11",
+      "case_13": "case_12",
+      "case_14": "case_13",
+      "case_15": "case_14",
+      "case_16": "case_15",
+      "case_17": "case_16",
+      "case_18": "case_17",
+      "case_19": "case_18",
+      "case_20": "case_19",
+      "case_21": "case_20",
+      "case_22": "case_21",
+      "case_23": "case_22",
+      "case_24": "case_23",
+      "case_25": "case_24",
+      "case_26": "case_25",
+      "case_27": "case_26",
+      "case_28": "case_27",
+      "case_29": "case_28",
+      "case_30": "case_29",
+      "case_31": "case_30",
+      "case_32": "case_31",
+      "case_33": "case_32",
+      "case_106": "case_33",
+      "case_107": "case_34",
+      "case_108": "case_35",
+      "case_109": "case_36",
+      "case_110": "case_37",
+      "case_111": "case_38",
+      "case_112": "case_39",
+      "case_113": "case_40",
+      "case_114": "case_41",
+      "case_115": "case_42",
+      "case_116": "case_43",
+      "case_117": "case_44",
+      "case_118": "case_45",
+      "case_119": "case_46",
+      "case_120": "case_47",
+      "case_121": "case_48",
+      "case_122": "case_49",
+      "case_123": "case_50",
+      "case_124": "case_51",
+      "case_125": "case_52",
+      "case_126": "case_53",
+      "case_127": "case_54",
+      "case_128": "case_55",
+      "case_129": "case_56",
+      "case_130": "case_57",
+      "case_131": "case_58",
+      "case_132": "case_59",
+      "case_133": "case_60",
+      "case_134": "case_61",
+      "case_135": "case_62",
+      "case_136": "case_63",
+      "case_137": "case_64",
+      "case_138": "case_65",
+      "case_139": "case_66",
+      "case_140": "case_67",
+      "case_141": "case_68",
+      "case_142": "case_69",
+      "case_143": "case_70",
+      "case_144": "case_71",
+      "case_145": "case_72",
+      "case_146": "case_73",
+      "case_147": "case_74",
+      "case_148": "case_75",
+      "case_149": "case_76",
+      "case_150": "case_77",
+      "case_151": "case_78",
+      "case_152": "case_79",
+      "case_153": "case_80",
+      "case_154": "case_81",
+      "case_155": "case_82",
+      "case_156": "case_83",
+      "case_157": "case_84",
+      "case_158": "case_85",
+      "case_159": "case_86",
+      "case_160": "case_87",
+      "case_161": "case_88",
+      "case_162": "case_89",
+      "case_163": "case_90",
+      "case_34": "case_91",
+      "case_35": "case_92",
+      "case_36": "case_93",
+      "case_37": "case_94",
+      "case_38": "case_95",
+      "case_39": "case_96",
+      "case_40": "case_97",
+      "case_41": "case_98",
+      "case_42": "case_99",
+      "case_43": "case_100",
+      "case_44": "case_101",
+      "case_45": "case_102",
+      "case_46": "case_103",
+      "case_47": "case_104",
+      "case_48": "case_105",
+      "case_49": "case_106",
+      "case_50": "case_107",
+      "case_51": "case_108",
+      "case_52": "case_109",
+      "case_53": "case_110",
+      "case_54": "case_111",
+      "case_55": "case_112",
+      "case_56": "case_113",
+      "case_57": "case_114",
+      "case_58": "case_115",
+      "case_59": "case_116",
+      "case_60": "case_117",
+      "case_61": "case_118",
+      "case_62": "case_119",
+      "case_63": "case_120",
+      "case_64": "case_121",
+      "case_65": "case_122",
+      "case_66": "case_123",
+      "case_67": "case_124",
+      "case_68": "case_125",
+      "case_69": "case_126",
+      "case_70": "case_127",
+      "case_71": "case_128",
+      "case_72": "case_129",
+      "case_73": "case_130",
+      "case_74": "case_131",
+      "case_75": "case_132",
+      "case_76": "case_133",
+      "case_77": "case_134",
+      "case_78": "case_135",
+      "case_79": "case_136",
+      "case_80": "case_137",
+      "case_81": "case_138",
+      "case_82": "case_139",
+      "case_83": "case_140",
+      "case_84": "case_141",
+      "case_85": "case_142",
+      "case_86": "case_143",
+      "case_87": "case_144",
+      "case_88": "case_145",
+      "case_89": "case_146",
+      "case_90": "case_147",
+      "case_91": "case_148",
+      "case_92": "case_149",
+      "case_93": "case_150",
+      "case_94": "case_151",
+      "case_95": "case_152",
+      "case_96": "case_153",
+      "case_97": "case_154",
+      "case_98": "case_155",
+      "case_99": "case_156",
+      "case_100": "case_157",
+      "case_101": "case_158",
+      "case_102": "case_159",
+      "case_103": "case_160",
+      "case_104": "case_161",
+      "case_105": "case_162"
+    },
+    "historical_retired_ids": [
+      "case_03"
+    ],
     "public_kernel_and_contract_bytes_preserved": true,
     "raw_trace_bytes_preserved": true,
-    "historical_oracle_hashes": "oracle_source_sha256 remains the historical measured value; bookkeeping paths and case IDs in builder source changed without rerunning GPU validation."
-  }
+    "frozen_validation_bytes_preserved": true,
+    "validation_lookup": "validation_case_id resolves immutable prior qualification IDs.",
+    "historical_oracle_hashes": "Original qualification JSON retains measured oracle hashes; live author programs only update bookkeeping IDs."
+  },
+  "numbering_version": "2026-10-19-compact",
+  "numbering_migrations": [
+    {
+      "date": "2026-09-30",
+      "public_kernel_and_contract_bytes_preserved": true,
+      "raw_trace_bytes_preserved": true,
+      "historical_oracle_hashes": "oracle_source_sha256 remains the historical measured value; bookkeeping paths and case IDs in builder source changed without rerunning GPU validation."
+    }
+  ]
 }

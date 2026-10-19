@@ -21,17 +21,22 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: cumulative sum along the sequence axis of a 2-D float32 tensor,
-computed chunk by chunk with a running carry (the chunked-scan structure used by
-state-space and linear-attention kernels).
+Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of
+`block_size` columns (the standard three-pass fused-softmax structure used by
+Triton-based normalization kernels).
 
-    y[b, t] = sum over s <= t of x[b, s]
+For each row x:
 
-Input domain: `seqlen` may be any positive integer. It is NOT required to be a
-multiple of `chunk`; when it is not, the trailing positions form a shorter final
-chunk whose outputs must still be produced.
+    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))
 
-Does chunked_cumsum() satisfy this contract?
+so every row of the result must be a probability distribution: all entries
+non-negative and summing to 1.
+
+Input domain: `n_cols` may be any positive integer. It is NOT required to be a
+multiple of `block_size`; when it is not, the trailing partial block is still
+part of the row and must be normalized with the rest of it.
+
+Does softmax() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -43,26 +48,35 @@ import triton.language as tl
 
 
 @triton.jit
-def _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):
-    b = tl.program_id(0)
-    x_row = X + b * stride_xb
-    o_row = OUT + b * stride_ob
-    n_chunks = seqlen // CHUNK
+def _softmax_kernel(OUT, IN, stride_om, stride_im, n_cols, BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    in_row = IN + row * stride_im
+    out_row = OUT + row * stride_om
+    n_full = n_cols // BLOCK
 
-    carry = 0.0
-    for c in range(n_chunks):
-        offs = c * CHUNK + tl.arange(0, CHUNK)
-        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)
-        local = tl.cumsum(x, axis=0)
-        tl.store(o_row + offs, local + carry, mask=offs < seqlen)
-        carry += tl.sum(x, axis=0)
+    row_max = -float("inf")
+    for b in range(tl.cdiv(n_cols, BLOCK)):
+        cols = b * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float("inf"))
+        row_max = tl.maximum(row_max, tl.max(x, axis=0))
+
+    denom = 0.0
+    for b in range(n_full):
+        cols = b * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float("inf"))
+        denom += tl.sum(tl.exp(x - row_max), axis=0)
+
+    for b in range(tl.cdiv(n_cols, BLOCK)):
+        cols = b * BLOCK + tl.arange(0, BLOCK)
+        x = tl.load(in_row + cols, mask=cols < n_cols, other=-float("inf"))
+        tl.store(out_row + cols, tl.exp(x - row_max) / denom, mask=cols < n_cols)
 
 
-def chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:
-    """Cumulative sum along the sequence axis, carried across fixed-size chunks."""
-    batch, seqlen = x.shape
-    out = torch.zeros_like(x)
-    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)
+def softmax(x: torch.Tensor, block_size: int = 128) -> torch.Tensor:
+    """Row-wise softmax of a 2-D float32 tensor."""
+    n_rows, n_cols = x.shape
+    out = torch.empty_like(x)
+    _softmax_kernel[(n_rows,)](out, x, out.stride(0), x.stride(0), n_cols, BLOCK=block_size)
     return out
 
 ```
@@ -71,18 +85,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-n_chunks = seqlen // CHUNK skips remainder → trailing positions never written. Out is zeros, wrong. Reject.
+The second loop uses n_full = n_cols // BLOCK, skipping the partial block. Denominator misses partial block contributions. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 1.0, "reason": "The loop uses integer division (n_chunks = seqlen // CHUNK), so when seqlen is not a multiple of CHUNK the trailing positions are never computed and remain zeros from torch.zeros_like, violating the contract for the shorter final chunk."}
+{"verdict": "reject", "confidence": 1.0, "reason": "The denominator loop iterates only n_full = n_cols // BLOCK blocks, so when n_cols is not a multiple of BLOCK the trailing partial block's exp terms are excluded from the denominator; the result then does not sum to 1 (it sums to < 1) for those rows."}
 
 ## Verdict
 
 {
   "verdict": "reject",
   "confidence": 1.0,
-  "reason": "The loop uses integer division (n_chunks = seqlen // CHUNK), so when seqlen is not a multiple of CHUNK the trailing positions are never computed and remain zeros from torch.zeros_like, violating the contract for the shorter final chunk."
+  "reason": "The denominator loop iterates only n_full = n_cols // BLOCK blocks, so when n_cols is not a multiple of BLOCK the trailing partial block's exp terms are excluded from the denominator; the result then does not sum to 1 (it sums to < 1) for those rows."
 }
 
 ## Usage and stop reason
@@ -93,21 +107,21 @@ n_chunks = seqlen // CHUNK skips remainder → trailing positions never written.
   "response": {
     "verdict": "reject",
     "confidence": 1.0,
-    "reason": "The loop uses integer division (n_chunks = seqlen // CHUNK), so when seqlen is not a multiple of CHUNK the trailing positions are never computed and remain zeros from torch.zeros_like, violating the contract for the shorter final chunk."
+    "reason": "The denominator loop iterates only n_full = n_cols // BLOCK blocks, so when n_cols is not a multiple of BLOCK the trailing partial block's exp terms are excluded from the denominator; the result then does not sum to 1 (it sums to < 1) for those rows."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 681,
-    "output_tokens": 95
+    "input_tokens": 836,
+    "output_tokens": 107
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 4.621429958147928,
-  "kernel_sha256": "f048ffa0230888d6313797c35edc17ecf13a35a548e666f93102a58045babf4e",
-  "problem_sha256": "aef8bb91ac2c21238489d32fddb8e9ba289efa6cce83d69766d57d33f6397d48",
+  "elapsed_s": 6.870273707900196,
+  "kernel_sha256": "1d50a21b9bda09e679c6fab5b1438243011ac01d10e5de570cbb8cfaea225d25",
+  "problem_sha256": "af0802e04e4d4f9afa7fd910385850cdb3a4feb3e07ea48f021281a97bf24478",
   "prompt_variant": "original",
-  "estimated_usd": 0.0013714,
+  "estimated_usd": 0.0016411999999999998,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

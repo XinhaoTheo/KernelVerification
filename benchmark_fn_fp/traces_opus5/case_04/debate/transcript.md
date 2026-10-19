@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_04`
+- Entry: `case_05`
 - Turns: 7
-- Tool events: 14
-- Claims: 2
+- Tool events: 17
+- Claims: 3
 - Description updates: 1
-- LLM time: 316.601s across 6 calls | tokens: in=157550 out=25260 total=182810
+- LLM time: 223.828s across 6 calls | tokens: in=237591 out=17402 total=254993
 - Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
 - Verdict: `trust`
-- Confidence: 0.6
+- Confidence: 0.76
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,88 +27,71 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_04",
+    "entry": "case_05",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_04"
+    "entry": "case_05"
   }
 
-### Turn 2 - `describer` (80.388986386s, in=3832 out=6185)
-
-Message:
-
-```text
-I have the full kernel, problem text, and metadata already in state, so I'll go straight to recording the structured description model. Key things I see: the wrapper hard-codes an fp32 output, `X.float()` is a no-op for fp32 inputs (so odd strides survive), and the kernel assumes unit stride along the last dim while only receiving `stride(0)`.
-```
+### Turn 2 - `describer` (72.708912403s, in=4227 out=5330)
 
 Tool calls:
 
 - `record_description_update -> t5 ok`
   Args:
   {
-    "contract_model": "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone.",
-    "kernel_model": "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols.",
-    "open_questions": "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD.",
-    "risk_map": "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong.",
-    "scope_notes": "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-
-  ...[truncated 654 chars]
+    "contract_model": [
+      "count_tied_at_boundary(scores, pivot) -> int must return the number of elements of `scores` that are strictly greater than `pivot` and that are tied with the minimum of that strictly-above-pivot set.",
+      "Tie comparison is explicitly tolerance-based, and the problem text states the numeric tolerance value is NOT fixed by the spec: only 'values equal at the boundary must be counted together' is mandatory. Exact-equality-reference mismatches on genuinely distinct near-ties are therefore arguably spec-permitted, not automatically a bug.",
+      "Comparison against pivot is strict (>), so values exactly equal to pivot must be excluded even if within tolerance of the boundary minimum.",
+      "Input domain per problem.txt: a single tile, length a power of two; multi-t
+  ...[truncated 7682 chars]
   Output summary:
   {
     "contract_model": [
-      "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
-    ],
-    "open_questions": [
-      "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
-    ],
-    "resolved_tasks": [],
-    "risk_map": [
-      "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
-    ],
-    "scope_notes": [
-      "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
-    ],
-    "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper.
-  ...[truncated 394 chars]
+      "count_tied_at_boundary(scores, pivot) -> int must return the number of elements of `scores` that are strictly greater than `pivot` and that are tied with the minimum of that strictly-above-pivot set.",
+      "Tie comparison is explicitly tolerance-based, and the problem text states the numeric tolerance value is NOT fixed by the spec: only 'values equal at the boundary must be counted together' is mandatory. Exact-equality-reference mismatches on genuinely distinct near-ties are therefore arguably spec-permitted, not automatically a bug.",
+      "Comparison against pivot is strict (>), so values exactly equal to pivot must be excluded even if within tolerance of the boundary minimum.",
+      "Input domain per problem.txt: a single tile, length a power of two; multi-tile/vocabulary-length reduction is the caller's responsibility and is out of this primitive's contract.",
+      "Downstream use: the count becomes a 1/count budget split, so a returned 0 when candidates exist (or an inflated count) is semantically severe (division / probability mass error), while an off-by-one on true ties changes sampling weights.",
+      "Return type is a Python int (host-side .item
+  ...[truncated 7353 chars]
 
-### Turn 3 - `skeptic` (78.13108642299999s, in=7382 out=6119)
+### Turn 3 - `skeptic` (44.23486745500003s, in=23498 out=3248)
 
 Message:
 
 ```text
-Reading the artifact contract: problem.txt explicitly says inputs "may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)". The wrapper unconditionally allocates and returns a float32 `Y`, so the bf16 storage path is the sharpest attack surface. Recording two directly testable claims about it.
+Recording the highest-risk, directly testable hypotheses for this artifact. The dominant surface is the untyped boolean reduction at kernel.py:12 and the resulting store type at line 28; both would corrupt the count in the plain single-tile domain that problem.txt declares.
 ```
 
 Tool calls:
@@ -116,115 +99,96 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+    "rationale": "tile_eq is `above_mask & (|data - tile_min| < EPS)`, an i1 tensor. Several Triton versions reduce i1 operands without promoting to a wider integer, giving XOR/parity or a saturated 0/1 result. A parity result is a direct violation of the stated return value and, downstream, of the 1/count budget split.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+        "summary": "Requires returning the count of values strictly above pivot tied with the smallest of them; input domain is a single tile whose length is a power of two."
       },
       {
         "source": "problem.txt",
-        "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, est
-  ...[truncated 1086 chars]
+        "summary": "Only the tolerance value is left unspecified; values 'equal at the boundary' must be counted together, so exactly-equal duplicates have a spec-fixed expected c
+  ...[truncated 881 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+    "rationale": "tile_eq is `above_mask & (|data - tile_min| < EPS)`, an i1 tensor. Several Triton versions reduce i1 operands without promoting to a wider integer, giving XOR/parity or a saturated 0/1 result. A parity result is a direct violation of the stated return value and, downstream, of the 1/count budget split.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+        "summary": "Requires returning the count of values strictly above pivot tied with the smallest of them; input domain is a single tile whose length is a power of two."
       },
       {
         "source": "problem.txt",
-        "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+        "summary": "Only the tolerance value is left unspecified; values 'equal at the boundary' must be counted together, so exactly-equal duplicates have a spec-fixed expected count."
       }
     ],
-    "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn c
-  ...[truncated 720 chars]
+    "scope_rationale": "problem.txt states the function \"must return how many of the values strictly above `pivot` are tied with the smallest of them\" and fixes the input domain as a single tile of power-of-two length. An 8-element fp32 tile with three exactly-equal values above the pivot is exactly that domain, and the expected answer (3) is fixed by the spec indep
+  ...[truncated 515 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+    "rationale": "The result type flows from tl.sum of an i1 tensor through tl.where with a bool condition and a bool*int product; if the final value is i1, the int32 store truncates/encodes the count as a flag. This failure mode is distinguishable from parity: it yields 1 for every nonzero tie count including even ones.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+        "summary": "Return value is the number of boundary-tied values (used as 1/count downstream), for a single power-of-two-length tile."
       }
     ],
-    "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and n
-  ...[truncated 814 chars]
+    "scope_rationale": "The contract requires an integer count from a single power-of-two tile; a 16-element fp32 tile with five exactly-equal values strictly above the pivot is inside that domain, and the expected value 5 is spec-fixed since th
+  ...[truncated 351 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+    "rationale": "The result type flows from tl.sum of an i1 tensor through tl.where with a bool condition and a bool*int product; if the final value is i1, the int32 store truncates/encodes the count as a flag. This failure mode is distinguishable from parity: it yields 1 for every nonzero tie count including even ones.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+        "summary": "Return value is the number of boundary-tied values (used as 1/count downstream), for a single power-of-two-length tile."
       }
     ],
-    "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
-    "statement": "For a bfloat16 input, the returned values are never roun
-  ...[truncated 448 chars]
+    "scope_rationale": "The contract requires an integer count from a single power-of-two tile; a 16-element fp32 tile with five exactly-equal values strictly above the pivot is inside that domain, and the expected value 5 is spec-fixed since the ties are exact equalities.",
+    "statement": "kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied boundary values (e.g. N=16 with five copies of 2.0 above pivot=1.0) returns 1 instead of k.",
+    "status": "open"
+  }
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "A magnitude-independent absolute tolerance cannot separate \"equal at the boundary\" from \"merely nearby\" across the logit range that top-k/top-p sampling feeds this primitive. Whether this is a violation depends on how much latitude problem.txt's \"tolerance not fixed\" clause grants, so the claim needs adjudication rather than assumption.",
+    "scope": "unknown",
+    "scope_rationale": "problem.txt explicitly declines to fix the tolerance value and only mandates that values equal at the boundary be counted together, so over-merging of distinct-but-near values may be spec-permitted. Scope is unknown until the Describer/Judge decides whether an arbitrarily wide absolute window is within that latitude; no test.py exists to pin the reference tie rule.",
+    "statement": "kerne
+  ...[truncated 443 chars]
+  Output summary:
+  {
+    "id": "c3",
+    "rationale": "A magnitude-independent absolute tolerance cannot separate \"equal at the boundary\" from \"merely nearby\" across the logit range that top-k/top-p sampling feeds this primitive. Whether this is a violation depends on how much latitude problem.txt's \"tolerance not fixed\" clause grants, so the claim needs adjudication rather than assumption.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt explicitly declines to fix the tolerance value and only mandates that values equal at the boundary be counted together, so over-merging of distinct-but-near values may be spec-permitted. Scope is unknown until the Describer/Judge decides whether an arbitrarily wide absolute window is within that latitude; no test.py exists to pin the reference tie rule.",
+    "statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the ef
+  ...[truncated 101 chars]
 
-### Turn 4 - `experimenter` (25.702794122s, in=13336 out=2544)
+### Turn 4 - `experimenter` (27.004304284s, in=30607 out=2506)
 
 Message:
 
 ```text
-Both open claims (c1 dtype, c2 value-level bf16 rounding) are independent — c1's outcome doesn't change c2's probe design — so I'm launching both in this response.
+Launching all three probes together: c1 (odd tie count / parity), c2 (bool-typed store yielding 0/1), and c3 (absolute EPS merging distinct near-boundary values). They use disjoint inputs and neither outcome changes another's design, so no need to hold any back.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    out={}\n    for name,dt in [(\"fp32\",torch.float32),(\"bf16\",torch.bfloat16),(\"fp16\",torch.float16)]:\n        X=torch.randn(4,512,device=\"cuda\").to(dt)\n        Y=m.rms_norm_forward(X,eps)\n        # reference: liger-style, fp32 accumulate, store in input dtype\n        x32=X.float()\n        ms=(x32*x32).sum(-1,keepdim=True)/x32.shape[-1]\n        ref=(x32*torch.rsqrt(ms+eps)).to(dt)\n        strict_ok=True; strict_msg=\"\"\n        try:\n            torch.testing.assert_close(Y,ref)\
-  ...[truncated 647 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
-      }
-    ],
-    "claim_id": "c1",
-    "claim_statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32
-  ...[truncated 5631 chars]
 - `run_claim_probe -> t9 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(0)\n    eps=1e-6\n    n_rows,n_cols=8,512\n    base=torch.randn(n_rows,n_cols,device=\"cuda\")\n    scales=torch.ones(n_rows,1,device=\"cuda\")\n    scales[4:]=1e-8            # near-zero-magnitude rows\n    X=(base*scales).to(torch.bfloat16)\n    Y=m.rms_norm_forward(X,eps)\n    x32=X.float()\n    ms=(x32*x32).sum(-1,keepdim=True)/n_cols\n    rstd=torch.rsqrt(ms+eps)\n    ref_bf16=(x32*rstd).to(torch.bfloat16)\n    ref_f32=x32*rstd\n    Yf=Y.float(); Rb=ref_bf16.float()\n    def stats(a,b):\n        d=(a-b).abs()
-  ...[truncated 1425 chars]
+    "claim_id": "c1",
+    "code": "import json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nimport triton\nres = {\"triton_version\": triton.__version__}\ndef ref(s, pivot, eps=0.0):\n    a = s[s > pivot]\n    if a.numel() == 0: return 0\n    mn = a.min()\n    return int((a == mn).sum().item()) if eps == 0.0 else int(((a - mn).abs() < eps).sum().item())\ncases = {}\n# vary number of exactly-tied boundary values k = 1..5 in N=8 tile\nfor k in range(1, 6):\n    vals = [1.0]*k + [5.0]*(5-k+1)\n    s = torch.tensor((vals + [0.0]*8)[:8], dtype=torch.float32, device=\"cuda\")\n    got = m.count_tied_at_boundary(s, 0.6)\n    cases[f\"k={k}\"] = {\"got\": got, \"
+  ...[truncated 415 chars]
   Output summary:
   {
     "artifacts": [
@@ -232,13 +196,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+        "sha256": "ff6b22a0f6433a7e4aaf1535155466f4d7cd211e88771970fd489aa046beb98d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+        "sha256": "a414942ae871918bc04284f02a3b88723b5eaecea626436fdfb3e587aba839db"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -250,308 +214,429 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t9_json_result.json",
-        "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+        "sha256": "b1d0f7f8069f878968ef831aa7a788bf0766ae414287ea1e84d54bcdc1a1c062"
       }
     ],
-    "claim_id": "c2",
-    "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can stil
-  ...[truncated 6359 chars]
-
-### Turn 5 - `experimenter` (45.61277221s, in=25000 out=4128)
-
-Message:
-
-```text
-Both probes returned. Finalizing c1 (confirmed: bf16/fp16 inputs yield fp32 output, dtype-strict comparison fails) and c2 (core assertion confirmed: ~0.34% elementwise deviation vs a bf16-stored reference, fails rtol=1e-5 — but the sub-claim that deviations concentrate on near-zero rows is not supported; normal and near-zero rows show essentially identical max relative error). In the same response I'm launching one supplementary c2 probe to establish whether the divergence is *purely* the missing final store-rounding (no math error) across a wider magnitude sweep, which is what the Judge needs to weigh severity.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t10 ok`
-  Args:
-  {
-    "data": {
-      "bf16_assert_close_strict_ok": false,
-      "bf16_dtype_matches_input": false,
-      "bf16_in_out_dtype": "torch.float32",
-      "bf16_ref_dtype": "torch.bfloat16",
-      "eps": 1e-06,
-      "fp16_assert_close_strict_ok": false,
-      "fp16_dtype_matches_input": false,
-      "fp16_in_out_dtype": "torch.float32",
-      "fp32_assert_close_strict_ok": true,
-      "fp32_dtype_matches_input": true,
-      "shape": "(4,512)"
-    },
-    "event_id": "t8",
-    "status": "confirmed",
-    "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.
-  ...[truncated 113 chars]
-  Output summary:
-  {
     "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
-    "supports": "confirmed",
-    "tool_event_id": "t8"
-  }
-- `finalize_probe_evidence -> t11 ok`
-  Args:
-  {
-    "data": {
-      "allclose_vs_bf16ref_rtol1e-2": true,
-      "allclose_vs_bf16ref_rtol1e-5": false,
-      "allclose_vs_fp32ref_rtol1e-5": true,
-      "bf16_eps_2pow_minus8": 0.00390625,
-      "eps": 1e-06,
-      "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
-      "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
-      "kernel_out_dtype": "torch.float32",
-      "kernel_rounded_to_bf16_exact_match_frac": 1.0,
-      "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
-      "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
-      "max_rel_vs_bf16_ref_all": 0.003449842566624284,
-      "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
-      "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
-      "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
-      "nearzero_concentration_supported": false,
-      "nearzero_row_scal
-  ...[truncated 1055 chars]
-  Output summary:
-  {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
-    "supports": "confirmed",
-    "tool_event_id": "t9"
-  }
-- `run_claim_probe -> t12 ok`
+    "claim_statement": "kernel.py:12 sums a boolean (i1) mask via tl.sum(tile_eq) with no .to(tl.int32) cast, so the reduction may be performed in i1 arithmetic and return parity (count mod 2) instead of the true count: for a power-of-tw
+  ...[truncated 5897 chars]
+- `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, torch, importlib.util, traceback\nres={}\ntry:\n    spec=importlib.util.spec_from_file_location(\"k\",\"/root/cases/case_04/kernel.py\")\n    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n    torch.manual_seed(1)\n    eps=1e-6\n    cases=[]\n    for shape in [(2,64),(4,512),(3,1024),(5,37)]:\n        for scale in [1.0, 1e-2, 1e-4, 1e-8, 1e-12, 1e2]:\n            for dt in [torch.bfloat16, torch.float16, torch.float32]:\n                X=(torch.randn(*shape,device=\"cuda\")*scale).to(dt)\n                Y=m.rms_norm_forward(X,eps)\n                x32=X.float()\n                ms=(x32*x32).sum(-1,keepdim=True)/shape[-1]\n                rstd=torch.rsqrt(ms+eps)\n                ref_dt=(x32*rstd).to(dt)\n              
-  ...[truncated 1970 chars]
+    "code": "import json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nres = {}\n# N=16 with five exact copies of 2.0 above pivot=1.0\ns = torch.tensor([2.0]*5 + [7.0]*3 + [0.5]*8, dtype=torch.float32, device=\"cuda\")\ngot5 = m.count_tied_at_boundary(s, 1.0)\n# N=32 with 12 copies (even, >1) to distinguish bool-saturate (1) from parity (0)\ns2 = torch.cat([torch.full((12,), 3.0), torch.full((4,), 9.0), torch.zeros(16)]).cuda()\ngot12 = m.count_tied_at_boundary(s2, 1.0)\n# empty above-pivot case\ns3 = torch.zeros(8, dtype=torch.float32, device=\"cuda\")\ngot0 = m.count_tied_at_boundary(s3, 1.0)\nres = {\"got_k5\": got5, \"expected_k5\
+  ...[truncated 421 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t12_probe.py",
-        "sha256": "16986387dc6954e0cc1e7c667d6551c2a545bedeaf2717e7d39738a7a8df21d9"
+        "path": "probes/t10_probe.py",
+        "sha256": "33e3abcbcbb012b433c6a27a26157894c651b60d00a9ad627ffdf0c253669347"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t12_stdout.txt",
-        "sha256": "b038e068c1bd3d724ceb02f507c96be3709fef721bca3890e4e24b5bd842a897"
+        "path": "probes/t10_stdout.txt",
+        "sha256": "441bbc0e03b2beff1cec944ae602e0d13f11d4ca9eeaa70b5aa180f348cc2e3e"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t12_stderr.txt",
+        "path": "probes/t10_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t12_json_result.json",
-        "sha256": "f1c32e909da4c7977764d59d7f464a833efbd11b215683302eb6f8a920d9d525"
+        "path": "probes/t10_json_result.json",
+        "sha256": "a439b26b121017d67cd7111e4636cdadc78f28d4732e30e24f6fd992def1515f"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can 
-  ...[truncated 11016 chars]
+    "claim_statement": "kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied
+  ...[truncated 2855 chars]
+- `run_claim_probe -> t11 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "import json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nout = {}\ndef exact_ref(s, pivot):\n    a = s[s > pivot]\n    if a.numel() == 0: return 0\n    return int((a == a.min()).sum().item())\n# distinct near-boundary values within 1e-3\ns = torch.tensor([1.0, 1.0005, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], dtype=torch.float32, device=\"cuda\")\nout[\"near_tie_1e-3\"] = {\"got\": m.count_tied_at_boundary(s, 0.5), \"exact_ref\": exact_ref(s, 0.5)}\n# large-magnitude logits: many distinct values inside 1e-3 window\nbase = 1000.0\nvals = [base + i*1e-4 for i in range(6)] + [2000.0, 3000.0]\ns2 = torch.tensor(vals, dtype=torch.float
+  ...[truncated 1038 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t11_probe.py",
+        "sha256": "eb3d73e54eddc95d04ba1b3062623be7f293023c00141b22b70eac2d39c91910"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t11_stdout.txt",
+        "sha256": "0b2e178e80e7d93161941f6eb94be6db2ae5a9f718a8fc7abb8cebf9fe541e9b"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t11_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t11_json_result.json",
+        "sha256": "413ba2881f3a5768d02ef152bc28545c65abe20a8e2bb8ef81423f8a01bfade8"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger 
+  ...[truncated 3505 chars]
 
-### Turn 6 - `skeptic` (12.393151410999991s, in=53478 out=755)
+### Turn 5 - `experimenter` (38.345997641000054s, in=43358 out=3358)
 
 Message:
 
 ```text
-This is my final review turn. The new t12 sweep adds nothing that existing claims don't cover: all 72 cases return fp32 unconditionally (c1), every low-precision case is bit-exact after rounding to the input dtype and the only fp32-input deviations are ~2e-7 relative (libdevice `rsqrt` vs `torch.rsqrt`, well inside fp32 ULP noise, no NaNs). The near-zero-row path behaves correctly (rstd saturates to 1/sqrt(eps)). No new in-scope, testable problem is exposed, so I defer to the Judge.
+Finalizing all three probes now: c1 and c2 are rebutted (Triton 3.8.0 promotes the i1 reduction correctly; exact counts 1–5, 12 and the empty case all match), and c3's over-merging behavior is confirmed as observed. I'm launching one additional c3 probe to quantify how often the fixed 1e-3 absolute window over-merges under realistic sampling-logit / probability distributions, which is the fact the Judge needs for the scope decision on c3.
 ```
 
 Tool calls:
 
-- `record_no_new_claims -> t13 ok`
+- `finalize_probe_evidence -> t12 ok`
   Args:
   {
-    "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) 
-  ...[truncated 223 chars]
+    "data": {
+      "N": 8,
+      "all_match": true,
+      "dtype": "float32",
+      "expected_k1_k5": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "got_k1": 1,
+      "got_k2": 2,
+      "got_k3": 3,
+      "got_k4": 4,
+      "got_k5": 5,
+      "parity_pattern": false,
+      "pivot": 0.6,
+      "triton_version": "3.8.0"
+    },
+    "event_id": "t9",
+    "status": "rebutted",
+    "summary": "No parity behavior: on Triton 3.8.0, tl.sum over the i1 mask promotes to an integer count. N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values (pivot=0.6) returned exactly k in every case (1,2,3,4,5), including the odd k=3 case the claim predicted would return 1 and the even k=2/k=4 cases predicted to return 0. parity_pattern=false, all_match=true.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "No parity behavior: on Triton 3.8.0, tl.sum over the i1 mask promotes to an integer count. N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values (pivot=0.6) returned exactly k in every case (1,2,3,4,5), including the odd k=3 case the claim predicted would return 1 and the even k=2/k=4 cases predicted to return 0. parity_pattern=false, all_match=true.",
+    "supports": "rebutted",
+    "tool_event_id": "t9"
+  }
+- `finalize_probe_evidence -> t13 ok`
+  Args:
+  {
+    "data": {
+      "N_cases": [
+        16,
+        32,
+        8
+      ],
+      "all_match": true,
+      "bool_saturate_signature": false,
+      "dtype": "float32",
+      "expected_empty": 0,
+      "expected_k12": 12,
+      "expected_k5": 5,
+      "got_empty": 0,
+      "got_k12": 12,
+      "got_k5": 5,
+      "parity_signature": false
+    },
+    "event_id": "t10",
+    "status": "rebutted",
+    "summary": "No boolean/i1 truncation at the store. N=16 with five exact copies of 2.0 above pivot=1.0 returned 5 (not 1); N=32 with twelve copies of 3.0 returned 12 (not 1 or 0); the empty above-pivot tile returned exactly 0. Both the bool-saturate signature (all nonzero counts -> 1) and the parity signature are absent, so tl.where/tl.store carry a genuine int32 count.",
+    "supports": "rebutted"
+  }
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "rebutted",
+    "evidence_id": "c2.e1",
+    "summary": "No boolean/i1 truncation at the store. N=16 with five exact copies of 2.0 above pivot=1.0 returned 5 (not 1); N=32 with twelve copies of 3.0 returned 12 (not 1 or 0); the empty above-pivot tile returned exactly 0. Both the bool-saturate signature (all nonzero counts -> 1) and the parity signature are absent, so tl.where/tl.store carry a genuine int32 count.",
+    "supports": "rebutted",
+    "tool_event_id": "t10"
+  }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "EPS": 0.001,
+      "codes_spanned_by_eps_at_1000": 16.38,
+      "dtype": "float32",
+      "exact_tie_large_exact_ref": 3,
+      "exact_tie_large_got": 3,
+      "large_mag_distinct_fp32_values": 8,
+      "large_mag_exact_ref": 1,
+      "large_mag_got": 6,
+      "large_mag_step": 0.0001,
+      "near_tie_exact_ref": 1,
+      "near_tie_gap": 0.0005,
+      "near_tie_got": 2,
+      "separated_control_exact_ref": 1,
+      "separated_control_gap": 0.01,
+      "separated_control_got": 1,
+      "ulp_at_1000": 6.103515625e-05
+    },
+    "event_id": "t11",
+    "status": "confirmed",
+    "summary": "The fixed absolute 1e-3 window does merge genuinely distinct above-pivot values, exactly as claimed. scores=[1.0,1.0005,5..10], pivot=0.5: kernel returned 2 where the strictly-above-pivot minimum has exact multiplicity 1. Lar
+  ...[truncated 606 chars]
+  Output summary:
+  {
+    "claim_id": "c3",
+    "claim_status": "confirmed",
+    "evidence_id": "c3.e1",
+    "summary": "The fixed absolute 1e-3 window does merge genuinely distinct above-pivot values, exactly as claimed. scores=[1.0,1.0005,5..10], pivot=0.5: kernel returned 2 where the strictly-above-pivot minimum has exact multiplicity 1. Large-magnitude case (1000.0 + i*1e-4 for i=0..5, pivot=500): kernel returned 6 vs exact-equality reference 1, and all 8 values are distinct in fp32 (fp32 ULP at 1000 is 6.10e-5, so the 1e-3 window spans ~16 representable codes). Controls behave correctly: values separated by 1e-2 are not merged (1 vs 1) and exact ties at large magnitude give 3 vs 3. So the mechanism is real and the overcount is deterministic; whether an unspecified-tolerance absolute window of this width violates the spec is a scope/adjudication question, not a runtime one (claim scope remains 'unknown').",
+    "supports": "confirmed",
+    "tool_event_id": "t11"
+  }
+- `run_claim_probe -> t15 ok`
+  Args:
+  {
+    "claim_id": "c3",
+    "code": "import json, importlib.util, torch\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_05/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef exact_ref(s, pivot):\n    a = s[s > pivot]\n    if a.numel() == 0: return 0\n    return int((a == a.min()).sum().item())\n\ntorch.manual_seed(0)\nout = {}\nfor name, gen, pivot_fn in [\n    (\"logits_N2(0,2)_N1024\", lambda: torch.randn(1024, device=\"cuda\")*2.0, lambda s: float(s.median())),\n    (\"probs_softmax_N1024\", lambda: torch.softmax(torch.randn(1024, device=\"cuda\")*2.0, dim=0), lambda s: float(s.median())),\n    (\"probs_softmax_tailpivot\", lambda: torch.softmax(torch.randn(1024, device=\"cuda\")*2.0, dim=0), lambda s: 0.0),\n    (\"logits_N25
+  ...[truncated 1639 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t15_probe.py",
+        "sha256": "465c0a95f2f2761bcf898cae154bfc230ca772028b572c84613e44de8c96eb38"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t15_stdout.txt",
+        "sha256": "4220cb9244df791bc82965993ea3ad070cf0d18d026cbaee8c5adf3751e14efb"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t15_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t15_json_result.json",
+        "sha256": "895c4f0886dc2882564ce481bc94b1f25e9569a6dfb801113a0f5ce386a1e60e"
+      }
+    ],
+    "claim_id": "c3",
+    "claim_statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger 
+  ...[truncated 6370 chars]
+
+### Turn 6 - `skeptic` (13.921489033s, in=66457 out=882)
+
+Message:
+
+```text
+This is the final review turn. The new probe (t15) quantifies the c3 mechanism rather than exposing a new one: the fixed absolute 1e-3 window overcounts in 6.5–18% of random logit tiles (max +2) and in 100% of softmax-probability tiles (mean 364 vs exact ref 1). That is entirely the same failure mode already recorded and confirmed under c3, and c1/c2 are rebutted with direct runtime evidence. The remaining question — whether problem.txt's "tolerance is not fixed" clause licenses a magnitude-blind 1e-3 window — is an adjudication matter for the Judge, not a new testable hypothesis.
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t16 ok`
+  Args:
+  {
+    "reason": "All three existing claims have direct runtime evidence: c1 (i1 parity reduction) and c2 (bool-typed store saturation) are rebutted on Triton 3.8.0 with exact counts for k=1..5, 12 and the empty tile; c3 (fixed absolute EPS=1e-3 merging distinct boundary values) is confirmed, and the final probe t15 only quantifies its prevalence (6.5-18% of logit tiles, max overcount +2; 100% of softmax-probability tiles, mean_got 364 vs exact_ref 1.005, max overcount 939) without revealing a new mechanism. Other surfaces in the risk map (+inf sentinel collision, fp16/bf16 promotion, non-contiguous/non-power-of-two loads, NaN rows) are not required by problem.txt's stated input domain (a single contiguous tile of power-of-two length, finite sampling scores) and per scope policy could not be 
+  ...[truncated 401 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+    "reason": "All three existing claims have direct runtime evidence: c1 (i1 parity reduction) and c2 (bool-typed store saturation) are rebutted on Triton 3.8.0 with exact counts for k=1..5, 12 and the empty tile; c3 (fixed absolute EPS=1e-3 merging distinct boundary values) is confirmed, and the final probe t15 only quantifies its prevalence (6.5-18% of logit tiles, max overcount +2; 100% of softmax-probability tiles, mean_got 364 vs exact_ref 1.005, max overcount 939) without revealing a new mechanism. Other surfaces in the risk map (+inf sentinel collision, fp16/bf16 promotion, non-contiguous/non-power-of-two loads, NaN rows) are not required by problem.txt's stated input domain (a single contiguous tile of power-of-two length, finite sampling scores) and per scope policy could not be decisive anyway. The remaining open question - whether the spec's unspecified tolerance permits a magnitude-blind 1e-3 absolute window that merges values separated by ~16 fp32 codes at magnitude 1000 and hundreds of distinct softmax probabilities - is a scope adjudication for the Judge on the already-confirmed c3, not a new testable claim.",
     "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 12,
-    "turn": 6
-  }
+    
+  ...[truncated 80 chars]
 
-### Turn 7 - `judge` (74.37257164900001s, in=54522 out=5529)
+### Turn 7 - `judge` (27.61236329199994s, in=69444 out=2078)
 
 Message:
 
 ```text
-All claims have evidence, both are confirmed, and the Skeptic has signed off with no new claims after reviewing the latest sweep (t12). The remaining question is purely contract interpretation, which is mine to settle, so I am finalizing rather than requesting more debate.
+All three claims have runtime evidence and the Skeptic has signed off with no new claims, so the only remaining work is adjudicating the confirmed c3 against the contract — which is my call, not something another debate round would resolve.
 
-The decisive reasoning: problem.txt is the operative contract here (no test.py), and what it explicitly requires is the RMSNorm formula, float32 accumulation, and robustness to inputs arriving at different storage precisions and to near-zero-magnitude rows. The probe evidence shows the kernel meets all of those — output rounded to the input dtype is bit-exact against the Liger-style reference across 72 configurations (t12), the fp32 path is within 2.2e-7 relative (libdevice `rsqrt` ULP noise), rstd correctly saturates to 1/sqrt(eps) on the 1e-8/1e-12 rows, and no NaNs at any tested magnitude. The one confirmed deviation (c1/c2) is that the wrapper always returns float32, so values are never downcast to the input storage precision; problem.txt declares fp32 *accumulation* but never declares the output storage format, and the returned values are a strict refinement of the reference rather than a math error. I reco
-...[truncated 126 chars]
+The mechanical failure modes that would have been genuine violations (i1 parity reduction, boolean store saturation) are directly rebutted, and the one confirmed behavior is exactly the tolerance latitude the problem text grants.
 ```
 
 Tool calls:
 
-- `record_verdict -> t14 ok`
+- `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.6,
+    "confidence": 0.76,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 ext
-  ...[truncated 2127 chars]
+    "reason": "The operative contract is problem.txt (no test.py exists). It requires count_tied_at_boundary to return how many values strictly above `pivot` are tied with the smallest of them, over a single power-of-two-length tile, and it states explicitly: \\\"'tied' is decided with a tolerance rather than exact equality. The specification requires only that values equal at the boundary be counted together; it does not fix the numeric value of that tolerance.\\\"\\n\\nThe two claims that would have been true violations of that mandatory behavior are rebutted by direct runtime evidence on the stated domain. c1 (tl.sum over the i1 mask at kernel.py:12 reducing in i1 and returning parity): probe t9 on Triton 3.8
+  ...[truncated 2340 chars]
   Output summary:
   {
-    "confidence": 0.6,
+    "confidence": 0.76,
     "decisive_claims": [
       "c1",
-      "c2"
+      "c2",
+      "c3"
     ],
-    "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32,
-  ...[truncated 1727 chars]
+    "reason": "The operative contract is problem.txt (no test.py exists). It requires count_tied_at_boundary to return how many values strictly above `pivot` are tied with the smallest of them, over a single power-of-two-length tile, and it states explicitly: \\\"'tied' is decided with a tolerance rather than exact equality. The specification requires only that values equal at the boundary be counted together; it does not fix the numeric value of that tolerance.\\\"\\n\\nThe two claims that would have been true violations of that mandatory behavior are rebutted by direct runtime evidence on the stated domain. c1 (tl.sum over the i1 mask at kernel.py:12 reducing in i1 and returning parity): probe t9 on Triton 3.8.0, N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values returned exactly 1,2,3,4,5; parity_pattern=false. c2 (bool-typed value truncated by the int32 store at kernel.py:15/28): probe t10 returned 5 for five exact copies, 12 for twelve exact copies, and 0 for the empty above-pivot tile; both the bool-saturate and parity signatures are absent. So exact ties at the boundary \u2014 the one thin
+  ...[truncated 1940 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+    "count_tied_at_boundary(scores, pivot) -> int must return the number of elements of `scores` that are strictly greater than `pivot` and that are tied with the minimum of that strictly-above-pivot set.",
+    "Tie comparison is explicitly tolerance-based, and the problem text states the numeric tolerance value is NOT fixed by the spec: only 'values equal at the boundary must be counted together' is mandatory. Exact-equality-reference mismatches on genuinely distinct near-ties are therefore arguably spec-permitted, not automatically a bug.",
+    "Comparison against pivot is strict (>), so values exactly equal to pivot must be excluded even if within tolerance of the boundary minimum.",
+    "Input domain per problem.txt: a single tile, length a power of two; multi-tile/vocabulary-length reduction is the caller's responsibility and is out of this primitive's contract.",
+    "Downstream use: the count becomes a 1/count budget split, so a returned 0 when candidates exist (or an inflated count) is semantically severe (division / probability mass error), while an off-by-one on true ties changes sampling weights.",
+    "Return type is a Python int (host-side .item()), so the device-side accumulator must be an integer type wide enough for the tile length."
   ],
   "kernel_model": [
-    "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
-  ],
-  "open_questions": [
-    "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
-  ],
-  "risk_map": [
-    "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
-  ],
-  "scope_notes": [
-    "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
-  ]
-}
+    "kernel.py:31-38 host wrapper: reads N = scores.shape[0], allocates a 1-element int32 output, launches grid (1,) with N and EPS=_TIE_EPS=1e-3 as constexpr and pivot as a runtime scalar, then returns int(count.item()).",
+    "kernel.py:22-24: offs = tl.arange(0, N) with an unmasked tl.load(scores_ptr + offs) -- assumes scores is 1-D, contiguous (unit stride), exactly N elements, and N a compile-time power of two; no bounds mask exists.",
+    "kernel.py:25-27: initializes min_larger = +inf (float32 scalar) and num_min_larger = 0 (int32 scalar), then calls the reduction helper exactly once.",
+    "kernel.py:10: tile_min = tl.min(tl.where(above_mask, data, sentinel)) with 
+...[truncated 5835 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE.
+- `du1` tasks=`initial`: case_05 implements a single-tile "count values tied with the smallest value strictly above pivot" primitive (vLLM top-k/top-p _update_min_larger_stats). The kernel does one masked min-reduction plus one tolerance-equality count in a single program, so most of the multi-pass accumulator logic (is_new/is_same) is dead code for the in-scope single-tile contract. Main bug surfaces are Triton boolean reduction typing (tl.sum over an i1 mask), the +inf sentinel colliding with legitimate +inf scores, absolute EPS=1e-3 tie semantics vs. an exact-equality reference, and unmasked contiguous 1-D load assumptions.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.
-
-Scope evidence:
-- `problem.txt`: "The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)" — bf16 storage is an explicitly named input case.
-- `problem.txt`: Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision.
-
-Rationale: Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16." Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.
-
-### c2 - `confirmed`
-
-Statement: For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.
+Statement: kernel.py:12 sums a boolean (i1) mask via tl.sum(tile_eq) with no .to(tl.int32) cast, so the reduction may be performed in i1 arithmetic and return parity (count mod 2) instead of the true count: for a power-of-two fp32 tile such as scores=[0.0,0.5,1.0,1.0,1.0,0.2,0.3,0.4] with pivot=0.6, count_tied_at_boundary must return 3 but may return 1 (and for 2 or 4 tied boundary values may return 0).
 
 Scope: `in_scope`
 
-Scope rationale: Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.
+Scope rationale: problem.txt states the function "must return how many of the values strictly above `pivot` are tied with the smallest of them" and fixes the input domain as a single tile of power-of-two length. An 8-element fp32 tile with three exactly-equal values above the pivot is exactly that domain, and the expected answer (3) is fixed by the spec independent of the unspecified tolerance because the tied values are exactly equal.
 
 Scope evidence:
-- `problem.txt`: States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' — both conditions are explicitly in the operating domain.
+- `problem.txt`: Requires returning the count of values strictly above pivot tied with the smallest of them; input domain is a single tile whose length is a power of two.
+- `problem.txt`: Only the tolerance value is left unspecified; values 'equal at the boundary' must be counted together, so exactly-equal duplicates have a spec-fixed expected count.
 
-Rationale: Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.
+Rationale: tile_eq is `above_mask & (|data - tile_min| < EPS)`, an i1 tensor. Several Triton versions reduce i1 operands without promoting to a wider integer, giving XOR/parity or a saturated 0/1 result. A parity result is a direct violation of the stated return value and, downstream, of the 1/count budget split.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t9: bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t9: No parity behavior: on Triton 3.8.0, tl.sum over the i1 mask promotes to an integer count. N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values (pivot=0.6) returned exactly k in every case (1,2,3,4,5), including the odd k=3 case the claim predicted would return 1 and the even k=2/k=4 cases predicted to return 0. parity_pattern=false, all_match=true.
+
+### c2 - `rebutted`
+
+Statement: kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied boundary values (e.g. N=16 with five copies of 2.0 above pivot=1.0) returns 1 instead of k.
+
+Scope: `in_scope`
+
+Scope rationale: The contract requires an integer count from a single power-of-two tile; a 16-element fp32 tile with five exactly-equal values strictly above the pivot is inside that domain, and the expected value 5 is spec-fixed since the ties are exact equalities.
+
+Scope evidence:
+- `problem.txt`: Return value is the number of boundary-tied values (used as 1/count downstream), for a single power-of-two-length tile.
+
+Rationale: The result type flows from tl.sum of an i1 tensor through tl.where with a bool condition and a bool*int product; if the final value is i1, the int32 store truncates/encodes the count as a flag. This failure mode is distinguishable from parity: it yields 1 for every nonzero tie count including even ones.
+
+Evidence:
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t10: No boolean/i1 truncation at the store. N=16 with five exact copies of 2.0 above pivot=1.0 returned 5 (not 1); N=32 with twelve copies of 3.0 returned 12 (not 1 or 0); the empty above-pivot tile returned exactly 0. Both the bool-saturate signature (all nonzero counts -> 1) and the parity signature are absent, so tl.where/tl.store carry a genuine int32 count.
+
+### c3 - `confirmed`
+
+Statement: kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the effect worsens for large-magnitude logits where 1e-3 spans many distinct values.
+
+Scope: `unknown`
+
+Scope rationale: problem.txt explicitly declines to fix the tolerance value and only mandates that values equal at the boundary be counted together, so over-merging of distinct-but-near values may be spec-permitted. Scope is unknown until the Describer/Judge decides whether an arbitrarily wide absolute window is within that latitude; no test.py exists to pin the reference tie rule.
+
+Rationale: A magnitude-independent absolute tolerance cannot separate "equal at the boundary" from "merely nearby" across the logit range that top-k/top-p sampling feeds this primitive. Whether this is a violation depends on how much latitude problem.txt's "tolerance not fixed" clause grants, so the claim needs adjudication rather than assumption.
+
+Evidence:
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: The fixed absolute 1e-3 window does merge genuinely distinct above-pivot values, exactly as claimed. scores=[1.0,1.0005,5..10], pivot=0.5: kernel returned 2 where the strictly-above-pivot minimum has exact multiplicity 1. Large-magnitude case (1000.0 + i*1e-4 for i=0..5, pivot=500): kernel returned 6 vs exact-equality reference 1, and all 8 values are distinct in fp32 (fp32 ULP at 1000 is 6.10e-5, so the 1e-3 window spans ~16 representable codes). Controls behave correctly: values separated by 1e-2 are not merged (1 vs 1) and exact ties at large magnitude give 3 vs 3. So the mechanism is real and the overcount is deterministic; whether an unspecified-tolerance absolute window of this width violates the spec is a scope/adjudication question, not a runtime one (claim scope remains 'unknown').
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_04"
+  "entry": "case_05"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Signature exercised by the harness is presumably `rms_norm_forward(X, eps) -> Y`; rstd is computed but not returned, so the graded output is most likely Y alone."
+    "count_tied_at_boundary(scores, pivot) -> int must return the number of elements of `scores` that are strictly greater than `pivot` and that are tied with the minimum of that strictly-above-pivot set.",
+    "Tie comparison is explicitly tolerance-based, and the problem text states the numeric tolerance value is NOT fixed by the spec: only 'values equal at the boundary must be counted together' is mandatory. Exact-equality-reference mismatches on genuinely distinct near-ties are therefore arguably spec-permitted, not automatically a bug.",
+    "Comparison against pivot is strict (>), so values exactly equal to pivot must be excluded even if within tolerance of the boundary minimum.",
+    "Input domain per problem.txt: a single tile, length a power of two; multi-tile/vocabulary-length reduction is the caller's responsibility and is out of this primitive's contract.",
+    "Downstream use: the count becomes a 1/count budget split, so a returned 0 when candidates exist (or an inflated count) is semantically severe (division / probability mass error), while an off-by-one on true ties changes sampling weights.",
+    "Return type is a Python int (host-side .item()), so the device-side accumulator must be an integer type wide enough for the tile length."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Launch-config model: no MAX_FUSED_SIZE clamp and no num_warps/num_stages tuning (upstream Liger uses calculate_settings with a 65536 cap), so BLOCK_SIZE scales freely with n_cols."
-  ],
-  "open_questions": [
-    "Does the harness inspect the rstd output at all, or only Y? The wrapper discards RSTD."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Unused RSTD: computed and stored but discarded by the wrapper. Harmless for a Y-only contract, but if the harness expects (Y, RSTD) the return signature is wrong."
-  ],
-  "scope_notes": [
-    "artifact.test_code is empty and meta.json carries status \"under_test\" with passed=null, so no harness-derived tolerance, dtype-strictness, or shape list is available from the artifact; scope judgments about dtype must be argued from problem.txt."
-  ],
-  "summary": "case_04 is a single-pass Triton RMSNorm forward (no weight/offset) with an fp32-accumulating one-block-per-row kernel plus a Python wrapper. The math inside the kernel matches the stated formula; the visible risk concentrates in the wrapper: unconditional fp32 output dtype (despite the problem naming bf16 round-trip inputs), `X.float()` being a no-op for fp32 so non-contiguous strides pass through, an unqualified unit-stride assumption on the last dimension, and an unbounded BLOCK_SIZE.",
-  "task_ids": [],
-  "update_id": "du1"
-}
+    "kernel.py:31-38 host wrapper: reads N = scores.shape[0], allocates a 1-element int32 output, launches grid (1,) with N and EPS=_TIE_EPS=1e-3 as constexpr and pivot as a runtime scalar, then returns int(count.item()).",
+    "kernel.py:22-24: offs = tl.arange(0, N) with an unmasked tl.load(scores_ptr + offs) -- assumes scores is 1-D, contiguous (unit stride), exactly N elements, and N a compile-time power of two; no bounds mask exists.",
+    "kernel.py:25-27: initializes min_larger = +inf (float32 scalar) and num_min_larger = 0 (int32 scalar), then calls the reduction helper exactly once.",
+    "kernel.py:10: tile_min = tl.min(tl.where(above_ma
+...[truncated 6553 chars]
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
+  "rationale": "tile_eq is `above_mask & (|data - tile_min| < EPS)`, an i1 tensor. Several Triton versions reduce i1 operands without promoting to a wider integer, giving XOR/parity or a saturated 0/1 result. A parity result is a direct violation of the stated return value and, downstream, of the 1/count budget split.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
+      "summary": "Requires returning the count of values strictly above pivot tied with the smallest of them; input domain is a single tile whose length is a power of two."
     },
     {
       "source": "problem.txt",
-      "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
+      "summary": "Only the tolerance value is left unspecified; values 'equal at the boundary' must be counted together, so exactly-equal duplicates have a spec-fixed expected count."
     }
   ],
-  "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
-  "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
+  "scope_rationale": "problem.txt states the function \"must return how many of the values strictly above `pivot` are tied with the smallest of them\" and fixes the input domain as a single tile of power-of-two length. An 8-element fp32 tile with three exactly-equal values above the pivot is exactly that domain, and the expected answer (3) is fixed by the spec independent of the unspecified tolerance because the tied values are exactly equal.",
+  "statement": "kernel.py:12 sums a boolean (i1) mask via tl.sum(tile_eq) with no .to(tl.int32) cast, so the reduction may be performed in i1 arithmetic and return parity (count mod 2) instead of the true count: for a power-of-two fp32 tile such as scores=[0.0,0.5,1.0,1.0,1.0,0.2,0.3,0.4] with pivot=0.6, count_tied_at_boundary must return 3 but may return 1 (and for 2 or 4 tied boundary values may return 0).",
   "status": "open"
 }
 
@@ -559,67 +644,30 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+  "rationale": "The result type flows from tl.sum of an i1 tensor through tl.where with a bool condition and a bool*int product; if the final value is i1, the int32 store truncates/encodes the count as a flag. This failure mode is distinguishable from parity: it yields 1 for every nonzero tie count including even ones.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+      "summary": "Return value is the number of boundary-tied values (used as 1/count downstream), for a single power-of-two-length tile."
     }
   ],
-  "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
-  "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+  "scope_rationale": "The contract requires an integer count from a single power-of-two tile; a 16-element fp32 tile with five exactly-equal values strictly above the pivot is inside that domain, and the expected value 5 is spec-fixed since the ties are exact equalities.",
+  "statement": "kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied boundary values (e.g. N=16 with five copies of 2.0 above pivot=1.0) returns 1 instead of k.",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t8 - record_claim - ok
 
 {
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
-    }
-  ],
-  "claim_id": "c1",
-  "claim_statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
-  "duration_s": 8.146397,
-  "event_id": "t8",
-  "evidence_draft": {
-    "claim_id": "c1",
-    "data": {
-      "artifacts": [
-        {
-          "description": "Python probe code executed by local runtime.",
-          "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-    
-...[truncated 4831 chars]
+  "id": "c3",
+  "rationale": "A magnitude-independent absolute tolerance cannot separate \"equal at the boundary\" from \"merely nearby\" across the logit range that top-k/top-p sampling feeds this primitive. Whether this is a violation depends on how much latitude problem.txt's \"tolerance not fixed\" clause grants, so the claim needs adjudication rather than assumption.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "problem.txt explicitly declines to fix the tolerance value and only mandates that values equal at the boundary be counted together, so over-merging of distinct-but-near values may be spec-permitted. Scope is unknown until the Describer/Judge decides whether an arbitrarily wide absolute window is within that latitude; no test.py exists to pin the reference tie rule.",
+  "statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the effect worsens for large-magnitude logits where 1e-3 spans many distinct values.",
+  "status": "open"
+}
 
 ### t9 - run_claim_probe - ok
 
@@ -629,13 +677,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+      "sha256": "ff6b22a0f6433a7e4aaf1535155466f4d7cd211e88771970fd489aa046beb98d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+      "sha256": "a414942ae871918bc04284f02a3b88723b5eaecea626436fdfb3e587aba839db"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -647,85 +695,64 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t9_json_result.json",
-      "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+      "sha256": "b1d0f7f8069f878968ef831aa7a788bf0766ae414287ea1e84d54bcdc1a1c062"
     }
   ],
-  "claim_id": "c2",
-  "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
-  "duration_s": 5.320805,
+  "claim_id": "c1",
+  "claim_statement": "kernel.py:12 sums a boolean (i1) mask via tl.sum(tile_eq) with no .to(tl.int32) cast, so the reduction may be performed in i1 arithmetic and return parity (count mod 2) instead of the true count: for a power-of-two fp32 tile such as scores=[0.0,0.5,1.0,1.0,1.0,0.2,0.3,0.4] with pivot=0.6, count_tied_at_boundary must return 3 but may return 1 (and for 2 or 4 tied boundary values may return 0).",
+  "duration_s": 6.570213,
   "event_id": "t9",
   "evidence_draft": {
-    "claim_id": "c2",
+    "claim_id": "c1",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+          "sha256": "ff6b22a0f6433a7e4aaf1535155466f4d7cd211e88771970fd489aa046beb98d"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
           "path": "probes/t9_stdout.txt",
-   
-...[truncated 5559 chars]
+          "sha256": "a414942ae871918bc04284f02a3b88723b5eaecea626436fdfb3e587aba839db"
+  
+...[truncated 5097 chars]
 
-### t10 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c2",
-  "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
-  "supports": "confirmed",
-  "tool_event_id": "t9"
-}
-
-### t12 - run_claim_probe - ok
+### t10 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t12_probe.py",
-      "sha256": "16986387dc6954e0cc1e7c667d6551c2a545bedeaf2717e7d39738a7a8df21d9"
+      "path": "probes/t10_probe.py",
+      "sha256": "33e3abcbcbb012b433c6a27a26157894c651b60d00a9ad627ffdf0c253669347"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t12_stdout.txt",
-      "sha256": "b038e068c1bd3d724ceb02f507c96be3709fef721bca3890e4e24b5bd842a897"
+      "path": "probes/t10_stdout.txt",
+      "sha256": "441bbc0e03b2beff1cec944ae602e0d13f11d4ca9eeaa70b5aa180f348cc2e3e"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t12_stderr.txt",
+      "path": "probes/t10_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t12_json_result.json",
-      "sha256": "f1c32e909da4c7977764d59d7f464a833efbd11b215683302eb6f8a920d9d525"
+      "path": "probes/t10_json_result.json",
+      "sha256": "a439b26b121017d67cd7111e4636cdadc78f28d4732e30e24f6fd992def1515f"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
-  "duration_s": 5.706501,
-  "event_id": "t12",
+  "claim_statement": "kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied boundary values (e.g. N=16 with five copies of 2.0 above pivot=1.0) returns 1 instead of k.",
+  "duration_s": 5.548989,
+  "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -733,47 +760,188 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t12_probe.py",
-          "sha256": "16986387dc6954e0cc1e7c667d6551c2a545bedeaf2717e7d39738a7a8df21d9"
+          "path": "probes/t10_probe.py",
+          "sha256": "33e3abcbcbb012b433c6a27a26157894c651b60d00a9ad627ffdf0c253669347"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t12_stdout.tx
-...[truncated 10216 chars]
+          "path": "probes/t10_stdout.txt",
+          "sha256": "441bbc0e03b2beff1cec944ae602e0d13f11d4ca9eeaa70b5aa180f348cc2e3e"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
 
-### t13 - record_no_new_claims - ok
+...[truncated 2055 chars]
+
+### t11 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t11_probe.py",
+      "sha256": "eb3d73e54eddc95d04ba1b3062623be7f293023c00141b22b70eac2d39c91910"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t11_stdout.txt",
+      "sha256": "0b2e178e80e7d93161941f6eb94be6db2ae5a9f718a8fc7abb8cebf9fe541e9b"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t11_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t11_json_result.json",
+      "sha256": "413ba2881f3a5768d02ef152bc28545c65abe20a8e2bb8ef81423f8a01bfade8"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the effect worsens for large-magnitude logits where 1e-3 spans many distinct values.",
+  "duration_s": 5.338737,
+  "event_id": "t11",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t11_probe.py",
+          "sha256": "eb3d73e54eddc95d04ba1b3062623be7f293023c00141b22b70eac2d39c91910"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t11_stdout.txt",
+          "sha256": "0b2e178e80e
+...[truncated 2705 chars]
+
+### t12 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "rebutted",
+  "evidence_id": "c1.e1",
+  "summary": "No parity behavior: on Triton 3.8.0, tl.sum over the i1 mask promotes to an integer count. N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values (pivot=0.6) returned exactly k in every case (1,2,3,4,5), including the odd k=3 case the claim predicted would return 1 and the even k=2/k=4 cases predicted to return 0. parity_pattern=false, all_match=true.",
+  "supports": "rebutted",
+  "tool_event_id": "t9"
+}
+
+### t13 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c2",
+  "claim_status": "rebutted",
+  "evidence_id": "c2.e1",
+  "summary": "No boolean/i1 truncation at the store. N=16 with five exact copies of 2.0 above pivot=1.0 returned 5 (not 1); N=32 with twelve copies of 3.0 returned 12 (not 1 or 0); the empty above-pivot tile returned exactly 0. Both the bool-saturate signature (all nonzero counts -> 1) and the parity signature are absent, so tl.where/tl.store carry a genuine int32 count.",
+  "supports": "rebutted",
+  "tool_event_id": "t10"
+}
+
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c3",
+  "claim_status": "confirmed",
+  "evidence_id": "c3.e1",
+  "summary": "The fixed absolute 1e-3 window does merge genuinely distinct above-pivot values, exactly as claimed. scores=[1.0,1.0005,5..10], pivot=0.5: kernel returned 2 where the strictly-above-pivot minimum has exact multiplicity 1. Large-magnitude case (1000.0 + i*1e-4 for i=0..5, pivot=500): kernel returned 6 vs exact-equality reference 1, and all 8 values are distinct in fp32 (fp32 ULP at 1000 is 6.10e-5, so the 1e-3 window spans ~16 representable codes). Controls behave correctly: values separated by 1e-2 are not merged (1 vs 1) and exact ties at large magnitude give 3 vs 3. So the mechanism is real and the overcount is deterministic; whether an unspecified-tolerance absolute window of this width violates the spec is a scope/adjudication question, not a runtime one (claim scope remains 'unknown').",
+  "supports": "confirmed",
+  "tool_event_id": "t11"
+}
+
+### t15 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t15_probe.py",
+      "sha256": "465c0a95f2f2761bcf898cae154bfc230ca772028b572c84613e44de8c96eb38"
+    },
+    {
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t15_stdout.txt",
+      "sha256": "4220cb9244df791bc82965993ea3ad070cf0d18d026cbaee8c5adf3751e14efb"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t15_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t15_json_result.json",
+      "sha256": "895c4f0886dc2882564ce481bc94b1f25e9569a6dfb801113a0f5ce386a1e60e"
+    }
+  ],
+  "claim_id": "c3",
+  "claim_statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the effect worsens for large-magnitude logits where 1e-3 spans many distinct values.",
+  "duration_s": 7.248835,
+  "event_id": "t15",
+  "evidence_draft": {
+    "claim_id": "c3",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t15_probe.py",
+          "sha256": "465c0a95f2f2761bcf898cae154bfc230ca772028b572c84613e44de8c96eb38"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t15_stdout.txt",
+          "sha256": "4220cb9244d
+...[truncated 5570 chars]
+
+### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: both existing claims are confirmed with runtime evidence and the supplementary sweep (t12) adds no uncovered failure mode. t12 shows all 72 configurations return torch.float32 (already c1), every bf16/fp16 case is bit-exact after rounding to the input dtype (so c2's divergence is purely the missing output-storage rounding, not a math error), the worst fp32-input deviation is 2.2e-7 relative \u2014 consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error \u2014 and no NaNs appear at any magnitude from 1e-12 to 1e2. The near-zero-row condition named in problem.txt is handled correctly (rstd saturates to 1/sqrt(eps)=1000). Remaining source-level oddities (unused RSTD output, unit-stride assumption on the last dim, unbounded BLOCK_SIZE) are either not part of the stated Y-only contract or are shape/stride generalizations that scope-policy excludes without benchmark evidence, so they are not decisive claims.",
+  "reason": "All three existing claims have direct runtime evidence: c1 (i1 parity reduction) and c2 (bool-typed store saturation) are rebutted on Triton 3.8.0 with exact counts for k=1..5, 12 and the empty tile; c3 (fixed absolute EPS=1e-3 merging distinct boundary values) is confirmed, and the final probe t15 only quantifies its prevalence (6.5-18% of logit tiles, max overcount +2; 100% of softmax-probability tiles, mean_got 364 vs exact_ref 1.005, max overcount 939) without revealing a new mechanism. Other surfaces in the risk map (+inf sentinel collision, fp16/bf16 promotion, non-contiguous/non-power-of-two loads, NaN rows) are not required by problem.txt's stated input domain (a single contiguous tile of power-of-two length, finite sampling scores) and per scope policy could not be decisive anyway. The remaining open question - whether the spec's unspecified tolerance permits a magnitude-blind 1e-3 absolute window that merges values separated by ~16 fp32 codes at magnitude 1000 and hundreds of distinct softmax probabilities - is a scope adjudication for the Judge on the already-confirmed c3, not a new testable claim.",
   "reviewed_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reviewed_tool_event_count": 12,
+  "reviewed_tool_event_count": 15,
   "turn": 6
 }
 
-### t14 - record_verdict - ok
+### t17 - record_verdict - ok
 
 {
-  "confidence": 0.6,
+  "confidence": 0.76,
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% element failure rate at rtol=1e-5 are ent
-...[truncated 927 chars]
+  "reason": "The operative contract is problem.txt (no test.py exists). It requires count_tied_at_boundary to return how many values strictly above `pivot` are tied with the smallest of them, over a single power-of-two-length tile, and it states explicitly: \\\"'tied' is decided with a tolerance rather than exact equality. The specification requires only that values equal at the boundary be counted together; it does not fix the numeric value of that tolerance.\\\"\\n\\nThe two claims that would have been true violations of that mandatory behavior are rebutted by direct runtime evidence on the stated domain. c1 (tl.sum over the i1 mask at kernel.py:12 reducing in i1 and returning parity): probe t9 on Triton 3.8.0, N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values returned exactly 1,2,3,4,5; parity_pattern=false. c2 (bool-typed value truncated by the int32 store at kernel.py:15/28): probe t10 returned 5 for five exact copies, 12 for twelve exact copies, and 0 for the empty above-pivot tile; both the bool-saturate and parity signatures are absent. So exact ties at the boundary \u2014 the one thing the spec makes mandatory \u2014 are counted together and counted correctly, including the empty case.\\n\\nc3 is confirmed as a mechanism but is not a contract violation. Probe t11 shows the fixed absolute window EPS=1e-3 (kernel.py:11) merges genuinely distinct above-pivot values (2 vs exact-ref 1 at a 5e-4 gap; 6 vs 1 for values spaced 1e-4 at magnitude 1000, where fp32 ULP is 6.1e-5), and t15 quantifies prevalence (6.5\u201318% of random logit tiles with max overcount +2; 100% of softmax-probability tiles with mean 364 vs exact-ref 1). But that is precisely the behavior of a tolerance-based tie test with tolerance 1e-3, and the contract explicitly declines to fix the tolerance value while requiring only that exactly-equal boundary values be grouped. Comparing against an exact-equality
+...[truncated 1140 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.6,
-  "created_at": "2026-09-08T15:52:28Z",
+  "confidence": 0.76,
+  "created_at": "2026-09-08T15:57:50Z",
   "decisive_claims": [
     "c1",
-    "c2"
+    "c2",
+    "c3"
   ],
-  "reason": "Both ledger claims are confirmed, but neither shows a violation of a behavior problem.txt actually requires. The operative contract (problem.txt; no test.py exists) requires: mean_square = sum(x*x)/n_cols, rstd = 1/sqrt(mean_square+eps), y = x*rstd, computed with float32 accumulation, on inputs that may arrive at fp32 or post-bf16-round-trip storage precision and on near-zero-magnitude rows. The runtime evidence shows the kernel satisfies exactly these clauses: t9 shows that for a bf16 input the kernel output is exact against an fp32 reference (max_rel 1.16e-7, 0% of elements above rel 1e-5) and that the kernel output rounded to bf16 matches the bf16-stored reference bit-exactly (match fraction 1.0); t12 extends this to 72 shape/scale/dtype configurations with no NaNs from scale 1e-12 to 1e2 and worst fp32-input deviation 2.2e-7 relative, consistent with libdevice rsqrt vs torch.rsqrt ULP noise rather than a formula error; the near-zero rows called out by problem.txt are handled correctly (rstd saturates to 1/sqrt(eps)=1000).\n\nc1 (confirmed, in_scope): rms_norm_forward always returns torch.float32, so for bf16/fp16 inputs a dtype-strict torch.testing.assert_close against a dtype-preserving reference fails on the dtype attribute. I am treating this as an interface/generalization caveat rather than a defect: problem.txt declares float32 *accumulation* and specifies the value formula, but nowhere declares an output storage format or a dtype-preservation invariant, and the returned values are a strict refinement of (not a deviation from) the required result. Under the deviation-tolerance rule, this is a different-but-internally-consistent output precision convention, not a failure of a required behavior. c2 (confirmed core, locality sub-claim rebutted by its own evidence): the ~3.4e-3 max relative gap versus a bf16-stored reference and the 99.6% e
-...[truncated 967 chars]
+  "reason": "The operative contract is problem.txt (no test.py exists). It requires count_tied_at_boundary to return how many values strictly above `pivot` are tied with the smallest of them, over a single power-of-two-length tile, and it states explicitly: \\\"'tied' is decided with a tolerance rather than exact equality. The specification requires only that values equal at the boundary be counted together; it does not fix the numeric value of that tolerance.\\\"\\n\\nThe two claims that would have been true violations of that mandatory behavior are rebutted by direct runtime evidence on the stated domain. c1 (tl.sum over the i1 mask at kernel.py:12 reducing in i1 and returning parity): probe t9 on Triton 3.8.0, N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values returned exactly 1,2,3,4,5; parity_pattern=false. c2 (bool-typed value truncated by the int32 store at kernel.py:15/28): probe t10 returned 5 for five exact copies, 12 for twelve exact copies, and 0 for the empty above-pivot tile; both the bool-saturate and parity signatures are absent. So exact ties at the boundary \u2014 the one thing the spec makes mandatory \u2014 are counted together and counted correctly, including the empty case.\\n\\nc3 is confirmed as a mechanism but is not a contract violation. Probe t11 shows the fixed absolute window EPS=1e-3 (kernel.py:11) merges genuinely distinct above-pivot values (2 vs exact-ref 1 at a 5e-4 gap; 6 vs 1 for values spaced 1e-4 at magnitude 1000, where fp32 ULP is 6.1e-5), and t15 quantifies prevalence (6.5\u201318% of random logit tiles with max overcount +2; 100% of softmax-probability tiles with mean 364 vs exact-ref 1). But that is precisely the behavior of a tolerance-based tie test with tolerance 1e-3, and the contract explicitly declines to fix the tolerance value while requiring only that exactly-equal boundary values be grou
+...[truncated 1180 chars]

@@ -1,34 +1,51 @@
 import torch
-from kernel import layer_norm
+from kernel import paged_gather
+
+
+def reference(kv_cache, block_table, seq_len):
+    page_size = kv_cache.shape[1]
+    num_seqs = block_table.shape[0]
+    out = torch.empty((num_seqs, seq_len, kv_cache.shape[2]), device=kv_cache.device,
+                      dtype=kv_cache.dtype)
+    for s in range(num_seqs):
+        for t in range(seq_len):
+            out[s, t] = kv_cache[block_table[s, t // page_size].item(), t % page_size]
+    return out
 
 
 def test_kernel():
     assert torch.cuda.is_available(), "this case requires a CUDA GPU (Triton)"
     torch.manual_seed(0)
     device = "cuda"
-    n_cols, eps = 512, 1e-5
-    w = torch.ones(n_cols, device=device)
-    b = torch.zeros(n_cols, device=device)
+    num_pages, page_size, head_dim = 32, 8, 16
+    num_seqs, max_blocks, seq_len = 4, 4, 32
 
-    x_normal = torch.randn(8, n_cols, device=device)
-    cand_n = layer_norm(x_normal, w, b, eps)
-    ref_n = torch.nn.functional.layer_norm(x_normal, (n_cols,), w, b, eps)
-    normal_pass = torch.allclose(cand_n, ref_n, rtol=1e-2, atol=1e-2)
+    # --- test data ------------------------------------------------------------
+    kv = torch.randn(num_pages, page_size, head_dim, device=device)
+    kv += torch.arange(num_pages, device=device).view(-1, 1, 1) * 10.0
 
-    # A row whose variance is far below eps, but whose deviations are still
-    # representable, so the normalized output is not identically zero.
-    x_flat = torch.full((1, n_cols), 1e-4, device=device)
-    x_flat[:, 1::2] = -1e-4
-    cand_f = layer_norm(x_flat, w, b, eps)
-    ref_f = torch.nn.functional.layer_norm(x_flat, (n_cols,), w, b, eps)
-    flat_pass = torch.allclose(cand_f, ref_f, rtol=1e-2, atol=1e-2)
+    # Lazy test data: pages happen to be handed out contiguously in order.
+    identity = torch.arange(num_seqs * max_blocks, device=device,
+                            dtype=torch.int32).reshape(num_seqs, max_blocks)
+    cand_h = paged_gather(kv, identity, seq_len)
+    ref_h = reference(kv, identity, seq_len)
+    homogeneous_pass = torch.allclose(cand_h, ref_h, rtol=1e-2, atol=1e-2)
 
-    print(f"normal rows: allclose={normal_pass}")
-    print(f"near-constant row: allclose={flat_pass}, ref max={ref_f.abs().max().item():.3e}, cand max={cand_f.abs().max().item():.3e}")
-    # What a conventional CI test would conclude: Gaussian rows never have
-    # near-zero variance.
-    print(f"NAIVE_ALLCLOSE_VERDICT: {normal_pass}")
-    return normal_pass and not flat_pass
+    # Contract-permitted table: pages of different sequences are interleaved,
+    # which is what a real allocator produces once requests come and go.
+    perm = torch.randperm(num_pages, device=device)[:num_seqs * max_blocks]
+    shuffled = perm.to(torch.int32).reshape(num_seqs, max_blocks)
+    cand_d = paged_gather(kv, shuffled, seq_len)
+    ref_d = reference(kv, shuffled, seq_len)
+    distinct_pass = torch.allclose(cand_d, ref_d, rtol=1e-2, atol=1e-2)
+    diff = (cand_d - ref_d).abs().max().item()
+
+    print(f"pages handed out in order: allclose={homogeneous_pass}")
+    print(f"pages interleaved by the allocator: allclose={distinct_pass}, max abs diff={diff:.4f}")
+    # What a conventional CI test would conclude: it fills the cache with one
+    # repeated pattern, so reading the wrong page returns the same values.
+    print(f"NAIVE_ALLCLOSE_VERDICT: {homogeneous_pass}")
+    return homogeneous_pass and not distinct_pass
 
 
 if __name__ == "__main__":

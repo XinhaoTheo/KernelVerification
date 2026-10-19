@@ -1,14 +1,14 @@
 # Agentic Verification Transcript
 
-- Entry: `case_18`
-- Turns: 12
-- Tool events: 16
+- Entry: `case_19`
+- Turns: 8
+- Tool events: 12
 - Claims: 2
 - Description updates: 0
-- LLM time: 58.006s across 11 calls | tokens: in=218509 out=4399 total=222908
+- LLM time: 128.983s across 7 calls | tokens: in=133929 out=3342 total=137271
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
-- Confidence: 0.98
+- Confidence: 0.97
 
 ## Timeline
 
@@ -25,85 +25,76 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_18",
+    "entry": "case_19",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_18"
+    "entry": "case_19"
   }
 
-### Turn 2 - `solo` (3.020266165999999s, in=6850 out=378)
+### Turn 2 - `solo` (12.018250561000059s, in=12923 out=605)
 
 Message:
 
 ```text
-Key suspicion: denominator loop uses `range(n_full)` — it skips the trailing partial block, so n_cols not multiple of block_size yields wrong normalization (sums only full blocks). But output store loop uses cdiv, so partial block values are exp(x-max)/denom with denom missing tail contributions → doesn't sum to 1. Contract explicitly requires trailing partial block be normalized with the rest. Record claim, run probe.The kernel's denominator loop iterates only over full blocks (`range(n_full)`), so when `n_cols % block_size != 0` the trailing partial block's terms are omitted from the denominator — exactly the case the contract calls out. Let me record that claim and probe it.
+The key risk here is the tie rule. In the kernel, `is_new_max = block_max >= m` (line 160) means a *later* block attaining the same max replaces `argmax_idx` with that block's index — so a tie spanning blocks would report the higher, not the lowest, index, violating the contract's explicit tie rule. Let me record and test that.
 ```
 
 Tool calls:
 
-- `record_claim -> t5 ok`
+- `record_claim -> t5 error`
   Args:
   {
-    "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted, while the store loop (line 25) covers all cdiv blocks \u2014 output rows won't sum to 1. The contract explicitly requires the trailing partial block to be normalized with the rest.",
+    "rationale": "Line 160 uses `is_new_max = block_max >= m`, so a later block whose max equals the running max overwrites argmax_idx with that later block's index; combined with the problem statement's requirement that tied maxima yield the lowest index and that n_cols may span multiple blocks, a tie split across blocks should report the higher index.",
+    "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "n_cols may be any positive integer, not required multiple of block_size; trailing partial block must be normalized with the rest; each row must sum to 1"
+        "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index.\" and \"n_cols ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
       }
     ],
-    "scope_rationale": "Contract states n_cols may be any positive integer and the trailing partial block must be normalized with the rest; rows must sum to 1. Non-multiple n_cols is exp
-  ...[truncated 177 chars]
+    "statement": "When the row maximum is tied across two or more blocks (n_cols > 
+  ...[truncated 115 chars]
   Output summary:
   {
-    "id": "c1",
-    "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted, while the store loop (line 25) covers all cdiv blocks \u2014 output rows won't sum to 1. The contract explicitly requires the trailing partial block to be normalized with the rest.",
-    "scope": "unknown",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "n_cols may be any positive integer, not required multiple of block_size; trailing partial block must be normalized with the rest; each row must sum to 1"
-      }
-    ],
-    "scope_rationale": "Contract states n_cols may be any positive integer and the trailing partial block must be normalized with the rest; rows must sum to 1. Non-multiple n_cols is explicitly in the input domain.",
-    "statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1.",
-    "status": "open"
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
 
-### Turn 3 - `solo` (6.648130881s, in=8227 out=460)
+### Turn 3 - `solo` (66.48779110300006s, in=13682 out=281)
 
 Message:
 
 ```text
-Run probe for c1. Note claim scope is "unknown" — but scope_rationale + evidence present; record_claim rejected scope param apparently. I should update scope? No tool to update scope except... only append_evidence, update_claim_status. record_verdict refuses reject with unscoped claims. Hmm, claim has scope "unknown". Maybe I can re-record a claim with scope in_scope. record_claim exists, so create a properly scoped claim. But duplicate. Let's just run the probe first and then record a scoped claim? Better: run probe to confirm, then record claim with scope in_scope (same statement) — but record_claim creates a new claim. Alternatively verdict might accept since scope_rationale/scope_evidence set even though field says unknown. Risky. I'll record a new scoped claim and run probe bound to it.The suspicion is well-formed: the denominator loop covers only full blocks while the store loop covers all blocks. I'll record a properly scoped claim and run a runtime probe on a non-multiple `n_cols`.
+I'll re-record the claim with the required scope_rationale, then test the tie behavior directly on GPU.
 ```
 
 Tool calls:
@@ -111,38 +102,38 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. Output rows will not sum to 1.",
+    "rationale": "Line 160 uses `is_new_max = block_max >= m`, so a later block whose max equals the running max overwrites argmax_idx with that later block's index; combined with the contract's requirement that ties yield the lowest index and that n_cols may span multiple blocks, a tie split across blocks may report the higher index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "n_cols may be any positive integer, NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest; each row must be a probability distribution summing to 1."
+        "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index.\" and \"n_cols ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
       }
     ],
-    "scope_rationale": "The contract explicitly admits non-multiple n_cols and requires the trailing partial block to be included in the normalization; a row-sum
-  ...[truncated 239 chars]
+    "scope_rationale": "The contract explicitly requires that when several vocabulary entries attain t
+  ...[truncated 315 chars]
   Output summary:
   {
-    "id": "c2",
-    "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. Output rows will not sum to 1.",
+    "id": "c1",
+    "rationale": "Line 160 uses `is_new_max = block_max >= m`, so a later block whose max equals the running max overwrites argmax_idx with that later block's index; combined with the contract's requirement that ties yield the lowest index and that n_cols may span multiple blocks, a tie split across blocks may report the higher index.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "n_cols may be any positive integer, NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest; each row must be a probability distribution summing to 1."
+        "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index.\" and \"n_cols ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
       }
     ],
-    "scope_rationale": "The contract explicitly admits non-multiple n_cols and requires the trailing partial block to be included in the normalization; a row-sum deviation there is a required-behaviour violation.",
-    "statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1 (and do not match the softmax formula).",
+    "scope_rationale": "The contract explicitly requires that when several vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index, and states n_cols may exceed BLOCK_SIZE so a tie may fall in different blocks.",
+    "statement": "When the row maximum is tied across two or more blocks (n_cols > BLOCK_SIZE), the kernel fails to report the lowest tied index as required by the contract.",
     "status": "open"
   }
 
-### Turn 4 - `solo` (5.442126944999998s, in=9704 out=370)
+### Turn 4 - `solo` (10.413334702000043s, in=14969 out=613)
 
 Message:
 
 ```text
-I'll run a probe bound to the scoped claim c2, testing a non-multiple n_cols row-sum.
+I'll test the tie-across-blocks hypothesis directly with a GPU probe: n_cols large enough to span multiple blocks, with the row maximum tied at indices in different blocks.
 ```
 
 Tool calls:
@@ -150,9 +141,9 @@ Tool calls:
 - `run_claim_probe -> t7 ok`
   Args:
   {
-    "claim_id": "c2",
-    "code": "import json, torch\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_18/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nres = {}\nfor n_cols in [128, 129, 200, 300, 1000]:\n    x = torch.randn(4, n_cols, device=\"cuda\", dtype=torch.float32)\n    y = m.softmax(x)\n    ref = torch.softmax(x, dim=-1)\n    sums = y.sum(dim=-1)\n    ref_sums = ref.sum(dim=-1)\n    err = (y - ref).abs().max().item()\n    res[n_cols] = {\"kernel_row_sums\": sums.tolist(), \"max_abs_err_vs_ref\": err,\n                   \"min\": y.min().item(), \"max\": y.max().item()}\n\n# dominant-entry case too\nx = torch.randn(4, 130, device=\"cuda\"); x[:, 0] += 20.0\ny = m.softmax(x); ref = torch.softm
-  ...[truncated 382 chars]
+    "claim_id": "c1",
+    "code": "\nimport sys, json, torch\nsys.path.insert(0, \"/root/cases/case_19\")\nimport kernel as K\n\ndev = \"cuda\"\nn_cols = 70000  # spans blocks: BLOCK_SIZE = min(32768, next_pow2(70000)) = 32768\nBLOCK = min(K.MAX_FUSED_SIZE, 32768)\nn_rows = 4\ntorch.manual_seed(0)\nlogits = torch.randn(n_rows, n_cols, device=dev, dtype=torch.float32)\ntargets = torch.randint(0, n_cols, (n_rows,), device=dev)\n\n# tie the row max across blocks: idx0 in block0 (small), idx1 in block1 (large)\nidx0, idx1 = 10, 40000  # both == row max\nresults = []\nfor r in range(n_rows):\n    logits[r] = -5.0\n    logits[r, idx0] = 3.0\n    logits[r, idx1] = 3.0\n\nlogits_in = logits.clone()\nloss, pred = K.cross_entropy_with_predictions(logits_in, targets)\n\n# reference\nref_pred = []\nfor 
+  ...[truncated 882 chars]
   Output summary:
   {
     "artifacts": [
@@ -160,335 +151,219 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t7_probe.py",
-        "sha256": "32e014523b151078adf40a510db22a2fd00c582e98cd9f45a955917df0f26c2a"
+        "sha256": "a8e84805385f8d22be2cf2685726daaab392f30fc55997297c46f1d948f3e3a7"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t7_stdout.txt",
-        "sha256": "6b7be0cb66cb39f5bff99a4b2956dc93e41df4542eefe41d06d09d784cc7d008"
+        "sha256": "3b63de3d2ac26e59afdd264e26d23911ab6f45ed59e5e79cbd46b899aa69140b"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t7_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "claim_id": "c1",
+    "claim_statement": "When the row maximum is tied across two or more blocks (n_cols > BLOCK_SIZE), the kernel fails to report the lowest tied index as required by the contract.",
+    "duration_s": 10.759142,
+    "event_id": "t7",
+    "evidence_draft": {
+      "claim_id": "c1",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t7_probe.py",
+            "sha256": "a8
+  ...[truncated 2579 chars]
+
+### Turn 5 - `solo` (19.16504036499998s, in=17737 out=1004)
+
+Message:
+
+```text
+The probe confirmed the tie bug (40000 reported instead of 10), and also revealed an unexpected second defect: the per-row loss is 11.238/4 ≈ 2.809 — the kernel divides by `n_non_ignore` despite returning a per-row loss, while the contract requires `loss[i] = -log softmax(logits[i])[target[i]]` with no normalization. Let me confirm c1, record this second claim, and probe it.
+```
+
+Tool calls:
+
+- `finalize_probe_evidence -> t8 ok`
+  Args:
+  {
+    "data": {
+      "expected_pred": 10,
+      "kernel_pred": 40000,
+      "loss_kernel_row0": 2.809490203857422,
+      "loss_ref_row0": 11.237960815429688
+    },
+    "event_id": "t7",
+    "status": "confirmed",
+    "summary": "With n_cols=70000 (3 blocks, BLOCK_SIZE=32768) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract's lowest-tied-index rule requires 10. Tie broken across blocks reports the higher block's index, violating the contract's tie rule.",
+    "supports": "confirmed"
+  }
+  Output summary:
+  {
+    "claim_id": "c1",
+    "claim_status": "confirmed",
+    "evidence_id": "c1.e1",
+    "summary": "With n_cols=70000 (3 blocks, BLOCK_SIZE=32768) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract's lowest-tied-index rule requires 10. Tie broken across blocks reports the higher block's index, violating the contract's tie rule.",
+    "supports": "confirmed",
+    "tool_event_id": "t7"
+  }
+- `record_claim -> t9 ok`
+  Args:
+  {
+    "rationale": "The tie probe (t7) unexpectedly showed loss_kernel = 2.8095 where the per-row reference is 11.238 \u2014 exactly 11.238/4, i.e. the kernel applies 'mean' normalization (division by n_non_ignore) to the per-row loss tensor, but the contract defines loss[i] = -log softmax(logits[i])[target[i]] per row with no normalization.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"loss[i] = -log softmax(logits[i])[target[i]]\" \u2014 the contract defines the per-row loss with no reduction normalization."
+      }
+    ],
+    "scope_rationale": "The contract explicitly specifies loss[i] = -log softmax(logits[i])[target[i]] as a per-row quantity; dividing it by the batch count of non-ignored tokens changes the required value.",
+    "stateme
+  ...[truncated 203 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "The tie probe (t7) unexpectedly showed loss_kernel = 2.8095 where the per-row reference is 11.238 \u2014 exactly 11.238/4, i.e. the kernel applies 'mean' normalization (division by n_non_ignore) to the per-row loss tensor, but the contract defines loss[i] = -log softmax(logits[i])[target[i]] per row with no normalization.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "\"loss[i] = -log softmax(logits[i])[target[i]]\" \u2014 the contract defines the per-row loss with no reduction normalization."
+      }
+    ],
+    "scope_rationale": "The contract explicitly specifies loss[i] = -log softmax(logits[i])[target[i]] as a per-row quantity; dividing it by the batch count of non-ignored tokens changes the required value.",
+    "statement": "cross_entropy_with_predictions returns a per-row loss that is divided by n_non_ignore (mean normalization) instead of the raw per-row -log softmax(logits[i])[target[i]] required by the contract.",
+    "status": "open"
+  }
+
+### Turn 6 - `solo` (5.979525537999962s, in=22402 out=299)
+
+Message:
+
+```text
+I'll probe c2 (the mean-normalization issue) on a random input to confirm it independently.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t10 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import sys, json, torch\nsys.path.insert(0, \"/root/cases/case_19\")\nimport kernel as K\n\ndev = \"cuda\"\ntorch.manual_seed(1)\nn_rows, n_cols = 3, 1000\nlogits = torch.randn(n_rows, n_cols, device=dev)\ntargets = torch.randint(0, n_cols, (n_rows,), device=dev)\nloss, pred = K.cross_entropy_with_predictions(logits.clone(), targets)\nref_loss = torch.nn.functional.cross_entropy(logits, targets, reduction=\"none\")\nref_pred = logits.argmax(dim=1)\nout = {\n    \"loss_kernel\": loss.tolist(),\n    \"loss_ref\": ref_loss.tolist(),\n    \"ratio_kernel_over_ref\": (loss / ref_loss).tolist(),\n    \"loss_max_abs_err\": float((loss - ref_loss).abs().max()),\n    \"n_non_ignore\": n_rows,\n    \"pred_match\": bool((pred == ref_pred).all()),\n    \"metric\": \"per
+  ...[truncated 173 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t10_probe.py",
+        "sha256": "695dd99d2f25776619fcd360e72257cc096ef1a6297a34fdc01b17a1421ea68c"
       },
       {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t7_json_result.json",
-        "sha256": "518d84d5de85a8f41ab9c7c35304ceef88c1fe9d1c306d93c13473e65a5ea269"
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t10_stdout.txt",
+        "sha256": "2629e5cc9750484f3bdaafc38c90ce07e75f0fce3a0926bcb103ff314586048a"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t10_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1 (and do not match the softmax formula).",
-    "duration_s": 5.879562,
-    "event_id": "t7"
-  ...[truncated 7704 chars]
+    "claim_statement": "cross_entropy_with_predictions returns a per-row loss that is divided by n_non_ignore (mean normalization) instead of the raw per-row -log softmax(logits[i])[target[i]] required by the contract.",
+    "duration_s": 7.515138,
+    "event_id": "t10",
+    "evidence_draft": {
+      "claim_id": "c2",
+      "data": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "pr
+  ...[truncated 2340 chars]
 
-### Turn 5 - `solo` (6.5059527169999996s, in=14699 out=747)
+### Turn 7 - `solo` (7.879301234999957s, in=24500 out=268)
 
 Message:
 
 ```text
-Probe t7 confirms: non-multiple n_cols row sums ≠ 1. Finalize evidence for c2, mark confirmed, also resolve c1 (same evidence, confirmed), then record verdict reject.The probe (t7) decisively confirms the claim: for n_cols = 129, 200, 300, 1000 the kernel's row sums deviate from 1 (up to 1.82 at n_cols=200, max abs error 0.055 vs torch.softmax), while n_cols=128 (a multiple) is exact. I'll finalize the evidence and close both claims.
+The c2 probe confirmed the second defect: kernel loss is exactly ref/3 for every row. I'll finalize that evidence, confirm the claim, and record the verdict.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t8 error`
+- `finalize_probe_evidence -> t11 ok`
   Args:
   {
-    "claim_id": "c2",
     "data": {
-      "dominant_130_row_sums": [
-        1.0000001192092896,
-        1.0000001192092896,
-        1.0,
-        1.0
-      ],
-      "max_abs_err_vs_ref": {
-        "1000": 0.0017772912979125977,
-        "128": 7.450580596923828e-09,
-        "129": 0.0006277710199356079,
-        "200": 0.055094264447689056,
-        "300": 0.00972149521112442
-      },
-      "row_sums": {
-        "1000": [
-          1.1115726232528689,
-          1.1141574382781982,
-          1.126317858695984,
-          1.1163523197174072
-        ],
-        "128": [
-          1.0,
-          0.9999998807907104,
-          0.9999998807907104,
-          0.9999998807907104
-        ],
-        "129": [
-          1.003498077392578,
-          1.0037050247192385,
-          1.00356125831604,
-          1.0020126104354858
-        ],
-        "200": [
-          1.6030261516571
-  ...[truncated 834 chars]
-  Output summary:
-  {
-    "error_type": "ToolRegistryError",
-    "message": "tool finalize_probe_evidence missing required arg: event_id"
+      "loss_kernel_row0": 2.419631004333496,
+      "loss_max_abs_err": 5.620715141296387,
+      "loss_ref_row0": 7.258893013000488,
+      "ratios": [
+        0.3333333432674408,
+        0.3333333730697632,
+        0.3333333432674408
+      ]
+    },
+    "event_id": "t10",
+    "status": "confirmed",
+    "summary": "On a random 3x1000 input, the kernel's per-row loss is exactly ref/3 (ratios 0.3333... for all rows): the kernel stores reduction='mean' normalization (division by n_non_ignore) into the per-row loss tensor, violating the contract's loss[i] = -log softmax(logits[i])[target[i]] with no normalization.",
+    "supports": "confirmed"
   }
-
-### Turn 6 - `solo` (6.2134934159999915s, in=16380 out=708)
-
-Message:
-
-```text
-Finalize evidence for c2 with event_id t7, update c1 status (also confirmed — but c1 scope unknown; can't reject on it; c2 is in_scope and confirmed). Then record verdict reject citing c2.The finalize call failed only for a missing `event_id`. I'll re-issue it with `event_id: t7`, close duplicate claim c1 with the same evidence, then record the verdict.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t9 ok`
-  Args:
-  {
-    "data": {
-      "dominant_130_row_sums": [
-        1.0000001192092896,
-        1.0000001192092896,
-        1.0,
-        1.0
-      ],
-      "max_abs_err_vs_ref": {
-        "1000": 0.0017772912979125977,
-        "128": 7.450580596923828e-09,
-        "129": 0.0006277710199356079,
-        "200": 0.055094264447689056,
-        "300": 0.00972149521112442
-      },
-      "row_sums": {
-        "1000": [
-          1.1115726232528687,
-          1.1141574382781982,
-          1.1263178586959839,
-          1.1163523197174072
-        ],
-        "128": [
-          1.0,
-          0.9999998807907104,
-          0.9999998807907104,
-          0.9999998807907104
-        ],
-        "129": [
-          1.0034980773925781,
-          1.0037050247192383,
-          1.00356125831604,
-          1.0020126104354858
-        ],
-        "200": [
-          1.6030261516571045,
-          1.595
-  ...[truncated 771 chars]
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Runtime probe t7 on real GPU: for n_cols not a multiple of block_size=128, row sums deviate from 1 badly (n_cols=200: sums 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035; n_cols=300: ~1.16-1.22; n_cols=1000: ~1.11-1.13). n_cols=128 (multiple) is exact (sums=1, err 7.5e-9). Denominator loop (kernel.py lines 20-23, range(n_full)) omits the trailing partial block, violating the contract's required normalization.",
+    "summary": "On a random 3x1000 input, the kernel's per-row loss is exactly ref/3 (ratios 0.3333... for all rows): the kernel stores reduction='mean' normalization (division by n_non_ignore) into the per-row loss tensor, violating the contract's loss[i] = -log softmax(logits[i])[target[i]] with no normalization.",
     "supports": "confirmed",
-    "tool_event_id": "t7"
+    "tool_event_id": "t10"
   }
 
-### Turn 7 - `solo` (1.810389107000006s, in=26224 out=35)
+### Turn 8 - `solo` (7.039745946000039s, in=27716 out=272)
 
 Message:
 
 ```text
-Now I'll close the duplicate claim c1 and record the verdict.
+Both in-scope claims are confirmed with runtime evidence. Recording the final verdict.
 ```
 
 Tool calls:
 
-- `update_claim_status -> t10 error`
+- `record_verdict -> t12 ok`
   Args:
   {
-    "claim_id": "c1",
-    "status": "confirmed"
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "claim c1 needs evidence supporting confirmed before status update"
-  }
-
-### Turn 8 - `solo` (8.008248819999991s, in=26299 out=414)
-
-Message:
-
-```text
-The duplicate claim c1 can't be confirmed directly since it lacks its own evidence; it's redundant with the confirmed in-scope claim c2. I'll mark c1 inconclusive as a duplicate and then record the verdict based on c2's confirmed evidence.
-```
-
-Tool calls:
-
-- `update_claim_status -> t11 error`
-  Args:
-  {
-    "claim_id": "c1",
-    "status": "inconclusive"
-  }
-  Output summary:
-  {
-    "error_type": "LedgerError",
-    "message": "claim c1 needs evidence supporting inconclusive before status update"
-  }
-- `record_verdict -> t12 error`
-  Args:
-  {
-    "confidence": 0.98,
+    "confidence": 0.97,
     "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "Kernel violates the contract's required normalization for n_cols not a multiple of block_size \u2014 a case the contract explicitly declares in domain (\"n_cols may be any positive integer... the trailing partial block... must be normalized with the rest\"). Source inspection: the denominator loop (kernel.py lines 20-23) iterates only over `range(n_full)` where n_full = n_cols // BLOCK, so the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but for non-multiples the row sums deviate badly: n_cols=129 s
-  ...[truncated 373 chars]
+    "reason": "Two in-scope contract violations confirmed on GPU. (1) Tie rule: with n_cols=70000 (BLOCK_SIZE=32768, 3 blocks per row) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract requires the LOWEST tied index (10) \u2014 caused by `is_new_max = block_max >= m` (kernel.py line 160), which lets a later block's equal max overwrite argmax_idx (probe t7). (2) Loss definition: on a random 3x1000 input the per-row loss equals exactly ref/3 (ratios 0.3333... for every row) because the wrapper passes reduction='mean' and the kernel divides the per-row loss by n_non_ignore, whereas the contract defines loss[i] = -log softmax(logits[i])[target[i]] with no normali
+  ...[truncated 95 chars]
   Output summary:
   {
-    "error_type": "ValueError",
-    "message": "reject verdict requires all claims to be resolved; open claims: c1"
-  }
-
-### Turn 9 - `solo` (5.905412327999997s, in=26997 out=437)
-
-Message:
-
-```text
-c1 open, needs to be closed. Try recording evidence for c1 via append_evidence, then update status, then verdict.I need to close duplicate claim c1 before the verdict can be recorded. I'll attach the same probe evidence to c1, mark it, then record the verdict.
-```
-
-Tool calls:
-
-- `append_evidence -> t13 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "data": {
-      "row_sums": {
-        "128": [
-          1.0,
-          0.9999998807907104,
-          0.9999998807907104,
-          0.9999998807907104
-        ],
-        "129": [
-          1.003498077392578,
-          1.0037050247192385,
-          1.00356125831604,
-          1.0020126104354858
-        ],
-        "200": [
-          1.6030261516571045,
-          1.5951852798461914,
-          1.7064943313598633,
-          1.8199896812438965
-        ],
-        "300": [
-          1.217827320098877,
-          1.161968231201172,
-          1.1607048511505127,
-          1.1764049530029297
-        ]
-      },
-      "tool_event_id": "t7"
-    },
-    "kind": "runtime_probe",
-    "summary": "Probe t7 (same as c2's evidence; c1 is a duplicate claim): for n_cols not a multiple of block_size=128, kernel row sums deviate from 1 (n_cols=200: 1.
-  ...[truncated 206 chars]
-  Output summary:
-  {
-    "id": "c1.e1",
-    "summary": "Probe t7 (same as c2's evidence; c1 is a duplicate claim): for n_cols not a multiple of block_size=128, kernel row sums deviate from 1 (n_cols=200: 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035). n_cols=128 is exact. Confirms the denominator loop omits the trailing partial block.",
-    "supports": "confirmed"
-  }
-
-### Turn 10 - `solo` (6.274113873000005s, in=27576 out=40)
-
-Message:
-
-```text
-I'll update c1 to confirmed (its evidence now supports it), then record the verdict.
-```
-
-Tool calls:
-
-- `update_claim_status -> t14 ok`
-  Args:
-  {
-    "claim_id": "c1",
-    "status": "confirmed"
-  }
-  Output summary:
-  {
-    "id": "c1",
-    "status": "confirmed"
-  }
-
-### Turn 11 - `solo` (4.074319996000014s, in=27794 out=398)
-
-Message:
-
-```text
-All claims are now resolved (c1 and c2 both confirmed), and the verdict attempt in round 8 only failed because c1 was still open. I'll record the verdict now.
-```
-
-Tool calls:
-
-- `record_verdict -> t15 error`
-  Args:
-  {
-    "confidence": 0.98,
+    "confidence": 0.97,
     "decisive_claims": [
-      "c2",
-      "c1"
-    ],
-    "reason": "Reject. Source inspection: the denominator loop (kernel.py lines 20-23) accumulates over range(n_full) where n_full = n_cols // BLOCK, so when n_cols % block_size != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. The contract explicitly declares this in domain (\"n_cols may be any positive integer... NOT required to be a multiple of block_size... the trailing partial block is still part of the row and must be normalized with the rest\") and requires rows to sum to 1. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (a multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but non-multiple
-  ...[truncated 432 chars]
-  Output summary:
-  {
-    "error_type": "ValueError",
-    "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: status=confirmed, scope=unknown"
-  }
-
-### Turn 12 - `solo` (4.103285115000006s, in=27759 out=412)
-
-Message:
-
-```text
-Just record verdict with only c2 decisive.The last verdict attempt failed only because c1 (scope unknown) was listed as decisive. c2 alone is confirmed, in_scope, and decisive, so I'll record the verdict with c2 only.
-```
-
-Tool calls:
-
-- `record_verdict -> t16 ok`
-  Args:
-  {
-    "confidence": 0.98,
-    "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "Reject. Source inspection: the denominator loop (kernel.py lines 20-23) accumulates over range(n_full) where n_full = n_cols // BLOCK, so when n_cols % block_size != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. The contract explicitly declares non-multiple n_cols in domain (\"n_cols may be any positive integer... NOT required to be a multiple of block_size... the trailing partial block is still part of the row and must be normalized with the rest\") and requires rows to sum to 1. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (a multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but non-mul
-  ...[truncated 430 chars]
-  Output summary:
-  {
-    "confidence": 0.98,
-    "decisive_claims": [
-      "c2"
-    ],
-    "reason": "Reject. Source inspection: the denominator loop (kernel.py lines 20-23) accumulates over range(n_full) where n_full = n_cols // BLOCK, so when n_cols % block_size != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. The contract explicitly declares non-multiple n_cols in domain (\"n_cols may be any positive integer... NOT required to be a multiple of block_size... the trailing partial block is still part of the row and must be normalized with the rest\") and requires rows to sum to 1. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (a multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but non-multiples fail: n_cols=129 row sums ~1.0035 (max abs err 6.3e-4), n_cols=200 sums 1.60-1.82 (max abs err 0.055), n_cols=300 sums ~1.16-1.22 (err 9.7e-3), n_cols=1000 sums ~1.11-1.13 (err 1.8e-3). Rows are not probability distributions, violating the contract's required invariant. Claim c1 is a duplicate of c2 (scope marked unknown only as a duplicate); the confirmed in-scope claim c2 is the decisive 
-  ...[truncated 30 chars]
+    "reason": "Two in-scope contract violations confirmed on GPU. (1) Tie rule: with n_cols=70000 (BLOCK_SIZE=32768, 3 blocks per row) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract requires the LOWEST tied index (10) \u2014 caused by `is_new_max = block_max >= m` (kernel.py line 160), which lets a later block's equal max overwrite argmax_idx (probe t7). (2) Loss definition: on a random 3x1000 input the per-row loss equals exactly ref/3 (ratios 0.3333... for every row) because the wrapper passes reduction='mean' and the kernel divides the per-row loss by n_non_ignore, whereas the contract defines loss[i] = -log softmax(logits[i])[target[i]] with no normalization (probe t10). Both claims have scope evidence from problem.txt.",
+    "verdict": "reject"
+  }
 
 ## Description Model
 
@@ -498,93 +373,83 @@ No description model recorded.
 
 ### c1 - `confirmed`
 
-Statement: For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1.
-
-Scope: `unknown`
-
-Scope rationale: Contract states n_cols may be any positive integer and the trailing partial block must be normalized with the rest; rows must sum to 1. Non-multiple n_cols is explicitly in the input domain.
-
-Scope evidence:
-- `problem.txt`: n_cols may be any positive integer, not required multiple of block_size; trailing partial block must be normalized with the rest; each row must sum to 1
-
-Rationale: Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted, while the store loop (line 25) covers all cdiv blocks — output rows won't sum to 1. The contract explicitly requires the trailing partial block to be normalized with the rest.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Probe t7 (same as c2's evidence; c1 is a duplicate claim): for n_cols not a multiple of block_size=128, kernel row sums deviate from 1 (n_cols=200: 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035). n_cols=128 is exact. Confirms the denominator loop omits the trailing partial block.
-
-### c2 - `confirmed`
-
-Statement: For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1 (and do not match the softmax formula).
+Statement: When the row maximum is tied across two or more blocks (n_cols > BLOCK_SIZE), the kernel fails to report the lowest tied index as required by the contract.
 
 Scope: `in_scope`
 
-Scope rationale: The contract explicitly admits non-multiple n_cols and requires the trailing partial block to be included in the normalization; a row-sum deviation there is a required-behaviour violation.
+Scope rationale: The contract explicitly requires that when several vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index, and states n_cols may exceed BLOCK_SIZE so a tie may fall in different blocks.
 
 Scope evidence:
-- `problem.txt`: n_cols may be any positive integer, NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest; each row must be a probability distribution summing to 1.
+- `problem.txt`: "Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index." and "n_cols ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks."
 
-Rationale: Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. Output rows will not sum to 1.
+Rationale: Line 160 uses `is_new_max = block_max >= m`, so a later block whose max equals the running max overwrites argmax_idx with that later block's index; combined with the contract's requirement that ties yield the lowest index and that n_cols may span multiple blocks, a tie split across blocks may report the higher index.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t7: Runtime probe t7 on real GPU: for n_cols not a multiple of block_size=128, row sums deviate from 1 badly (n_cols=200: sums 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035; n_cols=300: ~1.16-1.22; n_cols=1000: ~1.11-1.13). n_cols=128 (multiple) is exact (sums=1, err 7.5e-9). Denominator loop (kernel.py lines 20-23, range(n_full)) omits the trailing partial block, violating the contract's required normalization.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t7: With n_cols=70000 (3 blocks, BLOCK_SIZE=32768) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract's lowest-tied-index rule requires 10. Tie broken across blocks reports the higher block's index, violating the contract's tie rule.
+
+### c2 - `confirmed`
+
+Statement: cross_entropy_with_predictions returns a per-row loss that is divided by n_non_ignore (mean normalization) instead of the raw per-row -log softmax(logits[i])[target[i]] required by the contract.
+
+Scope: `in_scope`
+
+Scope rationale: The contract explicitly specifies loss[i] = -log softmax(logits[i])[target[i]] as a per-row quantity; dividing it by the batch count of non-ignored tokens changes the required value.
+
+Scope evidence:
+- `problem.txt`: "loss[i] = -log softmax(logits[i])[target[i]]" — the contract defines the per-row loss with no reduction normalization.
+
+Rationale: The tie probe (t7) unexpectedly showed loss_kernel = 2.8095 where the per-row reference is 11.238 — exactly 11.238/4, i.e. the kernel applies 'mean' normalization (division by n_non_ignore) to the per-row loss tensor, but the contract defines loss[i] = -log softmax(logits[i])[target[i]] per row with no normalization.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: On a random 3x1000 input, the kernel's per-row loss is exactly ref/3 (ratios 0.3333... for all rows): the kernel stores reduction='mean' normalization (division by n_non_ignore) into the per-row loss tensor, violating the contract's loss[i] = -log softmax(logits[i])[target[i]] with no normalization.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_18"
+  "entry": "case_19"
 }
 
-### t5 - record_claim - ok
+### t5 - record_claim - error
 
 {
-  "id": "c1",
-  "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted, while the store loop (line 25) covers all cdiv blocks \u2014 output rows won't sum to 1. The contract explicitly requires the trailing partial block to be normalized with the rest.",
-  "scope": "unknown",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "n_cols may be any positive integer, not required multiple of block_size; trailing partial block must be normalized with the rest; each row must sum to 1"
-    }
-  ],
-  "scope_rationale": "Contract states n_cols may be any positive integer and the trailing partial block must be normalized with the rest; rows must sum to 1. Non-multiple n_cols is explicitly in the input domain.",
-  "statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1.",
-  "status": "open"
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
 ### t6 - record_claim - ok
 
 {
-  "id": "c2",
-  "rationale": "Source lines 20-23: `denom` accumulates over `range(n_full)` where n_full = n_cols // BLOCK, so when n_cols % BLOCK != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. Output rows will not sum to 1.",
+  "id": "c1",
+  "rationale": "Line 160 uses `is_new_max = block_max >= m`, so a later block whose max equals the running max overwrites argmax_idx with that later block's index; combined with the contract's requirement that ties yield the lowest index and that n_cols may span multiple blocks, a tie split across blocks may report the higher index.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "n_cols may be any positive integer, NOT required to be a multiple of block_size; the trailing partial block is still part of the row and must be normalized with the rest; each row must be a probability distribution summing to 1."
+      "summary": "\"Tie rule: when several vocabulary entries attain the row maximum, `predicted` must be the LOWEST such index.\" and \"n_cols ... may exceed the kernel's block size, in which case a row spans several blocks and a tie may fall in different blocks.\""
     }
   ],
-  "scope_rationale": "The contract explicitly admits non-multiple n_cols and requires the trailing partial block to be included in the normalization; a row-sum deviation there is a required-behaviour violation.",
-  "statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1 (and do not match the softmax formula).",
+  "scope_rationale": "The contract explicitly requires that when several vocabulary entries attain the row maximum, predicted[i] must be the LOWEST such index, and states n_cols may exceed BLOCK_SIZE so a tie may fall in different blocks.",
+  "statement": "When the row maximum is tied across two or more blocks (n_cols > BLOCK_SIZE), the kernel fails to report the lowest tied index as required by the contract.",
   "status": "open"
 }
 
@@ -596,31 +461,109 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t7_probe.py",
-      "sha256": "32e014523b151078adf40a510db22a2fd00c582e98cd9f45a955917df0f26c2a"
+      "sha256": "a8e84805385f8d22be2cf2685726daaab392f30fc55997297c46f1d948f3e3a7"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t7_stdout.txt",
-      "sha256": "6b7be0cb66cb39f5bff99a4b2956dc93e41df4542eefe41d06d09d784cc7d008"
+      "sha256": "3b63de3d2ac26e59afdd264e26d23911ab6f45ed59e5e79cbd46b899aa69140b"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t7_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "claim_id": "c1",
+  "claim_statement": "When the row maximum is tied across two or more blocks (n_cols > BLOCK_SIZE), the kernel fails to report the lowest tied index as required by the contract.",
+  "duration_s": 10.759142,
+  "event_id": "t7",
+  "evidence_draft": {
+    "claim_id": "c1",
+    "data": {
+      "artifacts": [
+        {
+          "description": "Python probe code executed by local runtime.",
+          "kind": "probe_code",
+          "path": "probes/t7_probe.py",
+          "sha256": "a8e84805385f8d22be2cf2685726daaab392f30fc55997297c46f1d948f3e3a7"
+        },
+        {
+          "description": "Captured stdout from the probe process.",
+          "kind": "stdout",
+          "path": "probes/t7_stdout.txt",
+          "sha256": "3b63de3d2ac26e59afdd264e26d23911ab6f45ed59e5e79cbd46b899aa69140b"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "path": "probes/t7_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "duration_s": 10.759142,
+      "exit_code": 0,
+      "expected_signal": "kernel reports idx1 (40000) instead of idx0 (10) when tie spans blocks",
+      "json_parse_error": "last stdout line is not JSON: Expecting value"
+...[truncated 1779 chars]
+
+### t8 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "With n_cols=70000 (3 blocks, BLOCK_SIZE=32768) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract's lowest-tied-index rule requires 10. Tie broken across blocks reports the higher block's index, violating the contract's tie rule.",
+  "supports": "confirmed",
+  "tool_event_id": "t7"
+}
+
+### t9 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "The tie probe (t7) unexpectedly showed loss_kernel = 2.8095 where the per-row reference is 11.238 \u2014 exactly 11.238/4, i.e. the kernel applies 'mean' normalization (division by n_non_ignore) to the per-row loss tensor, but the contract defines loss[i] = -log softmax(logits[i])[target[i]] per row with no normalization.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "\"loss[i] = -log softmax(logits[i])[target[i]]\" \u2014 the contract defines the per-row loss with no reduction normalization."
+    }
+  ],
+  "scope_rationale": "The contract explicitly specifies loss[i] = -log softmax(logits[i])[target[i]] as a per-row quantity; dividing it by the batch count of non-ignored tokens changes the required value.",
+  "statement": "cross_entropy_with_predictions returns a per-row loss that is divided by n_non_ignore (mean normalization) instead of the raw per-row -log softmax(logits[i])[target[i]] required by the contract.",
+  "status": "open"
+}
+
+### t10 - run_claim_probe - ok
+
+{
+  "artifacts": [
+    {
+      "description": "Python probe code executed by local runtime.",
+      "kind": "probe_code",
+      "path": "probes/t10_probe.py",
+      "sha256": "695dd99d2f25776619fcd360e72257cc096ef1a6297a34fdc01b17a1421ea68c"
     },
     {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t7_json_result.json",
-      "sha256": "518d84d5de85a8f41ab9c7c35304ceef88c1fe9d1c306d93c13473e65a5ea269"
+      "description": "Captured stdout from the probe process.",
+      "kind": "stdout",
+      "path": "probes/t10_stdout.txt",
+      "sha256": "2629e5cc9750484f3bdaafc38c90ce07e75f0fce3a0926bcb103ff314586048a"
+    },
+    {
+      "description": "Captured stderr from the probe process.",
+      "kind": "stderr",
+      "path": "probes/t10_stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For n_cols not a multiple of block_size, the denominator loop omits the trailing partial block, so output rows do not sum to 1 (and do not match the softmax formula).",
-  "duration_s": 5.879562,
-  "event_id": "t7",
+  "claim_statement": "cross_entropy_with_predictions returns a per-row loss that is divided by n_non_ignore (mean normalization) instead of the raw per-row -log softmax(logits[i])[target[i]] required by the contract.",
+  "duration_s": 7.515138,
+  "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -628,106 +571,60 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t7_probe.py",
-          "sha256": "32e014523b151078adf40a510db22a2fd00c582e98cd9f45a955917df0f26c2a"
+          "path": "probes/t10_probe.py",
+          "sha256": "695dd99d2f25776619fcd360e72257cc096ef1a6297a34fdc01b17a1421ea68c"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t7_stdout.txt",
-          "sha256": "6b7be0cb66cb39f5bff99a4b2956dc93e41df4542eefe41d06d09d784cc7d008"
+          "path": "probes/t10_stdout.txt",
+          "sha256": "2629e5cc9750484f3bdaafc38c90ce07e75f0fce3a0926bcb103ff314586048a"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t7_stderr.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49
-...[truncated 6904 chars]
+          "path": "probes/t10_stderr.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "duration_s": 7.515138,
+      "exit_code": 0,
+      "expected_signal": "kernel loss equals ref/3 for all rows",
+      "json_parse_error": "last stdout line is not JSON: Expec
+...[truncated 1540 chars]
 
-### t8 - finalize_probe_evidence - error
-
-{
-  "error_type": "ToolRegistryError",
-  "message": "tool finalize_probe_evidence missing required arg: event_id"
-}
-
-### t9 - finalize_probe_evidence - ok
+### t11 - finalize_probe_evidence - ok
 
 {
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Runtime probe t7 on real GPU: for n_cols not a multiple of block_size=128, row sums deviate from 1 badly (n_cols=200: sums 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035; n_cols=300: ~1.16-1.22; n_cols=1000: ~1.11-1.13). n_cols=128 (multiple) is exact (sums=1, err 7.5e-9). Denominator loop (kernel.py lines 20-23, range(n_full)) omits the trailing partial block, violating the contract's required normalization.",
+  "summary": "On a random 3x1000 input, the kernel's per-row loss is exactly ref/3 (ratios 0.3333... for all rows): the kernel stores reduction='mean' normalization (division by n_non_ignore) into the per-row loss tensor, violating the contract's loss[i] = -log softmax(logits[i])[target[i]] with no normalization.",
   "supports": "confirmed",
-  "tool_event_id": "t7"
+  "tool_event_id": "t10"
 }
 
-### t10 - update_claim_status - error
+### t12 - record_verdict - ok
 
 {
-  "error_type": "LedgerError",
-  "message": "claim c1 needs evidence supporting confirmed before status update"
-}
-
-### t11 - update_claim_status - error
-
-{
-  "error_type": "LedgerError",
-  "message": "claim c1 needs evidence supporting inconclusive before status update"
-}
-
-### t12 - record_verdict - error
-
-{
-  "error_type": "ValueError",
-  "message": "reject verdict requires all claims to be resolved; open claims: c1"
-}
-
-### t13 - append_evidence - ok
-
-{
-  "id": "c1.e1",
-  "summary": "Probe t7 (same as c2's evidence; c1 is a duplicate claim): for n_cols not a multiple of block_size=128, kernel row sums deviate from 1 (n_cols=200: 1.60-1.82, max abs err vs torch.softmax 0.055; n_cols=129: ~1.0035). n_cols=128 is exact. Confirms the denominator loop omits the trailing partial block.",
-  "supports": "confirmed"
-}
-
-### t14 - update_claim_status - ok
-
-{
-  "id": "c1",
-  "status": "confirmed"
-}
-
-### t15 - record_verdict - error
-
-{
-  "error_type": "ValueError",
-  "message": "reject verdict can only use decisive claims that are confirmed, in_scope, and have benchmark/test-domain scope_evidence; c1: status=confirmed, scope=unknown"
-}
-
-### t16 - record_verdict - ok
-
-{
-  "confidence": 0.98,
+  "confidence": 0.97,
   "decisive_claims": [
+    "c1",
     "c2"
   ],
-  "reason": "Reject. Source inspection: the denominator loop (kernel.py lines 20-23) accumulates over range(n_full) where n_full = n_cols // BLOCK, so when n_cols % block_size != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. The contract explicitly declares non-multiple n_cols in domain (\"n_cols may be any positive integer... NOT required to be a multiple of block_size... the trailing partial block is still part of the row and must be normalized with the rest\") and requires rows to sum to 1. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (a multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but non-multiples fail: n_cols=129 row sums ~1.0035 (max abs err 6.3e-4), n_cols=200 sums 1.60-1.82 (max abs err 0.055), n_cols=300 sums ~1.16-1.22 (err 9.7e-3), n_cols=1000 sums ~1.11-1.13 (err 1.8e-3). Rows are not probability distributions, violating the contract's required invariant. Claim c1 is a duplicate of c2 (scope marked unknown only as a duplicate); the confirmed in-scope claim c2 is the decisive one.",
+  "reason": "Two in-scope contract violations confirmed on GPU. (1) Tie rule: with n_cols=70000 (BLOCK_SIZE=32768, 3 blocks per row) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract requires the LOWEST tied index (10) \u2014 caused by `is_new_max = block_max >= m` (kernel.py line 160), which lets a later block's equal max overwrite argmax_idx (probe t7). (2) Loss definition: on a random 3x1000 input the per-row loss equals exactly ref/3 (ratios 0.3333... for every row) because the wrapper passes reduction='mean' and the kernel divides the per-row loss by n_non_ignore, whereas the contract defines loss[i] = -log softmax(logits[i])[target[i]] with no normalization (probe t10). Both claims have scope evidence from problem.txt.",
   "verdict": "reject"
 }
 
 ## Verdict
 
 {
-  "confidence": 0.98,
-  "created_at": "2026-09-10T05:22:04Z",
+  "confidence": 0.97,
+  "created_at": "2026-09-30T08:28:52Z",
   "decisive_claims": [
+    "c1",
     "c2"
   ],
-  "forced_final_round": {
-    "skeptic_signed_off": false,
-    "unresolved_claims": []
-  },
-  "reason": "Reject. Source inspection: the denominator loop (kernel.py lines 20-23) accumulates over range(n_full) where n_full = n_cols // BLOCK, so when n_cols % block_size != 0 the trailing partial block's exp terms are omitted from the denominator, while the store loop (line 25) covers all cdiv blocks. The contract explicitly declares non-multiple n_cols in domain (\"n_cols may be any positive integer... NOT required to be a multiple of block_size... the trailing partial block is still part of the row and must be normalized with the rest\") and requires rows to sum to 1. Runtime probe t7 (run_claim_probe, GPU, exit 0) confirmed: n_cols=128 (a multiple) is exact (row sums 1.0, max abs err vs torch.softmax 7.5e-9), but non-multiples fail: n_cols=129 row sums ~1.0035 (max abs err 6.3e-4), n_cols=200 sums 1.60-1.82 (max abs err 0.055), n_cols=300 sums ~1.16-1.22 (err 9.7e-3), n_cols=1000 sums ~1.11-1.13 (err 1.8e-3). Rows are not probability distributions, violating the contract's required invariant. Claim c1 is a duplicate of c2 (scope marked unknown only as a duplicate); the confirmed in-scope claim c2 is the decisive one.",
+  "reason": "Two in-scope contract violations confirmed on GPU. (1) Tie rule: with n_cols=70000 (BLOCK_SIZE=32768, 3 blocks per row) and the row max tied at indices 10 and 40000, the kernel reported predicted=40000 for all rows while the contract requires the LOWEST tied index (10) \u2014 caused by `is_new_max = block_max >= m` (kernel.py line 160), which lets a later block's equal max overwrite argmax_idx (probe t7). (2) Loss definition: on a random 3x1000 input the per-row loss equals exactly ref/3 (ratios 0.3333... for every row) because the wrapper passes reduction='mean' and the kernel divides the per-row loss by n_non_ignore, whereas the contract defines loss[i] = -log softmax(logits[i])[target[i]] with no normalization (probe t10). Both claims have scope evidence from problem.txt.",
   "verdict": "reject"
 }

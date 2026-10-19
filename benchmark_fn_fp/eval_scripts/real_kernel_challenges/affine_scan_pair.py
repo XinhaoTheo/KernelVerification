@@ -11,7 +11,7 @@ import sys
 import numpy as np
 import torch
 
-EXPECTED = {"case_158": "trust", "case_159": "reject"}
+EXPECTED = {"case_85": "trust", "case_86": "reject"}
 ATOL = RTOL = 0
 
 
@@ -230,7 +230,7 @@ def _payload_matrix(payload):
 
 
 def structural_audit(case_root):
-    control = public_cpu(case_root, "case_158")
+    control = public_cpu(case_root, "case_85")
     # Six payload basis vectors and structured maps check the composition terms.
     payloads = [(1, 0, 0, 1, 0, 0), (1, 1, 0, 1, 0, 0), (1, 0, 1, 1, 0, 0),
                 (0, 1, -1, 0, 0, 0), (0, 0, 0, 0, 1, -1), (1, 0, 0, 1, -32768, 32767)]
@@ -256,7 +256,7 @@ def structural_audit(case_root):
                     total += 1
             tree_records.append({"case": name, "chunks": size, "prefixes_checked": total,
                                  "mismatches": int(mismatches)})
-            if name == "case_158":
+            if name == "case_85":
                 assert mismatches == 0
     for batch in range(1, 65):
         for length in range(1, 33):

@@ -5,168 +5,214 @@
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_10",
+    "entry": "case_11",
     "has_error": null,
-    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef rotary_kernel(\n    OUT, X, COS, SIN,\n    seqlen, nheads, rotary_dim_half,\n    stride_out_seqlen, stride_out_nheads, stride_out_headdim,\n    stride_x_seqlen, stride_x_nheads, stride_x_headdim,\n    INTERLEAVED: tl.constexpr,\n    BLOCK_H: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,\n):\n    pid_head = tl.program_id(0)\n    pid_m = tl.program_id(1)\n    rh = pid_head * BLOCK_H + tl.arange(0, BLOCK_H)\n    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    rk_half = tl.arange(0, BLOCK_K // 2)\n\n    COS = COS + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    SIN = SIN + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    mask_cs = (rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)\n    cos = tl.load(COS, mask=mask_cs, other=1.0).to(tl.float32)\n    sin = tl.load(SIN, mask=mask_cs, other=0.0).to(tl.float32)\n\n    if not INTERLEAVED:\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk_half[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk_half[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk_half[None, None, :] < rotary_dim_half)\n        x0 = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x1 = tl.load(X_ptrs + rotary_dim_half * stride_x_headdim, mask=mask, other=0.0).to(tl.float32)\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        tl.store(OUT_ptrs, o0, mask=mask)\n        tl.store(OUT_ptrs + rotary_dim_half * stride_out_headdim, o1, mask=mask)\n    else:\n        rk = tl.arange(0, BLOCK_K)\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk[None, None, :] < 2 * rotary_dim_half)\n        x = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x0, x1 = tl.split(tl.reshape(x, [BLOCK_H, BLOCK_M, BLOCK_K // 2, 2]))\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        o = tl.reshape(tl.join(o0, o1), [BLOCK_H, BLOCK_M, BLOCK_K])\n        tl.store(OUT_ptrs, o, mask=mask)\n\n\ndef apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool) -> torch.Tensor:\n    \"\"\"x: (seqlen, nheads, headdim). cos/sin: (seqlen, headdim//2).\"\"\"\n    seqlen, nheads, headdim = x.shape\n    rotary_dim_half = headdim // 2\n    out = torch.empty_like(x)\n    BLOCK_K = triton.next_power_of_2(headdim)\n    grid = (nheads, seqlen)\n    rotary_kernel[grid](\n        out, x, cos, sin,\n        seqlen, nheads, rotary_dim_half,\n        out.stride(0), out.stride(1), out.stride(2),\n        x.stride(0), x.stride(1), x.stride(2),\n        INTERLEAVED=interleaved, BLOCK_H=1, BLOCK_M=1, BLOCK_K=BLOCK_K,\n    )\n    return out\n",
     "passed": null,
-    "problem_text": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+    "problem_text": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
     "rounds": null,
-    "session_dir": "/root/cases/case_10",
+    "session_dir": "/root/cases/case_11",
     "status": "under_test",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-08T14:45:49Z",
+      "created_at": "2026-09-08T14:47:06Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-08T14:46:18Z",
+          "created_at": "2026-09-08T14:48:27Z",
           "data": {
-            "all_equal_N16": {
-              "contract_required": [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7
-              ],
-              "idx_exact_match": false,
-              "k": 8,
-              "kernel_idx_row0": [
-                8,
-                9,
-                11,
-                10,
-                14,
-                15,
-                13,
-                12
-              ],
-              "kernel_only_set": [
-                8,
-                9,
-                10,
-                11,
-                12,
-                13,
-                14,
-                15
-              ],
-              "ref_only_set": [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7
-              ],
-              "selected_values_match": true
-            },
+            "all_cases_ok": true,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
-                "path": "probes/t6_probe.py",
-                "sha256": "2589a63c897e4060161d6b3918da319d3ff00028bd0d9eb887c9d80aa0b7997d"
+                "path": "probes/t7_probe.py",
+                "sha256": "92d078fcde3426b4f45696674406a3693b98dade4258c96b3008bf711b608985"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
-                "path": "probes/t6_stdout.txt",
-                "sha256": "a20790c8dcc2a003c8455eb4cf6e109763f63b367f6c5ad36132550d3b893711"
+                "path": "probes/t7_stdout.txt",
+                "sha256": "b464673688d7e671a24281a95c6f92d9873507f705c0d64d0e4201f879510366"
               },
               {
                 "description": "Captured stderr from the probe process.",
                 "kind": "stderr",
-                "path": "probes/t6_stderr.txt",
+                "path": "probes/t7_stderr.txt",
                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
               }
             ],
-            "distinct_N16": {
-              "idx_exact_match": true
-            },
-            "duration_s": 9.519542,
+            "duration_s": 11.012061,
             "exit_code": 0,
-            "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly.",
-            "groups_of_4_N32": {
-              "idx_exact_match": true
-            },
+            "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it",
+            "fp16_max_abs_worst": 0.0009744167327880859,
+            "fp32_max_abs_worst": 2.384185791015625e-07,
             "json_parse_error": "last stdout line is not JSON: Expecting value",
             "json_result": null,
-            "quantized_3levels_N16": {
-              "idx_exact_match": false,
-              "row0_dropped_lower_tied": [
-                4,
-                6
-              ],
-              "row0_kept_higher_tied": [
+            "metric": "max_abs_elementwise_err_vs_fp32_reference",
+            "non_pow2_headdims": [
+              6,
+              48
+            ],
+            "shapes_tested": [
+              [
                 8,
-                14
+                4,
+                64
               ],
-              "row0_kernel": [
-                0,
+              [
+                3,
                 2,
-                11,
-                10,
-                15,
-                14,
-                7,
                 8
               ],
-              "row0_ref_stable": [
-                0,
-                2,
-                10,
-                11,
-                15,
+              [
+                5,
+                3,
+                6
+              ],
+              [
                 4,
-                6,
-                7
-              ],
-              "row2_dropped_lower_tied": [
                 2,
-                4,
-                7
+                48
               ],
-              "row2_kept_higher_tied": [
-                12,
-                14,
-                15
+              [
+                1,
+                1,
+                2
               ],
-              "tied_value": 1.0
-            },
+              [
+                16,
+                8,
+                128
+              ]
+            ],
             "stderr": "",
-            "stdout": "{\n \"all_equal_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   },\n   {\n    \"row\": 1,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   8,\n   9,\n   11,\n   10,\n   14,\n   15,\n   13,\n   12\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0\n  ]\n },\n \"quantized_3levels_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     4,\n     6\n    ],\n    \"kernel_only\": [\n     8,\n     14\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0\n    ]\n   },\n   {\n    \"row\": 2,\n    \"ref_only\": [\n     2,\n     4,\n     7\n    ],\n    \"kernel_only\": [\n     12,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   0,\n   2,\n   11,\n   10,\n   15,\n   14,\n   7,\n   8\n  ],\n  \"ref_idx_row0\": [\n   0,\n   2,\n   10,\n   11,\n   15,\n   4,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   2.0,\n   0.0,\n   2.0,\n   0.0,\n   1.0,\n   0.0,\n   1.0,\n   1.0,\n   1.0,\n   0.0,\n   2.0,\n   2.0,\n   0.0,\n   0.0,\n   1.0,\n   2.0\n  ]\n },\n \"distinct_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"ref_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"scores_row0\": [\n   -0.5692480802536011,\n   0.9199714064598083,\n   1.1108161211013794,\n   1.2898740768432617,\n   -1.4781739711761475,\n   2.567232847213745,\n   -0.4731197953224182,\n   0.3355507552623749,\n   -1.6293259859085083,\n   -0.54974365234375,\n   -0.47983425855636597,\n   -0.4996815323829651,\n   -1.0669803619384766,\n   1.114939570426941,\n   -0.14067143201828003,\n   0.8057535886764526\n  ]\n },\n \"groups_of_4_N32\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   7.75,\n   7.5,\n   7.25,\n   7.0,\n   6.75,\n   6.5,\n   6.25,\n   6.0,\n   5.75,\n   5.5,\n   5.25,\n   5.0,\n   4.75,\n   4.5,\n   4.25,\n   4.0,\n   3.75,\n   3.5,\n   3.25,\n   3.0,\n   2.75,\n   2.5,\n   2.25,\n   2.0,\n   1.75,\n   1.5,\n   1.25,\n   1.0,\n   0.75,\n   0.5,\n   0.25,\n   0.0\n  ]\n }\n}\n",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2735114296447136e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009698867797851562,\n   \"mean_abs\": 0.00014371277939062566,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 9.313225746154785e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0008449554443359375,\n   \"mean_abs\": 0.00016038073226809502,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 8.640603788023782e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0006351470947265625,\n   \"mean_abs\": 0.0001244622835656628,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 1.1860190163304196e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.00096893310546875,\n   \"mean_abs\": 0.0001347271609120071,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.3019342048892213e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009744167327880859,\n   \"mean_abs\": 0.00014230543456505984,\n   \"ok\": true\n  }\n ]\n}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Kernel violates the stated tie-break rule. All-equal row (N=16, k=8, all zeros): kernel returned [8,9,11,10,14,15,13,12] \u2014 every selected index is a HIGHER index, while the contract (lower index kept) requires [0..7]; set diff shows ref_only={0..7}, kernel_only={8..15} with identical values (0.0). Quantized 3-level row: kernel selected 8 and 14 while dropping tied lower indices 4 and 6 (all value 1.0), and ordered 11 before 10 among tied 2.0's. Distinct-score cases (distinct_N16, groups_of_4_N32) matched the stable reference exactly (idx_exact_match=true), isolating the defect to exact ties, consistent with line 24 `cond = (left > right) != flip` having no index term (descending flip=1 => swap when left<=right).",
-          "supports": "confirmed",
-          "tool_event_id": "t6"
+          "summary": "Probe t7 compared apply_rotary(..., interleaved=False) against an fp32 PyTorch reference implementing o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos, over (S,H,D) = (8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128) in fp32 and fp16. Max abs error <= 2.4e-7 in fp32 and <= 9.8e-4 in fp16 (consistent with fp16 storage rounding) in every case, including non-power-of-two headdims 6 and 48 where BLOCK_K padding/masking was the suspected failure. The required non-interleaved pairing is implemented correctly.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
         }
       ],
       "id": "c1",
       "raised_by": "solo",
-      "rationale": "Line 24 compares only values, with no index tie-break; with flip=1 (descending final merge) cond = NOT(left>right) = (left<=right), so equal elements are swapped, making the network unstable on ties. Contract explicitly requires the lower index be kept on exact ties.",
+      "rationale": "The non-interleaved branch uses 2D cos/sin broadcast against 3D x tensors and a padded BLOCK_K=next_pow2(headdim); rank-mismatched broadcasting or masking on non-power-of-2 headdim could break the required formula.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" and \"must return the indices of the k highest-scoring candidates, in descending score order.\" Input domain only constrains N to a power of two, so tied/quantized score inputs are admitted."
+          "summary": "'interleaved=False: dimension i is paired with dimension i + headdim/2' is a stated required behaviour of apply_rotary."
         }
       ],
-      "scope_rationale": "problem.txt states a mandatory tie-break rule (\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept\") and requires descending score order; scores with exact ties are admitted by the declared input domain (only constraint is power-of-two column count).",
-      "statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k.",
-      "status": "confirmed",
-      "updated_at": "2026-09-08T14:46:18Z"
+      "scope_rationale": "problem.txt explicitly states the interleaved=False pairing (dimension i paired with i+headdim/2) as required behaviour, and the function signature docstring fixes x as (seqlen,nheads,headdim), cos/sin (seqlen,headdim//2).",
+      "statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes.",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:48:27Z"
+    },
+    {
+      "created_at": "2026-09-08T14:47:06Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:48:27Z",
+          "data": {
+            "all_cases_ok": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "75dd5642fb31701ed7bbf5865d2b7b677ca19f75d3312ccba5dd484538795f96"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "38a4a5c3dd514a4e312b308463f2c14d5e5bb7ef379f5f50757a09b2db9921ed"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.833928,
+            "exit_code": 0,
+            "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it",
+            "fp16_max_abs_worst": 0.0009722709655761719,
+            "fp32_max_abs_worst": 2.384185791015625e-07,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "metric": "max_abs_elementwise_err_vs_fp32_reference",
+            "non_pow2_headdims": [
+              6,
+              48
+            ],
+            "shapes_tested": [
+              [
+                8,
+                4,
+                64
+              ],
+              [
+                3,
+                2,
+                8
+              ],
+              [
+                5,
+                3,
+                6
+              ],
+              [
+                4,
+                2,
+                48
+              ],
+              [
+                1,
+                1,
+                2
+              ],
+              [
+                16,
+                8,
+                128
+              ]
+            ],
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.239763491867052e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009670257568359375,\n   \"mean_abs\": 0.000142200558912009,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2883296207633066e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0005273818969726562,\n   \"mean_abs\": 0.00016582253738306463,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2862599874097214e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0004944801330566406,\n   \"mean_abs\": 0.00012973218690603971,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2513434732852602e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00015487612108699977,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2893747403097677e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00014225074846763164,\n   \"ok\": true\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t8 compared apply_rotary(..., interleaved=True) against an fp32 PyTorch reference pairing dim 2i with 2i+1 (out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos), same shape/dtype grid as t7. Max abs error <= 2.4e-7 (fp32) and <= 9.7e-4 (fp16) in every case, including D=6 and D=48 where BLOCK_K=next_pow2(D) padding of the reshape/split/join was the suspected misalignment. The required interleaved pairing is implemented correctly; padded lanes are masked out and do not shift the even/odd pairing.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c2",
+      "raised_by": "solo",
+      "rationale": "The interleaved branch relies on tl.reshape/tl.split/tl.join over a BLOCK_K padded to the next power of two; if headdim < BLOCK_K the padded lanes shift the even/odd pairing or the join layout, producing wrong outputs.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "'interleaved=True: dimension 2i is paired with dimension 2i+1' is a stated required behaviour of apply_rotary."
+        }
+      ],
+      "scope_rationale": "problem.txt explicitly states the interleaved=True pairing (2i with 2i+1) as required behaviour behind the flag.",
+      "statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two).",
+      "status": "rebutted",
+      "updated_at": "2026-09-08T14:48:27Z"
     }
   ],
   "convergence": null,
@@ -179,7 +225,7 @@
   },
   "description_tasks": [],
   "description_updates": [],
-  "entry": "case_10",
+  "entry": "case_11",
   "history": [
     {
       "duration_s": null,
@@ -189,25 +235,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_10"
+            "entry": "case_11"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_10"
+            "entry": "case_11"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_10"
+            "entry": "case_11"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_10",
+            "entry": "case_11",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -216,31 +262,69 @@
       "usage": null
     },
     {
-      "duration_s": 36.213532026999985,
+      "duration_s": 31.311974140000018,
       "role": "solo",
       "round": 2,
-      "text": "Contract has an explicit tie-break rule (lower index kept), and line 24's `cond = (left > right) != flip` has no index term \u2014 for descending (flip=1) it swaps when `left <= right`, i.e. on exact equality. That is the prime suspect.",
+      "text": "I have the full kernel and contract. The two pairings are the core requirement; I'll test each path against a PyTorch reference, including non-power-of-2 headdims where BLOCK_K padding could misalign the interleaved reshape/split.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "Line 24 compares only values, with no index tie-break; with flip=1 (descending final merge) cond = NOT(left>right) = (left<=right), so equal elements are swapped, making the network unstable on ties. Contract explicitly requires the lower index be kept on exact ties.",
+            "rationale": "The non-interleaved branch uses 2D cos/sin broadcast against 3D x tensors and a padded BLOCK_K=next_pow2(headdim); rank-mismatched broadcasting or masking on non-power-of-2 headdim could break the required formula.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" and \"must return the indices of the k highest-scoring candidates, in descending score order.\" Input domain only constrains N to a power of two, so tied/quantized score inputs are admitted."
+                "summary": "'interleaved=False: dimension i is paired with dimension i + headdim/2' is a stated required behaviour of apply_rotary."
               }
             ],
-            "scope_rationale": "problem.txt states a mandatory tie-break rule (\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept\") and requires descending score order; scores with exact ties are admitted by the declared input domain (only constraint is power-of-two column count).",
-            "statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k."
+            "scope_rationale": "problem.txt explicitly states the interleaved=False pairing (dimension i paired with i+headdim/2) as required behaviour, and the function signature docstring fixes x as (seqlen,nheads,headdim), cos/sin (seqlen,headdim//2).",
+            "statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes."
           },
           "tool": "record_claim"
         },
         {
           "args": {
+            "rationale": "The interleaved branch relies on tl.reshape/tl.split/tl.join over a BLOCK_K padded to the next power of two; if headdim < BLOCK_K the padded lanes shift the even/odd pairing or the join layout, producing wrong outputs.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "'interleaved=True: dimension 2i is paired with dimension 2i+1' is a stated required behaviour of apply_rotary."
+              }
+            ],
+            "scope_rationale": "problem.txt explicitly states the interleaved=True pairing (2i with 2i+1) as required behaviour behind the flag.",
+            "statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two)."
+          },
+          "tool": "record_claim"
+        }
+      ],
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6910,
+        "duration_s": 31.312,
+        "input_tokens": 6172,
+        "output_tokens": 2485
+      }
+    },
+    {
+      "duration_s": 35.84395516200004,
+      "role": "solo",
+      "round": 3,
+      "text": "Both claims are independent and testable with a straight reference comparison, so I'll probe them together: c1 for the non-interleaved pairing, c2 for the interleaved pairing, each across even/non-power-of-two headdims and fp32/fp16.",
+      "tool_calls": [
+        {
+          "args": {
             "claim_id": "c1",
-            "code": "\nimport importlib.util, torch, json\nspec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nout = {}\n\ndef check(name, scores, k):\n    s = scores.cuda().contiguous()\n    idx = m.sorted_topk_indices(s.clone(), k).cpu()\n    ref = torch.argsort(s.cpu(), dim=1, descending=True, stable=True)[:, :k]\n    vals_k = torch.gather(s.cpu(), 1, idx)\n    vals_r = torch.gather(s.cpu(), 1, ref)\n    val_match = torch.equal(vals_k, vals_r)\n    idx_match = torch.equal(idx, ref)\n    # set-level: which lower-index tied candidates were dropped\n    dropped = []\n    for b in range(s.shape[0]):\n        sel = set(idx[b].tolist()); rsel = set(ref[b].tolist())\n        miss = sorted(rsel - sel); extra = sorted(sel - rsel)\n        if miss or extra:\n            dropped.append({\"row\": b, \"ref_only\": miss, \"kernel_only\": extra,\n                            \"ref_only_vals\": [s[b, i].item() for i in miss],\n                            \"kernel_only_vals\": [s[b, i].item() for i in extra]})\n    out[name] = {\"k\": k, \"idx_exact_match\": idx_match, \"selected_values_match\": val_match,\n                 \"set_diffs\": dropped[:4],\n                 \"kernel_idx_row0\": idx[0].tolist(), \"ref_idx_row0\": ref[0].tolist(),\n                 \"scores_row0\": s[0].cpu().tolist()}\n\n# 1) all equal row -> contract demands 0..k-1\ncheck(\"all_equal_N16\", torch.zeros(2,16), 8)\n# 2) quantized scores, many ties\ncheck(\"quantized_3levels_N16\", torch.randint(0,3,(4,16)).float(), 8)\n# 3) distinct scores sanity\ncheck(\"distinct_N16\", torch.randn(4,16), 8)\n# 4) larger, ties at the cutoff\ns = torch.arange(32).float().flip(0).repeat(2,1)/4.0  # duplicates in groups of 4\ncheck(\"groups_of_4_N32\", s, 8)\nprint(json.dumps(out, indent=1))\n",
-            "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly."
+            "code": "\nimport torch, importlib.util, json, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_noninter(x, cos, sin):\n    h = x.shape[-1]//2\n    x1 = x[..., :h].float(); x2 = x[..., h:2*h].float()\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)\n    o1 = x1*c - x2*s; o2 = x1*s + x2*c\n    out = x.float().clone()\n    out[..., :h] = o1; out[..., h:2*h] = o2\n    return out\n\nres = []\ntorch.manual_seed(0)\nfor (S,H,D) in [(8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128)]:\n    for dt in [torch.float32, torch.float16]:\n        try:\n            x = torch.randn(S,H,D, device='cuda', dtype=dt)\n            ang = torch.randn(S, D//2, device='cuda', dtype=torch.float32)\n            cos = torch.cos(ang).to(dt); sin = torch.sin(ang).to(dt)\n            out = m.apply_rotary(x, cos, sin, False)\n            r = ref_noninter(x, cos, sin)\n            err = (out.float()-r).abs()\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),max_abs=float(err.max()),\n                            mean_abs=float(err.mean()), ok=bool(err.max() < (1e-4 if dt==torch.float32 else 5e-3))))\n        except Exception as e:\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),error=repr(e)[:300]))\nprint(json.dumps(dict(metric=\"max_abs_elementwise_err_vs_fp32_reference\", cases=res), indent=1))\n",
+            "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_inter(x, cos, sin):\n    xe = x[..., 0::2].float(); xo = x[..., 1::2].float()\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)\n    o1 = xe*c - xo*s; o2 = xe*s + xo*c\n    out = x.float().clone()\n    out[..., 0::2] = o1; out[..., 1::2] = o2\n    return out\n\nres = []\ntorch.manual_seed(0)\nfor (S,H,D) in [(8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128)]:\n    for dt in [torch.float32, torch.float16]:\n        try:\n            x = torch.randn(S,H,D, device='cuda', dtype=dt)\n            ang = torch.randn(S, D//2, device='cuda', dtype=torch.float32)\n            cos = torch.cos(ang).to(dt); sin = torch.sin(ang).to(dt)\n            out = m.apply_rotary(x, cos, sin, True)\n            r = ref_inter(x, cos, sin)\n            err = (out.float()-r).abs()\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),max_abs=float(err.max()),\n                            mean_abs=float(err.mean()), ok=bool(err.max() < (1e-4 if dt==torch.float32 else 5e-3))))\n        except Exception as e:\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),error=repr(e)[:300]))\nprint(json.dumps(dict(metric=\"max_abs_elementwise_err_vs_fp32_reference\", cases=res), indent=1))\n",
+            "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it"
           },
           "tool": "run_claim_probe"
         }
@@ -248,118 +332,116 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 6910,
-        "duration_s": 36.214,
-        "input_tokens": 5999,
-        "output_tokens": 2920
+        "duration_s": 35.844,
+        "input_tokens": 9741,
+        "output_tokens": 3228
       }
     },
     {
-      "duration_s": 19.506841775999987,
+      "duration_s": 24.479144688999952,
       "role": "solo",
-      "round": 3,
-      "text": "Probe t6 gives a clean signal: on the all-equal row the kernel returns indices 8\u201315 instead of the contract-required 0\u20137, and on quantized scores it keeps higher-index tied candidates (8, 14) while dropping lower-index tied ones (4, 6). Distinct-score rows match exactly, isolating the failure to the tie rule.",
+      "round": 4,
+      "text": "Both probes returned clean results across all shapes and dtypes, including non-power-of-two headdims where the BLOCK_K padding could have misaligned the split/join. I'll record that evidence and resolve both claims.",
       "tool_calls": [
         {
           "args": {
             "data": {
-              "all_equal_N16": {
-                "contract_required": [
-                  0,
-                  1,
-                  2,
+              "all_cases_ok": true,
+              "fp16_max_abs_worst": 0.0009744167327880859,
+              "fp32_max_abs_worst": 2.384185791015625e-07,
+              "metric": "max_abs_elementwise_err_vs_fp32_reference",
+              "non_pow2_headdims": [
+                6,
+                48
+              ],
+              "shapes_tested": [
+                [
+                  8,
+                  4,
+                  64
+                ],
+                [
                   3,
-                  4,
-                  5,
-                  6,
-                  7
-                ],
-                "idx_exact_match": false,
-                "k": 8,
-                "kernel_idx_row0": [
-                  8,
-                  9,
-                  11,
-                  10,
-                  14,
-                  15,
-                  13,
-                  12
-                ],
-                "kernel_only_set": [
-                  8,
-                  9,
-                  10,
-                  11,
-                  12,
-                  13,
-                  14,
-                  15
-                ],
-                "ref_only_set": [
-                  0,
-                  1,
                   2,
-                  3,
-                  4,
-                  5,
-                  6,
-                  7
-                ],
-                "selected_values_match": true
-              },
-              "distinct_N16": {
-                "idx_exact_match": true
-              },
-              "groups_of_4_N32": {
-                "idx_exact_match": true
-              },
-              "quantized_3levels_N16": {
-                "idx_exact_match": false,
-                "row0_dropped_lower_tied": [
-                  4,
-                  6
-                ],
-                "row0_kept_higher_tied": [
-                  8,
-                  14
-                ],
-                "row0_kernel": [
-                  0,
-                  2,
-                  11,
-                  10,
-                  15,
-                  14,
-                  7,
                   8
                 ],
-                "row0_ref_stable": [
-                  0,
-                  2,
-                  10,
-                  11,
-                  15,
+                [
+                  5,
+                  3,
+                  6
+                ],
+                [
                   4,
-                  6,
-                  7
-                ],
-                "row2_dropped_lower_tied": [
                   2,
-                  4,
-                  7
+                  48
                 ],
-                "row2_kept_higher_tied": [
-                  12,
-                  14,
-                  15
+                [
+                  1,
+                  1,
+                  2
                 ],
-                "tied_value": 1.0
-              }
+                [
+                  16,
+                  8,
+                  128
+                ]
+              ]
             },
-            "event_id": "t6",
-            "status": "confirmed",
-            "summary": "Kernel violates the stated tie-break rule. All-equal row (N=16, k=8, all zeros): kernel returned [8,9,11,10,14,15,13,12] \u2014 every selected index is a HIGHER index, while the contract (lower index kept) requires [0..7]; set diff shows ref_only={0..7}, kernel_only={8..15} with identical values (0.0). Quantized 3-level row: kernel selected 8 and 14 while dropping tied lower indices 4 and 6 (all value 1.0), and ordered 11 before 10 among tied 2.0's. Distinct-score cases (distinct_N16, groups_of_4_N32) matched the stable reference exactly (idx_exact_match=true), isolating the defect to exact ties, consistent with line 24 `cond = (left > right) != flip` having no index term (descending flip=1 => swap when left<=right).",
-            "supports": "confirmed"
+            "event_id": "t7",
+            "status": "rebutted",
+            "summary": "Probe t7 compared apply_rotary(..., interleaved=False) against an fp32 PyTorch reference implementing o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos, over (S,H,D) = (8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128) in fp32 and fp16. Max abs error <= 2.4e-7 in fp32 and <= 9.8e-4 in fp16 (consistent with fp16 storage rounding) in every case, including non-power-of-two headdims 6 and 48 where BLOCK_K padding/masking was the suspected failure. The required non-interleaved pairing is implemented correctly.",
+            "supports": "rebutted"
+          },
+          "tool": "finalize_probe_evidence"
+        },
+        {
+          "args": {
+            "data": {
+              "all_cases_ok": true,
+              "fp16_max_abs_worst": 0.0009722709655761719,
+              "fp32_max_abs_worst": 2.384185791015625e-07,
+              "metric": "max_abs_elementwise_err_vs_fp32_reference",
+              "non_pow2_headdims": [
+                6,
+                48
+              ],
+              "shapes_tested": [
+                [
+                  8,
+                  4,
+                  64
+                ],
+                [
+                  3,
+                  2,
+                  8
+                ],
+                [
+                  5,
+                  3,
+                  6
+                ],
+                [
+                  4,
+                  2,
+                  48
+                ],
+                [
+                  1,
+                  1,
+                  2
+                ],
+                [
+                  16,
+                  8,
+                  128
+                ]
+              ]
+            },
+            "event_id": "t8",
+            "status": "rebutted",
+            "summary": "Probe t8 compared apply_rotary(..., interleaved=True) against an fp32 PyTorch reference pairing dim 2i with 2i+1 (out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos), same shape/dtype grid as t7. Max abs error <= 2.4e-7 (fp32) and <= 9.7e-4 (fp16) in every case, including D=6 and D=48 where BLOCK_K=next_pow2(D) padding of the reshape/split/join was the suspected misalignment. The required interleaved pairing is implemented correctly; padded lanes are masked out and do not shift the even/odd pairing.",
+            "supports": "rebutted"
           },
           "tool": "finalize_probe_evidence"
         }
@@ -367,25 +449,26 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 6910,
-        "duration_s": 19.507,
-        "input_tokens": 16615,
-        "output_tokens": 1103
+        "duration_s": 24.479,
+        "input_tokens": 21628,
+        "output_tokens": 2112
       }
     },
     {
-      "duration_s": 16.425548307999975,
+      "duration_s": 25.818725192999977,
       "role": "solo",
-      "round": 4,
-      "text": "Claim c1 is confirmed with in-scope contract evidence and the probe numbers are decisive; no further probes would change the verdict.",
+      "round": 5,
+      "text": "Both contract-required pairings were probed directly against fp32 references across power-of-two and non-power-of-two headdims, in fp32 and fp16, and both matched to rounding. No open claims remain and no remaining hypothesis would change the outcome, so I'll record the verdict.",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.93,
+            "confidence": 0.85,
             "decisive_claims": [
-              "c1"
+              "c1",
+              "c2"
             ],
-            "reason": "The contract in problem.txt explicitly requires that \"when two candidates have exactly equal scores, the LOWER index must be the one kept\", and that the k highest-scoring indices be returned in descending score order. The kernel's compare-and-swap (kernel.py line 24) uses `cond = (left > right) != flip`, which contains no index term; with the descending final merge (flip=1) the condition reduces to `left <= right`, so exactly-tied elements are swapped and the network is unstable on ties.\n\nProbe t6 (finalized as evidence c1.e1) ran the actual kernel on GPU against a stable descending argsort reference, all within the declared input domain (power-of-two column counts, N=16 and N=32):\n- all_equal_N16 (all zeros, k=8): kernel returned [8,9,11,10,14,15,13,12]; the contract requires [0..7]. Set diff: ref_only={0..7}, kernel_only={8..15}, all values identical (0.0) \u2014 i.e. every kept candidate is a higher index among exact ties.\n- quantized_3levels_N16 (k=8): kernel kept tied (value 1.0) indices 8 and 14 while dropping lower tied indices 4 and 6; row 2 kept 12,14,15 while dropping 2,4,7. It also ordered tied 2.0 entries as 11 before 10, violating lower-index-first ordering.\n- Control cases with distinct scores (distinct_N16) and strictly decreasing scores (groups_of_4_N32) matched the reference exactly (idx_exact_match=true), isolating the failure precisely to the contractually specified tie rule rather than to a metric artifact or a reference-undefined case.\n\nSince the tie-break is an explicitly stated required behaviour and the failing inputs (exactly equal / quantized scores with power-of-two N) are admitted by the declared input domain, this is a contract violation, not an unspecified-choice difference.",
-            "verdict": "reject"
+            "reason": "The contract requires apply_rotary to apply the RoPE rotation with two selectable pairings: interleaved=False pairs dim i with i+headdim/2, interleaved=True pairs dim 2i with 2i+1. I tested each branch against an independent fp32 PyTorch reference on a GPU.\\n\\nProbe t7 (claim c1, interleaved=False, reference o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) over (S,H,D) = (8,4,64), (3,2,8), (5,3,6), (4,2,48), (1,1,2), (16,8,128) in fp32 and fp16: worst max abs error 2.38e-7 in fp32 and 9.74e-4 in fp16 (consistent with fp16 storage rounding of the output). Probe t8 (claim c2, interleaved=True, reference out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos) on the same grid: worst max abs error 2.38e-7 fp32 / 9.72e-4 fp16. Both grids deliberately included non-power-of-two headdims 6 and 48, the case where BLOCK_K=next_pow2(headdim) padding could have misaligned the masked loads (non-interleaved branch) or the reshape/split/join even-odd pairing (interleaved branch); no misalignment appeared, so the padded lanes are correctly masked. Both claims were therefore rebutted (evidence c1.e1, c2.e1).\\n\\nRemaining untested generalizations are outside the stated contract: odd headdim (the contract describes cos/sin as headdim//2 and speaks of rotating pairs, leaving any leftover odd dimension unspecified) and exotic strides/dtypes. Nothing established contradicts a required behaviour, so the implementation satisfies the contract.",
+            "verdict": "trust"
           },
           "tool": "record_verdict"
         }
@@ -393,9 +476,9 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 6910,
-        "duration_s": 16.426,
-        "input_tokens": 30790,
-        "output_tokens": 845
+        "duration_s": 25.819,
+        "input_tokens": 39792,
+        "output_tokens": 1556
       }
     }
   ],
@@ -413,9 +496,9 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_10"
+        "entry": "case_11"
       },
-      "created_at": "2026-09-08T14:45:13Z",
+      "created_at": "2026-09-08T14:46:35Z",
       "id": "t1",
       "output": {
         "artifact_files": [
@@ -423,13 +506,13 @@
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_10",
+        "entry": "case_11",
         "has_error": null,
-        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n@triton.jit\ndef _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]\n    y = tl.reshape(x, shape)\n    mask = tl.arange(0, 2)[None, :, None]\n    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)\n    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)\n    left = tl.reshape(left, x.shape)\n    right = tl.reshape(right, x.shape)\n    y_idx = tl.reshape(ids, shape)\n    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)\n    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)\n    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)\n    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)\n    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)\n    ileft = left.to(idtype, bitcast=True)\n    iright = right.to(idtype, bitcast=True)\n    ix = x.to(idtype, bitcast=True)\n    cond = (left > right) != flip\n    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))\n    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))\n    return ret.to(x.dtype, bitcast=True), new_ids\n\n\n@triton.jit\ndef _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):\n    n_outer: tl.constexpr = x.numel >> n_dims\n    tl.static_assert(stage <= n_dims)\n    if order == 2:\n        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]\n        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)\n    else:\n        flip = order\n    for i in tl.static_range(stage):\n        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)\n    return x, ids\n\n\n@triton.jit\ndef _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):\n    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every\n    # Triton version, so N_DIMS is passed in from the (Python-side, so still\n    # compile-time-known) caller instead. The bitonic merge/compare-and-swap\n    # primitives below -- where the actual tie-break mechanism lives -- are\n    # byte-for-byte the real kernel, unchanged.\n    row = tl.program_id(0)\n    offs = tl.arange(0, N)\n    x = tl.load(X_ptr + row * stride_row + offs)\n    ids = tl.load(IDS_ptr + row * stride_row + offs)\n    for i in tl.static_range(1, N_DIMS + 1):\n        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)\n    tl.store(X_ptr + row * stride_row + offs, x)\n    tl.store(IDS_ptr + row * stride_row + offs, ids)\n\n\ndef sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:\n    \"\"\"Host wrapper: real bitonic-sort kernel, launched one program per row.\"\"\"\n    import math\n    assert scores.is_cuda\n    B, N = scores.shape\n    n_dims = int(math.log2(N))\n    x = scores.clone().contiguous()\n    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()\n    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)\n    return ids[:, :k].long()\n",
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef rotary_kernel(\n    OUT, X, COS, SIN,\n    seqlen, nheads, rotary_dim_half,\n    stride_out_seqlen, stride_out_nheads, stride_out_headdim,\n    stride_x_seqlen, stride_x_nheads, stride_x_headdim,\n    INTERLEAVED: tl.constexpr,\n    BLOCK_H: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,\n):\n    pid_head = tl.program_id(0)\n    pid_m = tl.program_id(1)\n    rh = pid_head * BLOCK_H + tl.arange(0, BLOCK_H)\n    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)\n    rk_half = tl.arange(0, BLOCK_K // 2)\n\n    COS = COS + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    SIN = SIN + (rm[:, None] * rotary_dim_half + rk_half[None, :])\n    mask_cs = (rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)\n    cos = tl.load(COS, mask=mask_cs, other=1.0).to(tl.float32)\n    sin = tl.load(SIN, mask=mask_cs, other=0.0).to(tl.float32)\n\n    if not INTERLEAVED:\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk_half[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk_half[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk_half[None, None, :] < rotary_dim_half)\n        x0 = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x1 = tl.load(X_ptrs + rotary_dim_half * stride_x_headdim, mask=mask, other=0.0).to(tl.float32)\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        tl.store(OUT_ptrs, o0, mask=mask)\n        tl.store(OUT_ptrs + rotary_dim_half * stride_out_headdim, o1, mask=mask)\n    else:\n        rk = tl.arange(0, BLOCK_K)\n        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk[None, None, :] * stride_x_headdim)\n        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk[None, None, :] * stride_out_headdim)\n        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk[None, None, :] < 2 * rotary_dim_half)\n        x = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)\n        x0, x1 = tl.split(tl.reshape(x, [BLOCK_H, BLOCK_M, BLOCK_K // 2, 2]))\n        o0 = x0 * cos - x1 * sin\n        o1 = x0 * sin + x1 * cos\n        o = tl.reshape(tl.join(o0, o1), [BLOCK_H, BLOCK_M, BLOCK_K])\n        tl.store(OUT_ptrs, o, mask=mask)\n\n\ndef apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool) -> torch.Tensor:\n    \"\"\"x: (seqlen, nheads, headdim). cos/sin: (seqlen, headdim//2).\"\"\"\n    seqlen, nheads, headdim = x.shape\n    rotary_dim_half = headdim // 2\n    out = torch.empty_like(x)\n    BLOCK_K = triton.next_power_of_2(headdim)\n    grid = (nheads, seqlen)\n    rotary_kernel[grid](\n        out, x, cos, sin,\n        seqlen, nheads, rotary_dim_half,\n        out.stride(0), out.stride(1), out.stride(2),\n        x.stride(0), x.stride(1), x.stride(2),\n        INTERLEAVED=interleaved, BLOCK_H=1, BLOCK_M=1, BLOCK_K=BLOCK_K,\n    )\n    return out\n",
         "passed": null,
-        "problem_text": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
+        "problem_text": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
         "rounds": null,
-        "session_dir": "/root/cases/case_10",
+        "session_dir": "/root/cases/case_11",
         "status": "under_test",
         "test_code": ""
       },
@@ -438,13 +521,13 @@
     },
     {
       "args": {
-        "entry": "case_10"
+        "entry": "case_11"
       },
-      "created_at": "2026-09-08T14:45:13Z",
+      "created_at": "2026-09-08T14:46:35Z",
       "id": "t2",
       "output": {
-        "content": "Operation: top-k selection over candidate block scores, implemented with the\nbitonic sort network used by Native Sparse Attention's selection branch\n(fla-org/native-sparse-attention, native_sparse_attention/ops/utils.py).\n\n`sorted_topk_indices(scores, k)` must return the indices of the k\nhighest-scoring candidates, in descending score order.\n\nContract on ties: when two candidates have exactly equal scores, the\nLOWER index must be the one kept.\n\nDownstream, the selected indices gather value vectors that are averaged\ntogether, so the selection feeds a continuous output.\n\nInput domain: `scores` has a power-of-two number of columns (the bitonic\nnetwork this kernel family uses is defined only for power-of-two extents).\n",
-        "entry": "case_10",
+        "content": "Operation: rotary position embeddings (RoPE)\n(Dao-AILab/flash-attention, flash_attn/ops/triton/rotary.py::rotary_kernel).\n\n`apply_rotary(x, cos, sin, interleaved)` must rotate each pair of feature\ndimensions of x by the position-dependent angle encoded in cos/sin, so that\nthe dot product of a rotated query and a rotated key depends on their relative\nposition.\n\nTwo pairings are in use in the field and the kernel implements both behind the\n`interleaved` flag:\n  - interleaved=False: dimension i is paired with dimension i + headdim/2\n  - interleaved=True:  dimension 2i is paired with dimension 2i+1\n\nThe specification does not mandate which pairing a model uses; it requires\nonly that a given model apply the same one consistently to both q and k.\n",
+        "entry": "case_11",
         "exists": true,
         "path": "problem.txt"
       },
@@ -453,17 +536,17 @@
     },
     {
       "args": {
-        "entry": "case_10"
+        "entry": "case_11"
       },
-      "created_at": "2026-09-08T14:45:13Z",
+      "created_at": "2026-09-08T14:46:35Z",
       "id": "t3",
       "output": {
-        "entry": "case_10",
+        "entry": "case_11",
         "files": [
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 3236
+            "size_bytes": 3116
           },
           {
             "kind": "metadata",
@@ -473,7 +556,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 724
+            "size_bytes": 751
           }
         ]
       },
@@ -482,14 +565,14 @@
     },
     {
       "args": {
-        "entry": "case_10",
+        "entry": "case_11",
         "path": "meta.json"
       },
-      "created_at": "2026-09-08T14:45:13Z",
+      "created_at": "2026-09-08T14:46:35Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_10\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
-        "entry": "case_10",
+        "content": "{\n  \"name\": \"case_11\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_11",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 68,
@@ -500,36 +583,72 @@
     },
     {
       "args": {
-        "rationale": "Line 24 compares only values, with no index tie-break; with flip=1 (descending final merge) cond = NOT(left>right) = (left<=right), so equal elements are swapped, making the network unstable on ties. Contract explicitly requires the lower index be kept on exact ties.",
+        "rationale": "The non-interleaved branch uses 2D cos/sin broadcast against 3D x tensors and a padded BLOCK_K=next_pow2(headdim); rank-mismatched broadcasting or masking on non-power-of-2 headdim could break the required formula.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" and \"must return the indices of the k highest-scoring candidates, in descending score order.\" Input domain only constrains N to a power of two, so tied/quantized score inputs are admitted."
+            "summary": "'interleaved=False: dimension i is paired with dimension i + headdim/2' is a stated required behaviour of apply_rotary."
           }
         ],
-        "scope_rationale": "problem.txt states a mandatory tie-break rule (\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept\") and requires descending score order; scores with exact ties are admitted by the declared input domain (only constraint is power-of-two column count).",
-        "statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k."
+        "scope_rationale": "problem.txt explicitly states the interleaved=False pairing (dimension i paired with i+headdim/2) as required behaviour, and the function signature docstring fixes x as (seqlen,nheads,headdim), cos/sin (seqlen,headdim//2).",
+        "statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes."
       },
-      "created_at": "2026-09-08T14:45:49Z",
+      "created_at": "2026-09-08T14:47:06Z",
       "id": "t5",
       "output": {
-        "created_at": "2026-09-08T14:45:49Z",
+        "created_at": "2026-09-08T14:47:06Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "solo",
-        "rationale": "Line 24 compares only values, with no index tie-break; with flip=1 (descending final merge) cond = NOT(left>right) = (left<=right), so equal elements are swapped, making the network unstable on ties. Contract explicitly requires the lower index be kept on exact ties.",
+        "rationale": "The non-interleaved branch uses 2D cos/sin broadcast against 3D x tensors and a padded BLOCK_K=next_pow2(headdim); rank-mismatched broadcasting or masking on non-power-of-2 headdim could break the required formula.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" and \"must return the indices of the k highest-scoring candidates, in descending score order.\" Input domain only constrains N to a power of two, so tied/quantized score inputs are admitted."
+            "summary": "'interleaved=False: dimension i is paired with dimension i + headdim/2' is a stated required behaviour of apply_rotary."
           }
         ],
-        "scope_rationale": "problem.txt states a mandatory tie-break rule (\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept\") and requires descending score order; scores with exact ties are admitted by the declared input domain (only constraint is power-of-two column count).",
-        "statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k.",
+        "scope_rationale": "problem.txt explicitly states the interleaved=False pairing (dimension i paired with i+headdim/2) as required behaviour, and the function signature docstring fixes x as (seqlen,nheads,headdim), cos/sin (seqlen,headdim//2).",
+        "statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes.",
         "status": "open",
-        "updated_at": "2026-09-08T14:45:49Z"
+        "updated_at": "2026-09-08T14:47:06Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "The interleaved branch relies on tl.reshape/tl.split/tl.join over a BLOCK_K padded to the next power of two; if headdim < BLOCK_K the padded lanes shift the even/odd pairing or the join layout, producing wrong outputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'interleaved=True: dimension 2i is paired with dimension 2i+1' is a stated required behaviour of apply_rotary."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the interleaved=True pairing (2i with 2i+1) as required behaviour behind the flag.",
+        "statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two)."
+      },
+      "created_at": "2026-09-08T14:47:06Z",
+      "id": "t6",
+      "output": {
+        "created_at": "2026-09-08T14:47:06Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "solo",
+        "rationale": "The interleaved branch relies on tl.reshape/tl.split/tl.join over a BLOCK_K padded to the next power of two; if headdim < BLOCK_K the padded lanes shift the even/odd pairing or the join layout, producing wrong outputs.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "'interleaved=True: dimension 2i is paired with dimension 2i+1' is a stated required behaviour of apply_rotary."
+          }
+        ],
+        "scope_rationale": "problem.txt explicitly states the interleaved=True pairing (2i with 2i+1) as required behaviour behind the flag.",
+        "statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two).",
+        "status": "open",
+        "updated_at": "2026-09-08T14:47:06Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -537,37 +656,37 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "\nimport importlib.util, torch, json\nspec = importlib.util.spec_from_file_location(\"kmod\", \"/root/cases/case_10/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ntorch.manual_seed(0)\nout = {}\n\ndef check(name, scores, k):\n    s = scores.cuda().contiguous()\n    idx = m.sorted_topk_indices(s.clone(), k).cpu()\n    ref = torch.argsort(s.cpu(), dim=1, descending=True, stable=True)[:, :k]\n    vals_k = torch.gather(s.cpu(), 1, idx)\n    vals_r = torch.gather(s.cpu(), 1, ref)\n    val_match = torch.equal(vals_k, vals_r)\n    idx_match = torch.equal(idx, ref)\n    # set-level: which lower-index tied candidates were dropped\n    dropped = []\n    for b in range(s.shape[0]):\n        sel = set(idx[b].tolist()); rsel = set(ref[b].tolist())\n        miss = sorted(rsel - sel); extra = sorted(sel - rsel)\n        if miss or extra:\n            dropped.append({\"row\": b, \"ref_only\": miss, \"kernel_only\": extra,\n                            \"ref_only_vals\": [s[b, i].item() for i in miss],\n                            \"kernel_only_vals\": [s[b, i].item() for i in extra]})\n    out[name] = {\"k\": k, \"idx_exact_match\": idx_match, \"selected_values_match\": val_match,\n                 \"set_diffs\": dropped[:4],\n                 \"kernel_idx_row0\": idx[0].tolist(), \"ref_idx_row0\": ref[0].tolist(),\n                 \"scores_row0\": s[0].cpu().tolist()}\n\n# 1) all equal row -> contract demands 0..k-1\ncheck(\"all_equal_N16\", torch.zeros(2,16), 8)\n# 2) quantized scores, many ties\ncheck(\"quantized_3levels_N16\", torch.randint(0,3,(4,16)).float(), 8)\n# 3) distinct scores sanity\ncheck(\"distinct_N16\", torch.randn(4,16), 8)\n# 4) larger, ties at the cutoff\ns = torch.arange(32).float().flip(0).repeat(2,1)/4.0  # duplicates in groups of 4\ncheck(\"groups_of_4_N32\", s, 8)\nprint(json.dumps(out, indent=1))\n",
-        "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly."
+        "code": "\nimport torch, importlib.util, json, traceback\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_noninter(x, cos, sin):\n    h = x.shape[-1]//2\n    x1 = x[..., :h].float(); x2 = x[..., h:2*h].float()\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)\n    o1 = x1*c - x2*s; o2 = x1*s + x2*c\n    out = x.float().clone()\n    out[..., :h] = o1; out[..., h:2*h] = o2\n    return out\n\nres = []\ntorch.manual_seed(0)\nfor (S,H,D) in [(8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128)]:\n    for dt in [torch.float32, torch.float16]:\n        try:\n            x = torch.randn(S,H,D, device='cuda', dtype=dt)\n            ang = torch.randn(S, D//2, device='cuda', dtype=torch.float32)\n            cos = torch.cos(ang).to(dt); sin = torch.sin(ang).to(dt)\n            out = m.apply_rotary(x, cos, sin, False)\n            r = ref_noninter(x, cos, sin)\n            err = (out.float()-r).abs()\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),max_abs=float(err.max()),\n                            mean_abs=float(err.mean()), ok=bool(err.max() < (1e-4 if dt==torch.float32 else 5e-3))))\n        except Exception as e:\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),error=repr(e)[:300]))\nprint(json.dumps(dict(metric=\"max_abs_elementwise_err_vs_fp32_reference\", cases=res), indent=1))\n",
+        "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it"
       },
-      "created_at": "2026-09-08T14:45:59Z",
-      "id": "t6",
+      "created_at": "2026-09-08T14:47:53Z",
+      "id": "t7",
       "output": {
         "artifacts": [
           {
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
-            "path": "probes/t6_probe.py",
-            "sha256": "2589a63c897e4060161d6b3918da319d3ff00028bd0d9eb887c9d80aa0b7997d"
+            "path": "probes/t7_probe.py",
+            "sha256": "92d078fcde3426b4f45696674406a3693b98dade4258c96b3008bf711b608985"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
-            "path": "probes/t6_stdout.txt",
-            "sha256": "a20790c8dcc2a003c8455eb4cf6e109763f63b367f6c5ad36132550d3b893711"
+            "path": "probes/t7_stdout.txt",
+            "sha256": "b464673688d7e671a24281a95c6f92d9873507f705c0d64d0e4201f879510366"
           },
           {
             "description": "Captured stderr from the probe process.",
             "kind": "stderr",
-            "path": "probes/t6_stderr.txt",
+            "path": "probes/t7_stderr.txt",
             "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k.",
-        "cwd": "/root/cases/case_10",
-        "duration_s": 9.519542,
-        "event_id": "t6",
+        "claim_statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes.",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 11.012061,
+        "event_id": "t7",
         "evidence_draft": {
           "claim_id": "c1",
           "data": {
@@ -575,39 +694,39 @@
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
-                "path": "probes/t6_probe.py",
-                "sha256": "2589a63c897e4060161d6b3918da319d3ff00028bd0d9eb887c9d80aa0b7997d"
+                "path": "probes/t7_probe.py",
+                "sha256": "92d078fcde3426b4f45696674406a3693b98dade4258c96b3008bf711b608985"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
-                "path": "probes/t6_stdout.txt",
-                "sha256": "a20790c8dcc2a003c8455eb4cf6e109763f63b367f6c5ad36132550d3b893711"
+                "path": "probes/t7_stdout.txt",
+                "sha256": "b464673688d7e671a24281a95c6f92d9873507f705c0d64d0e4201f879510366"
               },
               {
                 "description": "Captured stderr from the probe process.",
                 "kind": "stderr",
-                "path": "probes/t6_stderr.txt",
+                "path": "probes/t7_stderr.txt",
                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
               }
             ],
-            "duration_s": 9.519542,
+            "duration_s": 11.012061,
             "exit_code": 0,
-            "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly.",
+            "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it",
             "json_parse_error": "last stdout line is not JSON: Expecting value",
             "json_result": null,
             "stderr": "",
-            "stdout": "{\n \"all_equal_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   },\n   {\n    \"row\": 1,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   8,\n   9,\n   11,\n   10,\n   14,\n   15,\n   13,\n   12\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0\n  ]\n },\n \"quantized_3levels_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     4,\n     6\n    ],\n    \"kernel_only\": [\n     8,\n     14\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0\n    ]\n   },\n   {\n    \"row\": 2,\n    \"ref_only\": [\n     2,\n     4,\n     7\n    ],\n    \"kernel_only\": [\n     12,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   0,\n   2,\n   11,\n   10,\n   15,\n   14,\n   7,\n   8\n  ],\n  \"ref_idx_row0\": [\n   0,\n   2,\n   10,\n   11,\n   15,\n   4,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   2.0,\n   0.0,\n   2.0,\n   0.0,\n   1.0,\n   0.0,\n   1.0,\n   1.0,\n   1.0,\n   0.0,\n   2.0,\n   2.0,\n   0.0,\n   0.0,\n   1.0,\n   2.0\n  ]\n },\n \"distinct_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"ref_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"scores_row0\": [\n   -0.5692480802536011,\n   0.9199714064598083,\n   1.1108161211013794,\n   1.2898740768432617,\n   -1.4781739711761475,\n   2.567232847213745,\n   -0.4731197953224182,\n   0.3355507552623749,\n   -1.6293259859085083,\n   -0.54974365234375,\n   -0.47983425855636597,\n   -0.4996815323829651,\n   -1.0669803619384766,\n   1.114939570426941,\n   -0.14067143201828003,\n   0.8057535886764526\n  ]\n },\n \"groups_of_4_N32\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   7.75,\n   7.5,\n   7.25,\n   7.0,\n   6.75,\n   6.5,\n   6.25,\n   6.0,\n   5.75,\n   5.5,\n   5.25,\n   5.0,\n   4.75,\n   4.5,\n   4.25,\n   4.0,\n   3.75,\n   3.5,\n   3.25,\n   3.0,\n   2.75,\n   2.5,\n   2.25,\n   2.0,\n   1.75,\n   1.5,\n   1.25,\n   1.0,\n   0.75,\n   0.5,\n   0.25,\n   0.0\n  ]\n }\n}\n",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2735114296447136e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009698867797851562,\n   \"mean_abs\": 0.00014371277939062566,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 9.313225746154785e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0008449554443359375,\n   \"mean_abs\": 0.00016038073226809502,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 8.640603788023782e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0006351470947265625,\n   \"mean_abs\": 0.0001244622835656628,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 1.1860190163304196e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.00096893310546875,\n   \"mean_abs\": 0.0001347271609120071,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.3019342048892213e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009744167327880859,\n   \"mean_abs\": 0.00014230543456505984,\n   \"ok\": true\n  }\n ]\n}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "kind": "runtime_probe",
           "summary": "Probe completed successfully and needs Experimenter interpretation.",
           "supports": "needs_interpretation",
-          "tool_event_id": "t6"
+          "tool_event_id": "t7"
         },
         "exit_code": 0,
-        "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly.",
+        "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it",
         "json_parse_error": "last stdout line is not JSON: Expecting value",
         "json_result": null,
         "sandbox": {
@@ -618,7 +737,99 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\n \"all_equal_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   },\n   {\n    \"row\": 1,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   8,\n   9,\n   11,\n   10,\n   14,\n   15,\n   13,\n   12\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0\n  ]\n },\n \"quantized_3levels_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     4,\n     6\n    ],\n    \"kernel_only\": [\n     8,\n     14\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0\n    ]\n   },\n   {\n    \"row\": 2,\n    \"ref_only\": [\n     2,\n     4,\n     7\n    ],\n    \"kernel_only\": [\n     12,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   0,\n   2,\n   11,\n   10,\n   15,\n   14,\n   7,\n   8\n  ],\n  \"ref_idx_row0\": [\n   0,\n   2,\n   10,\n   11,\n   15,\n   4,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   2.0,\n   0.0,\n   2.0,\n   0.0,\n   1.0,\n   0.0,\n   1.0,\n   1.0,\n   1.0,\n   0.0,\n   2.0,\n   2.0,\n   0.0,\n   0.0,\n   1.0,\n   2.0\n  ]\n },\n \"distinct_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"ref_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"scores_row0\": [\n   -0.5692480802536011,\n   0.9199714064598083,\n   1.1108161211013794,\n   1.2898740768432617,\n   -1.4781739711761475,\n   2.567232847213745,\n   -0.4731197953224182,\n   0.3355507552623749,\n   -1.6293259859085083,\n   -0.54974365234375,\n   -0.47983425855636597,\n   -0.4996815323829651,\n   -1.0669803619384766,\n   1.114939570426941,\n   -0.14067143201828003,\n   0.8057535886764526\n  ]\n },\n \"groups_of_4_N32\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   7.75,\n   7.5,\n   7.25,\n   7.0,\n   6.75,\n   6.5,\n   6.25,\n   6.0,\n   5.75,\n   5.5,\n   5.25,\n   5.0,\n   4.75,\n   4.5,\n   4.25,\n   4.0,\n   3.75,\n   3.5,\n   3.25,\n   3.0,\n   2.75,\n   2.5,\n   2.25,\n   2.0,\n   1.75,\n   1.5,\n   1.25,\n   1.0,\n   0.75,\n   0.5,\n   0.25,\n   0.0\n  ]\n }\n}\n",
+        "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2735114296447136e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009698867797851562,\n   \"mean_abs\": 0.00014371277939062566,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 9.313225746154785e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0008449554443359375,\n   \"mean_abs\": 0.00016038073226809502,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 8.640603788023782e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0006351470947265625,\n   \"mean_abs\": 0.0001244622835656628,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 1.1860190163304196e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.00096893310546875,\n   \"mean_abs\": 0.0001347271609120071,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.3019342048892213e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009744167327880859,\n   \"mean_abs\": 0.00014230543456505984,\n   \"ok\": true\n  }\n ]\n}\n",
+        "timed_out": false,
+        "timeout_s": 60,
+        "use_gpu": true
+      },
+      "status": "ok",
+      "tool": "run_claim_probe"
+    },
+    {
+      "args": {
+        "claim_id": "c2",
+        "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_11/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref_inter(x, cos, sin):\n    xe = x[..., 0::2].float(); xo = x[..., 1::2].float()\n    c = cos.float().unsqueeze(1); s = sin.float().unsqueeze(1)\n    o1 = xe*c - xo*s; o2 = xe*s + xo*c\n    out = x.float().clone()\n    out[..., 0::2] = o1; out[..., 1::2] = o2\n    return out\n\nres = []\ntorch.manual_seed(0)\nfor (S,H,D) in [(8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128)]:\n    for dt in [torch.float32, torch.float16]:\n        try:\n            x = torch.randn(S,H,D, device='cuda', dtype=dt)\n            ang = torch.randn(S, D//2, device='cuda', dtype=torch.float32)\n            cos = torch.cos(ang).to(dt); sin = torch.sin(ang).to(dt)\n            out = m.apply_rotary(x, cos, sin, True)\n            r = ref_inter(x, cos, sin)\n            err = (out.float()-r).abs()\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),max_abs=float(err.max()),\n                            mean_abs=float(err.mean()), ok=bool(err.max() < (1e-4 if dt==torch.float32 else 5e-3))))\n        except Exception as e:\n            res.append(dict(S=S,H=H,D=D,dtype=str(dt),error=repr(e)[:300]))\nprint(json.dumps(dict(metric=\"max_abs_elementwise_err_vs_fp32_reference\", cases=res), indent=1))\n",
+        "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it"
+      },
+      "created_at": "2026-09-08T14:48:03Z",
+      "id": "t8",
+      "output": {
+        "artifacts": [
+          {
+            "description": "Python probe code executed by local runtime.",
+            "kind": "probe_code",
+            "path": "probes/t8_probe.py",
+            "sha256": "75dd5642fb31701ed7bbf5865d2b7b677ca19f75d3312ccba5dd484538795f96"
+          },
+          {
+            "description": "Captured stdout from the probe process.",
+            "kind": "stdout",
+            "path": "probes/t8_stdout.txt",
+            "sha256": "38a4a5c3dd514a4e312b308463f2c14d5e5bb7ef379f5f50757a09b2db9921ed"
+          },
+          {
+            "description": "Captured stderr from the probe process.",
+            "kind": "stderr",
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "claim_id": "c2",
+        "claim_statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two).",
+        "cwd": "/root/cases/case_11",
+        "duration_s": 9.833928,
+        "event_id": "t8",
+        "evidence_draft": {
+          "claim_id": "c2",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "75dd5642fb31701ed7bbf5865d2b7b677ca19f75d3312ccba5dd484538795f96"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "38a4a5c3dd514a4e312b308463f2c14d5e5bb7ef379f5f50757a09b2db9921ed"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.833928,
+            "exit_code": 0,
+            "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it",
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.239763491867052e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009670257568359375,\n   \"mean_abs\": 0.000142200558912009,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2883296207633066e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0005273818969726562,\n   \"mean_abs\": 0.00016582253738306463,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2862599874097214e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0004944801330566406,\n   \"mean_abs\": 0.00012973218690603971,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2513434732852602e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00015487612108699977,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2893747403097677e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00014225074846763164,\n   \"ok\": true\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "kind": "runtime_probe",
+          "summary": "Probe completed successfully and needs Experimenter interpretation.",
+          "supports": "needs_interpretation",
+          "tool_event_id": "t8"
+        },
+        "exit_code": 0,
+        "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it",
+        "json_parse_error": "last stdout line is not JSON: Expecting value",
+        "json_result": null,
+        "sandbox": {
+          "cpu_limit_s": 90,
+          "cpu_quota_pct": null,
+          "memory_limit_mb": null,
+          "mode": "cpu_ulimit",
+          "network_isolated": false
+        },
+        "stderr": "",
+        "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.239763491867052e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009670257568359375,\n   \"mean_abs\": 0.000142200558912009,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2883296207633066e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0005273818969726562,\n   \"mean_abs\": 0.00016582253738306463,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2862599874097214e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0004944801330566406,\n   \"mean_abs\": 0.00012973218690603971,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2513434732852602e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00015487612108699977,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2893747403097677e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00014225074846763164,\n   \"ok\": true\n  }\n ]\n}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -629,392 +840,233 @@
     {
       "args": {
         "data": {
-          "all_equal_N16": {
-            "contract_required": [
-              0,
-              1,
-              2,
+          "all_cases_ok": true,
+          "fp16_max_abs_worst": 0.0009744167327880859,
+          "fp32_max_abs_worst": 2.384185791015625e-07,
+          "metric": "max_abs_elementwise_err_vs_fp32_reference",
+          "non_pow2_headdims": [
+            6,
+            48
+          ],
+          "shapes_tested": [
+            [
+              8,
+              4,
+              64
+            ],
+            [
               3,
-              4,
-              5,
-              6,
-              7
-            ],
-            "idx_exact_match": false,
-            "k": 8,
-            "kernel_idx_row0": [
-              8,
-              9,
-              11,
-              10,
-              14,
-              15,
-              13,
-              12
-            ],
-            "kernel_only_set": [
-              8,
-              9,
-              10,
-              11,
-              12,
-              13,
-              14,
-              15
-            ],
-            "ref_only_set": [
-              0,
-              1,
               2,
-              3,
-              4,
-              5,
-              6,
-              7
-            ],
-            "selected_values_match": true
-          },
-          "distinct_N16": {
-            "idx_exact_match": true
-          },
-          "groups_of_4_N32": {
-            "idx_exact_match": true
-          },
-          "quantized_3levels_N16": {
-            "idx_exact_match": false,
-            "row0_dropped_lower_tied": [
-              4,
-              6
-            ],
-            "row0_kept_higher_tied": [
-              8,
-              14
-            ],
-            "row0_kernel": [
-              0,
-              2,
-              11,
-              10,
-              15,
-              14,
-              7,
               8
             ],
-            "row0_ref_stable": [
-              0,
-              2,
-              10,
-              11,
-              15,
+            [
+              5,
+              3,
+              6
+            ],
+            [
               4,
-              6,
-              7
-            ],
-            "row2_dropped_lower_tied": [
               2,
-              4,
-              7
+              48
             ],
-            "row2_kept_higher_tied": [
-              12,
-              14,
-              15
+            [
+              1,
+              1,
+              2
             ],
-            "tied_value": 1.0
-          }
+            [
+              16,
+              8,
+              128
+            ]
+          ]
         },
-        "event_id": "t6",
-        "status": "confirmed",
-        "summary": "Kernel violates the stated tie-break rule. All-equal row (N=16, k=8, all zeros): kernel returned [8,9,11,10,14,15,13,12] \u2014 every selected index is a HIGHER index, while the contract (lower index kept) requires [0..7]; set diff shows ref_only={0..7}, kernel_only={8..15} with identical values (0.0). Quantized 3-level row: kernel selected 8 and 14 while dropping tied lower indices 4 and 6 (all value 1.0), and ordered 11 before 10 among tied 2.0's. Distinct-score cases (distinct_N16, groups_of_4_N32) matched the stable reference exactly (idx_exact_match=true), isolating the defect to exact ties, consistent with line 24 `cond = (left > right) != flip` having no index term (descending flip=1 => swap when left<=right).",
-        "supports": "confirmed"
+        "event_id": "t7",
+        "status": "rebutted",
+        "summary": "Probe t7 compared apply_rotary(..., interleaved=False) against an fp32 PyTorch reference implementing o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos, over (S,H,D) = (8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128) in fp32 and fp16. Max abs error <= 2.4e-7 in fp32 and <= 9.8e-4 in fp16 (consistent with fp16 storage rounding) in every case, including non-power-of-two headdims 6 and 48 where BLOCK_K padding/masking was the suspected failure. The required non-interleaved pairing is implemented correctly.",
+        "supports": "rebutted"
       },
-      "created_at": "2026-09-08T14:46:18Z",
-      "id": "t7",
+      "created_at": "2026-09-08T14:48:27Z",
+      "id": "t9",
       "output": {
         "claim": {
-          "created_at": "2026-09-08T14:45:49Z",
+          "created_at": "2026-09-08T14:47:06Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-08T14:46:18Z",
+              "created_at": "2026-09-08T14:48:27Z",
               "data": {
-                "all_equal_N16": {
-                  "contract_required": [
-                    0,
-                    1,
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7
-                  ],
-                  "idx_exact_match": false,
-                  "k": 8,
-                  "kernel_idx_row0": [
-                    8,
-                    9,
-                    11,
-                    10,
-                    14,
-                    15,
-                    13,
-                    12
-                  ],
-                  "kernel_only_set": [
-                    8,
-                    9,
-                    10,
-                    11,
-                    12,
-                    13,
-                    14,
-                    15
-                  ],
-                  "ref_only_set": [
-                    0,
-                    1,
-                    2,
-                    3,
-                    4,
-                    5,
-                    6,
-                    7
-                  ],
-                  "selected_values_match": true
-                },
+                "all_cases_ok": true,
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
-                    "path": "probes/t6_probe.py",
-                    "sha256": "2589a63c897e4060161d6b3918da319d3ff00028bd0d9eb887c9d80aa0b7997d"
+                    "path": "probes/t7_probe.py",
+                    "sha256": "92d078fcde3426b4f45696674406a3693b98dade4258c96b3008bf711b608985"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
-                    "path": "probes/t6_stdout.txt",
-                    "sha256": "a20790c8dcc2a003c8455eb4cf6e109763f63b367f6c5ad36132550d3b893711"
+                    "path": "probes/t7_stdout.txt",
+                    "sha256": "b464673688d7e671a24281a95c6f92d9873507f705c0d64d0e4201f879510366"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
                     "kind": "stderr",
-                    "path": "probes/t6_stderr.txt",
+                    "path": "probes/t7_stderr.txt",
                     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                   }
                 ],
-                "distinct_N16": {
-                  "idx_exact_match": true
-                },
-                "duration_s": 9.519542,
+                "duration_s": 11.012061,
                 "exit_code": 0,
-                "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly.",
-                "groups_of_4_N32": {
-                  "idx_exact_match": true
-                },
+                "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it",
+                "fp16_max_abs_worst": 0.0009744167327880859,
+                "fp32_max_abs_worst": 2.384185791015625e-07,
                 "json_parse_error": "last stdout line is not JSON: Expecting value",
                 "json_result": null,
-                "quantized_3levels_N16": {
-                  "idx_exact_match": false,
-                  "row0_dropped_lower_tied": [
-                    4,
-                    6
-                  ],
-                  "row0_kept_higher_tied": [
+                "metric": "max_abs_elementwise_err_vs_fp32_reference",
+                "non_pow2_headdims": [
+                  6,
+                  48
+                ],
+                "shapes_tested": [
+                  [
                     8,
-                    14
+                    4,
+                    64
                   ],
-                  "row0_kernel": [
-                    0,
+                  [
+                    3,
                     2,
-                    11,
-                    10,
-                    15,
-                    14,
-                    7,
                     8
                   ],
-                  "row0_ref_stable": [
-                    0,
-                    2,
-                    10,
-                    11,
-                    15,
+                  [
+                    5,
+                    3,
+                    6
+                  ],
+                  [
                     4,
-                    6,
-                    7
-                  ],
-                  "row2_dropped_lower_tied": [
                     2,
-                    4,
-                    7
+                    48
                   ],
-                  "row2_kept_higher_tied": [
-                    12,
-                    14,
-                    15
+                  [
+                    1,
+                    1,
+                    2
                   ],
-                  "tied_value": 1.0
-                },
+                  [
+                    16,
+                    8,
+                    128
+                  ]
+                ],
                 "stderr": "",
-                "stdout": "{\n \"all_equal_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   },\n   {\n    \"row\": 1,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   8,\n   9,\n   11,\n   10,\n   14,\n   15,\n   13,\n   12\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0\n  ]\n },\n \"quantized_3levels_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     4,\n     6\n    ],\n    \"kernel_only\": [\n     8,\n     14\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0\n    ]\n   },\n   {\n    \"row\": 2,\n    \"ref_only\": [\n     2,\n     4,\n     7\n    ],\n    \"kernel_only\": [\n     12,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   0,\n   2,\n   11,\n   10,\n   15,\n   14,\n   7,\n   8\n  ],\n  \"ref_idx_row0\": [\n   0,\n   2,\n   10,\n   11,\n   15,\n   4,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   2.0,\n   0.0,\n   2.0,\n   0.0,\n   1.0,\n   0.0,\n   1.0,\n   1.0,\n   1.0,\n   0.0,\n   2.0,\n   2.0,\n   0.0,\n   0.0,\n   1.0,\n   2.0\n  ]\n },\n \"distinct_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"ref_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"scores_row0\": [\n   -0.5692480802536011,\n   0.9199714064598083,\n   1.1108161211013794,\n   1.2898740768432617,\n   -1.4781739711761475,\n   2.567232847213745,\n   -0.4731197953224182,\n   0.3355507552623749,\n   -1.6293259859085083,\n   -0.54974365234375,\n   -0.47983425855636597,\n   -0.4996815323829651,\n   -1.0669803619384766,\n   1.114939570426941,\n   -0.14067143201828003,\n   0.8057535886764526\n  ]\n },\n \"groups_of_4_N32\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   7.75,\n   7.5,\n   7.25,\n   7.0,\n   6.75,\n   6.5,\n   6.25,\n   6.0,\n   5.75,\n   5.5,\n   5.25,\n   5.0,\n   4.75,\n   4.5,\n   4.25,\n   4.0,\n   3.75,\n   3.5,\n   3.25,\n   3.0,\n   2.75,\n   2.5,\n   2.25,\n   2.0,\n   1.75,\n   1.5,\n   1.25,\n   1.0,\n   0.75,\n   0.5,\n   0.25,\n   0.0\n  ]\n }\n}\n",
+                "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2735114296447136e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009698867797851562,\n   \"mean_abs\": 0.00014371277939062566,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 9.313225746154785e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0008449554443359375,\n   \"mean_abs\": 0.00016038073226809502,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 8.640603788023782e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0006351470947265625,\n   \"mean_abs\": 0.0001244622835656628,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 1.1860190163304196e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.00096893310546875,\n   \"mean_abs\": 0.0001347271609120071,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.3019342048892213e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009744167327880859,\n   \"mean_abs\": 0.00014230543456505984,\n   \"ok\": true\n  }\n ]\n}\n",
                 "timed_out": false,
                 "timeout_s": 60
               },
               "id": "c1.e1",
               "kind": "runtime_probe",
-              "summary": "Kernel violates the stated tie-break rule. All-equal row (N=16, k=8, all zeros): kernel returned [8,9,11,10,14,15,13,12] \u2014 every selected index is a HIGHER index, while the contract (lower index kept) requires [0..7]; set diff shows ref_only={0..7}, kernel_only={8..15} with identical values (0.0). Quantized 3-level row: kernel selected 8 and 14 while dropping tied lower indices 4 and 6 (all value 1.0), and ordered 11 before 10 among tied 2.0's. Distinct-score cases (distinct_N16, groups_of_4_N32) matched the stable reference exactly (idx_exact_match=true), isolating the defect to exact ties, consistent with line 24 `cond = (left > right) != flip` having no index term (descending flip=1 => swap when left<=right).",
-              "supports": "confirmed",
-              "tool_event_id": "t6"
+              "summary": "Probe t7 compared apply_rotary(..., interleaved=False) against an fp32 PyTorch reference implementing o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos, over (S,H,D) = (8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128) in fp32 and fp16. Max abs error <= 2.4e-7 in fp32 and <= 9.8e-4 in fp16 (consistent with fp16 storage rounding) in every case, including non-power-of-two headdims 6 and 48 where BLOCK_K padding/masking was the suspected failure. The required non-interleaved pairing is implemented correctly.",
+              "supports": "rebutted",
+              "tool_event_id": "t7"
             }
           ],
           "id": "c1",
           "raised_by": "solo",
-          "rationale": "Line 24 compares only values, with no index tie-break; with flip=1 (descending final merge) cond = NOT(left>right) = (left<=right), so equal elements are swapped, making the network unstable on ties. Contract explicitly requires the lower index be kept on exact ties.",
+          "rationale": "The non-interleaved branch uses 2D cos/sin broadcast against 3D x tensors and a padded BLOCK_K=next_pow2(headdim); rank-mismatched broadcasting or masking on non-power-of-2 headdim could break the required formula.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept.\" and \"must return the indices of the k highest-scoring candidates, in descending score order.\" Input domain only constrains N to a power of two, so tied/quantized score inputs are admitted."
+              "summary": "'interleaved=False: dimension i is paired with dimension i + headdim/2' is a stated required behaviour of apply_rotary."
             }
           ],
-          "scope_rationale": "problem.txt states a mandatory tie-break rule (\"Contract on ties: when two candidates have exactly equal scores, the LOWER index must be the one kept\") and requires descending score order; scores with exact ties are admitted by the declared input domain (only constraint is power-of-two column count).",
-          "statement": "For exactly-equal scores, sorted_topk_indices does not keep/order the LOWER index first: the compare-and-swap condition `(left > right) != flip` swaps on equality (descending), so tied candidates can be returned with a higher index ahead of a lower one, or a lower-index tied candidate can be dropped from the top-k.",
-          "status": "confirmed",
-          "updated_at": "2026-09-08T14:46:18Z"
+          "scope_rationale": "problem.txt explicitly states the interleaved=False pairing (dimension i paired with i+headdim/2) as required behaviour, and the function signature docstring fixes x as (seqlen,nheads,headdim), cos/sin (seqlen,headdim//2).",
+          "statement": "For interleaved=False, apply_rotary does not produce the contract-required rotation pairing dimension i with i+headdim/2 (o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) for representative shapes/dtypes.",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:48:27Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-08T14:46:18Z",
+          "created_at": "2026-09-08T14:48:27Z",
           "data": {
-            "all_equal_N16": {
-              "contract_required": [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7
-              ],
-              "idx_exact_match": false,
-              "k": 8,
-              "kernel_idx_row0": [
-                8,
-                9,
-                11,
-                10,
-                14,
-                15,
-                13,
-                12
-              ],
-              "kernel_only_set": [
-                8,
-                9,
-                10,
-                11,
-                12,
-                13,
-                14,
-                15
-              ],
-              "ref_only_set": [
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                6,
-                7
-              ],
-              "selected_values_match": true
-            },
+            "all_cases_ok": true,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
-                "path": "probes/t6_probe.py",
-                "sha256": "2589a63c897e4060161d6b3918da319d3ff00028bd0d9eb887c9d80aa0b7997d"
+                "path": "probes/t7_probe.py",
+                "sha256": "92d078fcde3426b4f45696674406a3693b98dade4258c96b3008bf711b608985"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
-                "path": "probes/t6_stdout.txt",
-                "sha256": "a20790c8dcc2a003c8455eb4cf6e109763f63b367f6c5ad36132550d3b893711"
+                "path": "probes/t7_stdout.txt",
+                "sha256": "b464673688d7e671a24281a95c6f92d9873507f705c0d64d0e4201f879510366"
               },
               {
                 "description": "Captured stderr from the probe process.",
                 "kind": "stderr",
-                "path": "probes/t6_stderr.txt",
+                "path": "probes/t7_stderr.txt",
                 "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
               }
             ],
-            "distinct_N16": {
-              "idx_exact_match": true
-            },
-            "duration_s": 9.519542,
+            "duration_s": 11.012061,
             "exit_code": 0,
-            "expected_signal": "If ties are mishandled, idx_exact_match=False on tied inputs (e.g. all_equal row returning non-ascending or non-0..k-1 indices), while distinct-score cases match exactly.",
-            "groups_of_4_N32": {
-              "idx_exact_match": true
-            },
+            "expected_signal": "max_abs err near 0 for all shapes rebuts c1; large err or compile error confirms it",
+            "fp16_max_abs_worst": 0.0009744167327880859,
+            "fp32_max_abs_worst": 2.384185791015625e-07,
             "json_parse_error": "last stdout line is not JSON: Expecting value",
             "json_result": null,
-            "quantized_3levels_N16": {
-              "idx_exact_match": false,
-              "row0_dropped_lower_tied": [
-                4,
-                6
-              ],
-              "row0_kept_higher_tied": [
+            "metric": "max_abs_elementwise_err_vs_fp32_reference",
+            "non_pow2_headdims": [
+              6,
+              48
+            ],
+            "shapes_tested": [
+              [
                 8,
-                14
+                4,
+                64
               ],
-              "row0_kernel": [
-                0,
+              [
+                3,
                 2,
-                11,
-                10,
-                15,
-                14,
-                7,
                 8
               ],
-              "row0_ref_stable": [
-                0,
-                2,
-                10,
-                11,
-                15,
+              [
+                5,
+                3,
+                6
+              ],
+              [
                 4,
-                6,
-                7
-              ],
-              "row2_dropped_lower_tied": [
                 2,
-                4,
-                7
+                48
               ],
-              "row2_kept_higher_tied": [
-                12,
-                14,
-                15
+              [
+                1,
+                1,
+                2
               ],
-              "tied_value": 1.0
-            },
+              [
+                16,
+                8,
+                128
+              ]
+            ],
             "stderr": "",
-            "stdout": "{\n \"all_equal_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   },\n   {\n    \"row\": 1,\n    \"ref_only\": [\n     0,\n     1,\n     2,\n     3,\n     4,\n     5,\n     6,\n     7\n    ],\n    \"kernel_only\": [\n     8,\n     9,\n     10,\n     11,\n     12,\n     13,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ],\n    \"kernel_only_vals\": [\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0,\n     0.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   8,\n   9,\n   11,\n   10,\n   14,\n   15,\n   13,\n   12\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0,\n   0.0\n  ]\n },\n \"quantized_3levels_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": false,\n  \"selected_values_match\": true,\n  \"set_diffs\": [\n   {\n    \"row\": 0,\n    \"ref_only\": [\n     4,\n     6\n    ],\n    \"kernel_only\": [\n     8,\n     14\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0\n    ]\n   },\n   {\n    \"row\": 2,\n    \"ref_only\": [\n     2,\n     4,\n     7\n    ],\n    \"kernel_only\": [\n     12,\n     14,\n     15\n    ],\n    \"ref_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ],\n    \"kernel_only_vals\": [\n     1.0,\n     1.0,\n     1.0\n    ]\n   }\n  ],\n  \"kernel_idx_row0\": [\n   0,\n   2,\n   11,\n   10,\n   15,\n   14,\n   7,\n   8\n  ],\n  \"ref_idx_row0\": [\n   0,\n   2,\n   10,\n   11,\n   15,\n   4,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   2.0,\n   0.0,\n   2.0,\n   0.0,\n   1.0,\n   0.0,\n   1.0,\n   1.0,\n   1.0,\n   0.0,\n   2.0,\n   2.0,\n   0.0,\n   0.0,\n   1.0,\n   2.0\n  ]\n },\n \"distinct_N16\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"ref_idx_row0\": [\n   5,\n   3,\n   13,\n   2,\n   1,\n   15,\n   7,\n   14\n  ],\n  \"scores_row0\": [\n   -0.5692480802536011,\n   0.9199714064598083,\n   1.1108161211013794,\n   1.2898740768432617,\n   -1.4781739711761475,\n   2.567232847213745,\n   -0.4731197953224182,\n   0.3355507552623749,\n   -1.6293259859085083,\n   -0.54974365234375,\n   -0.47983425855636597,\n   -0.4996815323829651,\n   -1.0669803619384766,\n   1.114939570426941,\n   -0.14067143201828003,\n   0.8057535886764526\n  ]\n },\n \"groups_of_4_N32\": {\n  \"k\": 8,\n  \"idx_exact_match\": true,\n  \"selected_values_match\": true,\n  \"set_diffs\": [],\n  \"kernel_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"ref_idx_row0\": [\n   0,\n   1,\n   2,\n   3,\n   4,\n   5,\n   6,\n   7\n  ],\n  \"scores_row0\": [\n   7.75,\n   7.5,\n   7.25,\n   7.0,\n   6.75,\n   6.5,\n   6.25,\n   6.0,\n   5.75,\n   5.5,\n   5.25,\n   5.0,\n   4.75,\n   4.5,\n   4.25,\n   4.0,\n   3.75,\n   3.5,\n   3.25,\n   3.0,\n   2.75,\n   2.5,\n   2.25,\n   2.0,\n   1.75,\n   1.5,\n   1.25,\n   1.0,\n   0.75,\n   0.5,\n   0.25,\n   0.0\n  ]\n }\n}\n",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2735114296447136e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009698867797851562,\n   \"mean_abs\": 0.00014371277939062566,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 9.313225746154785e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0008449554443359375,\n   \"mean_abs\": 0.00016038073226809502,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 8.640603788023782e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0006351470947265625,\n   \"mean_abs\": 0.0001244622835656628,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.1920928955078125e-07,\n   \"mean_abs\": 1.1860190163304196e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.00096893310546875,\n   \"mean_abs\": 0.0001347271609120071,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.3019342048892213e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009744167327880859,\n   \"mean_abs\": 0.00014230543456505984,\n   \"ok\": true\n  }\n ]\n}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "id": "c1.e1",
           "kind": "runtime_probe",
-          "summary": "Kernel violates the stated tie-break rule. All-equal row (N=16, k=8, all zeros): kernel returned [8,9,11,10,14,15,13,12] \u2014 every selected index is a HIGHER index, while the contract (lower index kept) requires [0..7]; set diff shows ref_only={0..7}, kernel_only={8..15} with identical values (0.0). Quantized 3-level row: kernel selected 8 and 14 while dropping tied lower indices 4 and 6 (all value 1.0), and ordered 11 before 10 among tied 2.0's. Distinct-score cases (distinct_N16, groups_of_4_N32) matched the stable reference exactly (idx_exact_match=true), isolating the defect to exact ties, consistent with line 24 `cond = (left > right) != flip` having no index term (descending flip=1 => swap when left<=right).",
-          "supports": "confirmed",
-          "tool_event_id": "t6"
+          "summary": "Probe t7 compared apply_rotary(..., interleaved=False) against an fp32 PyTorch reference implementing o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos, over (S,H,D) = (8,4,64),(3,2,8),(5,3,6),(4,2,48),(1,1,2),(16,8,128) in fp32 and fp16. Max abs error <= 2.4e-7 in fp32 and <= 9.8e-4 in fp16 (consistent with fp16 storage rounding) in every case, including non-power-of-two headdims 6 and 48 where BLOCK_K padding/masking was the suspected failure. The required non-interleaved pairing is implemented correctly.",
+          "supports": "rebutted",
+          "tool_event_id": "t7"
         }
       },
       "status": "ok",
@@ -1022,35 +1074,273 @@
     },
     {
       "args": {
-        "confidence": 0.93,
-        "decisive_claims": [
-          "c1"
-        ],
-        "reason": "The contract in problem.txt explicitly requires that \"when two candidates have exactly equal scores, the LOWER index must be the one kept\", and that the k highest-scoring indices be returned in descending score order. The kernel's compare-and-swap (kernel.py line 24) uses `cond = (left > right) != flip`, which contains no index term; with the descending final merge (flip=1) the condition reduces to `left <= right`, so exactly-tied elements are swapped and the network is unstable on ties.\n\nProbe t6 (finalized as evidence c1.e1) ran the actual kernel on GPU against a stable descending argsort reference, all within the declared input domain (power-of-two column counts, N=16 and N=32):\n- all_equal_N16 (all zeros, k=8): kernel returned [8,9,11,10,14,15,13,12]; the contract requires [0..7]. Set diff: ref_only={0..7}, kernel_only={8..15}, all values identical (0.0) \u2014 i.e. every kept candidate is a higher index among exact ties.\n- quantized_3levels_N16 (k=8): kernel kept tied (value 1.0) indices 8 and 14 while dropping lower tied indices 4 and 6; row 2 kept 12,14,15 while dropping 2,4,7. It also ordered tied 2.0 entries as 11 before 10, violating lower-index-first ordering.\n- Control cases with distinct scores (distinct_N16) and strictly decreasing scores (groups_of_4_N32) matched the reference exactly (idx_exact_match=true), isolating the failure precisely to the contractually specified tie rule rather than to a metric artifact or a reference-undefined case.\n\nSince the tie-break is an explicitly stated required behaviour and the failing inputs (exactly equal / quantized scores with power-of-two N) are admitted by the declared input domain, this is a contract violation, not an unspecified-choice difference.",
-        "verdict": "reject"
+        "data": {
+          "all_cases_ok": true,
+          "fp16_max_abs_worst": 0.0009722709655761719,
+          "fp32_max_abs_worst": 2.384185791015625e-07,
+          "metric": "max_abs_elementwise_err_vs_fp32_reference",
+          "non_pow2_headdims": [
+            6,
+            48
+          ],
+          "shapes_tested": [
+            [
+              8,
+              4,
+              64
+            ],
+            [
+              3,
+              2,
+              8
+            ],
+            [
+              5,
+              3,
+              6
+            ],
+            [
+              4,
+              2,
+              48
+            ],
+            [
+              1,
+              1,
+              2
+            ],
+            [
+              16,
+              8,
+              128
+            ]
+          ]
+        },
+        "event_id": "t8",
+        "status": "rebutted",
+        "summary": "Probe t8 compared apply_rotary(..., interleaved=True) against an fp32 PyTorch reference pairing dim 2i with 2i+1 (out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos), same shape/dtype grid as t7. Max abs error <= 2.4e-7 (fp32) and <= 9.7e-4 (fp16) in every case, including D=6 and D=48 where BLOCK_K=next_pow2(D) padding of the reshape/split/join was the suspected misalignment. The required interleaved pairing is implemented correctly; padded lanes are masked out and do not shift the even/odd pairing.",
+        "supports": "rebutted"
       },
-      "created_at": "2026-09-08T14:46:35Z",
-      "id": "t8",
+      "created_at": "2026-09-08T14:48:27Z",
+      "id": "t10",
       "output": {
-        "confidence": 0.93,
-        "created_at": "2026-09-08T14:46:35Z",
+        "claim": {
+          "created_at": "2026-09-08T14:47:06Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-08T14:48:27Z",
+              "data": {
+                "all_cases_ok": true,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "75dd5642fb31701ed7bbf5865d2b7b677ca19f75d3312ccba5dd484538795f96"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "38a4a5c3dd514a4e312b308463f2c14d5e5bb7ef379f5f50757a09b2db9921ed"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                ],
+                "duration_s": 9.833928,
+                "exit_code": 0,
+                "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it",
+                "fp16_max_abs_worst": 0.0009722709655761719,
+                "fp32_max_abs_worst": 2.384185791015625e-07,
+                "json_parse_error": "last stdout line is not JSON: Expecting value",
+                "json_result": null,
+                "metric": "max_abs_elementwise_err_vs_fp32_reference",
+                "non_pow2_headdims": [
+                  6,
+                  48
+                ],
+                "shapes_tested": [
+                  [
+                    8,
+                    4,
+                    64
+                  ],
+                  [
+                    3,
+                    2,
+                    8
+                  ],
+                  [
+                    5,
+                    3,
+                    6
+                  ],
+                  [
+                    4,
+                    2,
+                    48
+                  ],
+                  [
+                    1,
+                    1,
+                    2
+                  ],
+                  [
+                    16,
+                    8,
+                    128
+                  ]
+                ],
+                "stderr": "",
+                "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.239763491867052e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009670257568359375,\n   \"mean_abs\": 0.000142200558912009,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2883296207633066e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0005273818969726562,\n   \"mean_abs\": 0.00016582253738306463,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2862599874097214e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0004944801330566406,\n   \"mean_abs\": 0.00012973218690603971,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2513434732852602e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00015487612108699977,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2893747403097677e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00014225074846763164,\n   \"ok\": true\n  }\n ]\n}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c2.e1",
+              "kind": "runtime_probe",
+              "summary": "Probe t8 compared apply_rotary(..., interleaved=True) against an fp32 PyTorch reference pairing dim 2i with 2i+1 (out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos), same shape/dtype grid as t7. Max abs error <= 2.4e-7 (fp32) and <= 9.7e-4 (fp16) in every case, including D=6 and D=48 where BLOCK_K=next_pow2(D) padding of the reshape/split/join was the suspected misalignment. The required interleaved pairing is implemented correctly; padded lanes are masked out and do not shift the even/odd pairing.",
+              "supports": "rebutted",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c2",
+          "raised_by": "solo",
+          "rationale": "The interleaved branch relies on tl.reshape/tl.split/tl.join over a BLOCK_K padded to the next power of two; if headdim < BLOCK_K the padded lanes shift the even/odd pairing or the join layout, producing wrong outputs.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "'interleaved=True: dimension 2i is paired with dimension 2i+1' is a stated required behaviour of apply_rotary."
+            }
+          ],
+          "scope_rationale": "problem.txt explicitly states the interleaved=True pairing (2i with 2i+1) as required behaviour behind the flag.",
+          "statement": "For interleaved=True, apply_rotary does not produce the contract-required rotation pairing dimension 2i with 2i+1 for representative shapes/dtypes (including headdim that is not a power of two).",
+          "status": "rebutted",
+          "updated_at": "2026-09-08T14:48:27Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-08T14:48:27Z",
+          "data": {
+            "all_cases_ok": true,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "75dd5642fb31701ed7bbf5865d2b7b677ca19f75d3312ccba5dd484538795f96"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "38a4a5c3dd514a4e312b308463f2c14d5e5bb7ef379f5f50757a09b2db9921ed"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              }
+            ],
+            "duration_s": 9.833928,
+            "exit_code": 0,
+            "expected_signal": "near-zero err everywhere rebuts c2; mismatch on non-power-of-2 D (6,48) confirms it",
+            "fp16_max_abs_worst": 0.0009722709655761719,
+            "fp32_max_abs_worst": 2.384185791015625e-07,
+            "json_parse_error": "last stdout line is not JSON: Expecting value",
+            "json_result": null,
+            "metric": "max_abs_elementwise_err_vs_fp32_reference",
+            "non_pow2_headdims": [
+              6,
+              48
+            ],
+            "shapes_tested": [
+              [
+                8,
+                4,
+                64
+              ],
+              [
+                3,
+                2,
+                8
+              ],
+              [
+                5,
+                3,
+                6
+              ],
+              [
+                4,
+                2,
+                48
+              ],
+              [
+                1,
+                1,
+                2
+              ],
+              [
+                16,
+                8,
+                128
+              ]
+            ],
+            "stderr": "",
+            "stdout": "{\n \"metric\": \"max_abs_elementwise_err_vs_fp32_reference\",\n \"cases\": [\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.239763491867052e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 8,\n   \"H\": 4,\n   \"D\": 64,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009670257568359375,\n   \"mean_abs\": 0.000142200558912009,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2883296207633066e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 3,\n   \"H\": 2,\n   \"D\": 8,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0005273818969726562,\n   \"mean_abs\": 0.00016582253738306463,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2862599874097214e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 5,\n   \"H\": 3,\n   \"D\": 6,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0004944801330566406,\n   \"mean_abs\": 0.00012973218690603971,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2513434732852602e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 4,\n   \"H\": 2,\n   \"D\": 48,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00015487612108699977,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 1.4901161193847656e-08,\n   \"mean_abs\": 7.450580596923828e-09,\n   \"ok\": true\n  },\n  {\n   \"S\": 1,\n   \"H\": 1,\n   \"D\": 2,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 2.849102020263672e-05,\n   \"mean_abs\": 2.2292137145996094e-05,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float32\",\n   \"max_abs\": 2.384185791015625e-07,\n   \"mean_abs\": 1.2893747403097677e-08,\n   \"ok\": true\n  },\n  {\n   \"S\": 16,\n   \"H\": 8,\n   \"D\": 128,\n   \"dtype\": \"torch.float16\",\n   \"max_abs\": 0.0009722709655761719,\n   \"mean_abs\": 0.00014225074846763164,\n   \"ok\": true\n  }\n ]\n}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c2.e1",
+          "kind": "runtime_probe",
+          "summary": "Probe t8 compared apply_rotary(..., interleaved=True) against an fp32 PyTorch reference pairing dim 2i with 2i+1 (out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos), same shape/dtype grid as t7. Max abs error <= 2.4e-7 (fp32) and <= 9.7e-4 (fp16) in every case, including D=6 and D=48 where BLOCK_K=next_pow2(D) padding of the reshape/split/join was the suspected misalignment. The required interleaved pairing is implemented correctly; padded lanes are masked out and do not shift the even/odd pairing.",
+          "supports": "rebutted",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "confidence": 0.85,
         "decisive_claims": [
-          "c1"
+          "c1",
+          "c2"
         ],
-        "reason": "The contract in problem.txt explicitly requires that \"when two candidates have exactly equal scores, the LOWER index must be the one kept\", and that the k highest-scoring indices be returned in descending score order. The kernel's compare-and-swap (kernel.py line 24) uses `cond = (left > right) != flip`, which contains no index term; with the descending final merge (flip=1) the condition reduces to `left <= right`, so exactly-tied elements are swapped and the network is unstable on ties.\n\nProbe t6 (finalized as evidence c1.e1) ran the actual kernel on GPU against a stable descending argsort reference, all within the declared input domain (power-of-two column counts, N=16 and N=32):\n- all_equal_N16 (all zeros, k=8): kernel returned [8,9,11,10,14,15,13,12]; the contract requires [0..7]. Set diff: ref_only={0..7}, kernel_only={8..15}, all values identical (0.0) \u2014 i.e. every kept candidate is a higher index among exact ties.\n- quantized_3levels_N16 (k=8): kernel kept tied (value 1.0) indices 8 and 14 while dropping lower tied indices 4 and 6; row 2 kept 12,14,15 while dropping 2,4,7. It also ordered tied 2.0 entries as 11 before 10, violating lower-index-first ordering.\n- Control cases with distinct scores (distinct_N16) and strictly decreasing scores (groups_of_4_N32) matched the reference exactly (idx_exact_match=true), isolating the failure precisely to the contractually specified tie rule rather than to a metric artifact or a reference-undefined case.\n\nSince the tie-break is an explicitly stated required behaviour and the failing inputs (exactly equal / quantized scores with power-of-two N) are admitted by the declared input domain, this is a contract violation, not an unspecified-choice difference.",
-        "verdict": "reject"
+        "reason": "The contract requires apply_rotary to apply the RoPE rotation with two selectable pairings: interleaved=False pairs dim i with i+headdim/2, interleaved=True pairs dim 2i with 2i+1. I tested each branch against an independent fp32 PyTorch reference on a GPU.\\n\\nProbe t7 (claim c1, interleaved=False, reference o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) over (S,H,D) = (8,4,64), (3,2,8), (5,3,6), (4,2,48), (1,1,2), (16,8,128) in fp32 and fp16: worst max abs error 2.38e-7 in fp32 and 9.74e-4 in fp16 (consistent with fp16 storage rounding of the output). Probe t8 (claim c2, interleaved=True, reference out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos) on the same grid: worst max abs error 2.38e-7 fp32 / 9.72e-4 fp16. Both grids deliberately included non-power-of-two headdims 6 and 48, the case where BLOCK_K=next_pow2(headdim) padding could have misaligned the masked loads (non-interleaved branch) or the reshape/split/join even-odd pairing (interleaved branch); no misalignment appeared, so the padded lanes are correctly masked. Both claims were therefore rebutted (evidence c1.e1, c2.e1).\\n\\nRemaining untested generalizations are outside the stated contract: odd headdim (the contract describes cos/sin as headdim//2 and speaks of rotating pairs, leaving any leftover odd dimension unspecified) and exotic strides/dtypes. Nothing established contradicts a required behaviour, so the implementation satisfies the contract.",
+        "verdict": "trust"
+      },
+      "created_at": "2026-09-08T14:48:53Z",
+      "id": "t11",
+      "output": {
+        "confidence": 0.85,
+        "created_at": "2026-09-08T14:48:53Z",
+        "decisive_claims": [
+          "c1",
+          "c2"
+        ],
+        "reason": "The contract requires apply_rotary to apply the RoPE rotation with two selectable pairings: interleaved=False pairs dim i with i+headdim/2, interleaved=True pairs dim 2i with 2i+1. I tested each branch against an independent fp32 PyTorch reference on a GPU.\\n\\nProbe t7 (claim c1, interleaved=False, reference o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) over (S,H,D) = (8,4,64), (3,2,8), (5,3,6), (4,2,48), (1,1,2), (16,8,128) in fp32 and fp16: worst max abs error 2.38e-7 in fp32 and 9.74e-4 in fp16 (consistent with fp16 storage rounding of the output). Probe t8 (claim c2, interleaved=True, reference out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos) on the same grid: worst max abs error 2.38e-7 fp32 / 9.72e-4 fp16. Both grids deliberately included non-power-of-two headdims 6 and 48, the case where BLOCK_K=next_pow2(headdim) padding could have misaligned the masked loads (non-interleaved branch) or the reshape/split/join even-odd pairing (interleaved branch); no misalignment appeared, so the padded lanes are correctly masked. Both claims were therefore rebutted (evidence c1.e1, c2.e1).\\n\\nRemaining untested generalizations are outside the stated contract: odd headdim (the contract describes cos/sin as headdim//2 and speaks of rotating pairs, leaving any leftover odd dimension unspecified) and exotic strides/dtypes. Nothing established contradicts a required behaviour, so the implementation satisfies the contract.",
+        "verdict": "trust"
       },
       "status": "ok",
       "tool": "record_verdict"
     }
   ],
   "verdict": {
-    "confidence": 0.93,
-    "created_at": "2026-09-08T14:46:35Z",
+    "confidence": 0.85,
+    "created_at": "2026-09-08T14:48:53Z",
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "The contract in problem.txt explicitly requires that \"when two candidates have exactly equal scores, the LOWER index must be the one kept\", and that the k highest-scoring indices be returned in descending score order. The kernel's compare-and-swap (kernel.py line 24) uses `cond = (left > right) != flip`, which contains no index term; with the descending final merge (flip=1) the condition reduces to `left <= right`, so exactly-tied elements are swapped and the network is unstable on ties.\n\nProbe t6 (finalized as evidence c1.e1) ran the actual kernel on GPU against a stable descending argsort reference, all within the declared input domain (power-of-two column counts, N=16 and N=32):\n- all_equal_N16 (all zeros, k=8): kernel returned [8,9,11,10,14,15,13,12]; the contract requires [0..7]. Set diff: ref_only={0..7}, kernel_only={8..15}, all values identical (0.0) \u2014 i.e. every kept candidate is a higher index among exact ties.\n- quantized_3levels_N16 (k=8): kernel kept tied (value 1.0) indices 8 and 14 while dropping lower tied indices 4 and 6; row 2 kept 12,14,15 while dropping 2,4,7. It also ordered tied 2.0 entries as 11 before 10, violating lower-index-first ordering.\n- Control cases with distinct scores (distinct_N16) and strictly decreasing scores (groups_of_4_N32) matched the reference exactly (idx_exact_match=true), isolating the failure precisely to the contractually specified tie rule rather than to a metric artifact or a reference-undefined case.\n\nSince the tie-break is an explicitly stated required behaviour and the failing inputs (exactly equal / quantized scores with power-of-two N) are admitted by the declared input domain, this is a contract violation, not an unspecified-choice difference.",
-    "verdict": "reject"
+    "reason": "The contract requires apply_rotary to apply the RoPE rotation with two selectable pairings: interleaved=False pairs dim i with i+headdim/2, interleaved=True pairs dim 2i with 2i+1. I tested each branch against an independent fp32 PyTorch reference on a GPU.\\n\\nProbe t7 (claim c1, interleaved=False, reference o[i]=x[i]cos-x[i+h]sin, o[i+h]=x[i]sin+x[i+h]cos) over (S,H,D) = (8,4,64), (3,2,8), (5,3,6), (4,2,48), (1,1,2), (16,8,128) in fp32 and fp16: worst max abs error 2.38e-7 in fp32 and 9.74e-4 in fp16 (consistent with fp16 storage rounding of the output). Probe t8 (claim c2, interleaved=True, reference out[...,0::2]=xe*cos-xo*sin, out[...,1::2]=xe*sin+xo*cos) on the same grid: worst max abs error 2.38e-7 fp32 / 9.72e-4 fp16. Both grids deliberately included non-power-of-two headdims 6 and 48, the case where BLOCK_K=next_pow2(headdim) padding could have misaligned the masked loads (non-interleaved branch) or the reshape/split/join even-odd pairing (interleaved branch); no misalignment appeared, so the padded lanes are correctly masked. Both claims were therefore rebutted (evidence c1.e1, c2.e1).\\n\\nRemaining untested generalizations are outside the stated contract: odd headdim (the contract describes cos/sin as headdim//2 and speaks of rotating pairs, leaving any leftover odd dimension unspecified) and exotic strides/dtypes. Nothing established contradicts a required behaviour, so the implementation satisfies the contract.",
+    "verdict": "trust"
   }
 }

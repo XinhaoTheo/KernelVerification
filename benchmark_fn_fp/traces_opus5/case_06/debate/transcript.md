@@ -1,15 +1,15 @@
 # Agentic Verification Transcript
 
-- Entry: `case_06`
-- Turns: 8
+- Entry: `case_07`
+- Turns: 7
 - Tool events: 17
 - Claims: 3
 - Description updates: 1
-- LLM time: 197.683s across 7 calls | tokens: in=336511 out=15159 total=351670
-- Cache tokens: created=0 read=39115
+- LLM time: 355.807s across 6 calls | tokens: in=195711 out=28881 total=224592
+- Cache tokens: created=0 read=32852
 - Stop reason: `verdict_recorded`
-- Verdict: `reject`
-- Confidence: 0.95
+- Verdict: `trust`
+- Confidence: 0.78
 - Skeptic review: `no_new_claims`
 
 ## Timeline
@@ -27,47 +27,47 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_06",
+    "entry": "case_07",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_06"
+    "entry": "case_07"
   }
 
-### Turn 2 - `describer` (53.81762971399996s, in=4664 out=3992)
+### Turn 2 - `describer` (94.453429359s, in=6487 out=8061)
 
 Message:
 
 ```text
-The artifact context is complete (kernel source, problem text, metadata all present), so I'm going straight to recording the description model. The central thing to describe is the mismatch between the problem's "exact recurrence, no approximation" wording and the explicit 5e-3 quantization step applied to the carried state every chunk.
+I have the full source, problem text, and metadata already in state, so I'll go straight to building the description model for this AutoGPTQ INT4 dequant-matmul case.
 ```
 
 Tool calls:
@@ -75,33 +75,37 @@ Tool calls:
 - `record_description_update -> t5 ok`
   Args:
   {
-    "contract_model": [
-      "Inputs: new_states of shape (nchunks, dim) holding per-chunk local states, and dA_cs of shape (nchunks,) holding per-chunk cumulative log-decays.",
-      "Required recurrence: state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0.",
-      "Required return value: the final state after the last chunk (a length-dim vector); intermediate per-chunk outputs are not part of the requested return.",
-      "Accuracy contract is explicit and strong: the operation must be exact up to ordinary floating-point arithmetic, with no self-introduced approximation, and this must hold at any sequence length (any nchunks).",
-      "Reference semantics are anchored to mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel, i.e. an fp32 seq
-  ...[truncated 7573 chars]
+    "contract_model": "No tolerance, dtype, or shape constraints are given in problem.txt and test_code is empty, so the acceptance metric (allclose vs FP32 dequant reference, tolerance) is currently unspecified.",
+    "kernel_model": "`bits` and `maxq` are runtime scalars, not constexpr, so 32//bits and BLOCK_SIZE_K//(32//bits) are computed as device-side scalar expressions; the kernel only makes sense for bits in {2,4,8} and bits dividing/aligning with BLOCK_SIZE_K.",
+    "open_questions": "Does the evaluation environment's Triton version accept python `min()` on runtime values (kernel.py:23) and a non-constexpr `bits` in the pointer-advance expression (kernel.py:53), or would that be a compile-time failure rather than a numeric one?",
+    "risk_map": "Swizzle fragility: `min(num_pid_m - first
+  ...[truncated 992 chars]
   Output summary:
   {
     "contract_model": [
-      "Inputs: new_states of shape (nchunks, dim) holding per-chunk local states, and dA_cs of shape (nchunks,) holding per-chunk cumulative log-decays.",
-      "Required recurrence: state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0.",
-      "Required return value: the final state after the last chunk (a length-dim vector); intermediate per-chunk outputs are not part of the requested return.",
-      "Accuracy contract is explicit and strong: the operation must be exact up to ordinary floating-point arithmetic, with no self-introduced approximation, and this must hold at any sequence length (any nchunks).",
-      "Reference semantics are anchored to mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel, i.e. an fp32 sequential scan with no state compression."
+      "No tolerance, dtype, or shape constraints are given in problem.txt and test_code is empty, so the acceptance metric (allclose vs FP32 dequant reference, tolerance) is currently unspecified."
     ],
     "impact_on_claims": [],
     "kernel_model": [
-      "Host wrapper state_passing_lowbit (kernel.py:42-56) reads nchunks, dim from new_states.shape, allocates an fp32 out buffer (nchunks, dim) and fp32 final_states (dim,), sets BLOCK_SIZE = next_power_of_2(dim), and launches with grid (1,) - one program, one thread block, entire dim vectorized in registers
-  ...[truncated 7263 chars]
+      "`bits` and `maxq` are runtime scalars, not constexpr, so 32//bits and BLOCK_SIZE_K//(32//bits) are computed as device-side scalar expressions; the kernel only makes sense for bits in {2,4,8} and bits dividing/aligning with BLOCK_SIZE_K."
+    ],
+    "open_questions": [
+      "Does the evaluation environment's Triton version accept python `min()` on runtime values (kernel.py:23) and a non-constexpr `bits` in the pointer-advance expression (kernel.py:53), or would that be a compile-time failure rather than a numeric one?"
+    ],
+    "resolved_tasks": [],
+    "risk_map": [
+      "Swizzle fragility: `min(num_pid_m - first_pid_m, GROUP_SIZE_M)` and `pid_m = first_pid_m + (pid % group_size_m)` (kernel.py:23-24) are only benign because GROUP_SIZE_M == 1; the mapping is not one-to-one for GROUP_SIZE_M > 1, so it is a latent rather than active bug at the hardcoded config."
+    ],
+    "scope_notes": [
+      "Performance is not part of the st
+  ...[truncated 732 chars]
 
-### Turn 3 - `skeptic` (31.168797770000026s, in=23331 out=2465)
+### Turn 3 - `skeptic` (75.088968375s, in=10919 out=6331)
 
 Message:
 
 ```text
-Recording the primary quantization-related claims, framed so each has a distinct discriminating regime.
+The kernel is a near-verbatim AutoGPTQ port, so I'm targeting the three places where it can still diverge from the *stated* contract: the `zeros + 1` convention versus the formula printed in problem.txt, TF32 contamination in `tl.dot` on fp32 inputs, and the missing K-tail masking.
 ```
 
 Tool calls:
@@ -109,103 +113,89 @@ Tool calls:
 - `record_claim -> t6 ok`
   Args:
   {
-    "rationale": "Line 32 unconditionally snaps the carried state onto a 5e-3 grid every iteration; the maximum single-step rounding error alone is 2.5e-3, which is ~4 orders of magnitude above fp32 eps for O(1) values. Metric: max absolute error vs an fp64/fp32 torch sequential-scan reference, plus max relative error; report the quantization step for comparison.",
+    "rationale": "The GPTQ packed format conventionally stores zero_point-1, which makes the `+1` correct, but the problem text writes the dequant formula with a bare `zero` term. Only a two-convention probe can show which one the kernel matches and by how much they differ; an off-by-one zero-point is the single largest-magnitude candidate error in this kernel.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States the required recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and asserts 'The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.'"
-      },
-      {
-        "source": "kernel.py:5,32",
-        "summary": "_QUANT_STEP = 5e-3 and states
-  ...[truncated 1045 chars]
+        "summary": "States the required numeric behavior: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with per-(group,column) scale and zero-point."
+      }
+    ],
+    "scope_rationale": "problem.txt explicitly states the dequantization formula the kernel must evaluate, so a claim that the kernel's arithmetic deviates from tha
+  ...[truncated 786 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Line 32 unconditionally snaps the carried state onto a 5e-3 grid every iteration; the maximum single-step rounding error alone is 2.5e-3, which is ~4 orders of magnitude above fp32 eps for O(1) values. Metric: max absolute error vs an fp64/fp32 torch sequential-scan reference, plus max relative error; report the quantization step for comparison.",
+    "rationale": "The GPTQ packed format conventionally stores zero_point-1, which makes the `+1` correct, but the problem text writes the dequant formula with a bare `zero` term. Only a two-convention probe can show which one the kernel matches and by how much they differ; an off-by-one zero-point is the single largest-magnitude candidate error in this kernel.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States the required recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and asserts 'The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.'"
-      },
-      {
-        "source": "kernel.py:5,32",
-        "summary": "_QUANT_STEP = 5e-3 and states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied to the carried state on every chunk iteration."
+        "summary": "States the required numeric behavior: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with per-(group,column) scale and zero-point."
       }
     ],
-    "scope_rationale": "problem.txt is the operative contract and explicitly states the recurrence must be carried \"exactly\" and that the op \"introduces no approximation of its own beyond ordinary floating-point arithmetic\". A deliberate 5e-3 grid snap is exactly s
-  ...[truncated 679 chars]
+    "scope_rationale": "problem.txt explicitly states the dequantization formula the kernel must evaluate, so a claim that the kernel's arithmetic deviates from that stated formula is in scope even without a test.py. Representative inputs (4-bit packed B, fp32 A, per-group scales/zeros, g_idx) are exactly what the contract describes.",
+    "statement": "The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero
+  ...[truncated 420 chars]
 - `record_claim -> t7 ok`
   Args:
   {
-    "rationale": "Each iteration injects up to 2.5e-3 of error into the state, which is then multiplied by exp(dA_cs) and carried forward; with scale close to 1 the errors accumulate as a random-walk/sum instead of decaying, so error should scale roughly with sqrt(nchunks) or nchunks. Metric: max abs error vs exact reference as a function of nchunks, reported per nchunks value; a flat, eps-level curve would rebut this specific accumulation claim even if claim 1 holds.",
+    "rationale": "The declared 4-bit format makes the weight side exact, so any observed error must come from the accumulation path. TF32 inside tl.dot is the most likely source and would be invisible under a loose tolerance but visible under a fp32-appropriate one; the probe must separate \"lossy format\" from \"lossy accumulation\".",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'The recurrence is exact ... at any sequence length' explicitly puts sequence-length-dependent error growth inside the correctness contract."
+        "summary": "Requires the kernel to evaluate C = A @ dequant(B) faithfully in the declared 4-bit weight format, which bounds error to the weight quantization and not the accumulation."
       },
       {
-        "source": "kernel.py:31-32",
-        "summary": "Quantization is a
-  ...[truncated 870 chars]
+        "source": "kernel.py:65",
+        "summary": "Wrapper allocates the output as torch.float32, indicating fp32 accumulation/output is the intended numeric path."
+      }
+    ],
+   
+  ...[truncated 1012 chars]
   Output summary:
   {
     "id": "c2",
-    "rationale": "Each iteration injects up to 2.5e-3 of error into the state, which is then multiplied by exp(dA_cs) and carried forward; with scale close to 1 the errors accumulate as a random-walk/sum instead of decaying, so error should scale roughly with sqrt(nchunks) or nchunks. Metric: max abs error vs exact reference as a function of nchunks, reported per nchunks value; a flat, eps-level curve would rebut this specific accumulation claim even if claim 1 holds.",
+    "rationale": "The declared 4-bit format makes the weight side exact, so any observed error must come from the accumulation path. TF32 inside tl.dot is the most likely source and would be invisible under a loose tolerance but visible under a fp32-appropriate one; the probe must separate \"lossy format\" from \"lossy accumulation\".",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "'The recurrence is exact ... at any sequence length' explicitly puts sequence-length-dependent error growth inside the correctness contract."
+        "summary": "Requires the kernel to evaluate C = A @ dequant(B) faithfully in the declared 4-bit weight format, which bounds error to the weight quantization and not the accumulation."
       },
       {
-        "source": "kernel.py:31-32",
-        "summary": "Quantization is applied to `states` after the update and before the next loop iteration reuses it, so the rounding error is part of the recurrent carry."
+        "source": "kernel.py:65",
+        "summary": "Wrapper allocates the output as torch.float32, indicating fp32 accumulation/output is the intended numeric path."
       }
     ],
-    "scope_rationale": "problem.txt explicitly qualifies the exactness requirement with \"at any sequence length\", making the nchunks sweep a directly contract-mandated dimension. Near-zero log-decays are legitimate inputs (dA_cs are cumul
-  ...[truncated 504 chars]
+    "scope_rationale": "problem.txt says the kernel's job is to \"evaluate the matmul faithfully in that declared format\", i.e. the weights are 4-bit but the product/accumulation is expected to be a faithful matmul; fp32 activations are the dtype the wrapper itself produces (c is torch.float32) and are the natural contract inputs.",
+    "statement": "`accumulator += tl.dot(a, b)` (kernel
+  ...[truncated 646 chars]
 - `record_claim -> t8 ok`
   Args:
   {
-    "rationale": "Any state magnitude below 2.5e-3 rounds to 0 under floor(x/5e-3 + 0.5)*5e-3, and since the zeroed value is carried forward the state can never recover. Metric: count of output entries that are exactly 0 while the reference is nonzero, plus max relative error and sign-agreement fraction. This regime distinguishes a benign absolute-error story from total information loss.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Specifies only shapes/semantics (new_states[c], dA_cs[c]) and requires exact recurrence with no self-introduced approximation; no magnitude or distribution restriction is stated."
-      },
-      {
-        "source": "kernel.py:32",
-        "summary": "Round-half-up onto a 5e-3 grid maps any |state| < 2.5e-3 to exac
-  ...[truncated 805 chars]
+    "rationale": "Packing is 8 values per int32, so K only needs to be a multiple of 8 for a well-formed input, but the tiling assumes a multiple of 16; the wrapper performs no divisibility check or padding, so a contract-legal K=24 silently exercises the unmasked tail.",
+    "scope": "unknown",
+    "scope_rationale": "problem.txt places no divisibility constraint on K and the artifact has no test.py or get_inputs to pin the tested shapes, so it is unclear whether a K that is a multiple of 8 but not 16 is inside the verification domain; upstream AutoGPTQ is only ever called with group-aligned K. Marking unknown until the input domain is clarified.",
+    "statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a
+  ...[truncated 374 chars]
   Output summary:
   {
     "id": "c3",
-    "rationale": "Any state magnitude below 2.5e-3 rounds to 0 under floor(x/5e-3 + 0.5)*5e-3, and since the zeroed value is carried forward the state can never recover. Metric: count of output entries that are exactly 0 while the reference is nonzero, plus max relative error and sign-agreement fraction. This regime distinguishes a benign absolute-error story from total information loss.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "Specifies only shapes/semantics (new_states[c], dA_cs[c]) and requires exact recurrence with no self-introduced approximation; no magnitude or distribution restriction is stated."
-      },
-      {
-        "source": "kernel.py:32",
-        "summary": "Round-half-up onto a 5e-3 grid maps any |state| < 2.5e-3 to exactly 0, and that zero is carried into the next iteration."
-      }
-    ],
-    "scope_rationale": "problem.txt places no magnitude restriction on new_states and demands exactness for the stated recurrence; small-magnitude per-chunk states are ordinary inputs for a Mamba2 state-passing scan. No test.py narrows the input domain, so representative small-magnitude fp32 inputs of the contract's d
-  ...[truncated 439 chars]
+    "rationale": "Packing is 8 values per int32, so K only needs to be a multiple of 8 for a well-formed input, but the tiling assumes a multiple of 16; the wrapper performs no divisibility check or padding, so a contract-legal K=24 silently exercises the unmasked tail.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt places no divisibility constraint on K and the artifact has no test.py or get_inputs to pin the tested shapes, so it is unclear whether a K that is a multiple of 8 but not 16 is inside the verification domain; upstream AutoGPTQ is only ever called with group-aligned K. Marking unknown until the input domain is clarified.",
+    "statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit packing size but not a multiple of 16 (e.g. K=24, packed rows = 3), the final iteration reads past the ends of A, the packed B rows, and g_idx, and adds those out-of-bounds products into the accumulator, producing wrong C values (or a memory fault) rather than the contract's C = A @ de
+  ...[truncated 32 chars]
 
-### Turn 4 - `experimenter` (29.636517663000006s, in=32210 out=2633)
+### Turn 4 - `experimenter` (69.48883552400002s, in=19142 out=6339)
 
 Message:
 
 ```text
-All three claims are independent regimes of the same line-32 quantization; none of them changes another's experiment design, so I'm launching all three probes together.
+Batching all three probes now — c1 (zero-point convention), c2 (TF32 in `tl.dot`), and c3 (K-tail masking) are independent experiments. c1 and c2 use K multiples of 16 so the unmasked-tail issue cannot confound them; c3 uses K=24 in its own process so a possible memory fault stays isolated.
 ```
 
 Tool calls:
@@ -214,8 +204,8 @@ Tool calls:
   Args:
   {
     "claim_id": "c1",
-    "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_06/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\ndev='cuda'\nnchunks, dim = 32, 64\nns = torch.randn(nchunks, dim, device=dev, dtype=torch.float32)\ndA = torch.full((nchunks,), -0.1, device=dev, dtype=torch.float32)\n\ndef ref(ns, dA, dt):\n    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)\n    for c in range(ns.shape[0]):\n        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)\n    return s\n\nout = k.state_passing_lowbit(ns, dA)\nr64 = ref(ns, dA, torch.float64)\nr32 = ref(ns, dA, torch.float32)\nerr = (out.double()-r64).abs()\nfp32_ref_err = (r32.double()-r64).abs()\nrel = err/
-  ...[truncated 905 chars]
+    "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_07/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\ndev='cuda'\nM,K,N,gs = 32,64,64,32\ntorch.manual_seed(0)\ngroups=K//gs\nq = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)\nzp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)  # keep zp+1 <=15\nscales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()\ng_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)\n\ndef wrap32(x):\n    x = x & 0xFFFFFFFF\n    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)\n\nqw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)\nfor k in range(K):\n    qw[k//8] |= (q[k] << ((k%8)*
+  ...[truncated 1334 chars]
   Output summary:
   {
     "artifacts": [
@@ -223,33 +213,36 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t9_probe.py",
-        "sha256": "aca88d83f6b80b0de84477ecff1e2acc3a4a2818a4037645cdeabaf06d30c00a"
+        "sha256": "e7f3ed0903f32b8a8283d82bdc4cd142162aaf5b0edc461cf7e2a2c342fae75b"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t9_stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "3f730e28c4a2cec3e2f35576c8dca0d66addd2fc78ba80a5a1f77f2de75c8f83"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
         "path": "probes/t9_stderr.txt",
-        "sha256": "2d3e0230589ab2c24e1e2f8be6b4c3f2253a2cf6c7b004ea621a1606e429790a"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t9_json_result.json",
+        "sha256": "2054187eae624774f6face2a14d441266ad638a4b676729f9766b7bbbc0ca3a4"
       }
     ],
     "claim_id": "c1",
-    "claim_statement": "The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]) by an absolute error on the order of 1e-3 or larger, far beyond fp32 rounding, for a representative input such as nchunks=32, dim=64, new_states ~ N(0,1), dA_cs = -0.1*ones (or uniform(-0.5,0)).",
-    "duration_s": 0.030355,
-    "event_id": "t9",
-    "evide
-  ...[truncated 2126 chars]
+    "claim_statement": "The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * s
+  ...[truncated 4223 chars]
 - `run_claim_probe -> t10 ok`
   Args:
   {
     "claim_id": "c2",
-    "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_06/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev='cuda'; dim=64\ndef ref(ns, dA, dt):\n    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)\n    for c in range(ns.shape[0]):\n        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)\n    return s\nrows=[]\nfor nc in [1,8,64,512,4096]:\n    torch.manual_seed(1)\n    ns = torch.randn(nc, dim, device=dev, dtype=torch.float32)\n    dA = torch.full((nc,), -1e-3, device=dev, dtype=torch.float32)\n    out = k.state_passing_lowbit(ns, dA)\n    r64 = ref(ns, dA, torch.float64)\n    r32 = ref(ns, dA, torch.float32)\n    err=(out.double()-r64).abs()\n    rows.appen
-  ...[truncated 474 chars]
+    "code": "\nimport torch, importlib.util, json\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_07/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\n\ndev='cuda'\nM,K,N,gs = 64,256,64,64\ntorch.manual_seed(1)\ngroups=K//gs\nq = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)\nzp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)\nscales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()\ng_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)\ndef wrap32(x):\n    x = x & 0xFFFFFFFF\n    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)\nqw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)\nfor k in range(K):\n    qw[k//8] |= (q[k] << ((k%8)*4))\nqweight = wrap32
+  ...[truncated 1349 chars]
   Output summary:
   {
     "artifacts": [
@@ -257,13 +250,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t10_probe.py",
-        "sha256": "8848f9370597f957c8dcce28c8f41cf3bdc3ef524d0b93e640daa60628cd7889"
+        "sha256": "6be83a0073afb679536541f46bd56421d4e65ce2eeea67717c13c450d31daa21"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t10_stdout.txt",
-        "sha256": "3bbe98bd2d7e055a3e81921857a0fdfda69553b97202ca8a50eeff743cc54e2d"
+        "sha256": "017b4966c84c1c7a3e85e6e02fe9cbceb4c86e5cf180b7b68bf7fada6c214d0c"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -275,18 +268,18 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t10_json_result.json",
-        "sha256": "61db2b0fa0a6d4cca3e28e711238113ab90dd72ea7efbbf329aa9364446f921f"
+        "sha256": "a398c2276fa4c56541f5d624190e9b0533311836704bd33e2e19edd7ece4e60d"
       }
     ],
     "claim_id": "c2",
-    "claim_statement": "Because the quantization is applied to the carried state (not just the output), its error is fed back and amplified: with near-zero log-decays (e.g. dA_cs = -1e-3, scale ~ 1), the max absolute deviation from t
-  ...[truncated 6813 chars]
+    "claim_statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas
+  ...[truncated 4292 chars]
 - `run_claim_probe -> t11 ok`
   Args:
   {
     "claim_id": "c3",
-    "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_06/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev='cuda'\ntorch.manual_seed(2)\nnchunks, dim = 16, 64\nns = 1e-3*torch.randn(nchunks, dim, device=dev, dtype=torch.float32)\ndA = torch.full((nchunks,), -0.5, device=dev, dtype=torch.float32)\ndef ref(ns, dA, dt):\n    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)\n    for c in range(ns.shape[0]):\n        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)\n    return s\nout = k.state_passing_lowbit(ns, dA)\nr = ref(ns, dA, torch.float64)\nerr=(out.double()-r).abs()\nrel=err/r.abs().clamp_min(1e-30)\nzeros_kernel=int((out==0).sum().item())\nref_nonzero=int
-  ...[truncated 864 chars]
+    "code": "\nimport torch, importlib.util, json, traceback\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_07/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\ndev='cuda'\ndef wrap32(x):\n    x = x & 0xFFFFFFFF\n    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)\n\ndef run(K, gs, seed=2, M=32, N=64):\n    torch.manual_seed(seed)\n    groups=K//gs\n    q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)\n    zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)\n    scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()\n    g_idx = (torch.arange(K,device=dev)//gs).to(torch.int32)\n    qw = torch.zeros((K//8,N),device=dev,dtype=torch.int64)\n    for k in range(
+  ...[truncated 1133 chars]
   Output summary:
   {
     "artifacts": [
@@ -294,13 +287,13 @@ Tool calls:
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
         "path": "probes/t11_probe.py",
-        "sha256": "1fb6d3875ead683fbfe24d0fd4f11212fa211ee3e610c82c15ebad225c197615"
+        "sha256": "917d083fb800810f0cee0b4c9316d88fc5f2c64b5241db7d36e1093a809fa7a9"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
         "path": "probes/t11_stdout.txt",
-        "sha256": "4e9bd92a933f8b09b2204b04e44a1a2c1788dc801330420e3b7ce00377ad3864"
+        "sha256": "58f8e6a8c5f607fa14b231c3cbe1ea11ab1f1369af5f6fa31d569fa01876d90d"
       },
       {
         "description": "Captured stderr from the probe process.",
@@ -312,19 +305,19 @@ Tool calls:
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
         "path": "probes/t11_json_result.json",
-        "sha256": "83ddd69d3ab1bdeb9a3e10b83ff2743287f9d8784495cdeb1ca6b2c2fa0be2bd"
+        "sha256": "ed47d5e893ec615ba3e41f39d62c4535fe2e64fd5f709c3b0a76fdf2d461493d"
       }
     ],
     "claim_id": "c3",
-    "claim_statement": "In the small-magnitude regime (e.g. new_states ~ 1e-3 * N(0,1), dA_cs = -0.5*ones, nchunks=16, dim=64), the quantization at kernel.py:32 snaps the carried state to exactly 0 (or to a single grid code), so the 
-  ...[truncated 4133 chars]
+    "claim_statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit pac
+  ...[truncated 3683 chars]
 
-### Turn 5 - `experimenter` (32.71115283199998s, in=46200 out=2844)
+### Turn 5 - `experimenter` (66.79563341300002s, in=34459 out=5492)
 
 Message:
 
 ```text
-Finalizing c2 and c3 (both probes returned clean JSON), and relaunching the c1 probe which died on a Python syntax error (dict keyword `kernel_output_on_5e-3_grid_max_residual` is not a valid identifier) — that's a probe bug, not a kernel signal.
+Consuming all three probe results now. c1 shows the kernel implements the upstream GPTQ `zp+1` convention exactly; c2 shows no TF32 loss (device is a Tesla T4, which has no TF32 hardware — an important caveat); c3 reproduces an Inf output at K=24. Alongside these finalizations I'm launching one more probe on c2: a shape/group-size/act-order sweep at K multiples of 16 to test whether faithful fp32 accuracy holds generally (kept away from the K-tail case c3 just confirmed, so the two cannot confound).
 ```
 
 Tool calls:
@@ -333,158 +326,141 @@ Tool calls:
   Args:
   {
     "data": {
-      "dA_cs": -0.001,
-      "dim": 64,
-      "fp32_scan_max_abs_err_nc1": 0.0,
-      "fp32_scan_max_abs_err_nc4096": 0.0020321469785997692,
-      "fp32_scan_max_abs_err_nc512": 0.00045747464320555764,
-      "fp32_scan_max_abs_err_nc64": 3.188595607461764e-05,
-      "fp32_scan_max_abs_err_nc8": 1.624778868780652e-06,
-      "half_step": 0.0025,
-      "max_abs_err_nc1": 0.0024944543838500977,
-      "max_abs_err_nc4096": 0.09813679878703852,
-      "max_abs_err_nc512": 0.05856924349644288,
-      "max_abs_err_nc64": 0.03742966140741366,
-      "max_abs_err_nc8": 0.009672808872987826,
-      "max_rel_err_nc64": 1.9136097913619394,
-      "mean_abs_err_nc4096": 0.028562238102055736,
-      "quant_step": 0.005,
-      "ratio_kernel_to_fp32_err_nc4096": 48.3,
-      "ratio_kernel_to_fp32_err_nc64": 1173.6,
-      "ref_absmax_nc4
-  ...[truncated 713 chars]
+      "group_size": 32,
+      "kernel_matches": "zp_plus1_upstream_gptq_convention",
+      "max_abs_err_vs_bare_zp_ref": 0.7163703925054219,
+      "max_abs_err_vs_zp_plus1_ref": 1.3525163371497229e-06,
+      "max_rel_err_vs_bare_zp": 0.17107712218497226,
+      "max_rel_err_vs_zp_plus1": 3.254707524977362e-07,
+      "predicted_convention_offset_max_abs": 0.7163700357795296,
+      "ref_bare_max_abs": 4.187411989142925,
+      "ref_plus_max_abs": 4.155569515141396,
+      "shape": [
+        32,
+        64,
+        64
+      ]
+    },
+    "event_id": "t9",
+    "status": "rebutted",
+    "summary": "Probe with hand-packed 4-bit B (K=64,N=64,group=32) shows the kernel reproduces the (q - (qzeros+1)) * scale convention to fp32 rounding: max abs err 1.35e-6 (max rel 3.25e-7) against the zp+1 reference, versus max abs err 0.
+  ...[truncated 726 chars]
   Output summary:
   {
-    "claim_id": "c2",
-    "claim_status": "confirmed",
-    "evidence_id": "c2.e1",
-    "summary": "nchunks sweep at dA_cs=-1e-3 (scale~0.999), dim=64, new_states~N(0,1): max abs error vs fp64 exact scan grows monotonically with sequence length (2.49e-3 @ nc=1, 9.67e-3 @ 8, 3.74e-2 @ 64, 5.86e-2 @ 512, 9.81e-2 @ 4096), while a pure fp32 sequential scan deviates from fp64 by only 0.0/1.6e-6/3.2e-5/4.6e-4/2.0e-3 at the same lengths. Kernel error exceeds the fp32-arithmetic baseline by 48x-1500x and is ~half the 5e-3 quantization step already at nchunks=1, confirming the quantization error is fed back into the carry and accumulates with sequence length rather than staying at fp32 epsilon.",
-    "supports": "confirmed",
-    "tool_event_id": "t10"
+    "claim_id": "c1",
+    "claim_status": "rebutted",
+    "evidence_id": "c1.e1",
+    "summary": "Probe with hand-packed 4-bit B (K=64,N=64,group=32) shows the kernel reproduces the (q - (qzeros+1)) * scale convention to fp32 rounding: max abs err 1.35e-6 (max rel 3.25e-7) against the zp+1 reference, versus max abs err 0.716 (max rel 0.171) against a bare-qzeros reference, exactly matching the predicted systematic offset max|A @ scale| = 0.71637. So the `+1` is not a rounding-level discrepancy but a convention: the packed-qzeros-plus-one form is the upstream AutoGPTQ semantics that problem.txt names as the operation being implemented (auto_gptq .../kernels.py::quant_matmul_248_kernel), where `zero[g,n]` denotes the true zero-point = stored qzeros + 1. The kernel therefore matches the referenced reference implementation; no arithmetic defect. Note for Judge: this claim is only a defect if the acceptance harness dequantizes with raw qzeros, and test_code is empty so that cannot be checked from the artifact.",
+    "supports": "rebutted",
+    "tool_event_id": "t9"
   }
 - `finalize_probe_evidence -> t13 ok`
   Args:
   {
     "data": {
-      "dim": 64,
-      "dist": "new_states~1e-3*N(0,1), dA_cs=-0.5",
-      "half_step": 0.0025,
-      "kernel_zero_count": 64,
-      "max_abs_err": 0.003197542482023054,
-      "max_rel_err": 1.0,
-      "mean_rel_err": 1.0,
-      "n_unique_kernel_values": 1,
-      "quant_step": 0.005,
-      "ref_absmax": 0.003197542482023054,
-      "ref_absmin": 1.3279886578158157e-05,
-      "ref_nonzero_count": 64,
+      "device": "Tesla T4",
+      "kernel_max_abs_err_vs_fp64": 3.4923409302223263e-06,
+      "kernel_max_rel_err": 4.694003264441183e-07,
+      "predicted_tf32_rel_err_signature": 0.001,
+      "ref_max_abs": 7.4400053290931965,
       "shape": [
-        16,
+        64,
+        256,
         64
       ],
-      "sign_agreement_fraction": 0.0,
-      "unique_kernel_values": [
-        0.0
-      ],
-      "zeroed_but_ref_nonzero": 64
+      "sm_generation": "Turing_SM75_no_TF32_hardware",
+      "tf32_flag_had_no_effect": true,
+      "torch_fp32_max_abs_err": 1.377726111417843e-06,
+      "torch_fp32_max_rel_err": 1.8517810814333961e-07,
+      "torch_tf32_max_abs_err": 1.377726111417843e-06,
+      "torch_tf32_max_rel_err": 1.8517810814333961e-07
+    },
+    "event_id": "t10",
+    "status": "rebutted",
+    "summary": "At M=64,K=256,N=64 with group=64 the kernel's max abs err vs an fp64 reference of A @ dequant(B) is 3.49e-6, max rel err 4.69e-7 \u2014 the same ord
+  ...[truncated 600 chars]
+  Output summary:
+  {
+    "claim_id": "c2",
+    "claim_status": "rebutted",
+    "evidence_id": "c2.e1",
+    "summary": "At M=64,K=256,N=64 with group=64 the kernel's max abs err vs an fp64 reference of A @ dequant(B) is 3.49e-6, max rel err 4.69e-7 \u2014 the same order as torch's own fp32 matmul (1.38e-6 abs, 1.85e-7 rel), i.e. plain fp32 accumulation accuracy, roughly 3 orders of magnitude better than the ~1e-3 TF32 signature the claim predicted. Important environment caveat: the GPU is a Tesla T4 (Turing, SM75), which has no TF32 tensor cores, so torch allow_tf32=True and allow_tf32=False produced bit-identical errors (both 1.377726e-6). The TF32-truncation hypothesis is therefore rebutted for this verification environment, but this probe cannot exclude TF32 use by tl.dot on Ampere+ hardware; that variant is untestable here.",
+    "supports": "rebutted",
+    "tool_event_id": "t10"
+  }
+- `finalize_probe_evidence -> t14 ok`
+  Args:
+  {
+    "data": {
+      "M": 32,
+      "N": 64,
+      "block_size_k": 16,
+      "control_K32_max_abs_err": 4.0202052087323636e-07,
+      "control_K32_max_rel_err": 1.5165758651548456e-07,
+      "control_K32_ref_max_abs": 2.650843456698351,
+      "group_size": 8,
+      "pack_values_per_int32": 8,
+      "scope": "unknown_no_test_py",
+      "tail_K24_max_abs_err": "Infinity",
+      "tail_K24_ref_max_abs": 2.3319915821238406
     },
     "event_id": "t11",
     "status": "confirmed",
-    "summary": "Small-magnitude regime (new_states ~ 1e-3*N(0,1), dA_cs=-0.5, nchunks=16, dim=64): the kernel returns exactly 0.0 for all 64 output entries (1 unique value), while the exact fp64 scan is
-  ...[truncated 332 chars]
+    "summary": "The unmasked K-tail behavior is reproduced: with K=24 (a legal 8-per-int32 packing size but not a multiple of BLOCK_SIZE_K=16) the kernel returns values whose max abs error vs the fp64 reference is Infinity, i.e. the third loop iteration reads past the ends of A, the 3 packed B rows, and g_idx and folds non-finite/garbage OOB data int
+  ...[truncated 522 chars]
   Output summary:
   {
     "claim_id": "c3",
     "claim_status": "confirmed",
     "evidence_id": "c3.e1",
-    "summary": "Small-magnitude regime (new_states ~ 1e-3*N(0,1), dA_cs=-0.5, nchunks=16, dim=64): the kernel returns exactly 0.0 for all 64 output entries (1 unique value), while the exact fp64 scan is nonzero in all 64 entries (|ref| from 1.33e-5 to 3.20e-3). Max and mean relative error are both exactly 1.0 and sign agreement is 0.0 \u2014 total loss of state magnitude and sign information, caused by |state| < half-step (2.5e-3) snapping to zero at kernel.py:32 and that zero being carried forward.",
+    "summary": "The unmasked K-tail behavior is reproduced: with K=24 (a legal 8-per-int32 packing size but not a multiple of BLOCK_SIZE_K=16) the kernel returns values whose max abs error vs the fp64 reference is Infinity, i.e. the third loop iteration reads past the ends of A, the 3 packed B rows, and g_idx and folds non-finite/garbage OOB data into the accumulator (the g_idx OOB read also indexes scales/zeros with an arbitrary group id). The K=32 control on the identical construction is clean (max abs err 4.02e-7, max rel 1.52e-7), isolating the failure to the K%16!=0 tail rather than the packing or reference code. Scope caveat unchanged: the artifact has no test.py/get_inputs, so whether K%16!=0 is inside the verification domain is still unknown; behaviorally the defect is real, contractually its decisiveness is not established.",
     "supports": "confirmed",
     "tool_event_id": "t11"
   }
-- `run_claim_probe -> t14 ok`
+- `run_claim_probe -> t15 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "\nimport json, torch, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_06/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ndev='cuda'\ndef ref(ns, dA, dt):\n    s = torch.zeros(ns.shape[1], device=ns.device, dtype=dt)\n    for c in range(ns.shape[0]):\n        s = torch.exp(dA[c].to(dt))*s + ns[c].to(dt)\n    return s\nstep = 5e-3\nres = {}\ncases = {}\n\ntorch.manual_seed(0)\nnchunks, dim = 32, 64\nns = torch.randn(nchunks, dim, device=dev, dtype=torch.float32)\nfor name, dA in [(\"dA_const_-0.1\", torch.full((nchunks,), -0.1, device=dev, dtype=torch.float32)),\n                 (\"dA_uniform_-0.5_0\", -0.5*torch.rand(nchunks, device=dev, dtype=torch.float32))]:\n    out = k.state_p
-  ...[truncated 1334 chars]
+    "claim_id": "c2",
+    "code": "\nimport torch, importlib.util, json, traceback\nspec = importlib.util.spec_from_file_location(\"kern\", \"/root/cases/case_07/kernel.py\")\nkern = importlib.util.module_from_spec(spec); spec.loader.exec_module(kern)\ndev='cuda'\ndef wrap32(x):\n    x = x & 0xFFFFFFFF\n    return torch.where(x >= 2**31, x - 2**32, x).to(torch.int32)\n\ndef run(M,K,N,gs,actorder=False,seed=7):\n    torch.manual_seed(seed)\n    groups=K//gs\n    q = torch.randint(0,16,(K,N),device=dev,dtype=torch.int64)\n    zp = torch.randint(0,15,(groups,N),device=dev,dtype=torch.int64)\n    scales = (torch.rand((groups,N),device=dev)*0.02+0.005).float()\n    if actorder:\n        g_idx = torch.randint(0,groups,(K,),device=dev).to(torch.int32)\n    else:\n        g_idx = (torch.arange(K,dev
+  ...[truncated 1807 chars]
   Output summary:
   {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t14_probe.py",
-        "sha256": "e9028713484bd05d4831ad648be8b577de45f828c59da3bc6fcc42471ccca14a"
+        "path": "probes/t15_probe.py",
+        "sha256": "65d2fc7b9015e7ed96a03ed242142f718323b330751b7dc95d10a61851f1f77d"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t14_stdout.txt",
-        "sha256": "f7d351b79c84b2c067bf2276a55a1eac791c22997f7949c855219e4b1b28f4a0"
+        "path": "probes/t15_stdout.txt",
+        "sha256": "b98708dfc3ebc0594ef5b722b398403293aaf66ddb90aef7d23ee13855312811"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t14_stderr.txt",
+        "path": "probes/t15_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t14_json_result.json",
-        "sha256": "7cadc8a2703fef6ad6c20a3a0cbc3a43be72216648b25414235d53d2fecebc3f"
+        "path": "probes/t15_json_result.json",
+        "sha256": "6d8f8bd3d965945bf19fb6c1102e9d4c788e6bbe1d3d720888b06f1fe6e083e1"
       }
     ],
-    "claim_id": "c1",
-    "claim_statement": "The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]
-  ...[truncated 6142 chars]
+    "claim_id": "c2",
+    "claim_statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas
+  ...[truncated 8037 chars]
 
-### Turn 6 - `experimenter` (21.04243355s, in=68404 out=1361)
-
-Message:
-
-```text
-The c1 probe re-run succeeded; finalizing it as confirmed. That closes the last open claim — c1, c2, c3 all now have direct runtime evidence, so no further probes are needed.
-```
-
-Tool calls:
-
-- `finalize_probe_evidence -> t15 ok`
-  Args:
-  {
-    "data": {
-      "allclose_1e-2_both_cases": true,
-      "allclose_1e-3_both_cases": false,
-      "dA_const_-0.1_fp32_exactscan_max_abs_err": 1.8368513012845256e-06,
-      "dA_const_-0.1_grid_residual_max": 6.4849853515625e-05,
-      "dA_const_-0.1_max_abs_err": 0.008554751923401493,
-      "dA_const_-0.1_max_rel_err": 0.08021268707329214,
-      "dA_const_-0.1_mean_abs_err": 0.0028615198519291304,
-      "dA_const_-0.1_n_entries_err_gt_1e-3": 50,
-      "dA_const_-0.1_ratio_err_to_fp32_err": 4657.29,
-      "dA_const_-0.1_ref_absmax": 6.5532986094493815,
-      "dA_uniform_-0.5_0_fp32_exactscan_max_abs_err": 4.623644991319509e-07,
-      "dA_uniform_-0.5_0_grid_residual_max": 3.62396240234375e-05,
-      "dA_uniform_-0.5_0_max_abs_err": 0.005642408758820772,
-      "dA_uniform_-0.5_0_max_rel_err": 0.06028998198634111,
-     
-  ...[truncated 1253 chars]
-  Output summary:
-  {
-    "claim_id": "c1",
-    "claim_status": "confirmed",
-    "evidence_id": "c1.e1",
-    "summary": "Representative regime (nchunks=32, dim=64, new_states~N(0,1), fp32): kernel final state vs exact fp64 sequential scan gives max_abs_err = 8.55e-3 for dA_cs=-0.1 and 5.64e-3 for dA_cs~U(-0.5,0), i.e. above the 5e-3 quantization step and ~2-3x the 2.5e-3 half-step. A pure fp32 sequential scan deviates from fp64 by only 1.84e-6 / 4.62e-7 on the identical inputs, so the kernel error is 4657x / 12203x the genuine fp32-arithmetic baseline. 50/64 and 39/64 output entries exceed 1e-3 absolute error; allclose(atol=rtol=1e-3) fails in both cases (passes only at 1e-2). Kernel outputs lie on the 5e-3 grid up to fp32 representation error (max grid residual 6.5e-5 and 3.6e-5 in units of the step), confirming the deviation is the deliberate grid snap at kernel.py:32 and not ordinary floating-point rounding.",
-    "supports": "confirmed",
-    "tool_event_id": "t14"
-  }
-
-### Turn 7 - `skeptic` (9.775422116000016s, in=80026 out=482)
+### Turn 6 - `skeptic` (16.385858422000013s, in=60808 out=993)
 
 Message:
 
 ```text
-This is the final review turn. All three claims (c1, c2, c3) are confirmed with direct runtime evidence covering the representative regime, sequence-length growth, and small-magnitude zeroing — all tracing to the same in-scope contract violation at kernel.py:32. No new material, testable issue remains uncovered.
+The final sweep (t15) adds nothing adverse: across 8 configurations (group sizes 32/64/128, act-order permuted `g_idx`, M-tail M=33, N-tail N=40, deep K=512) the worst max relative error is 7.06e-07, all outputs finite — consistent with faithful fp32 evaluation and with c2's rebuttal. Notably the M/N tail cases (where `a_mask`/`c_mask` bound M and N but the `b`/`scales`/`zeros` loads are unmasked in N) came back clean, so no new masking defect beyond the already-confirmed K-tail issue in c3. Nothing here exposes a material, testable, in-scope problem not already covered by c1/c2/c3, so I'm not holding up the verdict.
 ```
 
 Tool calls:
@@ -492,28 +468,22 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Review turn: all three recorded claims (c1 representative-regime error above the 5e-3 grid step and ~4600-12000x the fp32-scan baseline; c2 monotonic error growth with nchunks at near-zero decay; c3 total zeroing/sign loss in the small-magnitude regime) are confirmed by runtime probes and all trace to the same in-scope violation of the problem.txt exactness clause via the per-chunk quantization at kernel.py:32. Remaining surfaces noted in the risk map (nchunks==0 uninitialized return, mismatched dA_cs length, very large dim BLOCK_SIZE pressure, positive dA_cs) are not required by the stated contract and would be out_of_scope or unknown, so they cannot add decisive evidence. No new high-quality in-scope claim is needed; the Judge has sufficient evidence.",
-    "reviewed_claims"
-  ...[truncated 38 chars]
+    "reason": "Review turn. The new evidence (t15 sweep) is consistent with the existing claim set and exposes no uncovered defect. c1 is rebutted: the kernel implements the upstream AutoGPTQ zp+1 convention that problem.txt names as the reference implementation. c2 is rebutted for this environment (fp32-level accuracy, max rel err 4.69e-7; the T4 lacks TF32 hardware so the Ampere+ variant is untestable here, already noted in the evidence). c3 is confirmed behaviorally (K=24 yields Infinity vs a clean K=32 control) with scope still unknown because the artifact has no test.py/get_inputs pinning K divisibility. The t15 sweep additionally exercised M-tail (M=33), N-tail (N=40), N=96, group sizes 32/64/128, act-order permuted g_idx, and K=512, all finite with worst max rel err 7.06e-07 \u2014 
+  ...[truncated 396 chars]
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Review turn: all three recorded claims (c1 representative-regime error above the 5e-3 grid step and ~4600-12000x the fp32-scan baseline; c2 monotonic error growth with nchunks at near-zero decay; c3 total zeroing/sign loss in the small-magnitude regime) are confirmed by runtime probes and all trace to the same in-scope violation of the problem.txt exactness clause via the per-chunk quantization at kernel.py:32. Remaining surfaces noted in the risk map (nchunks==0 uninitialized return, mismatched dA_cs length, very large dim BLOCK_SIZE pressure, positive dA_cs) are not required by the stated contract and would be out_of_scope or unknown, so they cannot add decisive evidence. No new high-quality in-scope claim is needed; the Judge has sufficient evidence.",
+    "reason": "Review turn. The new evidence (t15 sweep) is consistent with the existing claim set and exposes no uncovered defect. c1 is rebutted: the kernel implements the upstream AutoGPTQ zp+1 convention that problem.txt names as the reference implementation. c2 is rebutted for this environment (fp32-level accuracy, max rel err 4.69e-7; the T4 lacks TF32 hardware so the Ampere+ variant is untestable here, already noted in the evidence). c3 is confirmed behaviorally (K=24 yields Infinity vs a clean K=32 control) with scope still unknown because the artifact has no test.py/get_inputs pinning K divisibility. The t15 sweep additionally exercised M-tail (M=33), N-tail (N=40), N=96, group sizes 32/64/128, act-order permuted g_idx, and K=512, all finite with worst max rel err 7.06e-07 \u2014 so the unmasked N-dimension loads of b/scales/zeros show no observable failure and do not warrant a separate claim. Remaining questions (TF32 on Ampere+, whether the acceptance harness uses raw qzeros, whether K%16!=0 is in the input domain) are contract/environment ambiguities for the Judge, not new testable kernel-defect hypotheses.",
     "reviewed_claims": [
-      "c1",
-      "c2",
-      "c3"
-    ],
-    "reviewed_tool_event_count": 15,
-    "turn": 7
-  }
+      "c1
+  ...[truncated 75 chars]
 
-### Turn 8 - `judge` (19.530767294000043s, in=81676 out=1382)
+### Turn 7 - `judge` (33.59382987099997s, in=63896 out=1665)
 
 Message:
 
 ```text
-All three claims are confirmed with runtime evidence, the Skeptic has signed off with no new claims, and no open claims lack evidence. The artifact contains no test.py, so problem.txt is the operative contract, and it explicitly forbids self-introduced approximation — which the deliberate 5e-3 grid snap at kernel.py:32 is. Recording a reject.
+The ledger is complete: all three claims have runtime evidence, Skeptic reviewed the latest sweep (t15) and recorded no new claims, and no open claim lacks coverage. Recording the final verdict.
 ```
 
 Tool calls:
@@ -521,160 +491,161 @@ Tool calls:
 - `record_verdict -> t17 ok`
   Args:
   {
-    "confidence": 0.95,
+    "confidence": 0.78,
     "decisive_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json, and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It explicitly requires state <- exp(dA_cs[c])*state + new_states[c] from state=0 and states that \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" kernel.py:5,32 deliberately snaps the carried recurrent state onto a 5e-3 grid every chunk (tl.floor(states/5e-3 + 0.5)*5e-3), which is precisely the self-introduced approximation the contract forbids; this is not a declared low-precision format, a reduction-order difference, or an unspecified tie-break, so the leniency clauses do 
-  ...[truncated 1938 chars]
+    "reason": "The operative contract is problem.txt (no test.py/get_inputs exist): the kernel must evaluate C = A @ dequant(B) with 4-bit packed weights, per-(group,column) scale and zero-point, and it explicitly names AutoGPTQ's quant_matmul_248_kernel as the operation being implemented.\n\nc1 (zero-point off-by-one) is rebutted by t9: with hand-packed 4-bit B the kernel reproduces the (q - (qzeros+1))*scale form to fp32 rounding (max abs 1.35e-6, max rel 3.25e-7) while differing from a bare-qzeros reference by exactly the predicted systematic offset max|A@scale| = 0.71637. The `+1` is the upstream AutoGPTQ packing convention (stored qzeros = true zero-point - 1) for the very kernel problem.txt cites, so `zero
+  ...[truncated 2187 chars]
   Output summary:
   {
-    "confidence": 0.95,
+    "confidence": 0.78,
     "decisive_claims": [
       "c1",
       "c2",
       "c3"
     ],
-    "reason": "The artifact provides only kernel.py, meta.json, and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It explicitly requires state <- exp(dA_cs[c])*state + new_states[c] from state=0 and states that \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" kernel.py:5,32 deliberately snaps the carried recurrent state onto a 5e-3 grid every chunk (tl.floor(states/5e-3 + 0.5)*5e-3), which is precisely the self-introduced approximation the contract forbids; this is not a declared low-precision format, a reduction-order difference, or an unspecified tie-break, so the leniency clauses do not apply.\n\nThree confirmed in_scope claims, all backed by runtime probes on inputs matching the contract's declared shapes/semantics (2-D new_states (nchunks,dim), 1-D non-positive dA_cs, fp32):\n- c1 (t14): at nchunks=32, dim=64, new_states~N(0,1), max abs error vs an exact fp64 sequential scan is 8.55e-3 (dA=-0.1) and 5.64e-3 (dA~U(-0.5,0)), while a pure fp32 sequential scan deviates from fp6
-  ...[truncated 1538 chars]
+    "reason": "The operative contract is problem.txt (no test.py/get_inputs exist): the kernel must evaluate C = A @ dequant(B) with 4-bit packed weights, per-(group,column) scale and zero-point, and it explicitly names AutoGPTQ's quant_matmul_248_kernel as the operation being implemented.\n\nc1 (zero-point off-by-one) is rebutted by t9: with hand-packed 4-bit B the kernel reproduces the (q - (qzeros+1))*scale form to fp32 rounding (max abs 1.35e-6, max rel 3.25e-7) while differing from a bare-qzeros reference by exactly the predicted systematic offset max|A@scale| = 0.71637. The `+1` is the upstream AutoGPTQ packing convention (stored qzeros = true zero-point - 1) for the very kernel problem.txt cites, so `zero[g,n]` in the stated formula is satisfied; this is a representation convention the contract accounts for, not an arithmetic deviation.\n\nc2 (TF32 contamination in tl.dot) is rebutted by t10 and t15: kernel max rel err vs an fp64 reference is 4.69e-7, and across 8 configurations (group sizes 32/64/128, act-order permuted g_idx, M-tail M=33, N-tail N=40, N=96, deep K=512) the worst max rel err is 7
+  ...[truncated 1787 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "Inputs: new_states of shape (nchunks, dim) holding per-chunk local states, and dA_cs of shape (nchunks,) holding per-chunk cumulative log-decays.",
-    "Required recurrence: state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0.",
-    "Required return value: the final state after the last chunk (a length-dim vector); intermediate per-chunk outputs are not part of the requested return.",
-    "Accuracy contract is explicit and strong: the operation must be exact up to ordinary floating-point arithmetic, with no self-introduced approximation, and this must hold at any sequence length (any nchunks).",
-    "Reference semantics are anchored to mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel, i.e. an fp32 sequential scan with no state compression."
+    "No tolerance, dtype, or shape constraints are given in problem.txt and test_code is empty, so the acceptance metric (allclose vs FP32 dequant reference, tolerance) is currently unspecified."
   ],
   "kernel_model": [
-    "Host wrapper state_passing_lowbit (kernel.py:42-56) reads nchunks, dim from new_states.shape, allocates an fp32 out buffer (nchunks, dim) and fp32 final_states (dim,), sets BLOCK_SIZE = next_power_of_2(dim), and launches with grid (1,) - one program, one thread block, entire dim vectorized in registers.",
-    "Kernel loops sequentially over chunks (line 27); per chunk it loads new_states row (masked to dim), loads a scalar dA_cs value, computes scale = tl.exp(dA_cs), and applies states = scale*states + new_states (line 31) - this part matches the contract.",
-    "Line 32 then rewrites the carried state as tl.floor(states / 5e-3 + 0.5) * 5e-3, i.e. round-half-up onto a 5e-3 grid. This is applied to the recurrent state itself, so quantization error is fed back into the next iteration and is amplified by subsequent scale factors.",
-    "Because quantization happens every chunk, the deviation is not a one-shot output rounding: worst-case steady-state error is on the order of (QUANT_STEP/2) * sum of decay products, i.e. ~2.5e-3/(1-scale) when decays are near 1, and it grows with nchunks rather than staying bounded by
-...[truncated 5834 chars]
+    "`bits` and `maxq` are runtime scalars, not constexpr, so 32//bits and BLOCK_SIZE_K//(32//bits) are computed as device-side scalar expressions; the kernel only makes sense for bits in {2,4,8} and bits dividing/aligning with BLOCK_SIZE_K."
+  ],
+  "open_questions": [
+    "Does the evaluation environment's Triton version accept python `min()` on runtime values (kernel.py:23) and a non-constexpr `bits` in the pointer-advance expression (kernel.py:53), or would that be a compile-time failure rather than a numeric one?"
+  ],
+  "risk_map": [
+    "Swizzle fragility: `min(num_pid_m - first_pid_m, GROUP_SIZE_M)` and `pid_m = first_pid_m + (pid % group_size_m)` (kernel.py:23-24) are only benign because GROUP_SIZE_M == 1; the mapping is not one-to-one for GROUP_SIZE_M > 1, so it is a latent rather than active bug at the hardcoded config."
+  ],
+  "scope_notes": [
+    "Performance is not part of the stated contract; the problem asks only for faithful evaluation in the declared 4-bit format."
+  ]
+}
 
 Recent description updates:
-- `du1` tasks=`initial`: case_06 implements the Mamba2/SSD cross-chunk state-passing recurrence in a single-program Triton kernel, but injects a deliberate 5e-3 round-to-grid quantization of the carried state on every chunk iteration (kernel.py:5, :32), which the problem text explicitly forbids ("The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length"). Everything else (recurrence form, exp(dA_cs) decay, zero init, final-state return) matches the stated contract.
+- `du1` tasks=`initial`: case_07 is a near-verbatim port of AutoGPTQ's quant_matmul_248_kernel: C = A @ dequant(B) with 4-bit weights packed 8-per-int32 along K, per-(group,column) fp scales, and zero-points packed 8-per-int32 along N. The kernel body matches the upstream reference closely (including the `zeros + 1` GPTQ convention and the unusual `pid_m = first_pid_m + (pid % group_size_m)` swizzle), so the interesting surfaces are contract-level (zero-point convention, INT4 lossiness vs an FP32 reference) and shape-precondition-level (K/N divisibility, contiguity), not obvious arithmetic typos.
 
 ## Claims
 
-### c1 - `confirmed`
+### c1 - `rebutted`
 
-Statement: The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]) by an absolute error on the order of 1e-3 or larger, far beyond fp32 rounding, for a representative input such as nchunks=32, dim=64, new_states ~ N(0,1), dA_cs = -0.1*ones (or uniform(-0.5,0)).
-
-Scope: `in_scope`
-
-Scope rationale: problem.txt is the operative contract and explicitly states the recurrence must be carried "exactly" and that the op "introduces no approximation of its own beyond ordinary floating-point arithmetic". A deliberate 5e-3 grid snap is exactly such a self-introduced approximation. No test.py exists, so I chose representative inputs the contract admits: 2-D new_states (nchunks, dim) with per-chunk log-decays dA_cs of matching length, non-positive as upstream mamba requires.
-
-Scope evidence:
-- `problem.txt`: States the required recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and asserts 'The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.'
-- `kernel.py:5,32`: _QUANT_STEP = 5e-3 and states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied to the carried state on every chunk iteration.
-
-Rationale: Line 32 unconditionally snaps the carried state onto a 5e-3 grid every iteration; the maximum single-step rounding error alone is 2.5e-3, which is ~4 orders of magnitude above fp32 eps for O(1) values. Metric: max absolute error vs an fp64/fp32 torch sequential-scan reference, plus max relative error; report the quantization step for comparison.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t14: Representative regime (nchunks=32, dim=64, new_states~N(0,1), fp32): kernel final state vs exact fp64 sequential scan gives max_abs_err = 8.55e-3 for dA_cs=-0.1 and 5.64e-3 for dA_cs~U(-0.5,0), i.e. above the 5e-3 quantization step and ~2-3x the 2.5e-3 half-step. A pure fp32 sequential scan deviates from fp64 by only 1.84e-6 / 4.62e-7 on the identical inputs, so the kernel error is 4657x / 12203x the genuine fp32-arithmetic baseline. 50/64 and 39/64 output entries exceed 1e-3 absolute error; allclose(atol=rtol=1e-3) fails in both cases (passes only at 1e-2). Kernel outputs lie on the 5e-3 grid up to fp32 representation error (max grid residual 6.5e-5 and 3.6e-5 in units of the step), confirming the deviation is the deliberate grid snap at kernel.py:32 and not ordinary floating-point rounding.
-
-### c2 - `confirmed`
-
-Statement: Because the quantization is applied to the carried state (not just the output), its error is fed back and amplified: with near-zero log-decays (e.g. dA_cs = -1e-3, scale ~ 1), the max absolute deviation from the exact scan grows with nchunks (sweep nchunks = 1, 8, 64, 512, 4096) rather than staying bounded by a per-step fp32 epsilon, violating the contract's "at any sequence length" clause.
+Statement: The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. If the reference dequantization uses the unpacked qzeros value directly as `zero`, every output element is off by exactly (sum_k A[m,k] * scale[g_idx[k],n]), a large systematic error, not a rounding artifact. Testable: build packed 4-bit B, per-group scales/zeros, compare gptq_matmul against both conventions (zp and zp+1) and report max abs/rel error for each.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly qualifies the exactness requirement with "at any sequence length", making the nchunks sweep a directly contract-mandated dimension. Near-zero log-decays are legitimate inputs (dA_cs are cumulative log-decays and may be close to 0 for weakly-decaying chunks).
+Scope rationale: problem.txt explicitly states the dequantization formula the kernel must evaluate, so a claim that the kernel's arithmetic deviates from that stated formula is in scope even without a test.py. Representative inputs (4-bit packed B, fp32 A, per-group scales/zeros, g_idx) are exactly what the contract describes.
 
 Scope evidence:
-- `problem.txt`: 'The recurrence is exact ... at any sequence length' explicitly puts sequence-length-dependent error growth inside the correctness contract.
-- `kernel.py:31-32`: Quantization is applied to `states` after the update and before the next loop iteration reuses it, so the rounding error is part of the recurrent carry.
+- `problem.txt`: States the required numeric behavior: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with per-(group,column) scale and zero-point.
 
-Rationale: Each iteration injects up to 2.5e-3 of error into the state, which is then multiplied by exp(dA_cs) and carried forward; with scale close to 1 the errors accumulate as a random-walk/sum instead of decaying, so error should scale roughly with sqrt(nchunks) or nchunks. Metric: max abs error vs exact reference as a function of nchunks, reported per nchunks value; a flat, eps-level curve would rebut this specific accumulation claim even if claim 1 holds.
+Rationale: The GPTQ packed format conventionally stores zero_point-1, which makes the `+1` correct, but the problem text writes the dequant formula with a bare `zero` term. Only a two-convention probe can show which one the kernel matches and by how much they differ; an off-by-one zero-point is the single largest-magnitude candidate error in this kernel.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t10: nchunks sweep at dA_cs=-1e-3 (scale~0.999), dim=64, new_states~N(0,1): max abs error vs fp64 exact scan grows monotonically with sequence length (2.49e-3 @ nc=1, 9.67e-3 @ 8, 3.74e-2 @ 64, 5.86e-2 @ 512, 9.81e-2 @ 4096), while a pure fp32 sequential scan deviates from fp64 by only 0.0/1.6e-6/3.2e-5/4.6e-4/2.0e-3 at the same lengths. Kernel error exceeds the fp32-arithmetic baseline by 48x-1500x and is ~half the 5e-3 quantization step already at nchunks=1, confirming the quantization error is fed back into the carry and accumulates with sequence length rather than staying at fp32 epsilon.
+- `c1.e1` runtime_probe supports `rebutted`, tool_event_id=t9: Probe with hand-packed 4-bit B (K=64,N=64,group=32) shows the kernel reproduces the (q - (qzeros+1)) * scale convention to fp32 rounding: max abs err 1.35e-6 (max rel 3.25e-7) against the zp+1 reference, versus max abs err 0.716 (max rel 0.171) against a bare-qzeros reference, exactly matching the predicted systematic offset max|A @ scale| = 0.71637. So the `+1` is not a rounding-level discrepancy but a convention: the packed-qzeros-plus-one form is the upstream AutoGPTQ semantics that problem.txt names as the operation being implemented (auto_gptq .../kernels.py::quant_matmul_248_kernel), where `zero[g,n]` denotes the true zero-point = stored qzeros + 1. The kernel therefore matches the referenced reference implementation; no arithmetic defect. Note for Judge: this claim is only a defect if the acceptance harness dequantizes with raw qzeros, and test_code is empty so that cannot be checked from the artifact.
+
+### c2 - `rebutted`
+
+Statement: `accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas. Against an exact fp32 reference A @ dequant(B) the max relative error should be ~1e-3 rather than ~1e-6, i.e. the matmul is not evaluated faithfully at fp32 even though the 4-bit weights themselves are exactly representable. Testable: compare gptq_matmul against torch.matmul(a.double(), dequant.double()).float() and report max abs error, max rel error, and the same metrics for a reference computed with torch.backends.cuda.matmul.allow_tf32=True.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt says the kernel's job is to "evaluate the matmul faithfully in that declared format", i.e. the weights are 4-bit but the product/accumulation is expected to be a faithful matmul; fp32 activations are the dtype the wrapper itself produces (c is torch.float32) and are the natural contract inputs.
+
+Scope evidence:
+- `problem.txt`: Requires the kernel to evaluate C = A @ dequant(B) faithfully in the declared 4-bit weight format, which bounds error to the weight quantization and not the accumulation.
+- `kernel.py:65`: Wrapper allocates the output as torch.float32, indicating fp32 accumulation/output is the intended numeric path.
+
+Rationale: The declared 4-bit format makes the weight side exact, so any observed error must come from the accumulation path. TF32 inside tl.dot is the most likely source and would be invisible under a loose tolerance but visible under a fp32-appropriate one; the probe must separate "lossy format" from "lossy accumulation".
+
+Evidence:
+- `c2.e1` runtime_probe supports `rebutted`, tool_event_id=t10: At M=64,K=256,N=64 with group=64 the kernel's max abs err vs an fp64 reference of A @ dequant(B) is 3.49e-6, max rel err 4.69e-7 — the same order as torch's own fp32 matmul (1.38e-6 abs, 1.85e-7 rel), i.e. plain fp32 accumulation accuracy, roughly 3 orders of magnitude better than the ~1e-3 TF32 signature the claim predicted. Important environment caveat: the GPU is a Tesla T4 (Turing, SM75), which has no TF32 tensor cores, so torch allow_tf32=True and allow_tf32=False produced bit-identical errors (both 1.377726e-6). The TF32-truncation hypothesis is therefore rebutted for this verification environment, but this probe cannot exclude TF32 use by tl.dot on Ampere+ hardware; that variant is untestable here.
 
 ### c3 - `confirmed`
 
-Statement: In the small-magnitude regime (e.g. new_states ~ 1e-3 * N(0,1), dA_cs = -0.5*ones, nchunks=16, dim=64), the quantization at kernel.py:32 snaps the carried state to exactly 0 (or to a single grid code), so the returned final state is identically zero / grid-valued while the exact reference is nonzero — a ~100% relative error and destruction of sign information.
+Statement: The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit packing size but not a multiple of 16 (e.g. K=24, packed rows = 3), the final iteration reads past the ends of A, the packed B rows, and g_idx, and adds those out-of-bounds products into the accumulator, producing wrong C values (or a memory fault) rather than the contract's C = A @ dequant(B).
 
-Scope: `in_scope`
+Scope: `unknown`
 
-Scope rationale: problem.txt places no magnitude restriction on new_states and demands exactness for the stated recurrence; small-magnitude per-chunk states are ordinary inputs for a Mamba2 state-passing scan. No test.py narrows the input domain, so representative small-magnitude fp32 inputs of the contract's declared shapes are admissible.
+Scope rationale: problem.txt places no divisibility constraint on K and the artifact has no test.py or get_inputs to pin the tested shapes, so it is unclear whether a K that is a multiple of 8 but not 16 is inside the verification domain; upstream AutoGPTQ is only ever called with group-aligned K. Marking unknown until the input domain is clarified.
 
-Scope evidence:
-- `problem.txt`: Specifies only shapes/semantics (new_states[c], dA_cs[c]) and requires exact recurrence with no self-introduced approximation; no magnitude or distribution restriction is stated.
-- `kernel.py:32`: Round-half-up onto a 5e-3 grid maps any |state| < 2.5e-3 to exactly 0, and that zero is carried into the next iteration.
-
-Rationale: Any state magnitude below 2.5e-3 rounds to 0 under floor(x/5e-3 + 0.5)*5e-3, and since the zeroed value is carried forward the state can never recover. Metric: count of output entries that are exactly 0 while the reference is nonzero, plus max relative error and sign-agreement fraction. This regime distinguishes a benign absolute-error story from total information loss.
+Rationale: Packing is 8 values per int32, so K only needs to be a multiple of 8 for a well-formed input, but the tiling assumes a multiple of 16; the wrapper performs no divisibility check or padding, so a contract-legal K=24 silently exercises the unmasked tail.
 
 Evidence:
-- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: Small-magnitude regime (new_states ~ 1e-3*N(0,1), dA_cs=-0.5, nchunks=16, dim=64): the kernel returns exactly 0.0 for all 64 output entries (1 unique value), while the exact fp64 scan is nonzero in all 64 entries (|ref| from 1.33e-5 to 3.20e-3). Max and mean relative error are both exactly 1.0 and sign agreement is 0.0 — total loss of state magnitude and sign information, caused by |state| < half-step (2.5e-3) snapping to zero at kernel.py:32 and that zero being carried forward.
+- `c3.e1` runtime_probe supports `confirmed`, tool_event_id=t11: The unmasked K-tail behavior is reproduced: with K=24 (a legal 8-per-int32 packing size but not a multiple of BLOCK_SIZE_K=16) the kernel returns values whose max abs error vs the fp64 reference is Infinity, i.e. the third loop iteration reads past the ends of A, the 3 packed B rows, and g_idx and folds non-finite/garbage OOB data into the accumulator (the g_idx OOB read also indexes scales/zeros with an arbitrary group id). The K=32 control on the identical construction is clean (max abs err 4.02e-7, max rel 1.52e-7), isolating the failure to the K%16!=0 tail rather than the packing or reference code. Scope caveat unchanged: the artifact has no test.py/get_inputs, so whether K%16!=0 is inside the verification domain is still unknown; behaviorally the defect is real, contractually its decisiveness is not established.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_06"
+  "entry": "case_07"
 }
 
 ### t5 - record_description_update - ok
 
 {
   "contract_model": [
-    "Inputs: new_states of shape (nchunks, dim) holding per-chunk local states, and dA_cs of shape (nchunks,) holding per-chunk cumulative log-decays.",
-    "Required recurrence: state <- exp(dA_cs[c]) * state + new_states[c] for c = 0..nchunks-1, starting from state = 0.",
-    "Required return value: the final state after the last chunk (a length-dim vector); intermediate per-chunk outputs are not part of the requested return.",
-    "Accuracy contract is explicit and strong: the operation must be exact up to ordinary floating-point arithmetic, with no self-introduced approximation, and this must hold at any sequence length (any nchunks).",
-    "Reference semantics are anchored to mamba_ssm/ops/triton/ssd_state_passing.py::_state_passing_fwd_kernel, i.e. an fp32 sequential scan with no state compression."
+    "No tolerance, dtype, or shape constraints are given in problem.txt and test_code is empty, so the acceptance metric (allclose vs FP32 dequant reference, tolerance) is currently unspecified."
   ],
   "impact_on_claims": [],
   "kernel_model": [
-    "Host wrapper state_passing_lowbit (kernel.py:42-56) reads nchunks, dim from new_states.shape, allocates an fp32 out buffer (nchunks, dim) and fp32 final_states (dim,), sets BLOCK_SIZE = next_power_of_2(dim), and launches with grid (1,) - one program, one thread block, entire dim vectorized in registers.",
-    "Kernel loops sequentially over chunks (line 27); per chunk it loads new_states row (masked to dim), loads a scalar dA_cs value, computes scale = tl.exp(dA_cs), and applies states = scale*states + new_states (line 31) - this part matches the contract.",
-    "Line 32 then rewrites the carried state as tl.floor(states / 5e-3 + 0.5) * 5e-3, i.e. round-half-up onto a 5e-3 grid. This is applied to the recurrent state itself, so quantization error is fed back into the next iteration and is amplified by subsequent scale factors.",
-    "Because quantization happens every chunk, the deviation is not a one-shot output rounding: worst-case steady-state error is on the order of (QUANT_STEP/2) * sum of decay products, i.e. ~2.5e-3/(1-scale) when decays are near 1, and it grows with nchunks rath
-...[truncated 6463 chars]
+    "`bits` and `maxq` are runtime scalars, not constexpr, so 32//bits and BLOCK_SIZE_K//(32//bits) are computed as device-side scalar expressions; the kernel only makes sense for bits in {2,4,8} and bits dividing/aligning with BLOCK_SIZE_K."
+  ],
+  "open_questions": [
+    "Does the evaluation environment's Triton version accept python `min()` on runtime values (kernel.py:23) and a non-constexpr `bits` in the pointer-advance expression (kernel.py:53), or would that be a compile-time failure rather than a numeric one?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Swizzle fragility: `min(num_pid_m - first_pid_m, GROUP_SIZE_M)` and `pid_m = first_pid_m + (pid % group_size_m)` (kernel.py:23-24) are only benign because GROUP_SIZE_M == 1; the mapping is not one-to-one for GROUP_SIZE_M > 1, so it is a latent rather than active bug at the hardcoded config."
+  ],
+  "scope_notes": [
+    "Performance is not part of the stated contract; the problem asks only for faithful evaluation in the declared 4-bit format."
+  ],
+  "summary": "case_07 is a near-verbatim port of AutoGPTQ's quant_matmul_248_kernel: C = A @ dequant(B) with 4-bit weights packed 8-per-int32 along K, per-(group,column) fp scales, and zero-points packed 8-per-int32 along N. The kernel body matches the upstream reference closely (including the `zeros + 1` GPTQ convention and the unusual `pid_m = first_pid_m + (pid % group_size_m)` swizzle), so the interesting surfaces are contract-level (zero-point convention, INT4 lossiness vs an FP32 reference) and shape-precondition-level (K/N divisibility, contiguity), not obvious arithmetic typos.",
+  "task_ids": [],
+  "update_id": "du1"
+}
 
 ### t6 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Line 32 unconditionally snaps the carried state onto a 5e-3 grid every iteration; the maximum single-step rounding error alone is 2.5e-3, which is ~4 orders of magnitude above fp32 eps for O(1) values. Metric: max absolute error vs an fp64/fp32 torch sequential-scan reference, plus max relative error; report the quantization step for comparison.",
+  "rationale": "The GPTQ packed format conventionally stores zero_point-1, which makes the `+1` correct, but the problem text writes the dequant formula with a bare `zero` term. Only a two-convention probe can show which one the kernel matches and by how much they differ; an off-by-one zero-point is the single largest-magnitude candidate error in this kernel.",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "States the required recurrence state <- exp(dA_cs[c])*state + new_states[c] from state=0 and asserts 'The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.'"
-    },
-    {
-      "source": "kernel.py:5,32",
-      "summary": "_QUANT_STEP = 5e-3 and states = tl.floor(states / QUANT_STEP + 0.5) * QUANT_STEP applied to the carried state on every chunk iteration."
+      "summary": "States the required numeric behavior: dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n], with per-(group,column) scale and zero-point."
     }
   ],
-  "scope_rationale": "problem.txt is the operative contract and explicitly states the recurrence must be carried \"exactly\" and that the op \"introduces no approximation of its own beyond ordinary floating-point arithmetic\". A deliberate 5e-3 grid snap is exactly such a self-introduced approximation. No test.py exists, so I chose representative inputs the contract admits: 2-D new_states (nchunks, dim) with per-chunk log-decays dA_cs of matching length, non-positive as upstream mamba requires.",
-  "statement": "The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]) by an absolute error on the order of 1e-3 or larger, far beyond fp32 rounding, for a representative input such as nchunks=32, dim=64, new_states ~ N(0,1), dA_cs = -0.1*ones (or uniform(-0.5,0)).",
+  "scope_rationale": "problem.txt explicitly states the dequantization formula the kernel must evaluate, so a claim that the kernel's arithmetic deviates from that stated formula is in scope even without a test.py. Representative inputs (4-bit packed B, fp32 A, per-group scales/zeros, g_idx) are exactly what the contract describes.",
+  "statement": "The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. If the reference dequantization uses the unpacked qzeros value directly as `zero`, every output element is off by exactly (sum_k A[m,k] * scale[g_idx[k],n]), a large systematic error, not a rounding artifact. Testable: build packed 4-bit B, per-group scales/zeros, compare gptq_matmul against both conventions (zp and zp+1) and report max abs/rel error for each.",
   "status": "open"
 }
 
@@ -682,20 +653,20 @@ Evidence:
 
 {
   "id": "c2",
-  "rationale": "Each iteration injects up to 2.5e-3 of error into the state, which is then multiplied by exp(dA_cs) and carried forward; with scale close to 1 the errors accumulate as a random-walk/sum instead of decaying, so error should scale roughly with sqrt(nchunks) or nchunks. Metric: max abs error vs exact reference as a function of nchunks, reported per nchunks value; a flat, eps-level curve would rebut this specific accumulation claim even if claim 1 holds.",
+  "rationale": "The declared 4-bit format makes the weight side exact, so any observed error must come from the accumulation path. TF32 inside tl.dot is the most likely source and would be invisible under a loose tolerance but visible under a fp32-appropriate one; the probe must separate \"lossy format\" from \"lossy accumulation\".",
   "scope": "in_scope",
   "scope_evidence": [
     {
       "source": "problem.txt",
-      "summary": "'The recurrence is exact ... at any sequence length' explicitly puts sequence-length-dependent error growth inside the correctness contract."
+      "summary": "Requires the kernel to evaluate C = A @ dequant(B) faithfully in the declared 4-bit weight format, which bounds error to the weight quantization and not the accumulation."
     },
     {
-      "source": "kernel.py:31-32",
-      "summary": "Quantization is applied to `states` after the update and before the next loop iteration reuses it, so the rounding error is part of the recurrent carry."
+      "source": "kernel.py:65",
+      "summary": "Wrapper allocates the output as torch.float32, indicating fp32 accumulation/output is the intended numeric path."
     }
   ],
-  "scope_rationale": "problem.txt explicitly qualifies the exactness requirement with \"at any sequence length\", making the nchunks sweep a directly contract-mandated dimension. Near-zero log-decays are legitimate inputs (dA_cs are cumulative log-decays and may be close to 0 for weakly-decaying chunks).",
-  "statement": "Because the quantization is applied to the carried state (not just the output), its error is fed back and amplified: with near-zero log-decays (e.g. dA_cs = -1e-3, scale ~ 1), the max absolute deviation from the exact scan grows with nchunks (sweep nchunks = 1, 8, 64, 512, 4096) rather than staying bounded by a per-step fp32 epsilon, violating the contract's \"at any sequence length\" clause.",
+  "scope_rationale": "problem.txt says the kernel's job is to \"evaluate the matmul faithfully in that declared format\", i.e. the weights are 4-bit but the product/accumulation is expected to be a faithful matmul; fp32 activations are the dtype the wrapper itself produces (c is torch.float32) and are the natural contract inputs.",
+  "statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas. Against an exact fp32 reference A @ dequant(B) the max relative error should be ~1e-3 rather than ~1e-6, i.e. the matmul is not evaluated faithfully at fp32 even though the 4-bit weights themselves are exactly representable. Testable: compare gptq_matmul against torch.matmul(a.double(), dequant.double()).float() and report max abs error, max rel error, and the same metrics for a reference computed with torch.backends.cuda.matmul.allow_tf32=True.",
   "status": "open"
 }
 
@@ -703,20 +674,11 @@ Evidence:
 
 {
   "id": "c3",
-  "rationale": "Any state magnitude below 2.5e-3 rounds to 0 under floor(x/5e-3 + 0.5)*5e-3, and since the zeroed value is carried forward the state can never recover. Metric: count of output entries that are exactly 0 while the reference is nonzero, plus max relative error and sign-agreement fraction. This regime distinguishes a benign absolute-error story from total information loss.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "Specifies only shapes/semantics (new_states[c], dA_cs[c]) and requires exact recurrence with no self-introduced approximation; no magnitude or distribution restriction is stated."
-    },
-    {
-      "source": "kernel.py:32",
-      "summary": "Round-half-up onto a 5e-3 grid maps any |state| < 2.5e-3 to exactly 0, and that zero is carried into the next iteration."
-    }
-  ],
-  "scope_rationale": "problem.txt places no magnitude restriction on new_states and demands exactness for the stated recurrence; small-magnitude per-chunk states are ordinary inputs for a Mamba2 state-passing scan. No test.py narrows the input domain, so representative small-magnitude fp32 inputs of the contract's declared shapes are admissible.",
-  "statement": "In the small-magnitude regime (e.g. new_states ~ 1e-3 * N(0,1), dA_cs = -0.5*ones, nchunks=16, dim=64), the quantization at kernel.py:32 snaps the carried state to exactly 0 (or to a single grid code), so the returned final state is identically zero / grid-valued while the exact reference is nonzero \u2014 a ~100% relative error and destruction of sign information.",
+  "rationale": "Packing is 8 values per int32, so K only needs to be a multiple of 8 for a well-formed input, but the tiling assumes a multiple of 16; the wrapper performs no divisibility check or padding, so a contract-legal K=24 silently exercises the unmasked tail.",
+  "scope": "unknown",
+  "scope_evidence": [],
+  "scope_rationale": "problem.txt places no divisibility constraint on K and the artifact has no test.py or get_inputs to pin the tested shapes, so it is unclear whether a K that is a multiple of 8 but not 16 is inside the verification domain; upstream AutoGPTQ is only ever called with group-aligned K. Marking unknown until the input domain is clarified.",
+  "statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit packing size but not a multiple of 16 (e.g. K=24, packed rows = 3), the final iteration reads past the ends of A, the packed B rows, and g_idx, and adds those out-of-bounds products into the accumulator, producing wrong C values (or a memory fault) rather than the contract's C = A @ dequant(B).",
   "status": "open"
 }
 
@@ -728,24 +690,30 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t9_probe.py",
-      "sha256": "aca88d83f6b80b0de84477ecff1e2acc3a4a2818a4037645cdeabaf06d30c00a"
+      "sha256": "e7f3ed0903f32b8a8283d82bdc4cd142162aaf5b0edc461cf7e2a2c342fae75b"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t9_stdout.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      "sha256": "3f730e28c4a2cec3e2f35576c8dca0d66addd2fc78ba80a5a1f77f2de75c8f83"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
       "path": "probes/t9_stderr.txt",
-      "sha256": "2d3e0230589ab2c24e1e2f8be6b4c3f2253a2cf6c7b004ea621a1606e429790a"
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "description": "Parsed JSON object from the last non-empty stdout line.",
+      "kind": "json_result",
+      "path": "probes/t9_json_result.json",
+      "sha256": "2054187eae624774f6face2a14d441266ad638a4b676729f9766b7bbbc0ca3a4"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]) by an absolute error on the order of 1e-3 or larger, far beyond fp32 rounding, for a representative input such as nchunks=32, dim=64, new_states ~ N(0,1), dA_cs = -0.1*ones (or uniform(-0.5,0)).",
-  "duration_s": 0.030355,
+  "claim_statement": "The kernel adds 1 to the unpacked zero-point (kernel.py:46, `zeros = zeros + 1`), so it computes (q - (zp_packed + 1)) * scale, whereas problem.txt states dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]. If the reference dequantization uses the unpacked qzeros value directly as `zero`, every output element is off by exactly (sum_k A[m,k] * scale[g_idx[k],n]), a large systematic error, not a rounding artifact. Testable: build packed 4-bit B, per-group scales/zeros, compare gptq_matmul against both conventions (zp and zp+1) and report max abs/rel error for each.",
+  "duration_s": 9.096744,
   "event_id": "t9",
   "evidence_draft": {
     "claim_id": "c1",
@@ -755,20 +723,11 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t9_probe.py",
-          "sha256": "aca88d83f6b80b0de84477ecff1e2acc3a4a2818a4037645cdeabaf06d30c00a"
+          "sha256": "e7f3ed0903f32b8a8283d82bdc4cd142162aaf5b0edc461cf7e2a2c342fae75b"
         },
         {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t9_stdout.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        },
-        {
-          "description": "Captured stderr from the probe process.",
-          "kind": "stderr",
-          "path": "probes/t9_stderr.txt",
-          "sha256": "2d3e0230589ab2c24e1e2f8be6b4c3f2253a2cf6c7b004ea621a1606e4297
-...[truncated 1326 chars]
+          "description": "Cap
+...[truncated 3423 chars]
 
 ### t10 - run_claim_probe - ok
 
@@ -778,13 +737,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t10_probe.py",
-      "sha256": "8848f9370597f957c8dcce28c8f41cf3bdc3ef524d0b93e640daa60628cd7889"
+      "sha256": "6be83a0073afb679536541f46bd56421d4e65ce2eeea67717c13c450d31daa21"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t10_stdout.txt",
-      "sha256": "3bbe98bd2d7e055a3e81921857a0fdfda69553b97202ca8a50eeff743cc54e2d"
+      "sha256": "017b4966c84c1c7a3e85e6e02fe9cbceb4c86e5cf180b7b68bf7fada6c214d0c"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -796,12 +755,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t10_json_result.json",
-      "sha256": "61db2b0fa0a6d4cca3e28e711238113ab90dd72ea7efbbf329aa9364446f921f"
+      "sha256": "a398c2276fa4c56541f5d624190e9b0533311836704bd33e2e19edd7ece4e60d"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "Because the quantization is applied to the carried state (not just the output), its error is fed back and amplified: with near-zero log-decays (e.g. dA_cs = -1e-3, scale ~ 1), the max absolute deviation from the exact scan grows with nchunks (sweep nchunks = 1, 8, 64, 512, 4096) rather than staying bounded by a per-step fp32 epsilon, violating the contract's \"at any sequence length\" clause.",
-  "duration_s": 6.500288,
+  "claim_statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas. Against an exact fp32 reference A @ dequant(B) the max relative error should be ~1e-3 rather than ~1e-6, i.e. the matmul is not evaluated faithfully at fp32 even though the 4-bit weights themselves are exactly representable. Testable: compare gptq_matmul against torch.matmul(a.double(), dequant.double()).float() and report max abs error, max rel error, and the same metrics for a reference computed with torch.backends.cuda.matmul.allow_tf32=True.",
+  "duration_s": 5.50949,
   "event_id": "t10",
   "evidence_draft": {
     "claim_id": "c2",
@@ -811,14 +770,8 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t10_probe.py",
-          "sha256": "8848f9370597f957c8dcce28c8f41cf3bdc3ef524d0b93e640daa60628cd7889"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t10_stdout.txt",
-          "sha256": "3bbe98bd2d7e055a3e81921857a0fdfda69553b97202ca8a50eeff743cc54
-...[truncated 6013 chars]
+          "sha256": "6be83a0073afb679536541f46bd56421d4e65ce2eeea
+...[truncated 3492 chars]
 
 ### t11 - run_claim_probe - ok
 
@@ -828,13 +781,13 @@ Evidence:
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
       "path": "probes/t11_probe.py",
-      "sha256": "1fb6d3875ead683fbfe24d0fd4f11212fa211ee3e610c82c15ebad225c197615"
+      "sha256": "917d083fb800810f0cee0b4c9316d88fc5f2c64b5241db7d36e1093a809fa7a9"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
       "path": "probes/t11_stdout.txt",
-      "sha256": "4e9bd92a933f8b09b2204b04e44a1a2c1788dc801330420e3b7ce00377ad3864"
+      "sha256": "58f8e6a8c5f607fa14b231c3cbe1ea11ab1f1369af5f6fa31d569fa01876d90d"
     },
     {
       "description": "Captured stderr from the probe process.",
@@ -846,12 +799,12 @@ Evidence:
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
       "path": "probes/t11_json_result.json",
-      "sha256": "83ddd69d3ab1bdeb9a3e10b83ff2743287f9d8784495cdeb1ca6b2c2fa0be2bd"
+      "sha256": "ed47d5e893ec615ba3e41f39d62c4535fe2e64fd5f709c3b0a76fdf2d461493d"
     }
   ],
   "claim_id": "c3",
-  "claim_statement": "In the small-magnitude regime (e.g. new_states ~ 1e-3 * N(0,1), dA_cs = -0.5*ones, nchunks=16, dim=64), the quantization at kernel.py:32 snaps the carried state to exactly 0 (or to a single grid code), so the returned final state is identically zero / grid-valued while the exact reference is nonzero \u2014 a ~100% relative error and destruction of sign information.",
-  "duration_s": 5.545856,
+  "claim_statement": "The K loop runs cdiv(K, BLOCK_SIZE_K=16) iterations with no K-dimension mask on the `a`, `b`, or `g_idx` loads (kernel.py:41-54; a_mask only bounds M, b/g loads are unmasked). For a K that is a legal 4-bit packing size but not a multiple of 16 (e.g. K=24, packed rows = 3), the final iteration reads past the ends of A, the packed B rows, and g_idx, and adds those out-of-bounds products into the accumulator, producing wrong C values (or a memory fault) rather than the contract's C = A @ dequant(B).",
+  "duration_s": 5.995404,
   "event_id": "t11",
   "evidence_draft": {
     "claim_id": "c3",
@@ -861,136 +814,126 @@ Evidence:
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
           "path": "probes/t11_probe.py",
-          "sha256": "1fb6d3875ead683fbfe24d0fd4f11212fa211ee3e610c82c15ebad225c197615"
+          "sha256": "917d083fb800810f0cee0b4c9316d88fc5f2c64b5241db7d36e1093a809fa7a9"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t11_stdout.txt",
-          "sha256": "4e9bd92a933f8b09b2204b04e44a1a2c1788dc801330420e3b7ce00377ad3864"
-        },
-        {
-  
-...[truncated 3333 chars]
+          "path": "
+...[truncated 2883 chars]
 
 ### t12 - finalize_probe_evidence - ok
 
 {
-  "claim_id": "c2",
-  "claim_status": "confirmed",
-  "evidence_id": "c2.e1",
-  "summary": "nchunks sweep at dA_cs=-1e-3 (scale~0.999), dim=64, new_states~N(0,1): max abs error vs fp64 exact scan grows monotonically with sequence length (2.49e-3 @ nc=1, 9.67e-3 @ 8, 3.74e-2 @ 64, 5.86e-2 @ 512, 9.81e-2 @ 4096), while a pure fp32 sequential scan deviates from fp64 by only 0.0/1.6e-6/3.2e-5/4.6e-4/2.0e-3 at the same lengths. Kernel error exceeds the fp32-arithmetic baseline by 48x-1500x and is ~half the 5e-3 quantization step already at nchunks=1, confirming the quantization error is fed back into the carry and accumulates with sequence length rather than staying at fp32 epsilon.",
-  "supports": "confirmed",
-  "tool_event_id": "t10"
+  "claim_id": "c1",
+  "claim_status": "rebutted",
+  "evidence_id": "c1.e1",
+  "summary": "Probe with hand-packed 4-bit B (K=64,N=64,group=32) shows the kernel reproduces the (q - (qzeros+1)) * scale convention to fp32 rounding: max abs err 1.35e-6 (max rel 3.25e-7) against the zp+1 reference, versus max abs err 0.716 (max rel 0.171) against a bare-qzeros reference, exactly matching the predicted systematic offset max|A @ scale| = 0.71637. So the `+1` is not a rounding-level discrepancy but a convention: the packed-qzeros-plus-one form is the upstream AutoGPTQ semantics that problem.txt names as the operation being implemented (auto_gptq .../kernels.py::quant_matmul_248_kernel), where `zero[g,n]` denotes the true zero-point = stored qzeros + 1. The kernel therefore matches the referenced reference implementation; no arithmetic defect. Note for Judge: this claim is only a defect if the acceptance harness dequantizes with raw qzeros, and test_code is empty so that cannot be checked from the artifact.",
+  "supports": "rebutted",
+  "tool_event_id": "t9"
 }
 
 ### t13 - finalize_probe_evidence - ok
 
 {
+  "claim_id": "c2",
+  "claim_status": "rebutted",
+  "evidence_id": "c2.e1",
+  "summary": "At M=64,K=256,N=64 with group=64 the kernel's max abs err vs an fp64 reference of A @ dequant(B) is 3.49e-6, max rel err 4.69e-7 \u2014 the same order as torch's own fp32 matmul (1.38e-6 abs, 1.85e-7 rel), i.e. plain fp32 accumulation accuracy, roughly 3 orders of magnitude better than the ~1e-3 TF32 signature the claim predicted. Important environment caveat: the GPU is a Tesla T4 (Turing, SM75), which has no TF32 tensor cores, so torch allow_tf32=True and allow_tf32=False produced bit-identical errors (both 1.377726e-6). The TF32-truncation hypothesis is therefore rebutted for this verification environment, but this probe cannot exclude TF32 use by tl.dot on Ampere+ hardware; that variant is untestable here.",
+  "supports": "rebutted",
+  "tool_event_id": "t10"
+}
+
+### t14 - finalize_probe_evidence - ok
+
+{
   "claim_id": "c3",
   "claim_status": "confirmed",
   "evidence_id": "c3.e1",
-  "summary": "Small-magnitude regime (new_states ~ 1e-3*N(0,1), dA_cs=-0.5, nchunks=16, dim=64): the kernel returns exactly 0.0 for all 64 output entries (1 unique value), while the exact fp64 scan is nonzero in all 64 entries (|ref| from 1.33e-5 to 3.20e-3). Max and mean relative error are both exactly 1.0 and sign agreement is 0.0 \u2014 total loss of state magnitude and sign information, caused by |state| < half-step (2.5e-3) snapping to zero at kernel.py:32 and that zero being carried forward.",
+  "summary": "The unmasked K-tail behavior is reproduced: with K=24 (a legal 8-per-int32 packing size but not a multiple of BLOCK_SIZE_K=16) the kernel returns values whose max abs error vs the fp64 reference is Infinity, i.e. the third loop iteration reads past the ends of A, the 3 packed B rows, and g_idx and folds non-finite/garbage OOB data into the accumulator (the g_idx OOB read also indexes scales/zeros with an arbitrary group id). The K=32 control on the identical construction is clean (max abs err 4.02e-7, max rel 1.52e-7), isolating the failure to the K%16!=0 tail rather than the packing or reference code. Scope caveat unchanged: the artifact has no test.py/get_inputs, so whether K%16!=0 is inside the verification domain is still unknown; behaviorally the defect is real, contractually its decisiveness is not established.",
   "supports": "confirmed",
   "tool_event_id": "t11"
 }
 
-### t14 - run_claim_probe - ok
+### t15 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t14_probe.py",
-      "sha256": "e9028713484bd05d4831ad648be8b577de45f828c59da3bc6fcc42471ccca14a"
+      "path": "probes/t15_probe.py",
+      "sha256": "65d2fc7b9015e7ed96a03ed242142f718323b330751b7dc95d10a61851f1f77d"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t14_stdout.txt",
-      "sha256": "f7d351b79c84b2c067bf2276a55a1eac791c22997f7949c855219e4b1b28f4a0"
+      "path": "probes/t15_stdout.txt",
+      "sha256": "b98708dfc3ebc0594ef5b722b398403293aaf66ddb90aef7d23ee13855312811"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t14_stderr.txt",
+      "path": "probes/t15_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t14_json_result.json",
-      "sha256": "7cadc8a2703fef6ad6c20a3a0cbc3a43be72216648b25414235d53d2fecebc3f"
+      "path": "probes/t15_json_result.json",
+      "sha256": "6d8f8bd3d965945bf19fb6c1102e9d4c788e6bbe1d3d720888b06f1fe6e083e1"
     }
   ],
-  "claim_id": "c1",
-  "claim_statement": "The per-chunk state quantization at kernel.py:32 (states = floor(states/5e-3 + 0.5)*5e-3) makes the returned final state differ from the exact fp32 sequential scan (state <- exp(dA_cs[c])*state + new_states[c]) by an absolute error on the order of 1e-3 or larger, far beyond fp32 rounding, for a representative input such as nchunks=32, dim=64, new_states ~ N(0,1), dA_cs = -0.1*ones (or uniform(-0.5,0)).",
-  "duration_s": 5.465539,
-  "event_id": "t14",
+  "claim_id": "c2",
+  "claim_statement": "`accumulator += tl.dot(a, b)` (kernel.py:51) is executed with fp32 `a` and fp32 dequantized `b`; Triton's tl.dot defaults to TF32 for fp32 operands, so on Ampere+ the products are truncated to 10-bit mantissas. Against an exact fp32 reference A @ dequant(B) the max relative error should be ~1e-3 rather than ~1e-6, i.e. the matmul is not evaluated faithfully at fp32 even though the 4-bit weights themselves are exactly representable. Testable: compare gptq_matmul against torch.matmul(a.double(), dequant.double()).float() and report max abs error, max rel error, and the same metrics for a reference computed with torch.backends.cuda.matmul.allow_tf32=True.",
+  "duration_s": 9.141262,
+  "event_id": "t15",
   "evidence_draft": {
-    "claim_id": "c1",
+    "claim_id": "c2",
     "data": {
       "artifacts": [
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t14_probe.py",
-          "sha256": "e9028713484bd05d4831ad648be8b577de45f828c59da3bc6fcc42471ccca14a"
-        },
-        {
-          "description": "Captured stdout from the probe process.",
-          "kind": "stdout",
-          "path": "probes/t14_stdout.txt",
-          "sha256": "f7d351b79c84b2c067bf2276a55a1eac791c22997f7949c8552
-...[truncated 5342 chars]
-
-### t15 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Representative regime (nchunks=32, dim=64, new_states~N(0,1), fp32): kernel final state vs exact fp64 sequential scan gives max_abs_err = 8.55e-3 for dA_cs=-0.1 and 5.64e-3 for dA_cs~U(-0.5,0), i.e. above the 5e-3 quantization step and ~2-3x the 2.5e-3 half-step. A pure fp32 sequential scan deviates from fp64 by only 1.84e-6 / 4.62e-7 on the identical inputs, so the kernel error is 4657x / 12203x the genuine fp32-arithmetic baseline. 50/64 and 39/64 output entries exceed 1e-3 absolute error; allclose(atol=rtol=1e-3) fails in both cases (passes only at 1e-2). Kernel outputs lie on the 5e-3 grid up to fp32 representation error (max grid residual 6.5e-5 and 3.6e-5 in units of the step), confirming the deviation is the deliberate grid snap at kernel.py:32 and not ordinary floating-point rounding.",
-  "supports": "confirmed",
-  "tool_event_id": "t14"
-}
+          "path": "probes/t15_probe.py",
+          "sha256": "65d2fc7b9015e7ed96a03ed242142f718323b330751
+...[truncated 7237 chars]
 
 ### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Review turn: all three recorded claims (c1 representative-regime error above the 5e-3 grid step and ~4600-12000x the fp32-scan baseline; c2 monotonic error growth with nchunks at near-zero decay; c3 total zeroing/sign loss in the small-magnitude regime) are confirmed by runtime probes and all trace to the same in-scope violation of the problem.txt exactness clause via the per-chunk quantization at kernel.py:32. Remaining surfaces noted in the risk map (nchunks==0 uninitialized return, mismatched dA_cs length, very large dim BLOCK_SIZE pressure, positive dA_cs) are not required by the stated contract and would be out_of_scope or unknown, so they cannot add decisive evidence. No new high-quality in-scope claim is needed; the Judge has sufficient evidence.",
+  "reason": "Review turn. The new evidence (t15 sweep) is consistent with the existing claim set and exposes no uncovered defect. c1 is rebutted: the kernel implements the upstream AutoGPTQ zp+1 convention that problem.txt names as the reference implementation. c2 is rebutted for this environment (fp32-level accuracy, max rel err 4.69e-7; the T4 lacks TF32 hardware so the Ampere+ variant is untestable here, already noted in the evidence). c3 is confirmed behaviorally (K=24 yields Infinity vs a clean K=32 control) with scope still unknown because the artifact has no test.py/get_inputs pinning K divisibility. The t15 sweep additionally exercised M-tail (M=33), N-tail (N=40), N=96, group sizes 32/64/128, act-order permuted g_idx, and K=512, all finite with worst max rel err 7.06e-07 \u2014 so the unmasked N-dimension loads of b/scales/zeros show no observable failure and do not warrant a separate claim. Remaining questions (TF32 on Ampere+, whether the acceptance harness uses raw qzeros, whether K%16!=0 is in the input domain) are contract/environment ambiguities for the Judge, not new testable kernel-defect hypotheses.",
   "reviewed_claims": [
     "c1",
     "c2",
     "c3"
   ],
   "reviewed_tool_event_count": 15,
-  "turn": 7
+  "turn": 6
 }
 
 ### t17 - record_verdict - ok
 
 {
-  "confidence": 0.95,
+  "confidence": 0.78,
   "decisive_claims": [
     "c1",
     "c2",
     "c3"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json, and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It explicitly requires state <- exp(dA_cs[c])*state + new_states[c] from state=0 and states that \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" kernel.py:5,32 deliberately snaps the carried recurrent state onto a 5e-3 grid every chunk (tl.floor(states/5e-3 + 0.5)*5e-3), which is precisely the self-introduced approximation the contract forbids; this is not a declared low-precision format, a reduction-order difference, or an unspecified tie-break, so the leniency clauses do not apply.\n\nThree confirmed in_scope claims, all backed by runtime probes on inputs matching the contract's declared shapes/semantics (2-D new_states (nchunks,dim), 1-D non-positive dA_cs, fp32):\n- c1 (t14): at nchunks=32, dim=64, new_states~N(0,1), max abs error vs an exact fp64 sequential scan is 8.55e-3 (dA=-0.1) and 5.64e-3 (dA~U(-0.5,0)), while a pure fp32 sequential scan deviates from fp64 by only 1.84e-6 / 4.62e-7 on identical inputs \u2014 4657x/12203x the genuine floating-point baseline. 50/64 and 39/64 entries exceed 1e-3; allclose(1e-3) fails. Outputs lie on the 5e-3 grid (residual ~3-6e-5 of a step), tying the deviation directly to line 32 rather than fp arithmetic.\n- c2 (t10): with dA_cs=-1e-3 the deviation grows monotonically with sequence length (2.49e-3 @ nc=1 up to 9.81e-2 @ nc=4096) versus 0.0\u20132.0e-3 for the fp32 scan, directly violating the contract's explicit \"at any sequence length\" clause because the quantization error is fed back into the carry.\n- c3 (t11): with new_states~1e-3*N(0,1), dA_cs=-0.5, all 64 output entries are exactly 0.0 while the exact reference is nonzero in all 64 (|ref| 1.33e-5 to 3.20e-3); max/mean relative error 1.0 and sign ag
-...[truncated 738 chars]
+  "reason": "The operative contract is problem.txt (no test.py/get_inputs exist): the kernel must evaluate C = A @ dequant(B) with 4-bit packed weights, per-(group,column) scale and zero-point, and it explicitly names AutoGPTQ's quant_matmul_248_kernel as the operation being implemented.\n\nc1 (zero-point off-by-one) is rebutted by t9: with hand-packed 4-bit B the kernel reproduces the (q - (qzeros+1))*scale form to fp32 rounding (max abs 1.35e-6, max rel 3.25e-7) while differing from a bare-qzeros reference by exactly the predicted systematic offset max|A@scale| = 0.71637. The `+1` is the upstream AutoGPTQ packing convention (stored qzeros = true zero-point - 1) for the very kernel problem.txt cites, so `zero[g,n]` in the stated formula is satisfied; this is a representation convention the contract accounts for, not an arithmetic deviation.\n\nc2 (TF32 contamination in tl.dot) is rebutted by t10 and t15: kernel max rel err vs an fp64 reference is 4.69e-7, and across 8 configurations (group sizes 32/64/128, act-order permuted g_idx, M-tail M=33, N-tail N=40, N=96, deep K=512) the worst max rel err is 7.06e-07 with all outputs finite \u2014 plain fp32 accumulation accuracy, ~3 orders better than the ~1e-3 TF32 signature the claim predicted. Caveat recorded in evidence: the test GPU is a Tesla T4 (SM75, no TF32 hardware), so the Ampere+ variant of this hypothesis is untestable here; I set it aside because it is a hardware-dependent generalization concern, not a confirmed deviation on the verification environment, and because faithful-fp32 reduction order differences would in any case be within contract.\n\nc3 (unmasked K tail) is confirmed behaviorally: at K=24 the kernel returns non-finite output (max abs err Infinity) while the K=32 control on identical construction is clean (4.02e-7). This is the one unresolved item \u2014 its scope stayed `unknown` with empty scope_evidence, because p
+...[truncated 987 chars]
 
 ## Verdict
 
 {
-  "confidence": 0.95,
-  "created_at": "2026-09-08T14:47:46Z",
+  "confidence": 0.78,
+  "created_at": "2026-09-08T15:27:30Z",
   "decisive_claims": [
     "c1",
     "c2",
     "c3"
   ],
-  "reason": "The artifact provides only kernel.py, meta.json, and problem.txt (artifact.test_code is empty), so problem.txt is the operative contract. It explicitly requires state <- exp(dA_cs[c])*state + new_states[c] from state=0 and states that \"The recurrence is exact: it introduces no approximation of its own beyond ordinary floating-point arithmetic, at any sequence length.\" kernel.py:5,32 deliberately snaps the carried recurrent state onto a 5e-3 grid every chunk (tl.floor(states/5e-3 + 0.5)*5e-3), which is precisely the self-introduced approximation the contract forbids; this is not a declared low-precision format, a reduction-order difference, or an unspecified tie-break, so the leniency clauses do not apply.\n\nThree confirmed in_scope claims, all backed by runtime probes on inputs matching the contract's declared shapes/semantics (2-D new_states (nchunks,dim), 1-D non-positive dA_cs, fp32):\n- c1 (t14): at nchunks=32, dim=64, new_states~N(0,1), max abs error vs an exact fp64 sequential scan is 8.55e-3 (dA=-0.1) and 5.64e-3 (dA~U(-0.5,0)), while a pure fp32 sequential scan deviates from fp64 by only 1.84e-6 / 4.62e-7 on identical inputs \u2014 4657x/12203x the genuine floating-point baseline. 50/64 and 39/64 entries exceed 1e-3; allclose(1e-3) fails. Outputs lie on the 5e-3 grid (residual ~3-6e-5 of a step), tying the deviation directly to line 32 rather than fp arithmetic.\n- c2 (t10): with dA_cs=-1e-3 the deviation grows monotonically with sequence length (2.49e-3 @ nc=1 up to 9.81e-2 @ nc=4096) versus 0.0\u20132.0e-3 for the fp32 scan, directly violating the contract's explicit \"at any sequence length\" clause because the quantization error is fed back into the carry.\n- c3 (t11): with new_states~1e-3*N(0,1), dA_cs=-0.5, all 64 output entries are exactly 0.0 while the exact reference is nonzero in all 64 (|ref| 1.33e-5 to 3.20e-3);
-...[truncated 778 chars]
+  "reason": "The operative contract is problem.txt (no test.py/get_inputs exist): the kernel must evaluate C = A @ dequant(B) with 4-bit packed weights, per-(group,column) scale and zero-point, and it explicitly names AutoGPTQ's quant_matmul_248_kernel as the operation being implemented.\n\nc1 (zero-point off-by-one) is rebutted by t9: with hand-packed 4-bit B the kernel reproduces the (q - (qzeros+1))*scale form to fp32 rounding (max abs 1.35e-6, max rel 3.25e-7) while differing from a bare-qzeros reference by exactly the predicted systematic offset max|A@scale| = 0.71637. The `+1` is the upstream AutoGPTQ packing convention (stored qzeros = true zero-point - 1) for the very kernel problem.txt cites, so `zero[g,n]` in the stated formula is satisfied; this is a representation convention the contract accounts for, not an arithmetic deviation.\n\nc2 (TF32 contamination in tl.dot) is rebutted by t10 and t15: kernel max rel err vs an fp64 reference is 4.69e-7, and across 8 configurations (group sizes 32/64/128, act-order permuted g_idx, M-tail M=33, N-tail N=40, N=96, deep K=512) the worst max rel err is 7.06e-07 with all outputs finite \u2014 plain fp32 accumulation accuracy, ~3 orders better than the ~1e-3 TF32 signature the claim predicted. Caveat recorded in evidence: the test GPU is a Tesla T4 (SM75, no TF32 hardware), so the Ampere+ variant of this hypothesis is untestable here; I set it aside because it is a hardware-dependent generalization concern, not a confirmed deviation on the verification environment, and because faithful-fp32 reduction order differences would in any case be within contract.\n\nc3 (unmasked K tail) is confirmed behaviorally: at K=24 the kernel returns non-finite output (max abs err Infinity) while the K=32 control on identical construction is clean (4.02e-7). This is the one unresolved item \u2014 its scope stayed `unkno
+...[truncated 1027 chars]

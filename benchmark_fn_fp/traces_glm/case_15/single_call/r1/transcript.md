@@ -21,23 +21,18 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: symmetric INT8 quantize-dequantize with one scale per group of
-columns, the per-group scaling used by INT8 inference kernels.
+Operation: dense matrix multiplication C = A @ B for float32 operands, blocked
+over M, N and K (the standard tiled-GEMM structure used by Triton matmul
+kernels).
 
-For each group of `group_size` consecutive columns of a row:
+    C[m, n] = sum over k of A[m, k] * B[k, n]
 
-    scale = max(|x|) / 127          over that group
-    q     = round(x / scale)        clamped into int8
-    y     = q * scale
+Input domain: M, N and K may each be any positive integer. In particular K is
+NOT required to be a multiple of the kernel's K block size; when it is not, the
+final K tile is partial and only the first (K mod BLOCK_K) of its entries take
+part in the sum.
 
-Every column of the input must be quantized under the scale of the group it
-belongs to.
-
-Input domain: `n_cols` may be any positive integer. It is NOT required to be a
-multiple of `group_size`; when it is not, the trailing columns form a shorter
-final group, which is still a group with its own scale.
-
-Does group_quant_dequant() satisfy this contract?
+Does matmul() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -49,31 +44,41 @@ import triton.language as tl
 
 
 @triton.jit
-def _group_quant_kernel(X, OUT, stride_xm, stride_om, n_cols, GROUP: tl.constexpr,
-                        BLOCK: tl.constexpr):
-    row = tl.program_id(0)
-    x_row = X + row * stride_xm
-    o_row = OUT + row * stride_om
-    n_groups = n_cols // GROUP
+def _matmul_kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn,
+                   stride_cm, stride_cn,
+                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
 
-    for g in range(n_groups):
-        cols = g * GROUP + tl.arange(0, BLOCK)
-        in_group = tl.arange(0, BLOCK) < GROUP
-        x = tl.load(x_row + cols, mask=in_group & (cols < n_cols), other=0.0)
-        absmax = tl.max(tl.abs(x), axis=0)
-        scale = tl.where(absmax == 0.0, 1.0, absmax / 127.0)
-        q = tl.floor(x / scale + 0.5).to(tl.int8)
-        deq = q.to(tl.float32) * scale
-        tl.store(o_row + cols, deq, mask=in_group & (cols < n_cols))
+    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for _ in range(0, K // BLOCK_K):
+        a = tl.load(a_ptrs, mask=offs_m[:, None] < M, other=0.0)
+        b = tl.load(b_ptrs, mask=offs_n[None, :] < N, other=0.0)
+        acc += tl.dot(a, b)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+
+    c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+    tl.store(c_ptrs, acc, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
 
 
-def group_quant_dequant(x: torch.Tensor, group_size: int = 64) -> torch.Tensor:
-    """Symmetric INT8 quantize-dequantize with one scale per group of columns."""
-    n_rows, n_cols = x.shape
-    out = torch.zeros_like(x)
-    _group_quant_kernel[(n_rows,)](x, out, x.stride(0), out.stride(0), n_cols,
-                                   GROUP=group_size, BLOCK=group_size)
-    return out
+def matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """C = A @ B for float32 operands."""
+    M, K = a.shape
+    K2, N = b.shape
+    assert K == K2
+    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
+    grid = (triton.cdiv(M, 64), triton.cdiv(N, 64))
+    _matmul_kernel[grid](a, b, c, M, N, K,
+                         a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                         c.stride(0), c.stride(1),
+                         BLOCK_M=64, BLOCK_N=64, BLOCK_K=32)
+    return c
 
 ```
 
@@ -81,18 +86,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-n_groups = n_cols // GROUP drops trailing columns. Reject.
+K // BLOCK_K skips partial tile — defect. Reject.
 
 ## Final response (verbatim)
 
-{"verdict": "reject", "confidence": 1.0, "reason": "n_groups = n_cols // GROUP ignores trailing columns when n_cols is not a multiple of group_size, so the final shorter group is never computed and its output stays zero, violating the contract. (BLOCK=group_size also requires group_size to be a power of two for tl.arange.)"}
+{"verdict": "reject", "confidence": 0.98, "reason": "The loop iterates only K // BLOCK_K times, dropping the partial final K tile (K mod BLOCK_K entries), so results are wrong whenever K is not a multiple of BLOCK_K (32), violating the stated contract."}
 
 ## Verdict
 
 {
   "verdict": "reject",
-  "confidence": 1.0,
-  "reason": "n_groups = n_cols // GROUP ignores trailing columns when n_cols is not a multiple of group_size, so the final shorter group is never computed and its output stays zero, violating the contract. (BLOCK=group_size also requires group_size to be a power of two for tl.arange.)"
+  "confidence": 0.98,
+  "reason": "The loop iterates only K // BLOCK_K times, dropping the partial final K tile (K mod BLOCK_K entries), so results are wrong whenever K is not a multiple of BLOCK_K (32), violating the stated contract."
 }
 
 ## Usage and stop reason
@@ -102,22 +107,22 @@ n_groups = n_cols // GROUP drops trailing columns. Reject.
   "provider": "fireworks",
   "response": {
     "verdict": "reject",
-    "confidence": 1.0,
-    "reason": "n_groups = n_cols // GROUP ignores trailing columns when n_cols is not a multiple of group_size, so the final shorter group is never computed and its output stays zero, violating the contract. (BLOCK=group_size also requires group_size to be a power of two for tl.arange.)"
+    "confidence": 0.98,
+    "reason": "The loop iterates only K // BLOCK_K times, dropping the partial final K tile (K mod BLOCK_K entries), so results are wrong whenever K is not a multiple of BLOCK_K (32), violating the stated contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 805,
-    "output_tokens": 93
+    "input_tokens": 949,
+    "output_tokens": 79
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 2.0748671249020845,
-  "kernel_sha256": "28bb9b4874c6179e1d5d269fcef4ce96048e73c84787b528a16f6cc171cb138c",
-  "problem_sha256": "b9e74bd58460edccb2c1857bdbb87c6c01795b16deb0c171d7e852b8f0ac84d2",
+  "elapsed_s": 5.146305917063728,
+  "kernel_sha256": "9c3c587b86a6accbe5da1824ac522b09d88da2f62b7e907d5fafc3b2f29528f8",
+  "problem_sha256": "e100390174e220d1fa4bd27f544b30db4f7a94464cbda3068c85cee96ecffcd0",
   "prompt_variant": "original",
-  "estimated_usd": 0.0015362000000000002,
+  "estimated_usd": 0.0016761999999999999,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

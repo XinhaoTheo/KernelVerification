@@ -1,4 +1,4 @@
-"""Independent qualification for case_108/109 (no model API calls).
+"""Independent qualification for case_35/109 (no model API calls).
 
 Run validate(Path('/root/cases')) inside the frozen CUDA environment. Expected
 labels are registered before GPU execution; test measurements only qualify or
@@ -10,7 +10,7 @@ import importlib.util
 import hashlib
 from pathlib import Path
 
-EXPECTED = {"case_108": "trust", "case_109": "reject"}
+EXPECTED = {"case_35": "trust", "case_36": "reject"}
 
 
 def _load(path):

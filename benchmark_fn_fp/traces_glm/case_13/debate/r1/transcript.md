@@ -1,11 +1,11 @@
 # Agentic Verification Transcript
 
-- Entry: `case_13`
-- Turns: 12
+- Entry: `case_14`
+- Turns: 10
 - Tool events: 17
 - Claims: 2
-- Description updates: 2
-- LLM time: 118.904s across 11 calls | tokens: in=213183 out=5777 total=218960
+- Description updates: 1
+- LLM time: 86.316s across 9 calls | tokens: in=146604 out=4697 total=151301
 - Stop reason: `verdict_recorded`
 - Verdict: `reject`
 - Confidence: 0.97
@@ -26,90 +26,62 @@ Tool calls:
 - `load_artifact -> t1 ok`
   Args:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
   Output summary:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
 - `inspect_problem -> t2 ok`
   Args:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
   Output summary:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
 - `list_artifact_files -> t3 ok`
   Args:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
   Output summary:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
 - `read_artifact_file -> t4 ok`
   Args:
   {
-    "entry": "case_13",
+    "entry": "case_14",
     "path": "meta.json"
   }
   Output summary:
   {
-    "entry": "case_13"
+    "entry": "case_14"
   }
 
-### Turn 2 - `describer` (11.734249923999982s, in=3942 out=670)
-
-Message:
-
-```text
-The kernel uses `q_head % num_kv_heads`, while the contract requires consecutive grouping (`q_head // n_rep`). I'll record the description model.
-```
+### Turn 2 - `describer` (13.687045625999986s, in=4362 out=753)
 
 Tool calls:
 
-- `record_description_update -> t5 ok`
+- `record_description_update -> t5 error`
   Args:
   {
-    "contract_model": [
-      "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-      "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-      "Output must match kv dtype and device; a per-row gather, no numerics beyond copying.",
-      "Explicitly styled on vllm's triton_unified_attention.py index arithmetic."
-    ],
-    "kernel_model": [
-      "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-      "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interleaved/round-robin mappin
-  ...[truncated 1554 chars]
+    "contract_model": "[\"Per-row absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale), -127, 127); out = q * scale (kernel.py problem.txt contract).\", \"Scale must be derived from each row's own magnitude so no value is clipped by its own scale.\", \"Output is the dequantized reconstruction, not raw int8 codes.\", \"1e-10 floor guarantees a non-degenerate scale for all-zero or tiny rows.\", \"Reference upstream: sglang _per_token_quant_int8 per-token INT8 activation quantization.\"], \"kernel_model</arg_key><arg_value>[\"kernel.py:19 hardcodes absmax = STALE_ABSMAX = 4.0 (module constant, line 5) instead of computing per-row max(|x_row|) with 1e-10 floor.\", \"Quantization math is scale = 4.0/127 and x_q = round(x * 127/4.0) clamped to [-127,127], cast to int8;
+  ...[truncated 2151 chars]
   Output summary:
   {
-    "contract_model": [
-      "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-      "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-      "Output must match kv dtype and device; a per-row gather, no numerics beyond copying.",
-      "Explicitly styled on vllm's triton_unified_attention.py index arithmetic."
-    ],
-    "impact_on_claims": [],
-    "kernel_model": [
-      "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-      "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interleaved/round-robin mapping, not the consecutive block mapping required by the problem.",
-      "dim is a constexpr, so tl.arange(0, dim) requires dim to be a power of two; non-power-of-two dims would fail or need masking.",
-      "num_kv_heads is passed as a runtime int, num_q_heads is not passed to the kernel at all, so n_rep is never computed."
-    ],
-    "open_questions": [],
-    "resolved_tasks": [],
-   
-  ...[truncated 1278 chars]
+    "error_type": "ToolRegistryError",
+    "message": "tool record_description_update missing required arg: summary"
+  }
 
-### Turn 3 - `skeptic` (8.339353635999942s, in=9475 out=488)
+### Turn 3 - `skeptic` (7.520284766000032s, in=7607 out=459)
 
 Message:
 
 ```text
-The primary bug surface is clear: the kernel uses modulo mapping while the contract explicitly requires consecutive grouping. I'll record that as an in-scope claim, plus a secondary claim on non-power-of-two dims.
+The kernel hardcodes `STALE_ABSMAX = 4.0` instead of computing per-row absmax. Recording claims tied to the contract's explicit per-row formula.
 ```
 
 Tool calls:
@@ -117,162 +89,290 @@ Tool calls:
 - `record_claim -> t6 error`
   Args:
   {
-    "rationale": "kernel.py line 9 computes kv_head = q_head % num_kv_heads, an interleaved mapping; the problem explicitly defines consecutive grouping (q_head // n_rep). For n_rep > 1 (e.g. num_q_heads=8, num_kv_heads=2), query head 2 should read KV head 1 but the kernel returns KV head 0, so out[2] != kv[1].",
+    "rationale": "kernel.py line 19 uses absmax = STALE_ABSMAX = 4.0 (line 5) rather than max(|x_row|) with the 1e-10 floor, and the comment admits it simulates a stale EMA scale.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "The contract states 'GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1, and so on' \u2014 i.e. kv_head = q_head // n_rep \u2014 and requires gqa_gather to return 'the KV row that query head is supposed to read'."
+        "summary": "Contract: absmax = max(max(|x_row|), 1e-10); scale = absmax/127 \u2014 per-row scale derived from THAT row's own magnitude, so no value in the row is clipped by its own scale."
       }
     ],
-    "statement": "For any input with n_rep = num_q_heads // num_kv_heads
-  ...[truncated 232 chars]
+    "statement": "For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=\u00b1127, so dequantized output saturates at \u00b14.0 and deviates from the reference per-row scale, violating the contract that no value is clipped by its own row scale."
+  }
   Output summary:
   {
     "error_type": "LedgerError",
     "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
-- `record_claim -> t7 ok`
+- `record_claim -> t7 error`
   Args:
   {
-    "rationale": "Triton requires tl.arange bounds to be a power of two; a dim like 96 raises a compile error, so gqa_gather would fail to run for such head dims.",
-    "scope": "unknown",
-    "statement": "When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissible shapes with non-pow2 dim."
+    "rationale": "With a fixed step of 4/127, values in low-magnitude rows land on far fewer distinct int8 codes, so the dequantized reconstruction differs from the contract's absmax/127-scale reference even without clipping.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: q = clamp(round(x_row/scale)) with scale = absmax/127 from the row's own magnitude \u2014 kernel uses 4.0/127 instead, changing both scale and reconstruction for every row whose absmax differs from 4.0."
+      }
+    ],
+    "statement": "For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output error far above the re
+  ...[truncated 34 chars]
+  Output summary:
+  {
+    "error_type": "LedgerError",
+    "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
   }
+
+### Turn 4 - `skeptic` (9.19829834699999s, in=9010 out=637)
+
+Message:
+
+```text
+My previous claim attempts were rejected for missing `scope_rationale`; re-sending them with that field filled in.
+```
+
+Tool calls:
+
+- `record_claim -> t8 ok`
+  Args:
+  {
+    "rationale": "kernel.py line 19 uses absmax = STALE_ABSMAX = 4.0 (line 5) instead of per-row max(|x_row|) with the 1e-10 floor; the comment explicitly says it simulates a stale EMA scale that hasn't caught up.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x_row/scale), -127, 127) \u2014 per-row scale derived from THAT row's own magnitude so no value in the row is clipped by its own scale."
+      }
+    ],
+    "scope_rationale": "The problem.txt contract requires absmax = max(max(|x_row|), 1e-10) per row; a row with any |x| > 4.0 (e.g. a row containing 10.0) violates the stated formula and the explicit guarantee that no value is clipped by its own scale.",
+    
+  ...[truncated 275 chars]
   Output summary:
   {
     "id": "c1",
-    "rationale": "Triton requires tl.arange bounds to be a power of two; a dim like 96 raises a compile error, so gqa_gather would fail to run for such head dims.",
-    "scope": "unknown",
-    "scope_evidence": [],
-    "scope_rationale": "",
-    "statement": "When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissible shapes with non-pow2 dim.",
+    "rationale": "kernel.py line 19 uses absmax = STALE_ABSMAX = 4.0 (line 5) instead of per-row max(|x_row|) with the 1e-10 floor; the comment explicitly says it simulates a stale EMA scale that hasn't caught up.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x_row/scale), -127, 127) \u2014 per-row scale derived from THAT row's own magnitude so no value in the row is clipped by its own scale."
+      }
+    ],
+    "scope_rationale": "The problem.txt contract requires absmax = max(max(|x_row|), 1e-10) per row; a row with any |x| > 4.0 (e.g. a row containing 10.0) violates the stated formula and the explicit guarantee that no value is clipped by its own scale.",
+    "statement": "For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=\u00b1127, so dequantized output saturates at \u00b14.0 and deviates from the reference per-row scale, violating the contract that no value is clipped by its own row scale.",
+    "status": "open"
+  }
+- `record_claim -> t9 ok`
+  Args:
+  {
+    "rationale": "With a fixed step of 4/127, values in low-magnitude rows land on far fewer distinct int8 codes, so the dequantized reconstruction differs from the contract's absmax/127-scale reference even without clipping.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: scale = absmax/127 derived from the row's own magnitude (with 1e-10 floor); the kernel uses a fixed 4.0/127 instead, changing the reconstruction for every row whose absmax differs from 4.0."
+      }
+    ],
+    "scope_rationale": "problem.txt requires scale = absmax/127 from each row's own magnitude; for a row with absmax ~0.05 the kernel's fixed 4.0/127 scale is ~80x coarser than the contract's scale, so the dequantized reconstruction deviates well beyond the cont
+  ...[truncated 321 chars]
+  Output summary:
+  {
+    "id": "c2",
+    "rationale": "With a fixed step of 4/127, values in low-magnitude rows land on far fewer distinct int8 codes, so the dequantized reconstruction differs from the contract's absmax/127-scale reference even without clipping.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Contract: scale = absmax/127 derived from the row's own magnitude (with 1e-10 floor); the kernel uses a fixed 4.0/127 instead, changing the reconstruction for every row whose absmax differs from 4.0."
+      }
+    ],
+    "scope_rationale": "problem.txt requires scale = absmax/127 from each row's own magnitude; for a row with absmax ~0.05 the kernel's fixed 4.0/127 scale is ~80x coarser than the contract's scale, so the dequantized reconstruction deviates well beyond the contract's \u2264 scale/2 rounding error.",
+    "statement": "For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output error far above the reference's \u2264 scale/2 bound.",
     "status": "open"
   }
 
-### Turn 4 - `experimenter` (16.122328739000068s, in=11366 out=939)
+### Turn 5 - `describer` (11.58520232300009s, in=10309 out=775)
 
 Message:
 
 ```text
-Only one claim is open in the ledger (c1, non-power-of-two dim compile failure). The primary mapping claim failed to record earlier (t6 error) and is not in the ledger, but I'll still capture the mapping behavior with an exploratory probe since the same single run with a non-pow2 dim (e.g. dim=96, n_rep=2) exposes both surfaces. Launching both probes now.
+The earlier description update failed due to a malformed argument list; I have all needed context, so I'll re-record it correctly.
 ```
 
 Tool calls:
 
-- `run_claim_probe -> t8 ok`
+- `record_description_update -> t10 ok`
   Args:
   {
-    "claim_id": "c1",
-    "code": "import torch, json, traceback, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_13/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nres = {}\ntry:\n    kv = torch.randn(2, 96, device=\"cuda\")\n    out = m.gqa_gather(kv, 4)\n    torch.cuda.synchronize()\n    # check pow2 behavior: does it run? correct rows per contract?\n    n_rep = 4 // 2\n    ref = torch.stack([kv[q // n_rep] for q in range(4)])\n    res[\"compiled_ran\"] = True\n    res[\"exact_match_consecutive_contract\"] = bool(torch.equal(out, ref))\n    res[\"mismatched_rows\"] = [q for q in range(4) if not torch.equal(out[q], ref[q])]\nexcept Exception as e:\n    res[\"compiled_ran\"] = False\n    res[\"error\"] = f\"{type(e
-  ...[truncated 131 chars]
+    "contract_model": [
+      "Per-row absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale), -127, 127); out = q * scale (problem.txt contract).",
+      "Scale must be derived from each row's own magnitude so no value is clipped by its own scale.",
+      "Output is the dequantized reconstruction, not raw int8 codes.",
+      "1e-10 floor guarantees a non-degenerate scale for all-zero or tiny rows.",
+      "Reference upstream: sglang _per_token_quant_int8 per-token INT8 activation quantization."
+    ],
+    "kernel_model": [
+      "kernel.py:19 hardcodes absmax = STALE_ABSMAX = 4.0 (module constant, line 5) instead of computing per-row max(|x_row|) with a 1e-10 floor.",
+      "Quantization math: scale = 4.0/127 for every row, x_q = round(x * 127/4.0) clamped to [-127,127], cast to in
+  ...[truncated 1986 chars]
   Output summary:
   {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t8_probe.py",
-        "sha256": "5e78cd4fbca343674f56cae33a49596b1c7f0b8c3fb4b511a4a35260317a20c5"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t8_stdout.txt",
-        "sha256": "35ff80343ba96ea6a5578368b52b839c5098401b512bbd987a8b0060379f966d"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t8_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t8_json_result.json",
-        "sha256": "d128fb094460eed0675aa5d5c28532ca9a0366e133a8288761a38194df67a1e4"
-      }
+    "contract_model": [
+      "Per-row absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale), -127, 127); out = q * scale (problem.txt contract).",
+      "Scale must be derived from each row's own magnitude so no value is clipped by its own scale.",
+      "Output is the dequantized reconstruction, not raw int8 codes.",
+      "1e-10 floor guarantees a non-degenerate scale for all-zero or tiny rows.",
+      "Reference upstream: sglang _per_token_quant_int8 per-token INT8 activation quantization."
     ],
-    "claim_id": "c1",
-    "claim_statement": "When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissib
-  ...[truncated 2927 chars]
-- `run_python_probe -> t9 ok`
+    "impact_on_claims": [],
+    "kernel_model": [
+      "kernel.py:19 hardcodes absmax = STALE_ABSMAX = 4.0 (module constant, line 5) instead of computing per-row max(|x_row|) with a 1e-10 floor.",
+      "Quantization math: scale = 4.0/127 for every row, x_q = round(x * 127/4.0) clamped to [-127,127], cast to int8; dequant multiplies xq.float() by per-row stored scale (all rows 4/127).",
+      "One Triton program per row (grid (M,)), BLOCK = next_power_of_2(N), masked loads with other=0.0; row strides handled but column stride assumed 1.",
+      "Returns x_q.float() * scales.unsqueeze(-1); scales are fp32 per row.",
+      "Comment on line 5 explicitly says it simulates an EMA scale th
+  ...[truncated 1676 chars]
+
+### Turn 6 - `skeptic` (6.968042905999937s, in=16583 out=292)
+
+Message:
+
+```text
+Both major contract violations (clipping for rows with absmax > 4.0, and coarse resolution for rows with absmax < 4.0) are already recorded as in-scope claims c1 and c2, with the hardcoded `STALE_ABSMAX = 4.0` source evidence clearly tying them to the problem.txt contract. The source is short and I see no additional distinct high-risk failure mode worth a new claim (contiguity/dtype cases are out of scope, rounding matches the reference, and all-zero rows produce identical dequantized zeros).
+```
+
+Tool calls:
+
+- `record_no_new_claims -> t11 ok`
   Args:
   {
-    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_13/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nkv = torch.randn(2, 64, device=\"cuda\")\nout = m.gqa_gather(kv, 8)\ntorch.cuda.synchronize()\nn_rep = 8 // 2\nref = torch.stack([kv[q // n_rep] for q in range(8)])\nprint(json.dumps({\n    \"num_q_heads\": 8, \"num_kv_heads\": 2, \"n_rep\": n_rep, \"dim\": 64,\n    \"exact_match_consecutive_contract\": bool(torch.equal(out, ref)),\n    \"mismatched_rows\": [q for q in range(8) if not torch.equal(out[q], ref[q])],\n    \"kernel_kv_head_for_q\": [int((q % 2)) for q in range(8)],\n    \"required_kv_head_for_q\": [q // n_rep for q in range(8)],\n}))"
+    "reason": "The only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is already fully covered by in-scope claims c1 (clipping when absmax > 4.0) and c2 (resolution loss when absmax < 4.0), each tied to the explicit problem.txt formula. Other potential issues (non-contiguous columns, tie rounding, all-zero rows producing identical zeros) are either out of scope, low risk, or not distinct testable failures of the stated contract.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ]
   }
   Output summary:
   {
+    "decision": "no_new_claims",
+    "reason": "The only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is already fully covered by in-scope claims c1 (clipping when absmax > 4.0) and c2 (resolution loss when absmax < 4.0), each tied to the explicit problem.txt formula. Other potential issues (non-contiguous columns, tie rounding, all-zero rows producing identical zeros) are either out of scope, low risk, or not distinct testable failures of the stated contract.",
+    "reviewed_claims": [
+      "c1",
+      "c2"
+    ],
+    "reviewed_tool_event_count": 10,
+    "turn": 6
+  }
+
+### Turn 7 - `experimenter` (12.82402787500007s, in=17820 out=747)
+
+Message:
+
+```text
+Launching two independent probes: c1 (absmax > 4.0 clipping) and c2 (absmax < 4.0 resolution loss), comparing kernel output vs the contract's per-row reference.
+```
+
+Tool calls:
+
+- `run_claim_probe -> t12 ok`
+  Args:
+  {
+    "claim_id": "c1",
+    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_14/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref(x):\n    absmax = x.abs().amax(dim=-1, keepdim=True).clamp_min(1e-10)\n    scale = absmax / 127\n    q = torch.clamp(torch.round(x / scale), -127, 127)\n    return q * scale\n\ntorch.manual_seed(0)\n# rows with absmax > 4.0\nx = torch.randn(8, 128, device=\"cuda\") * 3.0\nx[0, 0] = 10.0\nout = m.quant_dequant_int8(x)\nr = ref(x)\nerr = (out - r).abs()\nprint(json.dumps({\n  \"metric\": \"max_abs_err_kernel_vs_contract_reference\",\n  \"kernel_max_out\": float(out.abs().max()),\n  \"kernel_row0_saturates_at_4\": float(out[0].abs().max()),\n  \"ref_r
+  ...[truncated 281 chars]
+  Output summary:
+  {
     "artifacts": [
       {
         "description": "Python probe code executed by local runtime.",
         "kind": "probe_code",
-        "path": "probes/t9_probe.py",
-        "sha256": "df98fcd0fc641858f7c7c42fbb4896cbee017d61a8bc5d1408bcc1e24053c002"
+        "path": "probes/t12_probe.py",
+        "sha256": "57658251363a2286313bfd5c83f31075540e634823d093609226b74cebf95490"
       },
       {
         "description": "Captured stdout from the probe process.",
         "kind": "stdout",
-        "path": "probes/t9_stdout.txt",
-        "sha256": "6eb3fedab3caea764d3c7ddc0b5d3751b3c5df725060630a2078c9ee22ccde1f"
+        "path": "probes/t12_stdout.txt",
+        "sha256": "0738be552bc893d638bf359ddf9c741e693df2630a4a5310d431172056dbbcbf"
       },
       {
         "description": "Captured stderr from the probe process.",
         "kind": "stderr",
-        "path": "probes/t9_stderr.txt",
+        "path": "probes/t12_stderr.txt",
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       {
         "description": "Parsed JSON object from the last non-empty stdout line.",
         "kind": "json_result",
-        "path": "probes/t9_json_result.json",
-        "sha256": "e5df2031b176f0b3d0ed39ad4886184da1c26c311e76d1c51f1b8facc70d64ff"
+        "path": "probes/t12_json_result.json",
+        "sha256": "61148da1bb453152ef82ed23bdf1909d9722a96571c780ffd795ace08bf3445e"
       }
     ],
-    "duration_s": 4.86332,
-    "event_id": "t9",
-    "exit_code": 0,
-    "json_result": {
-      "dim": 64,
-      "exact_match_consecutive_contract": false,
-      "kernel_kv_head_for_q": [
-        0,
-        1,
-        0,
-        1,
-        0,
-        1,
-        0,
-        1
-      ],
-     
-  ...[truncated 568 chars]
+    "claim_id": "c1",
+    "claim_statement": "For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=\u00b1127, so dequantized output saturates at \u00b14.0 and deviates from the reference per-row scale, violating the contra
+  ...[truncated 3516 chars]
+- `run_claim_probe -> t13 ok`
+  Args:
+  {
+    "claim_id": "c2",
+    "code": "import torch, json\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_14/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\ndef ref(x):\n    absmax = x.abs().amax(dim=-1, keepdim=True).clamp_min(1e-10)\n    scale = absmax / 127\n    q = torch.clamp(torch.round(x / scale), -127, 127)\n    return q * scale\n\ntorch.manual_seed(1)\n# low-magnitude rows, absmax ~0.05\nx = torch.randn(8, 128, device=\"cuda\") * 0.02\nout = m.quant_dequant_int8(x)\nr = ref(x)\nerr = (out - r).abs()\nrow_absmax = x.abs().amax(dim=-1)\ncontract_bound = (row_absmax / 127 / 2)  # <= scale/2 rounding bound\nprint(json.dumps({\n  \"metric\": \"max_abs_err_kernel_vs_contract_reference\",\n  \"input_row_absm
+  ...[truncated 414 chars]
+  Output summary:
+  {
+    "artifacts": [
+      {
+        "description": "Python probe code executed by local runtime.",
+        "kind": "probe_code",
+        "path": "probes/t13_probe.py",
+        "sha256": "eb4050ba70d71930d814ad786ae47e2f47ddfdfe933c2775b75538311995dd88"
+      },
+      {
+        "description": "Captured stdout from the probe process.",
+        "kind": "stdout",
+        "path": "probes/t13_stdout.txt",
+        "sha256": "c5387fbf876e2aead2cc1e0861390ca5c8226b6d0d9292416dd9a7434d752aa5"
+      },
+      {
+        "description": "Captured stderr from the probe process.",
+        "kind": "stderr",
+        "path": "probes/t13_stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "description": "Parsed JSON object from the last non-empty stdout line.",
+        "kind": "json_result",
+        "path": "probes/t13_json_result.json",
+        "sha256": "162f3367ec9642cd14f37fbc4ee01771dbcaa1f3021d6f2e81746d899be095be"
+      }
+    ],
+    "claim_id": "c2",
+    "claim_statement": "For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output 
+  ...[truncated 3786 chars]
 
-### Turn 5 - `experimenter` (12.167023766999932s, in=14953 out=626)
+### Turn 8 - `experimenter` (8.179768176000039s, in=22470 out=370)
 
 Message:
 
 ```text
-The dim=96 probe (t8) directly answers c1: Triton raised a `CompilationError` at `tl.arange(0, dim)` for the non-power-of-two dim, so the kernel fails to run for such shapes. I'll finalize that as confirmed evidence for c1. Additionally, the exploratory probe t9 (num_q_heads=8, num_kv_heads=2, dim=64, n_rep=4) showed the modulo-vs-consecutive mapping bug (rows 1,3,4,6 mismatch), but that surface is not covered by any claim in the ledger since the earlier record_claim failed; I'll note it for the Judge.
+Both probes returned decisive results; I'll finalize their evidence now.
 ```
 
 Tool calls:
 
-- `finalize_probe_evidence -> t10 ok`
+- `finalize_probe_evidence -> t14 ok`
   Args:
   {
     "data": {
-      "compiled_ran": false,
-      "dim": 96,
-      "error_location": "tl.arange(0, dim)",
-      "error_type": "CompilationError",
-      "num_kv_heads": 2,
-      "num_q_heads": 4
+      "contract_ref_row0_absmax": 10.0,
+      "kernel_max_out": 4.0,
+      "kernel_row0_absmax": 4.0,
+      "max_abs_err": 6.0,
+      "metric": "max_abs_err_kernel_vs_contract_reference",
+      "row_absmax_range": "6.3-10.0"
     },
-    "event_id": "t8",
+    "event_id": "t12",
     "status": "confirmed",
-    "summary": "Calling gqa_gather with a non-power-of-two head dimension (kv shape (2, 96), num_q_heads=4) raises a Triton CompilationError at `offs_d = tl.arange(0, dim)`, confirming c1: the kernel fails to compile/run for non-pow2 dims. Related exploratory probe (t9, dim=64, num_q_heads=8, num_kv_heads=2) also showed the modulo-vs-consecutive mapping produces wrong rows (mismatched query rows [1,3,4,6]), but that surface has no claim in the ledger since the earlier record_claim errored (t6).",
+    "summary": "For rows with absmax up to 10.0, kernel output saturates at exactly \u00b14.0 (kernel_max_out=4.0, ref_row0=10.0) and max abs error vs the contract per-row reference is 6.0, confirming clipping by the hardcoded STALE_ABSMAX=4.0.",
     "supports": "confirmed"
   }
   Output summary:
@@ -280,236 +380,41 @@ Tool calls:
     "claim_id": "c1",
     "claim_status": "confirmed",
     "evidence_id": "c1.e1",
-    "summary": "Calling gqa_gather with a non-power-of-two head dimension (kv shape (2, 96), num_q_heads=4) raises a Triton CompilationError at `offs_d = tl.arange(0, dim)`, confirming c1: the kernel fails to compile/run for non-pow2 dims. Related exploratory probe (t9, dim=64, num_q_heads=8, num_kv_heads=2) also showed the modulo-vs-consecutive mapping produces wrong rows (mismatched query rows [1,3,4,6]), but that surface has no claim in the ledger since the earlier record_claim errored (t6).",
+    "summary": "For rows with absmax up to 10.0, kernel output saturates at exactly \u00b14.0 (kernel_max_out=4.0, ref_row0=10.0) and max abs error vs the contract per-row reference is 6.0, confirming clipping by the hardcoded STALE_ABSMAX=4.0.",
     "supports": "confirmed",
-    "tool_event_id": "t8"
+    "tool_event_id": "t12"
   }
-
-### Turn 6 - `skeptic` (13.885062632999961s, in=18285 out=566)
-
-Message:
-
-```text
-The t6 record_claim for the mapping bug errored and never made it into the ledger, yet probe t9 produced decisive in-scope evidence of the modulo-vs-consecutive bug. This is exactly the case where a review turn should record the claim rather than let the Judge miss the primary defect.
-```
-
-Tool calls:
-
-- `record_claim -> t11 ok`
-  Args:
-  {
-    "rationale": "kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), while the contract requires consecutive grouping kv_head = q_head // n_rep. Probe t9 (kv shape (2,64), num_q_heads=8) showed mismatched rows [1,3,4,6]: e.g. query head 4 is required to read KV head 1 but the kernel returns KV head 0.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1, and so on\" \u2014 i.e. kv_head = q_head // n_rep \u2014 and gqa_gather \"must return, for each query head, the KV row that query head is supposed to read\"."
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly defines the co
-  ...[truncated 723 chars]
-  Output summary:
-  {
-    "id": "c2",
-    "rationale": "kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), while the contract requires consecutive grouping kv_head = q_head // n_rep. Probe t9 (kv shape (2,64), num_q_heads=8) showed mismatched rows [1,3,4,6]: e.g. query head 4 is required to read KV head 1 but the kernel returns KV head 0.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1, and so on\" \u2014 i.e. kv_head = q_head // n_rep \u2014 and gqa_gather \"must return, for each query head, the KV row that query head is supposed to read\"."
-      }
-    ],
-    "scope_rationale": "problem.txt explicitly defines the consecutive grouping (kv_head = q_head // n_rep) and requires gqa_gather to return that row for each query head; any input with n_rep > 1 (e.g. num_q_heads=8, num_kv_heads=2) is admitted by the contract and the kernel returns the wrong rows there.",
-    "statement": "For any contract-admissible input with n_rep = num_q_heads // num_kv_heads > 1 (e.g. kv shape (2, 64), num_q_heads=8, so n
-  ...[truncated 357 chars]
-
-### Turn 7 - `describer` (15.629355459000067s, in=18722 out=840)
-
-Message:
-
-```text
-The description model is already comprehensive; the recent probes (t8 compile failure for non-pow2 dim, t9 mapping mismatch) align with the recorded risks. I'll record a brief update tying the description to the current ledger state.
-```
-
-Tool calls:
-
-- `record_description_update -> t12 ok`
-  Args:
-  {
-    "contract_model": [
-      "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-      "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-      "Output must match kv dtype and device; a pure per-row gather with no numerics beyond copying.",
-      "Contract does not restrict dim to powers of two, so non-pow2 head dims are admissible inputs."
-    ],
-    "impact_on_claims": [
-      "c1 (non-pow2 dim compile failure) is now confirmed by runtime probe t8.",
-      "c2 (modulo vs consecutive mapping) is in_scope and backed by probe t9; it remains open pending evidence finalization.",
-      "The
-  ...[truncated 2271 chars]
-  Output summary:
-  {
-    "contract_model": [
-      "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-      "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-      "Output must match kv dtype and device; a pure per-row gather with no numerics beyond copying.",
-      "Contract does not restrict dim to powers of two, so non-pow2 head dims are admissible inputs."
-    ],
-    "impact_on_claims": [
-      "c1 (non-pow2 dim compile failure) is now confirmed by runtime probe t8.",
-      "c2 (modulo vs consecutive mapping) is in_scope and backed by probe t9; it remains open pending evidence finalization.",
-      "The modulo-vs-floor-division and pow2-dim risks raised in du1 have both materialized in probes, so no further description-level surfaces appear unprobed."
-    ],
-    "kernel_model": [
-      "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-      "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interlea
-  ...[truncated 1935 chars]
-
-### Turn 8 - `skeptic` (6.879937433999999s, in=24956 out=261)
-
-Message:
-
-```text
-This is the final review turn. The ledger already covers both defect surfaces: c2 (in-scope modulo-vs-consecutive mapping bug, backed by probe t9's decisive runtime evidence) and c1 (confirmed non-pow2 dim compile failure). No unexplored surfaces remain in this small gather kernel, so I'll close out with no new claims.
-```
-
-Tool calls:
-
-- `record_no_new_claims -> t13 ok`
-  Args:
-  {
-    "reason": "All observable defect surfaces for this pure-gather kernel are already claimed with decisive evidence: c2 (in-scope, kernel uses q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping, confirmed by probe t9 with mismatched rows [1,3,4,6] for num_q_heads=8, num_kv_heads=2) and c1 (confirmed CompilationError for non-pow2 dim via probe t8). The kernel is a 6-line row gather with no numerics, masking, or other surfaces; no additional material, testable in-scope problems exist.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ]
-  }
-  Output summary:
-  {
-    "decision": "no_new_claims",
-    "reason": "All observable defect surfaces for this pure-gather kernel are already claimed with decisive evidence: c2 (in-scope, kernel uses q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping, confirmed by probe t9 with mismatched rows [1,3,4,6] for num_q_heads=8, num_kv_heads=2) and c1 (confirmed CompilationError for non-pow2 dim via probe t8). The kernel is a 6-line row gather with no numerics, masking, or other surfaces; no additional material, testable in-scope problems exist.",
-    "reviewed_claims": [
-      "c1",
-      "c2"
-    ],
-    "reviewed_tool_event_count": 12,
-    "turn": 8
-  }
-
-### Turn 9 - `experimenter` (8.339224218000027s, in=24925 out=407)
-
-Message:
-
-```text
-Only c2 remains open without evidence. I'll run a decisive claim-bound probe for the modulo-vs-consecutive mapping with n_rep > 1.
-```
-
-Tool calls:
-
-- `run_claim_probe -> t14 ok`
-  Args:
-  {
-    "claim_id": "c2",
-    "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"k\", \"/root/cases/case_13/kernel.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\nkv = torch.randn(2, 64, device=\"cuda\")\nout = m.gqa_gather(kv, 8)\ntorch.cuda.synchronize()\nn_rep = 8 // 2\nref = torch.stack([kv[q // n_rep] for q in range(8)])\nmismatched = [q for q in range(8) if not torch.equal(out[q], ref[q])]\nprint(json.dumps({\n    \"num_q_heads\": 8, \"num_kv_heads\": 2, \"n_rep\": n_rep, \"dim\": 64,\n    \"exact_match_consecutive_contract\": bool(torch.equal(out, ref)),\n    \"mismatched_rows\": mismatched,\n    \"kernel_kv_head_for_q\": [q % 2 for q in range(8)],\n    \"required_kv_head_for_q\": [q // n_rep for q in range(8)],\n}))"
-  ...[truncated 101 chars]
-  Output summary:
-  {
-    "artifacts": [
-      {
-        "description": "Python probe code executed by local runtime.",
-        "kind": "probe_code",
-        "path": "probes/t14_probe.py",
-        "sha256": "848f56c9ad5507cfafb9493faff30f65b55bf32b80c61c5c65ea80830d013a38"
-      },
-      {
-        "description": "Captured stdout from the probe process.",
-        "kind": "stdout",
-        "path": "probes/t14_stdout.txt",
-        "sha256": "6eb3fedab3caea764d3c7ddc0b5d3751b3c5df725060630a2078c9ee22ccde1f"
-      },
-      {
-        "description": "Captured stderr from the probe process.",
-        "kind": "stderr",
-        "path": "probes/t14_stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-      },
-      {
-        "description": "Parsed JSON object from the last non-empty stdout line.",
-        "kind": "json_result",
-        "path": "probes/t14_json_result.json",
-        "sha256": "e5df2031b176f0b3d0ed39ad4886184da1c26c311e76d1c51f1b8facc70d64ff"
-      }
-    ],
-    "claim_id": "c2",
-    "claim_statement": "For any contract-admissible input with n_rep = num_q_heads // num_kv_heads > 1 (e.g. kv shape (2, 64), num_q_heads=8, so n_rep=4), gqa_gather returns the wrong KV rows for query heads outside the first group b
-  ...[truncated 3572 chars]
-
-### Turn 10 - `experimenter` (7.404035229999977s, in=26595 out=333)
-
-Message:
-
-```text
-The c2 probe (t14) returned decisive output: mismatched rows [1,3,4,6] with the modulo mapping vs the required consecutive mapping. Finalizing it as confirmed.
-```
-
-Tool calls:
-
 - `finalize_probe_evidence -> t15 ok`
   Args:
   {
     "data": {
-      "dim": 64,
-      "exact_match_consecutive_contract": false,
-      "kernel_kv_head_for_q": [
-        0,
-        1,
-        0,
-        1,
-        0,
-        1,
-        0,
-        1
-      ],
-      "mismatched_rows": [
-        1,
-        3,
-        4,
-        6
-      ],
-      "n_rep": 4,
-      "num_kv_heads": 2,
-      "num_q_heads": 8,
-      "required_kv_head_for_q": [
-        0,
-        0,
-        0,
-        0,
-        1,
-        1,
-        1,
-        1
-      ]
+      "contract_scale_half_bound": 0.0002578,
+      "input_row_absmax_range": "0.042-0.065",
+      "max_abs_err": 0.0158825,
+      "metric": "max_abs_err_kernel_vs_contract_reference",
+      "ratio_err_to_bound_min": 60.0
     },
-    "event_id": "t14",
+    "event_id": "t13",
     "status": "confirmed",
-    "summary": "Probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and compared against the contract-required consecutive mapping ref[q] = kv[q // n_rep]. Exact match is false: rows 1,3,4,6 differ. Kernel maps query head to kv head q % 2 = [0,1,0,1,...] while the contract requires [0,0,0,0,1,1,1,1]. 
-  ...[truncated 118 chars]
+    "summary": "For low-magnitude rows (absmax 0.042\u20130.065), kernel dequant error vs contract reference is 0.0159, which exceeds the contract's \u2264scale/2 rounding bound (0.00026) by a factor of 60, confirming resolution loss from the fixed 4.0/127 step.",
+    "supports": "confirmed"
+  }
   Output summary:
   {
     "claim_id": "c2",
     "claim_status": "confirmed",
     "evidence_id": "c2.e1",
-    "summary": "Probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and compared against the contract-required consecutive mapping ref[q] = kv[q // n_rep]. Exact match is false: rows 1,3,4,6 differ. Kernel maps query head to kv head q % 2 = [0,1,0,1,...] while the contract requires [0,0,0,0,1,1,1,1]. Confirms c2: kernel.py line 9's modulo mapping returns wrong KV rows whenever n_rep > 1.",
+    "summary": "For low-magnitude rows (absmax 0.042\u20130.065), kernel dequant error vs contract reference is 0.0159, which exceeds the contract's \u2264scale/2 rounding bound (0.00026) by a factor of 60, confirming resolution loss from the fixed 4.0/127 step.",
     "supports": "confirmed",
-    "tool_event_id": "t14"
+    "tool_event_id": "t13"
   }
 
-### Turn 11 - `skeptic` (10.187174656000025s, in=29912 out=245)
+### Turn 9 - `skeptic` (7.374736315000064s, in=29199 out=232)
 
 Message:
 
 ```text
-This is the final review turn. Both defect surfaces are confirmed with decisive evidence: c2 (in-scope modulo-vs-consecutive mapping bug, probe t14) and c1 (non-pow2 dim CompilationError, probe t8). No new in-scope problems are exposed.
+Both in-scope claims (c1 clipping, c2 resolution loss) are confirmed with decisive probe evidence against the problem.txt contract; no new material issues surfaced.
 ```
 
 Tool calls:
@@ -517,7 +422,7 @@ Tool calls:
 - `record_no_new_claims -> t16 ok`
   Args:
   {
-    "reason": "Final review: both observable defect surfaces are already claimed and confirmed with decisive runtime evidence \u2014 c2 (in-scope: kernel maps q_head to q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping; probe t14, num_q_heads=8, num_kv_heads=2, dim=64, mismatched rows [1,3,4,6]) and c1 (CompilationError at tl.arange(0, dim) for non-pow2 dim; probe t8). The kernel is a 6-line pure row gather with no numerics, masking, or other unexplored surfaces; no additional material, testable in-scope problems exist.",
+    "reason": "Final review: the only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is fully covered and confirmed by in-scope claims c1 (output saturates at \u00b14.0 for rows with absmax up to 10.0, max abs err 6.0 vs reference) and c2 (error 60x above the \u2264scale/2 bound for low-magnitude rows). The probes' evidence directly matches the problem.txt formula, no new tool output exposes an uncovered in-scope failure, and remaining candidates (contiguity, rounding mode, all-zero rows yielding identical zeros) are out of scope or non-distinct.",
     "reviewed_claims": [
       "c1",
       "c2"
@@ -526,21 +431,21 @@ Tool calls:
   Output summary:
   {
     "decision": "no_new_claims",
-    "reason": "Final review: both observable defect surfaces are already claimed and confirmed with decisive runtime evidence \u2014 c2 (in-scope: kernel maps q_head to q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping; probe t14, num_q_heads=8, num_kv_heads=2, dim=64, mismatched rows [1,3,4,6]) and c1 (CompilationError at tl.arange(0, dim) for non-pow2 dim; probe t8). The kernel is a 6-line pure row gather with no numerics, masking, or other unexplored surfaces; no additional material, testable in-scope problems exist.",
+    "reason": "Final review: the only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is fully covered and confirmed by in-scope claims c1 (output saturates at \u00b14.0 for rows with absmax up to 10.0, max abs err 6.0 vs reference) and c2 (error 60x above the \u2264scale/2 bound for low-magnitude rows). The probes' evidence directly matches the problem.txt formula, no new tool output exposes an uncovered in-scope failure, and remaining candidates (contiguity, rounding mode, all-zero rows yielding identical zeros) are out of scope or non-distinct.",
     "reviewed_claims": [
       "c1",
       "c2"
     ],
     "reviewed_tool_event_count": 15,
-    "turn": 11
+    "turn": 9
   }
 
-### Turn 12 - `judge` (8.216296432000036s, in=30052 out=402)
+### Turn 10 - `judge` (8.978304181999988s, in=29244 out=432)
 
 Message:
 
 ```text
-The evidence is decisive: c2 (in_scope, confirmed by probe t14) shows the kernel maps query heads round-robin (q_head % num_kv_heads) instead of the contract-required consecutive mapping (q_head // n_rep), returning wrong KV rows for any n_rep > 1. The artifact has no test.py/get_inputs, so problem.txt is the operative contract and explicitly requires this mapping. Skeptic has signed off with no new claims. Recording a reject verdict.
+Both in-scope claims (c1, c2) are confirmed with decisive probe evidence against the explicit problem.txt contract, the Skeptic has signed off with no new claims, and no open claims remain. The kernel's hardcoded STALE_ABSMAX=4.0 directly violates the contract's per-row formula — this is a defect regardless of deviation size, and the contract explicitly rules out stale/EMA scale behavior.
 ```
 
 Tool calls:
@@ -550,132 +455,119 @@ Tool calls:
   {
     "confidence": 0.97,
     "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "Confirmed in-scope defect (c2): kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), but problem.txt \u2014 the operative contract, since the artifact provides no test.py/get_inputs \u2014 explicitly requires consecutive grouping (query heads 0..n_rep-1 read KV head 0, i.e. kv_head = q_head // n_rep). Runtime probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and showed exact mismatch: kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1], wrong rows [1,3,4,6]. This is a pure row gather, so the index mapping fully determines correctness; the deviation is not covered by any contract clause. c1 (non-pow2 dim compile failure, probe t8) is confirmed but its scope is unk
-  ...[truncated 215 chars]
+    "reason": "The problem.txt contract (the operative contract here, since the artifact has no test.py/get_inputs) explicitly requires per-row absmax = max(max(|x_row|), 1e-10), scale = absmax/127, and guarantees no value is clipped by its own scale. kernel.py:19 instead hardcodes absmax = STALE_ABSMAX = 4.0 (line 5, self-described as a stale EMA scale), which the contract explicitly rules out. Confirmed in-scope probe evidence: (c1) for rows with absmax 6.3\u201310.0, output saturates at exactly \u00b14.0 while the contract reference preserves up to 10.0, max abs error 6.0 \u2014 a large, unambiguous violation of the no-self-clipping guarantee, not quantization noise; (c2) for low-magnitude rows (absmax 0.042\u20130.065
+  ...[truncated 411 chars]
   Output summary:
   {
     "confidence": 0.97,
     "decisive_claims": [
+      "c1",
       "c2"
     ],
-    "reason": "Confirmed in-scope defect (c2): kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), but problem.txt \u2014 the operative contract, since the artifact provides no test.py/get_inputs \u2014 explicitly requires consecutive grouping (query heads 0..n_rep-1 read KV head 0, i.e. kv_head = q_head // n_rep). Runtime probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and showed exact mismatch: kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1], wrong rows [1,3,4,6]. This is a pure row gather, so the index mapping fully determines correctness; the deviation is not covered by any contract clause. c1 (non-pow2 dim compile failure, probe t8) is confirmed but its scope is unknown (no benchmark artifact specifies non-pow2 dims), so it serves only as a generalization note, not a reject basis. Skeptic signed off with no new claims and no open claims lack evidence.",
-    "verdict": "reject"
-  }
+    "reason": "The problem.txt contract (the operative contract here, since the artifact has no test.py/get_inputs) explicitly requires per-row absmax = max(max(|x_row|), 1e-10), scale = absmax/127, and guarantees no value is clipped by its own scale. kernel.py:19 instead hardcodes absmax = STALE_ABSMAX = 4.0 (line 5, self-described as a stale EMA scale), which the contract explicitly rules out. Confirmed in-scope probe evidence: (c1) for rows with absmax 6.3\u201310.0, output saturates at exactly \u00b14.0 while the contract reference preserves up to 10.0, max abs error 6.0 \u2014 a large, unambiguous violation of the no-self-clipping guarantee, not quantization noise; (c2) for low-magnitude rows (absmax 0.042\u20130.065), dequant error 0.0159 exceeds the contract's \u2264 scale/2 rounding bound by a factor of 60, confirming the fixed 4.0/127 step replaces the per-row scale. The reference is finite and well-defined in both cases, so these are genuine correctness failures, not reference-undefined artifacts. Skeptic reviewed the latest evidence (t16) and recorded no new claims; no open claims remain.",
+    "verdict":
+  ...[truncated 11 chars]
 
 ## Description Model
 
 {
   "contract_model": [
-    "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-    "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-    "Output must match kv dtype and device; a per-row gather, no numerics beyond copying.",
-    "Explicitly styled on vllm's triton_unified_attention.py index arithmetic.",
-    "Output must match kv dtype and device; a pure per-row gather with no numerics beyond copying.",
-    "Contract does not restrict dim to powers of two, so non-pow2 head dims are admissible inputs."
+    "Per-row absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale), -127, 127); out = q * scale (problem.txt contract).",
+    "Scale must be derived from each row's own magnitude so no value is clipped by its own scale.",
+    "Output is the dequantized reconstruction, not raw int8 codes.",
+    "1e-10 floor guarantees a non-degenerate scale for all-zero or tiny rows.",
+    "Reference upstream: sglang _per_token_quant_int8 per-token INT8 activation quantization."
   ],
   "kernel_model": [
-    "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-    "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interleaved/round-robin mapping, not the consecutive block mapping required by the problem.",
-    "dim is a constexpr, so tl.arange(0, dim) requires dim to be a power of two; non-power-of-two dims would fail or need masking.",
-    "num_kv_heads is passed as a runtime int, num_q_heads is not passed to the kernel at all, so n_rep is never computed.",
-    "dim is a constexpr, so tl.arange(0, dim) requires dim to be a power of two; probe t8 confirmed a Triton CompilationError for dim=96.",
-    "num_kv_heads is passed as a runtime int; num_q_heads is not passed to the kernel at all, so n_rep is never computed."
+    "kernel.py:19 hardcodes absmax = STALE_ABSMAX = 4.0 (module constant, line 5) instead of computing per-row max(|x_row|) with a 1e-10 floor.",
+    "Quantization math: scale = 4.0/127 for every row, x_q = round(x * 127/4.0) clamped to [-127,127], cast to int8; dequant multiplies xq.float() by per-row stored scale (all rows 4/127).",
+    "One Triton program per row (grid (M,)), BLOCK = next_power_of_2(N), masked loads with other=0.0; row strides handled but column stride assumed 1.",
+    "Returns x_q.float() * scales.unsqueeze(-1); scales are fp32 per row.",
+    "Comment on line 5 explicitly says it simulates an EMA scale that hasn't caught up to the current batch."
   ],
   "open_questions": [
-    "Whether the benchmark harness itself uses non-pow2 head dims (relevant only to how strongly c1 matters to final pass/fail)."
+    "What tolerance does the hidden test use, and does it compare only the returned dequantized tensor or also per-row scales?",
+    "What input distribution does the harness use (row magnitudes relative to 4.0)?"
   ],
   "risk_map": [
-    "Primary bug surface: modulo vs floor-division mapping. For num_kv_heads == num_q_heads (MQA degenerate or n_rep=1) both agree; for any n_rep > 1 they disagree, e.g. n_rep=2: q_head 2 should read KV 1 but kernel reads KV 0. Skeptic 
-...[truncated 1703 chars]
+    "Hardcoded scale vs per-row contract: any row with max(|x_row|) != 4.0 produces a different reconstruction than the contract; rows with absmax > 4.0 saturate at +/-4.0 (c1).",
+    "Rows with absmax < 4.0 quantize with step 4/127 instead of absmax/127, giving error far above the contract's <= scale/2 rounding bound (c2).",
+    "All-zero rows: contract absmax = 1e-10, kernel absmax = 4.0; dequantized values are still zero, so detectability depends on whether the test compares scales.",
+    "round is libdevice.roun
+...[truncated 501 chars]
 
 Recent description updates:
-- `du1` tasks=`initial`: Case_13 is a GQA query-head-to-KV-head gather. The kernel implements a round-robin (modulo) mapping, while the contract requires consecutive grouping (q_head // n_rep), which is a concrete candidate bug whenever n_rep > 1.
-- `du2` tasks=`initial`: Description model for case_13 (GQA gather) remains accurate; runtime probes t8/t9 have since materialized both risks: the kernel uses modulo mapping (contract requires consecutive q_head // n_rep) and fails to compile for non-pow2 dims. Ledger now has c1 confirmed and c2 (mapping bug, in_scope) open with probe t9 evidence pending finalization.
+- `du1` tasks=`initial`: Describing case_14: per-token INT8 quantize/dequantize kernel whose contract requires a per-row dynamic absmax scale, but the source hardcodes STALE_ABSMAX=4.0 for every row (previously failed to record due to malformed tool args; re-sent now that claims c1/c2 exist).
 
 ## Claims
 
 ### c1 - `confirmed`
 
-Statement: When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissible shapes with non-pow2 dim.
-
-Scope: `unknown`
-
-Rationale: Triton requires tl.arange bounds to be a power of two; a dim like 96 raises a compile error, so gqa_gather would fail to run for such head dims.
-
-Evidence:
-- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t8: Calling gqa_gather with a non-power-of-two head dimension (kv shape (2, 96), num_q_heads=4) raises a Triton CompilationError at `offs_d = tl.arange(0, dim)`, confirming c1: the kernel fails to compile/run for non-pow2 dims. Related exploratory probe (t9, dim=64, num_q_heads=8, num_kv_heads=2) also showed the modulo-vs-consecutive mapping produces wrong rows (mismatched query rows [1,3,4,6]), but that surface has no claim in the ledger since the earlier record_claim errored (t6).
-
-### c2 - `confirmed`
-
-Statement: For any contract-admissible input with n_rep = num_q_heads // num_kv_heads > 1 (e.g. kv shape (2, 64), num_q_heads=8, so n_rep=4), gqa_gather returns the wrong KV rows for query heads outside the first group because kernel.py line 9 maps q_head to q_head % num_kv_heads (round-robin) instead of the required consecutive mapping q_head // n_rep; runtime probe t9 confirms mismatched rows [1,3,4,6] (kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1]).
+Statement: For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=±127, so dequantized output saturates at ±4.0 and deviates from the reference per-row scale, violating the contract that no value is clipped by its own row scale.
 
 Scope: `in_scope`
 
-Scope rationale: problem.txt explicitly defines the consecutive grouping (kv_head = q_head // n_rep) and requires gqa_gather to return that row for each query head; any input with n_rep > 1 (e.g. num_q_heads=8, num_kv_heads=2) is admitted by the contract and the kernel returns the wrong rows there.
+Scope rationale: The problem.txt contract requires absmax = max(max(|x_row|), 1e-10) per row; a row with any |x| > 4.0 (e.g. a row containing 10.0) violates the stated formula and the explicit guarantee that no value is clipped by its own scale.
 
 Scope evidence:
-- `problem.txt`: "GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1, and so on" — i.e. kv_head = q_head // n_rep — and gqa_gather "must return, for each query head, the KV row that query head is supposed to read".
+- `problem.txt`: Contract: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x_row/scale), -127, 127) — per-row scale derived from THAT row's own magnitude so no value in the row is clipped by its own scale.
 
-Rationale: kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), while the contract requires consecutive grouping kv_head = q_head // n_rep. Probe t9 (kv shape (2,64), num_q_heads=8) showed mismatched rows [1,3,4,6]: e.g. query head 4 is required to read KV head 1 but the kernel returns KV head 0.
+Rationale: kernel.py line 19 uses absmax = STALE_ABSMAX = 4.0 (line 5) instead of per-row max(|x_row|) with the 1e-10 floor; the comment explicitly says it simulates a stale EMA scale that hasn't caught up.
 
 Evidence:
-- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t14: Probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and compared against the contract-required consecutive mapping ref[q] = kv[q // n_rep]. Exact match is false: rows 1,3,4,6 differ. Kernel maps query head to kv head q % 2 = [0,1,0,1,...] while the contract requires [0,0,0,0,1,1,1,1]. Confirms c2: kernel.py line 9's modulo mapping returns wrong KV rows whenever n_rep > 1.
+- `c1.e1` runtime_probe supports `confirmed`, tool_event_id=t12: For rows with absmax up to 10.0, kernel output saturates at exactly ±4.0 (kernel_max_out=4.0, ref_row0=10.0) and max abs error vs the contract per-row reference is 6.0, confirming clipping by the hardcoded STALE_ABSMAX=4.0.
+
+### c2 - `confirmed`
+
+Statement: For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output error far above the reference's ≤ scale/2 bound.
+
+Scope: `in_scope`
+
+Scope rationale: problem.txt requires scale = absmax/127 from each row's own magnitude; for a row with absmax ~0.05 the kernel's fixed 4.0/127 scale is ~80x coarser than the contract's scale, so the dequantized reconstruction deviates well beyond the contract's ≤ scale/2 rounding error.
+
+Scope evidence:
+- `problem.txt`: Contract: scale = absmax/127 derived from the row's own magnitude (with 1e-10 floor); the kernel uses a fixed 4.0/127 instead, changing the reconstruction for every row whose absmax differs from 4.0.
+
+Rationale: With a fixed step of 4/127, values in low-magnitude rows land on far fewer distinct int8 codes, so the dequantized reconstruction differs from the contract's absmax/127-scale reference even without clipping.
+
+Evidence:
+- `c2.e1` runtime_probe supports `confirmed`, tool_event_id=t13: For low-magnitude rows (absmax 0.042–0.065), kernel dequant error vs contract reference is 0.0159, which exceeds the contract's ≤scale/2 rounding bound (0.00026) by a factor of 60, confirming resolution loss from the fixed 4.0/127 step.
 
 ## Tool Events
 
 ### t1 - load_artifact - ok
 
 {
-  "entry": "case_13"
+  "entry": "case_14"
 }
 
 ### t2 - inspect_problem - ok
 
 {
-  "entry": "case_13"
+  "entry": "case_14"
 }
 
 ### t3 - list_artifact_files - ok
 
 {
-  "entry": "case_13"
+  "entry": "case_14"
 }
 
 ### t4 - read_artifact_file - ok
 
 {
-  "entry": "case_13"
+  "entry": "case_14"
 }
 
-### t5 - record_description_update - ok
+### t5 - record_description_update - error
 
 {
-  "contract_model": [
-    "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-    "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-    "Output must match kv dtype and device; a per-row gather, no numerics beyond copying.",
-    "Explicitly styled on vllm's triton_unified_attention.py index arithmetic."
-  ],
-  "impact_on_claims": [],
-  "kernel_model": [
-    "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-    "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interleaved/round-robin mapping, not the consecutive block mapping required by the problem.",
-    "dim is a constexpr, so tl.arange(0, dim) requires dim to be a power of two; non-power-of-two dims would fail or need masking.",
-    "num_kv_heads is passed as a runtime int, num_q_heads is not passed to the kernel at all, so n_rep is never computed."
-  ],
-  "open_questions": [],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Primary bug surface: modulo vs floor-division mapping. For num_kv_heads == num_q_heads (MQA degenerate or n_rep=1) both agree; for any n_rep > 1 they disagree, e.g. n_rep=2: q_head 2 should read KV 1 but kernel reads KV 0. Skeptic should claim incorrect mapping whenever n_rep > 1 is in scope.",
-    "dim must be a power of two for tl.arange(0, dim) constexpr; odd/non-pow2 head dims are a possible compile-time failure or untested surface.",
-    "No masking or bounds checks; assumes num_q_heads divisible by num_kv_heads exactly (contract implies this via integer n_rep, so likely fine).",
-    "num_kv_heads passed as runtime scalar \u2014 fine, but if a future variant makes it constexpr, low risk."
-  ],
-  "scope_notes": [
-    "Small pure-gather kernel; no numerics/tolerance 
-...[truncated 478 chars]
+  "error_type": "ToolRegistryError",
+  "message": "tool record_description_update missing required arg: summary"
+}
 
 ### t6 - record_claim - error
 
@@ -684,51 +576,122 @@ Evidence:
   "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
 }
 
-### t7 - record_claim - ok
+### t7 - record_claim - error
+
+{
+  "error_type": "LedgerError",
+  "message": "in_scope claims require non-empty scope_rationale: re-send this same call with scope_rationale and scope_evidence filled in. Do not record the claim a second time -- that leaves a duplicate in the ledger."
+}
+
+### t8 - record_claim - ok
 
 {
   "id": "c1",
-  "rationale": "Triton requires tl.arange bounds to be a power of two; a dim like 96 raises a compile error, so gqa_gather would fail to run for such head dims.",
-  "scope": "unknown",
-  "scope_evidence": [],
-  "scope_rationale": "",
-  "statement": "When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissible shapes with non-pow2 dim.",
+  "rationale": "kernel.py line 19 uses absmax = STALE_ABSMAX = 4.0 (line 5) instead of per-row max(|x_row|) with the 1e-10 floor; the comment explicitly says it simulates a stale EMA scale that hasn't caught up.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Contract: absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x_row/scale), -127, 127) \u2014 per-row scale derived from THAT row's own magnitude so no value in the row is clipped by its own scale."
+    }
+  ],
+  "scope_rationale": "The problem.txt contract requires absmax = max(max(|x_row|), 1e-10) per row; a row with any |x| > 4.0 (e.g. a row containing 10.0) violates the stated formula and the explicit guarantee that no value is clipped by its own scale.",
+  "statement": "For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=\u00b1127, so dequantized output saturates at \u00b14.0 and deviates from the reference per-row scale, violating the contract that no value is clipped by its own row scale.",
   "status": "open"
 }
 
-### t8 - run_claim_probe - ok
+### t9 - record_claim - ok
+
+{
+  "id": "c2",
+  "rationale": "With a fixed step of 4/127, values in low-magnitude rows land on far fewer distinct int8 codes, so the dequantized reconstruction differs from the contract's absmax/127-scale reference even without clipping.",
+  "scope": "in_scope",
+  "scope_evidence": [
+    {
+      "source": "problem.txt",
+      "summary": "Contract: scale = absmax/127 derived from the row's own magnitude (with 1e-10 floor); the kernel uses a fixed 4.0/127 instead, changing the reconstruction for every row whose absmax differs from 4.0."
+    }
+  ],
+  "scope_rationale": "problem.txt requires scale = absmax/127 from each row's own magnitude; for a row with absmax ~0.05 the kernel's fixed 4.0/127 scale is ~80x coarser than the contract's scale, so the dequantized reconstruction deviates well beyond the contract's \u2264 scale/2 rounding error.",
+  "statement": "For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output error far above the reference's \u2264 scale/2 bound.",
+  "status": "open"
+}
+
+### t10 - record_description_update - ok
+
+{
+  "contract_model": [
+    "Per-row absmax = max(max(|x_row|), 1e-10); scale = absmax/127; q = clamp(round(x/scale), -127, 127); out = q * scale (problem.txt contract).",
+    "Scale must be derived from each row's own magnitude so no value is clipped by its own scale.",
+    "Output is the dequantized reconstruction, not raw int8 codes.",
+    "1e-10 floor guarantees a non-degenerate scale for all-zero or tiny rows.",
+    "Reference upstream: sglang _per_token_quant_int8 per-token INT8 activation quantization."
+  ],
+  "impact_on_claims": [],
+  "kernel_model": [
+    "kernel.py:19 hardcodes absmax = STALE_ABSMAX = 4.0 (module constant, line 5) instead of computing per-row max(|x_row|) with a 1e-10 floor.",
+    "Quantization math: scale = 4.0/127 for every row, x_q = round(x * 127/4.0) clamped to [-127,127], cast to int8; dequant multiplies xq.float() by per-row stored scale (all rows 4/127).",
+    "One Triton program per row (grid (M,)), BLOCK = next_power_of_2(N), masked loads with other=0.0; row strides handled but column stride assumed 1.",
+    "Returns x_q.float() * scales.unsqueeze(-1); scales are fp32 per row.",
+    "Comment on line 5 explicitly says it simulates an EMA scale that hasn't caught up to the current batch."
+  ],
+  "open_questions": [
+    "What tolerance does the hidden test use, and does it compare only the returned dequantized tensor or also per-row scales?",
+    "What input distribution does the harness use (row magnitudes relative to 4.0)?"
+  ],
+  "resolved_tasks": [],
+  "risk_map": [
+    "Hardcoded scale vs per-row contract: any row with max(|x_row|) != 4.0 produces a different reconstruction than the contract; rows with absmax > 4.0 saturate at +/-4.0 (c1).",
+    "Rows with absmax < 4.0 quantize with step 4/127 instead of absmax/127, giving error far above the contract's <= scale/2 rounding bound (c2).",
+    "All-zero rows: contract absmax = 1e-10, kernel absmax = 4.0; dequantized values are still zero, so detectability depends on whether the te
+...[truncated 876 chars]
+
+### t11 - record_no_new_claims - ok
+
+{
+  "decision": "no_new_claims",
+  "reason": "The only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is already fully covered by in-scope claims c1 (clipping when absmax > 4.0) and c2 (resolution loss when absmax < 4.0), each tied to the explicit problem.txt formula. Other potential issues (non-contiguous columns, tie rounding, all-zero rows producing identical zeros) are either out of scope, low risk, or not distinct testable failures of the stated contract.",
+  "reviewed_claims": [
+    "c1",
+    "c2"
+  ],
+  "reviewed_tool_event_count": 10,
+  "turn": 6
+}
+
+### t12 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t8_probe.py",
-      "sha256": "5e78cd4fbca343674f56cae33a49596b1c7f0b8c3fb4b511a4a35260317a20c5"
+      "path": "probes/t12_probe.py",
+      "sha256": "57658251363a2286313bfd5c83f31075540e634823d093609226b74cebf95490"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t8_stdout.txt",
-      "sha256": "35ff80343ba96ea6a5578368b52b839c5098401b512bbd987a8b0060379f966d"
+      "path": "probes/t12_stdout.txt",
+      "sha256": "0738be552bc893d638bf359ddf9c741e693df2630a4a5310d431172056dbbcbf"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t8_stderr.txt",
+      "path": "probes/t12_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t8_json_result.json",
-      "sha256": "d128fb094460eed0675aa5d5c28532ca9a0366e133a8288761a38194df67a1e4"
+      "path": "probes/t12_json_result.json",
+      "sha256": "61148da1bb453152ef82ed23bdf1909d9722a96571c780ffd795ace08bf3445e"
     }
   ],
   "claim_id": "c1",
-  "claim_statement": "When kv has a non-power-of-two head dimension dim, tl.arange(0, dim) in the kernel will fail to compile (Triton requires power-of-two range bounds), so gqa_gather raises an error or produces no output for admissible shapes with non-pow2 dim.",
-  "duration_s": 4.915223,
-  "event_id": "t8",
+  "claim_statement": "For rows with max(|x_row|) > 4.0, the kernel's hardcoded absmax 4.0 clips values to q=\u00b1127, so dequantized output saturates at \u00b14.0 and deviates from the reference per-row scale, violating the contract that no value is clipped by its own row scale.",
+  "duration_s": 7.498358,
+  "event_id": "t12",
   "evidence_draft": {
     "claim_id": "c1",
     "data": {
@@ -736,195 +699,54 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t8_probe.py",
-          "sha256": "5e78cd4fbca343674f56cae33a49596b1c7f0b8c3fb4b511a4a35260317a20c5"
+          "path": "probes/t12_probe.py",
+          "sha256": "57658251363a2286313bfd5c83f31075540e634823d093609226b74cebf95490"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t8_stdout.txt",
-          "sha256": "35ff80343ba96ea6a5578368b52b839c5098401b512bbd987a8b0060379f966d"
+          "path": "probes/t12_stdout.txt",
+          "sha256": "0738be552bc893d638bf359ddf9c741e693df2630a4a5310d431172056dbbcbf"
         },
         {
           "description": "Captured stderr from the probe process.",
           "kind": "stderr",
-          "path": "probes/t8_stderr.txt
-...[truncated 2127 chars]
+          "path
+...[truncated 2716 chars]
 
-### t9 - run_python_probe - ok
-
-{
-  "artifacts": [
-    {
-      "description": "Python probe code executed by local runtime.",
-      "kind": "probe_code",
-      "path": "probes/t9_probe.py",
-      "sha256": "df98fcd0fc641858f7c7c42fbb4896cbee017d61a8bc5d1408bcc1e24053c002"
-    },
-    {
-      "description": "Captured stdout from the probe process.",
-      "kind": "stdout",
-      "path": "probes/t9_stdout.txt",
-      "sha256": "6eb3fedab3caea764d3c7ddc0b5d3751b3c5df725060630a2078c9ee22ccde1f"
-    },
-    {
-      "description": "Captured stderr from the probe process.",
-      "kind": "stderr",
-      "path": "probes/t9_stderr.txt",
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "description": "Parsed JSON object from the last non-empty stdout line.",
-      "kind": "json_result",
-      "path": "probes/t9_json_result.json",
-      "sha256": "e5df2031b176f0b3d0ed39ad4886184da1c26c311e76d1c51f1b8facc70d64ff"
-    }
-  ],
-  "duration_s": 4.86332,
-  "event_id": "t9",
-  "exit_code": 0,
-  "json_result": {
-    "dim": 64,
-    "exact_match_consecutive_contract": false,
-    "kernel_kv_head_for_q": [
-      0,
-      1,
-      0,
-      1,
-      0,
-      1,
-      0,
-      1
-    ],
-    "mismatched_rows": [
-      1,
-      3,
-      4,
-      6
-    ],
-    "n_rep": 4,
-    "num_kv_heads": 2,
-    "num_q_heads": 8,
-    "required_kv_head_for_q": [
-      0,
-      0,
-      0,
-      0,
-      1,
-      1,
-      1,
-      1
-    ]
-  },
-  "stderr": "",
-  "stdout": "{\"num_q_heads\": 8, \"num_kv_heads\": 2, \"n_rep\": 4, \"dim\": 64, \"exact_match_consecutive_contract\": false, \"mismatched_rows\": [1, 3, 4, 6], \"kernel_kv_head_for_q\": [0, 1, 0, 1, 0, 1, 0, 1], \"required_kv_head_for_q\": [0, 0, 0, 0, 1, 1, 1, 1]}\n",
-  "timed_out": false,
-  "timeout_s": 60
-}
-
-### t10 - finalize_probe_evidence - ok
-
-{
-  "claim_id": "c1",
-  "claim_status": "confirmed",
-  "evidence_id": "c1.e1",
-  "summary": "Calling gqa_gather with a non-power-of-two head dimension (kv shape (2, 96), num_q_heads=4) raises a Triton CompilationError at `offs_d = tl.arange(0, dim)`, confirming c1: the kernel fails to compile/run for non-pow2 dims. Related exploratory probe (t9, dim=64, num_q_heads=8, num_kv_heads=2) also showed the modulo-vs-consecutive mapping produces wrong rows (mismatched query rows [1,3,4,6]), but that surface has no claim in the ledger since the earlier record_claim errored (t6).",
-  "supports": "confirmed",
-  "tool_event_id": "t8"
-}
-
-### t11 - record_claim - ok
-
-{
-  "id": "c2",
-  "rationale": "kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), while the contract requires consecutive grouping kv_head = q_head // n_rep. Probe t9 (kv shape (2,64), num_q_heads=8) showed mismatched rows [1,3,4,6]: e.g. query head 4 is required to read KV head 1 but the kernel returns KV head 0.",
-  "scope": "in_scope",
-  "scope_evidence": [
-    {
-      "source": "problem.txt",
-      "summary": "\"GQA groups CONSECUTIVE query heads onto the same KV head: query heads 0..n_rep-1 read KV head 0, query heads n_rep..2*n_rep-1 read KV head 1, and so on\" \u2014 i.e. kv_head = q_head // n_rep \u2014 and gqa_gather \"must return, for each query head, the KV row that query head is supposed to read\"."
-    }
-  ],
-  "scope_rationale": "problem.txt explicitly defines the consecutive grouping (kv_head = q_head // n_rep) and requires gqa_gather to return that row for each query head; any input with n_rep > 1 (e.g. num_q_heads=8, num_kv_heads=2) is admitted by the contract and the kernel returns the wrong rows there.",
-  "statement": "For any contract-admissible input with n_rep = num_q_heads // num_kv_heads > 1 (e.g. kv shape (2, 64), num_q_heads=8, so n_rep=4), gqa_gather returns the wrong KV rows for query heads outside the first group because kernel.py line 9 maps q_head to q_head % num_kv_heads (round-robin) instead of the required consecutive mapping q_head // n_rep; runtime probe t9 confirms mismatched rows [1,3,4,6] (kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1]).",
-  "status": "open"
-}
-
-### t12 - record_description_update - ok
-
-{
-  "contract_model": [
-    "gqa_gather(kv, num_q_heads) takes kv of shape (num_kv_heads, dim) and returns shape (num_q_heads, dim), where each query head gets the KV row it should read.",
-    "Required mapping is CONSECUTIVE grouping: n_rep = num_q_heads // num_kv_heads; query heads [h*n_rep, (h+1)*n_rep) read KV head h, i.e. kv_head = q_head // n_rep.",
-    "Output must match kv dtype and device; a pure per-row gather with no numerics beyond copying.",
-    "Contract does not restrict dim to powers of two, so non-pow2 head dims are admissible inputs."
-  ],
-  "impact_on_claims": [
-    "c1 (non-pow2 dim compile failure) is now confirmed by runtime probe t8.",
-    "c2 (modulo vs consecutive mapping) is in_scope and backed by probe t9; it remains open pending evidence finalization.",
-    "The modulo-vs-floor-division and pow2-dim risks raised in du1 have both materialized in probes, so no further description-level surfaces appear unprobed."
-  ],
-  "kernel_model": [
-    "Triton kernel launches one program per query head (grid = num_q_heads), each loading one dim-wide row of kv and storing one row of out.",
-    "It computes kv_head = q_head % num_kv_heads (kernel.py line 9), an interleaved/round-robin mapping, not the consecutive block mapping required by the problem.",
-    "dim is a constexpr, so tl.arange(0, dim) requires dim to be a power of two; probe t8 confirmed a Triton CompilationError for dim=96.",
-    "num_kv_heads is passed as a runtime int; num_q_heads is not passed to the kernel at all, so n_rep is never computed."
-  ],
-  "open_questions": [
-    "Whether the benchmark harness itself uses non-pow2 head dims (relevant only to how strongly c1 matters to final pass/fail)."
-  ],
-  "resolved_tasks": [],
-  "risk_map": [
-    "Primary bug surface: modulo vs floor-division mapping; any n_rep > 1 input yields wrong rows (probe t9: mismatched query rows [1,3,4,6] for num_q_heads=8, num_kv_heads=2).",
-    "Non-power-of-two dim fails to compile at tl.arange(0, dim) (probe
-...[truncated 1135 chars]
-
-### t13 - record_no_new_claims - ok
-
-{
-  "decision": "no_new_claims",
-  "reason": "All observable defect surfaces for this pure-gather kernel are already claimed with decisive evidence: c2 (in-scope, kernel uses q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping, confirmed by probe t9 with mismatched rows [1,3,4,6] for num_q_heads=8, num_kv_heads=2) and c1 (confirmed CompilationError for non-pow2 dim via probe t8). The kernel is a 6-line row gather with no numerics, masking, or other surfaces; no additional material, testable in-scope problems exist.",
-  "reviewed_claims": [
-    "c1",
-    "c2"
-  ],
-  "reviewed_tool_event_count": 12,
-  "turn": 8
-}
-
-### t14 - run_claim_probe - ok
+### t13 - run_claim_probe - ok
 
 {
   "artifacts": [
     {
       "description": "Python probe code executed by local runtime.",
       "kind": "probe_code",
-      "path": "probes/t14_probe.py",
-      "sha256": "848f56c9ad5507cfafb9493faff30f65b55bf32b80c61c5c65ea80830d013a38"
+      "path": "probes/t13_probe.py",
+      "sha256": "eb4050ba70d71930d814ad786ae47e2f47ddfdfe933c2775b75538311995dd88"
     },
     {
       "description": "Captured stdout from the probe process.",
       "kind": "stdout",
-      "path": "probes/t14_stdout.txt",
-      "sha256": "6eb3fedab3caea764d3c7ddc0b5d3751b3c5df725060630a2078c9ee22ccde1f"
+      "path": "probes/t13_stdout.txt",
+      "sha256": "c5387fbf876e2aead2cc1e0861390ca5c8226b6d0d9292416dd9a7434d752aa5"
     },
     {
       "description": "Captured stderr from the probe process.",
       "kind": "stderr",
-      "path": "probes/t14_stderr.txt",
+      "path": "probes/t13_stderr.txt",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "description": "Parsed JSON object from the last non-empty stdout line.",
       "kind": "json_result",
-      "path": "probes/t14_json_result.json",
-      "sha256": "e5df2031b176f0b3d0ed39ad4886184da1c26c311e76d1c51f1b8facc70d64ff"
+      "path": "probes/t13_json_result.json",
+      "sha256": "162f3367ec9642cd14f37fbc4ee01771dbcaa1f3021d6f2e81746d899be095be"
     }
   ],
   "claim_id": "c2",
-  "claim_statement": "For any contract-admissible input with n_rep = num_q_heads // num_kv_heads > 1 (e.g. kv shape (2, 64), num_q_heads=8, so n_rep=4), gqa_gather returns the wrong KV rows for query heads outside the first group because kernel.py line 9 maps q_head to q_head % num_kv_heads (round-robin) instead of the required consecutive mapping q_head // n_rep; runtime probe t9 confirms mismatched rows [1,3,4,6] (kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1]).",
-  "duration_s": 4.397415,
-  "event_id": "t14",
+  "claim_statement": "For rows with max(|x_row|) significantly less than 4.0 (e.g. absmax ~0.05), the kernel's fixed step 4/127 quantizes with much coarser resolution than the contract's per-row scale, producing dequantized output error far above the reference's \u2264 scale/2 bound.",
+  "duration_s": 5.674374,
+  "event_id": "t13",
   "evidence_draft": {
     "claim_id": "c2",
     "data": {
@@ -932,15 +754,31 @@ Evidence:
         {
           "description": "Python probe code executed by local runtime.",
           "kind": "probe_code",
-          "path": "probes/t14_probe.py",
-          "sha256": "848f56c9ad5507cfafb9493faff30f65b55bf32b80c61c5c65ea80830d013a38"
+          "path": "probes/t13_probe.py",
+          "sha256": "eb4050ba70d71930d814ad786ae47e2f47ddfdfe933c2775b75538311995dd88"
         },
         {
           "description": "Captured stdout from the probe process.",
           "kind": "stdout",
-          "path": "probes/t14_stdout.txt",
-          "sha256": "
-...[truncated 2772 chars]
+          "path": "probes/t13_stdout.txt",
+          "sha256": "c5387fbf876e2aead2cc1e0861390ca5c8226b6d0d9292416dd9a7434d752aa5"
+        },
+        {
+          "description": "Captured stderr from the probe process.",
+          "kind": "stderr",
+          "
+...[truncated 2986 chars]
+
+### t14 - finalize_probe_evidence - ok
+
+{
+  "claim_id": "c1",
+  "claim_status": "confirmed",
+  "evidence_id": "c1.e1",
+  "summary": "For rows with absmax up to 10.0, kernel output saturates at exactly \u00b14.0 (kernel_max_out=4.0, ref_row0=10.0) and max abs error vs the contract per-row reference is 6.0, confirming clipping by the hardcoded STALE_ABSMAX=4.0.",
+  "supports": "confirmed",
+  "tool_event_id": "t12"
+}
 
 ### t15 - finalize_probe_evidence - ok
 
@@ -948,22 +786,22 @@ Evidence:
   "claim_id": "c2",
   "claim_status": "confirmed",
   "evidence_id": "c2.e1",
-  "summary": "Probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and compared against the contract-required consecutive mapping ref[q] = kv[q // n_rep]. Exact match is false: rows 1,3,4,6 differ. Kernel maps query head to kv head q % 2 = [0,1,0,1,...] while the contract requires [0,0,0,0,1,1,1,1]. Confirms c2: kernel.py line 9's modulo mapping returns wrong KV rows whenever n_rep > 1.",
+  "summary": "For low-magnitude rows (absmax 0.042\u20130.065), kernel dequant error vs contract reference is 0.0159, which exceeds the contract's \u2264scale/2 rounding bound (0.00026) by a factor of 60, confirming resolution loss from the fixed 4.0/127 step.",
   "supports": "confirmed",
-  "tool_event_id": "t14"
+  "tool_event_id": "t13"
 }
 
 ### t16 - record_no_new_claims - ok
 
 {
   "decision": "no_new_claims",
-  "reason": "Final review: both observable defect surfaces are already claimed and confirmed with decisive runtime evidence \u2014 c2 (in-scope: kernel maps q_head to q_head % num_kv_heads round-robin instead of the contract-required consecutive q_head // n_rep mapping; probe t14, num_q_heads=8, num_kv_heads=2, dim=64, mismatched rows [1,3,4,6]) and c1 (CompilationError at tl.arange(0, dim) for non-pow2 dim; probe t8). The kernel is a 6-line pure row gather with no numerics, masking, or other unexplored surfaces; no additional material, testable in-scope problems exist.",
+  "reason": "Final review: the only material defect \u2014 the hardcoded STALE_ABSMAX=4.0 replacing the contract's per-row absmax = max(max(|x_row|), 1e-10) \u2014 is fully covered and confirmed by in-scope claims c1 (output saturates at \u00b14.0 for rows with absmax up to 10.0, max abs err 6.0 vs reference) and c2 (error 60x above the \u2264scale/2 bound for low-magnitude rows). The probes' evidence directly matches the problem.txt formula, no new tool output exposes an uncovered in-scope failure, and remaining candidates (contiguity, rounding mode, all-zero rows yielding identical zeros) are out of scope or non-distinct.",
   "reviewed_claims": [
     "c1",
     "c2"
   ],
   "reviewed_tool_event_count": 15,
-  "turn": 11
+  "turn": 9
 }
 
 ### t17 - record_verdict - ok
@@ -971,9 +809,10 @@ Evidence:
 {
   "confidence": 0.97,
   "decisive_claims": [
+    "c1",
     "c2"
   ],
-  "reason": "Confirmed in-scope defect (c2): kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), but problem.txt \u2014 the operative contract, since the artifact provides no test.py/get_inputs \u2014 explicitly requires consecutive grouping (query heads 0..n_rep-1 read KV head 0, i.e. kv_head = q_head // n_rep). Runtime probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and showed exact mismatch: kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1], wrong rows [1,3,4,6]. This is a pure row gather, so the index mapping fully determines correctness; the deviation is not covered by any contract clause. c1 (non-pow2 dim compile failure, probe t8) is confirmed but its scope is unknown (no benchmark artifact specifies non-pow2 dims), so it serves only as a generalization note, not a reject basis. Skeptic signed off with no new claims and no open claims lack evidence.",
+  "reason": "The problem.txt contract (the operative contract here, since the artifact has no test.py/get_inputs) explicitly requires per-row absmax = max(max(|x_row|), 1e-10), scale = absmax/127, and guarantees no value is clipped by its own scale. kernel.py:19 instead hardcodes absmax = STALE_ABSMAX = 4.0 (line 5, self-described as a stale EMA scale), which the contract explicitly rules out. Confirmed in-scope probe evidence: (c1) for rows with absmax 6.3\u201310.0, output saturates at exactly \u00b14.0 while the contract reference preserves up to 10.0, max abs error 6.0 \u2014 a large, unambiguous violation of the no-self-clipping guarantee, not quantization noise; (c2) for low-magnitude rows (absmax 0.042\u20130.065), dequant error 0.0159 exceeds the contract's \u2264 scale/2 rounding bound by a factor of 60, confirming the fixed 4.0/127 step replaces the per-row scale. The reference is finite and well-defined in both cases, so these are genuine correctness failures, not reference-undefined artifacts. Skeptic reviewed the latest evidence (t16) and recorded no new claims; no open claims remain.",
   "verdict": "reject"
 }
 
@@ -981,10 +820,11 @@ Evidence:
 
 {
   "confidence": 0.97,
-  "created_at": "2026-09-30T08:26:13Z",
+  "created_at": "2026-09-30T08:25:46Z",
   "decisive_claims": [
+    "c1",
     "c2"
   ],
-  "reason": "Confirmed in-scope defect (c2): kernel.py line 9 computes kv_head = q_head % num_kv_heads (round-robin), but problem.txt \u2014 the operative contract, since the artifact provides no test.py/get_inputs \u2014 explicitly requires consecutive grouping (query heads 0..n_rep-1 read KV head 0, i.e. kv_head = q_head // n_rep). Runtime probe t14 (kv shape (2,64), num_q_heads=8, n_rep=4) ran the kernel successfully and showed exact mismatch: kernel heads [0,1,0,1,...] vs required [0,0,0,0,1,1,1,1], wrong rows [1,3,4,6]. This is a pure row gather, so the index mapping fully determines correctness; the deviation is not covered by any contract clause. c1 (non-pow2 dim compile failure, probe t8) is confirmed but its scope is unknown (no benchmark artifact specifies non-pow2 dims), so it serves only as a generalization note, not a reject basis. Skeptic signed off with no new claims and no open claims lack evidence.",
+  "reason": "The problem.txt contract (the operative contract here, since the artifact has no test.py/get_inputs) explicitly requires per-row absmax = max(max(|x_row|), 1e-10), scale = absmax/127, and guarantees no value is clipped by its own scale. kernel.py:19 instead hardcodes absmax = STALE_ABSMAX = 4.0 (line 5, self-described as a stale EMA scale), which the contract explicitly rules out. Confirmed in-scope probe evidence: (c1) for rows with absmax 6.3\u201310.0, output saturates at exactly \u00b14.0 while the contract reference preserves up to 10.0, max abs error 6.0 \u2014 a large, unambiguous violation of the no-self-clipping guarantee, not quantization noise; (c2) for low-magnitude rows (absmax 0.042\u20130.065), dequant error 0.0159 exceeds the contract's \u2264 scale/2 rounding bound by a factor of 60, confirming the fixed 4.0/127 step replaces the per-row scale. The reference is finite and well-defined in both cases, so these are genuine correctness failures, not reference-undefined artifacts. Skeptic reviewed the latest evidence (t16) and recorded no new claims; no open claims remain.",
   "verdict": "reject"
 }

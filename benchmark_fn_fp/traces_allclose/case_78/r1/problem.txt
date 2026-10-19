@@ -1,0 +1,21 @@
+Compute the forward cyclic number-theoretic transform (NTT) independently for each input row over the prime field modulo 3329.
+
+For a row of length N, define omega_N = 17**(256/N) modulo 3329. The target is
+
+    out[b,k] = (sum over j=0..N-1 of x[b,j] * omega_N**(j*k)) modulo 3329.
+
+Return the canonical integer representative in [0,3328]. Output position k is frequency k in natural order, with no normalization factor and the positive exponent shown above. This is a cyclic transform, not a negacyclic transform or Kyber's incomplete polynomial transform. The element 17 has order 256 modulo 3329, so omega_N has order N at both supported lengths.
+
+Inputs and complete public domain:
+- x is an ordinary torch.Tensor (not a subclass) with dtype int32 and shape [B,N], where 1<=B<=128 and N is either 64 or 128.
+- EVERY combination of canonical field values 0<=x[b,j]<3329 is legal. There is no distribution, sparsity, signal-band or seed restriction.
+- x is dense, strided, contiguous and on a CUDA device. Contiguous views with nonzero storage offsets are legal.
+- x has requires_grad=False, is_inference=False, is_neg=False and is_conj=False. Calls run in ordinary non-inference mode, without concurrent external writes. This operation has no autograd requirement.
+
+Return a fresh int32 tensor with shape [B,N] on x.device, preserving x and its backing storage. Every result must equal the mathematical target exactly: absolute tolerance=0 and relative tolerance=0. Implementations may use any transform factorization, internal residue representation or modular-reduction algorithm satisfying this same requirement. Correctness is one verdict for the whole implementation; individual inputs provide evidence, not separate labels.
+
+validate_inputs() enforces this full domain and is called by run(). reference() directly evaluates the mathematical modular DFT using integer products and sums; it also accepts CPU inputs. make_inputs() only supplies examples.
+
+NTTs are used in polynomial arithmetic. This is an original synthetic Triton implementation using stage fusion and precomputed coefficients, inspired by established modular-transform techniques. It is not an upstream kernel, a claimed historical bug, or an implementation of the complete Kyber scheme.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

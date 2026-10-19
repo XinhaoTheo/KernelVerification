@@ -1,54 +1,174 @@
 {
   "artifact": {
     "artifact_files": [
+      "__pycache__/kernel.cpython-311.pyc",
       "kernel.py",
       "meta.json",
       "problem.txt"
     ],
-    "entry": "case_27",
+    "entry": "case_28",
     "has_error": null,
-    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _masked_softmax_kernel(X, M, Y, stride, N, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=-float(\"inf\"))\n    keep = tl.load(M + row * stride + cols, mask=valid, other=0).to(tl.int1)\n    x = tl.where(keep, x, -float(\"inf\"))\n    x = x - tl.max(x, axis=0)\n    e = tl.where(keep, tl.exp(x), 0.0)\n    tl.store(Y + row * stride + cols, e / tl.sum(e, axis=0), mask=valid)\n\n\ndef masked_softmax(x, mask):\n    # Row-wise softmax over the positions the mask keeps.\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    _masked_softmax_kernel[(n_rows,)](x, mask, y, x.stride(0), n_cols,\n                                      BLOCK=triton.next_power_of_2(n_cols))\n    return y\n",
+    "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\n\n    ax = tl.abs(x)\n    absmax = tl.max(ax, axis=0)\n    # Calibrate on the bulk of the row rather than on its single largest value.\n    thresh = absmax\n    for _ in range(PCTL_LEVELS):\n        below = tl.where(ax < thresh, ax, 0.0)\n        thresh = tl.max(below, axis=0)\n\n    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\n    q = tl.floor(x / scale + 0.5)\n    q = tl.minimum(tl.maximum(q, -127.0), 127.0)\n    tl.store(OUT + row * stride + cols, q * scale, mask=valid)\n\n\ndef quant_dequant(x, pctl_levels: int = 2):\n    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\n                             PCTL_LEVELS=pctl_levels,\n                             BLOCK=triton.next_power_of_2(n_cols))\n    return out\n",
     "passed": null,
-    "problem_text": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
+    "problem_text": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
     "rounds": null,
-    "session_dir": "/root/cases/case_27",
+    "session_dir": "/root/cases/case_28",
     "status": "under_test",
     "test_code": ""
   },
   "claims": [
     {
-      "created_at": "2026-09-30T08:34:04Z",
+      "created_at": "2026-09-30T08:35:11Z",
       "evidence": [
         {
           "artifacts": [],
-          "created_at": "2026-09-30T08:34:16Z",
-          "data": {
-            "exit_code": 1,
-            "reason": "probe syntax error, no signal",
-            "tool_event_id": "t7"
-          },
-          "id": "c1.e1",
-          "kind": "tool_error",
-          "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
-          "supports": "inconclusive",
-          "tool_event_id": "t7"
-        },
-        {
-          "artifacts": [],
-          "created_at": "2026-09-30T08:34:33Z",
+          "created_at": "2026-09-30T08:35:47Z",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
+              }
+            ],
+            "budget": 0.05,
+            "duration_s": 5.738579,
+            "exit_code": 0,
+            "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+            "json_parse_error": null,
+            "json_result": {
+              "budget": 0.05,
+              "metric": "per_row_relative_L2_error",
+              "trials": [
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.5486,
+                  "outlier_ratio": 20,
+                  "per_row_rel_err": [
+                    0.5413,
+                    0.5324,
+                    0.5486,
+                    0.5443
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.8487,
+                  "outlier_ratio": 50,
+                  "per_row_rel_err": [
+                    0.8487,
+                    0.8298,
+                    0.8269,
+                    0.8447
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.9423,
+                  "outlier_ratio": 100,
+                  "per_row_rel_err": [
+                    0.9344,
+                    0.9405,
+                    0.9423,
+                    0.9377
+                  ]
+                }
+              ]
+            },
+            "max_row_err_ratio100": 0.9423,
+            "max_row_err_ratio20": 0.5486,
+            "max_row_err_ratio50": 0.8487,
+            "outlier_ratios": [
+              20,
+              50,
+              100
+            ],
+            "per_row_rel_err": {
+              "100x": [
+                0.9344,
+                0.9405,
+                0.9423,
+                0.9377
+              ],
+              "20x": [
+                0.5413,
+                0.5324,
+                0.5486,
+                0.5443
+              ],
+              "50x": [
+                0.8487,
+                0.8298,
+                0.8269,
+                0.8447
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      ],
+      "id": "c1",
+      "raised_by": "skeptic",
+      "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
+      "scope": "in_scope",
+      "scope_evidence": [
+        {
+          "source": "problem.txt",
+          "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
+        }
+      ],
+      "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+      "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget.",
+      "status": "confirmed",
+      "updated_at": "2026-09-30T08:35:47Z"
+    },
+    {
+      "created_at": "2026-09-30T08:35:11Z",
+      "evidence": [
+        {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:35:47Z",
+          "data": {
+            "absmax_reference_max_err": 0.0194,
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+                "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+                "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -60,149 +180,143 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+                "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
               }
             ],
-            "duration_s": 5.023958,
+            "duration_s": 5.737025,
             "exit_code": 0,
-            "expected_output": "all-zero finite row",
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
-            "finite_elsewhere": true,
-            "full_row_isnan": true,
+            "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
             "json_parse_error": null,
             "json_result": {
-              "finite_elsewhere": true,
-              "full_row_isnan": true,
-              "full_row_values": [
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN
+              "absmax_reference_max_err": 0.0194,
+              "exceeds_5pct": true,
+              "kernel_per_row_err": [
+                0.3593,
+                0.3479,
+                0.361,
+                0.3491
               ],
-              "nan_count_row1": 8,
-              "nan_count_total": 8
+              "kernel_y_zero_fraction": 0.000244140625,
+              "max_kernel_err": 0.361,
+              "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
             },
-            "n_cols": 8,
-            "n_rows": 3,
-            "nan_count_row1": 8,
-            "nan_count_total": 8,
-            "result": "all 8 lanes of fully-masked row are NaN",
+            "kernel_y_zero_fraction": 0.000244140625,
+            "max_kernel_err": 0.361,
             "stderr": "",
-            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
             "timed_out": false,
-            "timeout_s": 60
+            "timeout_s": 60,
+            "top_tied_magnitude": 0.5
           },
-          "id": "c1.e2",
+          "id": "c2.e1",
           "kind": "runtime_probe",
-          "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+          "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
           "supports": "confirmed",
           "tool_event_id": "t9"
         }
       ],
-      "id": "c1",
+      "id": "c2",
       "raised_by": "skeptic",
-      "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+      "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
       "scope": "in_scope",
       "scope_evidence": [
         {
           "source": "problem.txt",
-          "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+          "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
         }
       ],
-      "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
-      "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+      "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+      "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows.",
       "status": "confirmed",
-      "updated_at": "2026-09-30T08:34:33Z"
+      "updated_at": "2026-09-30T08:35:47Z"
     }
   ],
   "convergence": null,
   "description_model": {
     "contract_model": [
-      "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-      "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-      "Fully-masked rows must return an all-zero output row.",
-      "Every returned value must be finite (no NaN/Inf in any row).",
-      "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+      "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+      "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+      "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+      "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+      "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
     ],
     "kernel_model": [
-      "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-      "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-      "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-      "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-      "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-      "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+      "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+      "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+      "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+      "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+      "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
     ],
     "open_questions": [
-      "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-      "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-      "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+      "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+      "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+      "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
     ],
     "risk_map": [
-      "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-      "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-      "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-      "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-      "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-      "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+      "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+      "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+      "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+      "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+      "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+      "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+      "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+      "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
     ],
     "scope_notes": [
-      "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-      "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-      "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-      "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+      "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+      "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+      "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+      "Only the dequantized output y is observable; no separate integer tensor is exposed."
     ]
   },
   "description_tasks": [],
   "description_updates": [
     {
       "contract_model": [
-        "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-        "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-        "Fully-masked rows must return an all-zero output row.",
-        "Every returned value must be finite (no NaN/Inf in any row).",
-        "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+        "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+        "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+        "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+        "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+        "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
       ],
-      "created_at": "2026-09-30T08:33:54Z",
+      "created_at": "2026-09-30T08:34:57Z",
       "created_by": "describer",
       "id": "du1",
       "impact_on_claims": [],
       "kernel_model": [
-        "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-        "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-        "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-        "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-        "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-        "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+        "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+        "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+        "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+        "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+        "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
       ],
       "open_questions": [
-        "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-        "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-        "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+        "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+        "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+        "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
       ],
       "risk_map": [
-        "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-        "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-        "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-        "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-        "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-        "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+        "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+        "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+        "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+        "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+        "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+        "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+        "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+        "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
       ],
       "scope_notes": [
-        "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-        "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-        "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-        "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+        "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+        "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+        "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+        "Only the dequantized output y is observable; no separate integer tensor is exposed."
       ],
-      "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface.",
+      "summary": "Kernel implements per-row symmetric INT8 quant-dequant in Triton, but calibrates the scale on an iteratively-lowered threshold (the third-largest |x| with default pctl_levels=2) instead of the row absmax, so any |x| above that threshold maps to |q|>127 and is clamped. On the contract's stated heavy-tailed activation domain, outlier channels will be substantially clipped, likely violating the 5% per-row relative error. Also a tie-handling edge: if the top |x| values are all equal, the strict '<' drops them all at once, thresh becomes 0 and scale falls back to 1.0, which quantizes the whole row to zero for small magnitudes.",
       "task_ids": [],
       "turn": 2
     }
   ],
-  "entry": "case_27",
+  "entry": "case_28",
   "history": [
     {
       "duration_s": null,
@@ -212,25 +326,25 @@
       "tool_calls": [
         {
           "args": {
-            "entry": "case_27"
+            "entry": "case_28"
           },
           "tool": "load_artifact"
         },
         {
           "args": {
-            "entry": "case_27"
+            "entry": "case_28"
           },
           "tool": "inspect_problem"
         },
         {
           "args": {
-            "entry": "case_27"
+            "entry": "case_28"
           },
           "tool": "list_artifact_files"
         },
         {
           "args": {
-            "entry": "case_27",
+            "entry": "case_28",
             "path": "meta.json"
           },
           "tool": "read_artifact_file"
@@ -239,48 +353,49 @@
       "usage": null
     },
     {
-      "duration_s": 21.254439149999826,
+      "duration_s": 23.177919186000054,
       "role": "describer",
       "round": 2,
-      "text": "I have full artifact context. The critical surface: the kernel computes `e / tl.sum(e)` with no guard for rows where no mask positions are kept \u2014 a fully-masked row yields sum 0 and 0/0 = NaN, directly violating the \"all-zero, finite\" contract clause. I'll record the description model now.",
+      "text": "I have full context: the contract and kernel. The kernel calibrates the scale on a \"bulk\" threshold (iteratively dropping top |x| values) instead of the row absmax, which under-covers heavy-tailed outlier channels and clamps them \u2014 exactly the failure mode the contract highlights. Recording the description model now.",
       "tool_calls": [
         {
           "args": {
             "contract_model": [
-              "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-              "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-              "Fully-masked rows must return an all-zero output row.",
-              "Every returned value must be finite (no NaN/Inf in any row).",
-              "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+              "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+              "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+              "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+              "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+              "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
             ],
             "kernel_model": [
-              "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-              "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-              "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-              "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-              "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-              "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+              "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+              "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+              "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+              "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+              "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
             ],
             "open_questions": [
-              "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-              "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-              "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+              "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+              "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+              "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
             ],
             "risk_map": [
-              "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-              "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-              "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-              "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-              "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-              "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+              "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+              "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+              "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+              "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+              "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+              "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+              "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+              "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
             ],
             "scope_notes": [
-              "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-              "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-              "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-              "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+              "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+              "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+              "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+              "Only the dequantized output y is observable; no separate integer tensor is exposed."
             ],
-            "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface."
+            "summary": "Kernel implements per-row symmetric INT8 quant-dequant in Triton, but calibrates the scale on an iteratively-lowered threshold (the third-largest |x| with default pctl_levels=2) instead of the row absmax, so any |x| above that threshold maps to |q|>127 and is clamped. On the contract's stated heavy-tailed activation domain, outlier channels will be substantially clipped, likely violating the 5% per-row relative error. Also a tie-handling edge: if the top |x| values are all equal, the strict '<' drops them all at once, thresh becomes 0 and scale falls back to 1.0, which quantizes the whole row to zero for small magnitudes."
           },
           "tool": "record_description_update"
         }
@@ -288,29 +403,44 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 21.254,
-        "input_tokens": 4127,
-        "output_tokens": 961
+        "duration_s": 23.178,
+        "input_tokens": 4708,
+        "output_tokens": 1287
       }
     },
     {
-      "duration_s": 10.279029032999915,
+      "duration_s": 13.537692555000149,
       "role": "skeptic",
       "round": 3,
-      "text": "The contract explicitly requires finite, all-zero output for fully-masked rows; the kernel divides by `tl.sum(e)` unconditionally and even `x - max(x)` becomes `-inf - (-inf) = NaN` in that case. Recording this as the primary testable claim.",
+      "text": "The description model matches my reading of the source. The two highest-risk, directly testable failure modes are outlier clamping under the contract's heavy-tailed domain and the tie-collapse fallback to scale=1.0.",
       "tool_calls": [
         {
           "args": {
-            "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+            "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
             "scope": "in_scope",
             "scope_evidence": [
               {
                 "source": "problem.txt",
-                "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+                "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
               }
             ],
-            "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
-            "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp)."
+            "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+            "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget."
+          },
+          "tool": "record_claim"
+        },
+        {
+          "args": {
+            "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
+            "scope": "in_scope",
+            "scope_evidence": [
+              {
+                "source": "problem.txt",
+                "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
+              }
+            ],
+            "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+            "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows."
           },
           "tool": "record_claim"
         }
@@ -318,22 +448,30 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 10.279,
-        "input_tokens": 11227,
-        "output_tokens": 500
+        "duration_s": 13.538,
+        "input_tokens": 13887,
+        "output_tokens": 724
       }
     },
     {
-      "duration_s": 5.931172870999944,
+      "duration_s": 13.439458278000075,
       "role": "experimenter",
       "round": 4,
-      "text": "I'll probe claim c1 directly: run the kernel on an input containing a fully-masked row alongside normal rows and check for NaN.",
+      "text": "I'm launching two independent runtime probes: c1 tests heavy-tailed outlier clamping against the 5% per-row budget, and c2 tests the tied-top-values threshold collapse.",
       "tool_calls": [
         {
           "args": {
             "claim_id": "c1",
-            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0,2]].all().item()),\n}\nprint(json.dumps(res))\n",
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+            "code": "import torch, json, sys, os\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nresults = []\n# Heavy-tailed rows: bulk ~N(0,1), 2 outlier channels at 50x bulk (in-contract regime)\nfor ratio in [20, 50, 100]:\n    x = torch.randn(4, 1024, device=dev)\n    x[:, 0] = ratio\n    x[:, 1] = -ratio * 0.9\n    y = quant_dequant(x)\n    per_row = ((y - x).norm(dim=1) / x.norm(dim=1))\n    # identify clamped entries: |y| == 127*scale observed cap\n    results.append({\n        \"outlier_ratio\": ratio,\n        \"per_row_rel_err\": [round(v, 4) for v in per_row.tolist()],\n        \"max_row_err\": round(per_row.max().item(), 4),\n        \"exceeds_5pct\": bool((per_row > 0.05).any()),\n    })\nprint(json.dumps({\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": results}))\n",
+            "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers"
+          },
+          "tool": "run_claim_probe"
+        },
+        {
+          "args": {
+            "claim_id": "c2",
+            "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\n# Row where top-3 |x| are tied: bulk small (~0.1 magnitude), three channels tied at 0.5\nx = torch.full((4, 1024), 0.05, device=dev) + 0.02 * torch.randn(4, 1024, device=dev)\nx[:, 0] = 0.5; x[:, 1] = -0.5; x[:, 2] = 0.5\ny = quant_dequant(x)\nper_row = ((y - x).norm(dim=1) / x.norm(dim=1))\n# reference: absmax calibration\ns = x.abs().amax(dim=1, keepdim=True) / 127.0\nq = torch.clamp(torch.round(x / s), -127, 127)\ny_ref = q * s\nref_err = ((y_ref - x).norm(dim=1) / x.norm(dim=1))\nprint(json.dumps({\n    \"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\",\n    \"kernel_per_row_err\": [round(v, 4) for v in per_row.tolist()],\n    \"max_kernel_err\": round(per_row.max().item(), 4),\n    \"absmax_reference_max_err\": round(ref_err.max().item(), 4),\n    \"kernel_y_zero_fraction\": float((y == 0).float().mean()),\n    \"exceeds_5pct\": bool((per_row > 0.05).any()),\n}))\n",
+            "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%"
           },
           "tool": "run_claim_probe"
         }
@@ -341,85 +479,68 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.931,
-        "input_tokens": 12917,
-        "output_tokens": 273
+        "duration_s": 13.439,
+        "input_tokens": 17341,
+        "output_tokens": 808
       }
     },
     {
-      "duration_s": 6.2423599369999465,
+      "duration_s": 11.368320881000045,
       "role": "experimenter",
       "round": 5,
-      "text": "The previous probe failed with a syntax error (stray comma before the closing paren), so it produced no signal. I'll record it as inconclusive and relaunch a corrected probe.",
+      "text": "Both probes completed and clearly confirm the claims. Finalizing evidence for c1 and c2 now.",
       "tool_calls": [
         {
           "args": {
-            "claim_id": "c1",
             "data": {
-              "exit_code": 1,
-              "reason": "probe syntax error, no signal",
-              "tool_event_id": "t7"
+              "budget": 0.05,
+              "max_row_err_ratio100": 0.9423,
+              "max_row_err_ratio20": 0.5486,
+              "max_row_err_ratio50": 0.8487,
+              "outlier_ratios": [
+                20,
+                50,
+                100
+              ],
+              "per_row_rel_err": {
+                "100x": [
+                  0.9344,
+                  0.9405,
+                  0.9423,
+                  0.9377
+                ],
+                "20x": [
+                  0.5413,
+                  0.5324,
+                  0.5486,
+                  0.5443
+                ],
+                "50x": [
+                  0.8487,
+                  0.8298,
+                  0.8269,
+                  0.8447
+                ]
+              }
             },
-            "kind": "tool_error",
-            "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
-            "supports": "inconclusive",
-            "tool_event_id": "t7"
+            "event_id": "t8",
+            "status": "confirmed",
+            "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
+            "supports": "confirmed"
           },
-          "tool": "append_evidence"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 6.242,
-        "input_tokens": 14611,
-        "output_tokens": 230
-      }
-    },
-    {
-      "duration_s": 5.482364883999935,
-      "role": "experimenter",
-      "round": 6,
-      "text": "Relaunching the corrected probe for c1 (previous one had a syntax error).",
-      "tool_calls": [
-        {
-          "args": {
-            "claim_id": "c1",
-            "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0, 2]]).all().item()),\n  \"nan_count_row1\": int(torch.isnan(row1).sum().item())\n}\nprint(json.dumps(res))\n",
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
-          },
-          "tool": "run_claim_probe"
-        }
-      ],
-      "usage": {
-        "cache_creation_input_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "duration_s": 5.482,
-        "input_tokens": 15270,
-        "output_tokens": 279
-      }
-    },
-    {
-      "duration_s": 6.124927581000065,
-      "role": "experimenter",
-      "round": 7,
-      "text": "The corrected probe (t9) succeeded: the fully-masked row returns all NaN lanes while other rows are finite \u2014 exactly the claimed defect. I'll finalize this as confirmed evidence for c1.",
-      "tool_calls": [
+          "tool": "finalize_probe_evidence"
+        },
         {
           "args": {
             "data": {
-              "expected_output": "all-zero finite row",
-              "finite_elsewhere": true,
-              "full_row_isnan": true,
-              "n_cols": 8,
-              "n_rows": 3,
-              "nan_count_row1": 8,
-              "nan_count_total": 8,
-              "result": "all 8 lanes of fully-masked row are NaN"
+              "absmax_reference_max_err": 0.0194,
+              "kernel_y_zero_fraction": 0.000244140625,
+              "max_kernel_err": 0.361,
+              "top_tied_magnitude": 0.5
             },
             "event_id": "t9",
             "status": "confirmed",
-            "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+            "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
             "supports": "confirmed"
           },
           "tool": "finalize_probe_evidence"
@@ -428,22 +549,23 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 6.125,
-        "input_tokens": 17307,
-        "output_tokens": 236
+        "duration_s": 11.368,
+        "input_tokens": 22867,
+        "output_tokens": 562
       }
     },
     {
-      "duration_s": 5.3996596350000345,
+      "duration_s": 5.920157069999959,
       "role": "skeptic",
-      "round": 8,
-      "text": "The single in-scope claim (c1) is confirmed by a clean runtime probe: the fully-masked row returns all-NaN, violating the contract's explicit all-zero/finite requirement. No other material, in-scope problem is uncovered by the new evidence, so I close the review.",
+      "round": 6,
+      "text": "Both in-scope claims (c1: heavy-tailed outlier clamping; c2: tied-top-value threshold collapse) are confirmed with decisive runtime evidence well above the 5% budget. No additional in-scope problems remain uncovered.",
       "tool_calls": [
         {
           "args": {
-            "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+            "reason": "Final review: both claims are in-scope and confirmed \u2014 c1 shows 53-94% per-row relative error on the contract's explicitly stated heavy-tailed domain (outliers 20-100x the bulk, clamped at 127*scale), and c2 shows ~36% error vs the reference's 1.94% for tied top-magnitude rows due to the strict-'<' threshold collapse. The new evidence reveals no additional material, testable in-scope failure mode not already covered.",
             "reviewed_claims": [
-              "c1"
+              "c1",
+              "c2"
             ]
           },
           "tool": "record_no_new_claims"
@@ -452,24 +574,25 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 5.4,
-        "input_tokens": 20259,
-        "output_tokens": 180
+        "duration_s": 5.92,
+        "input_tokens": 31528,
+        "output_tokens": 199
       }
     },
     {
-      "duration_s": 10.266427092999947,
+      "duration_s": 8.985249810000141,
       "role": "judge",
-      "round": 9,
-      "text": "The single in-scope claim c1 is confirmed by a clean runtime probe: a fully-masked row returns all-NaN instead of the contractually required all-zero finite row. The artifact has no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly requires this case. Skeptic signed off with no new claims. Recording a reject verdict.",
+      "round": 7,
+      "text": "Both claims are confirmed, in-scope, and backed by decisive runtime evidence on the contract's explicitly stated heavy-tailed domain. No open claims remain, and Skeptic signed off. Recording the reject verdict.",
       "tool_calls": [
         {
           "args": {
-            "confidence": 0.97,
+            "confidence": 0.95,
             "decisive_claims": [
-              "c1"
+              "c1",
+              "c2"
             ],
-            "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+            "reason": "The kernel calibrates the per-row scale on the third-largest |x| (default pctl_levels=2) instead of a calibration covering the row's dynamic range. Claim c1 (confirmed, in-scope, scoped to problem.txt's explicitly stated heavy-tailed input domain of channels 1-2 orders of magnitude above the bulk): probes show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% for outlier-to-bulk ratios of 20x/50x/100x, versus the contract's 5% budget. The problem text explicitly states the budget 'is not loose enough to absorb a value that has been clamped away' \u2014 the outlier channels are clamped at 127*scale, removing most of their magnitude, directly violating the accuracy requirement. Claim c2 (confirmed, in-scope): tied top-magnitude rows (a natural case within the heavy-tailed domain) collapse the strict-'<' threshold loop at once, yielding ~36% per-row error versus 1.94% for the absmax-calibrated reference. Since the artifact provides no test.py/get_inputs, problem.txt is the operative contract and these violations of its explicit 5% per-row relative error requirement on its stated input domain are a valid basis for reject. This is a genuine correctness failure (clamping loss), not an acceptable lossy-format or rounding deviation, per the contract's own clause that clamped-away magnitudes cannot be absorbed by the 5% budget.",
             "verdict": "reject"
           },
           "tool": "record_verdict"
@@ -478,22 +601,23 @@
       "usage": {
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
-        "duration_s": 10.266,
-        "input_tokens": 19915,
-        "output_tokens": 319
+        "duration_s": 8.985,
+        "input_tokens": 32298,
+        "output_tokens": 396
       }
     }
   ],
   "skeptic_review": {
-    "created_at": "2026-09-30T08:34:38Z",
+    "created_at": "2026-09-30T08:35:53Z",
     "decision": "no_new_claims",
-    "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+    "reason": "Final review: both claims are in-scope and confirmed \u2014 c1 shows 53-94% per-row relative error on the contract's explicitly stated heavy-tailed domain (outliers 20-100x the bulk, clamped at 127*scale), and c2 shows ~36% error vs the reference's 1.94% for tied top-magnitude rows due to the strict-'<' threshold collapse. The new evidence reveals no additional material, testable in-scope failure mode not already covered.",
     "reviewed_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reviewed_tool_event_count": 10,
-    "tool_event_id": "t11",
-    "turn": 8
+    "reviewed_tool_event_count": 11,
+    "tool_event_id": "t12",
+    "turn": 6
   },
   "skills": [
     "kernel-verification.md",
@@ -508,23 +632,24 @@
   "tool_events": [
     {
       "args": {
-        "entry": "case_27"
+        "entry": "case_28"
       },
-      "created_at": "2026-09-30T08:33:32Z",
+      "created_at": "2026-09-30T08:34:34Z",
       "id": "t1",
       "output": {
         "artifact_files": [
+          "__pycache__/kernel.cpython-311.pyc",
           "kernel.py",
           "meta.json",
           "problem.txt"
         ],
-        "entry": "case_27",
+        "entry": "case_28",
         "has_error": null,
-        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _masked_softmax_kernel(X, M, Y, stride, N, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=-float(\"inf\"))\n    keep = tl.load(M + row * stride + cols, mask=valid, other=0).to(tl.int1)\n    x = tl.where(keep, x, -float(\"inf\"))\n    x = x - tl.max(x, axis=0)\n    e = tl.where(keep, tl.exp(x), 0.0)\n    tl.store(Y + row * stride + cols, e / tl.sum(e, axis=0), mask=valid)\n\n\ndef masked_softmax(x, mask):\n    # Row-wise softmax over the positions the mask keeps.\n    n_rows, n_cols = x.shape\n    y = torch.empty_like(x)\n    _masked_softmax_kernel[(n_rows,)](x, mask, y, x.stride(0), n_cols,\n                                      BLOCK=triton.next_power_of_2(n_cols))\n    return y\n",
+        "kernel_code": "import torch\nimport triton\nimport triton.language as tl\n\n\n@triton.jit\ndef _quant_kernel(X, OUT, stride, N, PCTL_LEVELS: tl.constexpr, BLOCK: tl.constexpr):\n    row = tl.program_id(0)\n    cols = tl.arange(0, BLOCK)\n    valid = cols < N\n    x = tl.load(X + row * stride + cols, mask=valid, other=0.0)\n\n    ax = tl.abs(x)\n    absmax = tl.max(ax, axis=0)\n    # Calibrate on the bulk of the row rather than on its single largest value.\n    thresh = absmax\n    for _ in range(PCTL_LEVELS):\n        below = tl.where(ax < thresh, ax, 0.0)\n        thresh = tl.max(below, axis=0)\n\n    scale = tl.where(thresh == 0.0, 1.0, thresh / 127.0)\n    q = tl.floor(x / scale + 0.5)\n    q = tl.minimum(tl.maximum(q, -127.0), 127.0)\n    tl.store(OUT + row * stride + cols, q * scale, mask=valid)\n\n\ndef quant_dequant(x, pctl_levels: int = 2):\n    # Symmetric INT8 quantize-dequantize with a per-row calibrated scale.\n    n_rows, n_cols = x.shape\n    out = torch.empty_like(x)\n    _quant_kernel[(n_rows,)](x, out, x.stride(0), n_cols,\n                             PCTL_LEVELS=pctl_levels,\n                             BLOCK=triton.next_power_of_2(n_cols))\n    return out\n",
         "passed": null,
-        "problem_text": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
+        "problem_text": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
         "rounds": null,
-        "session_dir": "/root/cases/case_27",
+        "session_dir": "/root/cases/case_28",
         "status": "under_test",
         "test_code": ""
       },
@@ -533,13 +658,13 @@
     },
     {
       "args": {
-        "entry": "case_27"
+        "entry": "case_28"
       },
-      "created_at": "2026-09-30T08:33:32Z",
+      "created_at": "2026-09-30T08:34:34Z",
       "id": "t2",
       "output": {
-        "content": "Operation: row-wise softmax restricted to the positions a boolean mask keeps,\nthe attention-probability step of any masked or padded attention kernel.\n\n    y[j] = exp(x[j]) / sum over kept k of exp(x[k])     if mask[j]\n    y[j] = 0                                            otherwise\n\nInput domain: the mask is arbitrary. In particular a row may keep NO positions\nat all -- a fully padded query row, or a causal row before its first visible\nkey. For such a row the specification requires an all-zero output row: there is\nno probability mass to distribute, and every downstream consumer treats the row\nas contributing nothing.\n\nEvery returned value must be finite.\n\nDoes masked_softmax() satisfy this contract?\n",
-        "entry": "case_27",
+        "content": "Operation: symmetric INT8 quantize-dequantize with a per-row calibrated scale,\nthe activation quantization step of INT8 inference.\n\n    scale = calibration(|x|) / 127\n    q     = round(x / scale), clamped to [-127, 127]\n    y     = q * scale\n\nAccuracy requirement: the relative reconstruction error of each row,\n\n    ||y - x|| / ||x||        (Euclidean norm over the row)\n\nmust not exceed 5%. That is the usual way INT8 quantization quality is stated,\nand it is loose enough to absorb ordinary rounding: an 8-bit grid over the row's\ndynamic range leaves a residual well under 1%. It is not loose enough to absorb\na value that has been clamped away, since a clamped entry removes its whole\nmagnitude from the reconstruction.\n\nInput domain: real transformer activations, whose per-channel magnitudes are\nheavy-tailed. A small number of channels carrying values one or two orders of\nmagnitude above the bulk is normal and documented (LLM.int8(), SmoothQuant), and\nthose channels are exactly the ones downstream layers depend on.\n\nDoes quant_dequant() satisfy this contract?\n",
+        "entry": "case_28",
         "exists": true,
         "path": "problem.txt"
       },
@@ -548,17 +673,22 @@
     },
     {
       "args": {
-        "entry": "case_27"
+        "entry": "case_28"
       },
-      "created_at": "2026-09-30T08:33:32Z",
+      "created_at": "2026-09-30T08:34:34Z",
       "id": "t3",
       "output": {
-        "entry": "case_27",
+        "entry": "case_28",
         "files": [
+          {
+            "kind": "other",
+            "path": "__pycache__/kernel.cpython-311.pyc",
+            "size_bytes": 2279
+          },
           {
             "kind": "kernel_source",
             "path": "kernel.py",
-            "size_bytes": 858
+            "size_bytes": 1147
           },
           {
             "kind": "metadata",
@@ -568,7 +698,7 @@
           {
             "kind": "problem",
             "path": "problem.txt",
-            "size_bytes": 711
+            "size_bytes": 1071
           }
         ]
       },
@@ -577,14 +707,14 @@
     },
     {
       "args": {
-        "entry": "case_27",
+        "entry": "case_28",
         "path": "meta.json"
       },
-      "created_at": "2026-09-30T08:33:32Z",
+      "created_at": "2026-09-30T08:34:34Z",
       "id": "t4",
       "output": {
-        "content": "{\n  \"name\": \"case_27\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
-        "entry": "case_27",
+        "content": "{\n  \"name\": \"case_28\",\n  \"status\": \"under_test\",\n  \"passed\": null\n}\n",
+        "entry": "case_28",
         "kind": "metadata",
         "path": "meta.json",
         "size_chars": 68,
@@ -596,121 +726,124 @@
     {
       "args": {
         "contract_model": [
-          "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-          "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-          "Fully-masked rows must return an all-zero output row.",
-          "Every returned value must be finite (no NaN/Inf in any row).",
-          "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+          "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+          "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+          "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+          "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+          "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
         ],
         "kernel_model": [
-          "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-          "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-          "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-          "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-          "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-          "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+          "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+          "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+          "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+          "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+          "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
         ],
         "open_questions": [
-          "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-          "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-          "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+          "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+          "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+          "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
         ],
         "risk_map": [
-          "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-          "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-          "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-          "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-          "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-          "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+          "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+          "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+          "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+          "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+          "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+          "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+          "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+          "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
         ],
         "scope_notes": [
-          "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-          "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-          "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-          "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+          "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+          "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+          "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+          "Only the dequantized output y is observable; no separate integer tensor is exposed."
         ],
-        "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface."
+        "summary": "Kernel implements per-row symmetric INT8 quant-dequant in Triton, but calibrates the scale on an iteratively-lowered threshold (the third-largest |x| with default pctl_levels=2) instead of the row absmax, so any |x| above that threshold maps to |q|>127 and is clamped. On the contract's stated heavy-tailed activation domain, outlier channels will be substantially clipped, likely violating the 5% per-row relative error. Also a tie-handling edge: if the top |x| values are all equal, the strict '<' drops them all at once, thresh becomes 0 and scale falls back to 1.0, which quantizes the whole row to zero for small magnitudes."
       },
-      "created_at": "2026-09-30T08:33:54Z",
+      "created_at": "2026-09-30T08:34:57Z",
       "id": "t5",
       "output": {
         "description_model": {
           "contract_model": [
-            "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-            "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-            "Fully-masked rows must return an all-zero output row.",
-            "Every returned value must be finite (no NaN/Inf in any row).",
-            "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+            "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+            "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+            "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+            "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+            "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
           ],
           "kernel_model": [
-            "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-            "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-            "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-            "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-            "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-            "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+            "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+            "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+            "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+            "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+            "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
           ],
           "open_questions": [
-            "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-            "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-            "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+            "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+            "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+            "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
           ],
           "risk_map": [
-            "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-            "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-            "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-            "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-            "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-            "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+            "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+            "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+            "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+            "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+            "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+            "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+            "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+            "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
           ],
           "scope_notes": [
-            "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-            "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-            "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-            "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+            "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+            "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+            "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+            "Only the dequantized output y is observable; no separate integer tensor is exposed."
           ]
         },
         "resolved_tasks": [],
         "update": {
           "contract_model": [
-            "Row-wise softmax restricted to kept (mask true) positions: y[j] = exp(x[j]) / sum_kept exp(x[k]) for kept j, y[j] = 0 for masked j.",
-            "Mask is arbitrary; a row may keep NO positions (fully padded query / pre-first-visible causal row).",
-            "Fully-masked rows must return an all-zero output row.",
-            "Every returned value must be finite (no NaN/Inf in any row).",
-            "Downstream is attention probabilities, so zero rows mean 'contributes nothing'."
+            "Symmetric INT8 quantize-dequantize per row: scale = calibration(|x|)/127, q = round(x/scale) clamped to [-127,127], y = q*scale.",
+            "Per-row relative reconstruction error ||y-x||/||x|| must be <= 5%.",
+            "Clamping away a value removes its whole magnitude from reconstruction and is explicitly called out as not absorbable by the 5% budget.",
+            "Input domain: heavy-tailed transformer activations where a few channels are 1-2 orders of magnitude above the bulk (LLM.int8/SmoothQuant regime).",
+            "The calibration function is named but not precisely defined in the contract; the reference behavior implied by the accuracy statement is that the full dynamic range (or at least all retained values) fits within the [-127,127] grid."
           ],
-          "created_at": "2026-09-30T08:33:54Z",
+          "created_at": "2026-09-30T08:34:57Z",
           "created_by": "describer",
           "id": "du1",
           "impact_on_claims": [],
           "kernel_model": [
-            "One Triton program per row (grid = n_rows), BLOCK = next_power_of_2(n_cols), loads a full row with cols < N masking.",
-            "Masked-out lanes load -inf and keep=0; keep=false positions set x to -inf and e to 0.0 before the sum, so masked positions are excluded from numerator and denominator.",
-            "Standard max-subtraction for numerical stability: x = x - max(x) over the padded row (max is 0 or a real kept max since -inf padding is dominated).",
-            "Output is e / tl.sum(e, axis=0) with NO special-case for a row where all positions are dropped by the mask.",
-            "Uses x.stride(0) for X, M, and Y addressing, implicitly assuming mask and output share the row stride/shape of x; wrapper assumes x is 2-D (n_rows, n_cols) and y = empty_like(x).",
-            "Mask loaded as int and cast to tl.int1 (other=0 for out-of-range lanes)."
+            "One Triton program per row; loads the row with mask, computes absmax, then iteratively lowers a threshold: for each of PCTL_LEVELS (default 2) iterations, thresh = max(|x| below current thresh), effectively the (PCTL_LEVELS+1)-th largest |x| value.",
+            "scale = thresh/127 (or 1.0 if thresh==0), i.e., calibrated on the third-largest magnitude rather than the row absmax.",
+            "q = floor(x/scale + 0.5) (round-half-up) clamped to [-127,127]; output is q*scale.",
+            "Any |x| > thresh*127/127, i.e., |x| larger than roughly the third-largest value, exceeds 127 after scaling only when the outlier-to-bulk ratio exceeds ~127; more directly, values above thresh map to q>127 and get clamped, losing (|x| - 127*scale) of magnitude each.",
+            "Assumes 2D contiguous-enough input (uses x.stride(0), element-contiguous rows); BLOCK = next_power_of_2(n_cols)."
           ],
           "open_questions": [
-            "What dtype and layout do the tests use for mask and x (bool contiguous? float mask?), and are non-contiguous inputs ever exercised?",
-            "Do the tests include fully-masked rows explicitly (the problem statement strongly implies yes)?",
-            "Exact behavior of tl.sum over all-zeros followed by division in the target Triton version \u2014 needs runtime probe by the Experimenter."
+            "Is the grading contract based only on the 5% per-row relative error, or also on reproducing a specific calibration (e.g., absmax)? The problem text names 'calibration(|x|)' without defining it, so a scale that passes on benign inputs may still violate the implied dynamic-range intent.",
+            "What exact input shapes/distributions does the test harness use (row sizes, number of outlier channels, outlier-to-bulk ratios)? This decides whether the strict-< tie-collapse path (thresh=0 -> scale=1.0) is reachable in-scope.",
+            "Does the harness ever pass pctl_levels other than the default 2, or non-contiguous/1D inputs?"
           ],
           "risk_map": [
-            "Fully-masked row: tl.sum(e) = 0, so e/0 = 0/0 = NaN at every stored lane \u2014 violates the explicit all-zero-row and finiteness requirements (kernel.py lines 15-16).",
-            "Even if some backend returned 0 instead of NaN, the division 0/0 in Triton fp arithmetic is the direct hazard to probe first.",
-            "Stride assumption: mask indexed with row * stride where stride = x.stride(0); if mask has different layout/stride, reads are wrong. Only a concern if tests pass non-contiguous or differently-strided masks.",
-            "BLOCK = next_power_of_2(n_cols) assumes n_cols >= 1; n_cols = 0 or 1-D inputs would misbehave, but likely out of scope.",
-            "Out-of-range lanes are masked from the store, so tail padding beyond N cannot leak into Y.",
-            "keep cast .to(tl.int1) of the loaded mask: if mask dtype is bool the load is fine; if mask is stored as float 0/1 or other dtype, int1 cast semantics should be verified against test inputs."
+            "Clamping of heavy-tailed outliers: with default pctl_levels=2, values above the third-largest |x| are clamped at 127*scale; outliers 1-2 orders of magnitude above the bulk (in-contract domain) lose most of their magnitude, and the problem statement says a clamped entry's full magnitude error is not absorbable by 5% \u2014 this can blow the per-row relative error.",
+            "Scale calibration choice is a deliberate mis-scoping: the comment 'Calibrate on the bulk of the row rather than on its single largest value' directly contradicts the contract's dynamic-range framing.",
+            "Tie handling in the threshold loop: if the top values are all equal (e.g., duplicated outliers), 'below thresh' with strict < yields 0.0 in one step, collapsing thresh to 0 and scale to 1.0, catastrophically wrong for small-magnitude rows.",
+            "Rows where thresh==0 (all-tied or zero rows) fall back to scale=1.0, which is only correct for an all-zero row.",
+            "Rounding: floor(x/scale+0.5) vs torch round (banker's) is a negligible difference here; in-scope but low risk.",
+            "Narrow rows (n_cols small) make the (PCTL_LEVELS+1)-th percentile statistic extremely noisy \u2014 with e.g. 4 columns, dropping the top 2 values calibrates on nearly half the row's range.",
+            "Grid/BLOCK assumption: BLOCK must cover N; next_power_of_2 handles this, and masked lanes load 0.0 which do not affect max() \u2014 safe.",
+            "Non-contiguous last-dim stride would break correctness since element stride is assumed 1."
           ],
           "scope_notes": [
-            "In scope: any 2-D (n_rows, n_cols) input with an arbitrary boolean mask, including rows with zero kept positions.",
-            "Contract explicitly demands finite outputs and zero rows for empty-mask rows; benign random probes with dense masks do not cover this.",
-            "No mention of dtype constraints beyond softmax; assume float x, bool mask unless tests show otherwise.",
-            "n_rows/n_cols are per-row loops; masked/padded attention is the motivating domain."
+            "Correctness metric is per-row relative L2 error, not elementwise allclose; aggregate row-norm error is the deciding quantity.",
+            "Heavy-tailed inputs (few large outliers) are explicitly in-scope, not adversarial extras; verification must include such distributions.",
+            "INT8 symmetric scheme with clamp at \u00b1127; the lossy nature means evidence should distinguish rounding residual (<1% expected) from clamping loss.",
+            "Only the dequantized output y is observable; no separate integer tensor is exposed."
           ],
-          "summary": "Described case_27: masked row-wise softmax with arbitrary mask. Contract requires all-zero, finite output rows even when a row keeps no positions; the kernel divides by tl.sum(e) unconditionally, so an all-masked row produces 0/0 = NaN. This empty-row case is the primary risk surface.",
+          "summary": "Kernel implements per-row symmetric INT8 quant-dequant in Triton, but calibrates the scale on an iteratively-lowered threshold (the third-largest |x| with default pctl_levels=2) instead of the row absmax, so any |x| above that threshold maps to |q|>127 and is clamped. On the contract's stated heavy-tailed activation domain, outlier channels will be substantially clipped, likely violating the 5% per-row relative error. Also a tie-handling edge: if the top |x| values are all equal, the strict '<' drops them all at once, thresh becomes 0 and scale falls back to 1.0, which quantizes the whole row to zero for small magnitudes.",
           "task_ids": [],
           "turn": 2
         }
@@ -720,36 +853,72 @@
     },
     {
       "args": {
-        "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+        "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+            "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
           }
         ],
-        "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
-        "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp)."
+        "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+        "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget."
       },
-      "created_at": "2026-09-30T08:34:04Z",
+      "created_at": "2026-09-30T08:35:11Z",
       "id": "t6",
       "output": {
-        "created_at": "2026-09-30T08:34:04Z",
+        "created_at": "2026-09-30T08:35:11Z",
         "evidence": [],
         "id": "c1",
         "raised_by": "skeptic",
-        "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+        "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
         "scope": "in_scope",
         "scope_evidence": [
           {
             "source": "problem.txt",
-            "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+            "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
           }
         ],
-        "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
-        "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+        "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+        "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget.",
         "status": "open",
-        "updated_at": "2026-09-30T08:34:04Z"
+        "updated_at": "2026-09-30T08:35:11Z"
+      },
+      "status": "ok",
+      "tool": "record_claim"
+    },
+    {
+      "args": {
+        "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
+          }
+        ],
+        "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+        "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows."
+      },
+      "created_at": "2026-09-30T08:35:11Z",
+      "id": "t7",
+      "output": {
+        "created_at": "2026-09-30T08:35:11Z",
+        "evidence": [],
+        "id": "c2",
+        "raised_by": "skeptic",
+        "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
+        "scope": "in_scope",
+        "scope_evidence": [
+          {
+            "source": "problem.txt",
+            "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
+          }
+        ],
+        "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+        "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows.",
+        "status": "open",
+        "updated_at": "2026-09-30T08:35:11Z"
       },
       "status": "ok",
       "tool": "record_claim"
@@ -757,37 +926,43 @@
     {
       "args": {
         "claim_id": "c1",
-        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0,2]].all().item()),\n}\nprint(json.dumps(res))\n",
-        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
+        "code": "import torch, json, sys, os\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(0)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\nresults = []\n# Heavy-tailed rows: bulk ~N(0,1), 2 outlier channels at 50x bulk (in-contract regime)\nfor ratio in [20, 50, 100]:\n    x = torch.randn(4, 1024, device=dev)\n    x[:, 0] = ratio\n    x[:, 1] = -ratio * 0.9\n    y = quant_dequant(x)\n    per_row = ((y - x).norm(dim=1) / x.norm(dim=1))\n    # identify clamped entries: |y| == 127*scale observed cap\n    results.append({\n        \"outlier_ratio\": ratio,\n        \"per_row_rel_err\": [round(v, 4) for v in per_row.tolist()],\n        \"max_row_err\": round(per_row.max().item(), 4),\n        \"exceeds_5pct\": bool((per_row > 0.05).any()),\n    })\nprint(json.dumps({\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": results}))\n",
+        "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers"
       },
-      "created_at": "2026-09-30T08:34:10Z",
-      "id": "t7",
+      "created_at": "2026-09-30T08:35:30Z",
+      "id": "t8",
       "output": {
         "artifacts": [
           {
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
-            "path": "probes/t7_probe.py",
-            "sha256": "733f006ea95b7d5ebed5de3bbf3df9994559b2f6c382da1940aad09d92ea1176"
+            "path": "probes/t8_probe.py",
+            "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
-            "path": "probes/t7_stdout.txt",
-            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            "path": "probes/t8_stdout.txt",
+            "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
           },
           {
             "description": "Captured stderr from the probe process.",
             "kind": "stderr",
-            "path": "probes/t7_stderr.txt",
-            "sha256": "7b48c65f49779eef0c8cce98345506f7034a5b6104ffc0583efc62aaccc7f8d4"
+            "path": "probes/t8_stderr.txt",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "description": "Parsed JSON object from the last non-empty stdout line.",
+            "kind": "json_result",
+            "path": "probes/t8_json_result.json",
+            "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
           }
         ],
         "claim_id": "c1",
-        "claim_statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
-        "cwd": "/root/cases/case_27",
-        "duration_s": 0.025103,
-        "event_id": "t7",
+        "claim_statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget.",
+        "cwd": "/root/cases/case_28",
+        "duration_s": 5.738579,
+        "event_id": "t8",
         "evidence_draft": {
           "claim_id": "c1",
           "data": {
@@ -795,41 +970,123 @@
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
-                "path": "probes/t7_probe.py",
-                "sha256": "733f006ea95b7d5ebed5de3bbf3df9994559b2f6c382da1940aad09d92ea1176"
+                "path": "probes/t8_probe.py",
+                "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
-                "path": "probes/t7_stdout.txt",
-                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
               },
               {
                 "description": "Captured stderr from the probe process.",
                 "kind": "stderr",
-                "path": "probes/t7_stderr.txt",
-                "sha256": "7b48c65f49779eef0c8cce98345506f7034a5b6104ffc0583efc62aaccc7f8d4"
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
               }
             ],
-            "duration_s": 0.025103,
-            "exit_code": 1,
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
-            "json_parse_error": "stdout has no non-empty lines",
-            "json_result": null,
-            "stderr": "  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_27/debate/probes/t7_probe.py\", line 15\n    }\n    ^\nSyntaxError: closing parenthesis '}' does not match opening parenthesis '(' on line 14\n",
-            "stdout": "",
+            "duration_s": 5.738579,
+            "exit_code": 0,
+            "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+            "json_parse_error": null,
+            "json_result": {
+              "budget": 0.05,
+              "metric": "per_row_relative_L2_error",
+              "trials": [
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.5486,
+                  "outlier_ratio": 20,
+                  "per_row_rel_err": [
+                    0.5413,
+                    0.5324,
+                    0.5486,
+                    0.5443
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.8487,
+                  "outlier_ratio": 50,
+                  "per_row_rel_err": [
+                    0.8487,
+                    0.8298,
+                    0.8269,
+                    0.8447
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.9423,
+                  "outlier_ratio": 100,
+                  "per_row_rel_err": [
+                    0.9344,
+                    0.9405,
+                    0.9423,
+                    0.9377
+                  ]
+                }
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
             "timed_out": false,
             "timeout_s": 60
           },
           "kind": "runtime_probe",
-          "summary": "Probe failed or produced nonzero exit and needs Experimenter interpretation.",
+          "summary": "Probe produced a JSON result that needs Experimenter interpretation.",
           "supports": "needs_interpretation",
-          "tool_event_id": "t7"
+          "tool_event_id": "t8"
         },
-        "exit_code": 1,
-        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
-        "json_parse_error": "stdout has no non-empty lines",
-        "json_result": null,
+        "exit_code": 0,
+        "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+        "json_parse_error": null,
+        "json_result": {
+          "budget": 0.05,
+          "metric": "per_row_relative_L2_error",
+          "trials": [
+            {
+              "exceeds_5pct": true,
+              "max_row_err": 0.5486,
+              "outlier_ratio": 20,
+              "per_row_rel_err": [
+                0.5413,
+                0.5324,
+                0.5486,
+                0.5443
+              ]
+            },
+            {
+              "exceeds_5pct": true,
+              "max_row_err": 0.8487,
+              "outlier_ratio": 50,
+              "per_row_rel_err": [
+                0.8487,
+                0.8298,
+                0.8269,
+                0.8447
+              ]
+            },
+            {
+              "exceeds_5pct": true,
+              "max_row_err": 0.9423,
+              "outlier_ratio": 100,
+              "per_row_rel_err": [
+                0.9344,
+                0.9405,
+                0.9423,
+                0.9377
+              ]
+            }
+          ]
+        },
         "sandbox": {
           "cpu_limit_s": 90,
           "cpu_quota_pct": null,
@@ -837,8 +1094,8 @@
           "mode": "cpu_ulimit",
           "network_isolated": false
         },
-        "stderr": "  File \"/root/trace_runs/completion_20260930_r1/benchmark_fn_fp/case_27/debate/probes/t7_probe.py\", line 15\n    }\n    ^\nSyntaxError: closing parenthesis '}' does not match opening parenthesis '(' on line 14\n",
-        "stdout": "",
+        "stderr": "",
+        "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -848,43 +1105,11 @@
     },
     {
       "args": {
-        "claim_id": "c1",
-        "data": {
-          "exit_code": 1,
-          "reason": "probe syntax error, no signal",
-          "tool_event_id": "t7"
-        },
-        "kind": "tool_error",
-        "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
-        "supports": "inconclusive",
-        "tool_event_id": "t7"
+        "claim_id": "c2",
+        "code": "import torch, json, sys\nsys.path.insert(0, \"/root/cases/case_28\")\nfrom kernel import quant_dequant\n\ntorch.manual_seed(1)\ndev = 'cuda' if torch.cuda.is_available() else 'cpu'\n# Row where top-3 |x| are tied: bulk small (~0.1 magnitude), three channels tied at 0.5\nx = torch.full((4, 1024), 0.05, device=dev) + 0.02 * torch.randn(4, 1024, device=dev)\nx[:, 0] = 0.5; x[:, 1] = -0.5; x[:, 2] = 0.5\ny = quant_dequant(x)\nper_row = ((y - x).norm(dim=1) / x.norm(dim=1))\n# reference: absmax calibration\ns = x.abs().amax(dim=1, keepdim=True) / 127.0\nq = torch.clamp(torch.round(x / s), -127, 127)\ny_ref = q * s\nref_err = ((y_ref - x).norm(dim=1) / x.norm(dim=1))\nprint(json.dumps({\n    \"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\",\n    \"kernel_per_row_err\": [round(v, 4) for v in per_row.tolist()],\n    \"max_kernel_err\": round(per_row.max().item(), 4),\n    \"absmax_reference_max_err\": round(ref_err.max().item(), 4),\n    \"kernel_y_zero_fraction\": float((y == 0).float().mean()),\n    \"exceeds_5pct\": bool((per_row > 0.05).any()),\n}))\n",
+        "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%"
       },
-      "created_at": "2026-09-30T08:34:16Z",
-      "id": "t8",
-      "output": {
-        "artifacts": [],
-        "created_at": "2026-09-30T08:34:16Z",
-        "data": {
-          "exit_code": 1,
-          "reason": "probe syntax error, no signal",
-          "tool_event_id": "t7"
-        },
-        "id": "c1.e1",
-        "kind": "tool_error",
-        "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
-        "supports": "inconclusive",
-        "tool_event_id": "t7"
-      },
-      "status": "ok",
-      "tool": "append_evidence"
-    },
-    {
-      "args": {
-        "claim_id": "c1",
-        "code": "import torch, json, importlib.util\nspec = importlib.util.spec_from_file_location(\"kernel\", \"/root/cases/case_27/kernel.py\")\nk = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)\ntorch.manual_seed(0)\nx = torch.randn(3, 8, device=\"cuda\", dtype=torch.float32)\nmask = torch.ones(3, 8, dtype=torch.bool, device=\"cuda\")\nmask[1] = False  # fully masked row\ny = k.masked_softmax(x, mask)\ntorch.cuda.synchronize()\nrow1 = y[1]\nres = {\n  \"full_row_isnan\": bool(torch.isnan(row1).all().item()),\n  \"full_row_values\": row1.tolist(),\n  \"nan_count_total\": int(torch.isnan(y).sum().item()),\n  \"finite_elsewhere\": bool(torch.isfinite(y[[0, 2]]).all().item()),\n  \"nan_count_row1\": int(torch.isnan(row1).sum().item())\n}\nprint(json.dumps(res))\n",
-        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite"
-      },
-      "created_at": "2026-09-30T08:34:27Z",
+      "created_at": "2026-09-30T08:35:36Z",
       "id": "t9",
       "output": {
         "artifacts": [
@@ -892,13 +1117,13 @@
             "description": "Python probe code executed by local runtime.",
             "kind": "probe_code",
             "path": "probes/t9_probe.py",
-            "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+            "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
           },
           {
             "description": "Captured stdout from the probe process.",
             "kind": "stdout",
             "path": "probes/t9_stdout.txt",
-            "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+            "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
           },
           {
             "description": "Captured stderr from the probe process.",
@@ -910,29 +1135,29 @@
             "description": "Parsed JSON object from the last non-empty stdout line.",
             "kind": "json_result",
             "path": "probes/t9_json_result.json",
-            "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+            "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
           }
         ],
-        "claim_id": "c1",
-        "claim_statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
-        "cwd": "/root/cases/case_27",
-        "duration_s": 5.023958,
+        "claim_id": "c2",
+        "claim_statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows.",
+        "cwd": "/root/cases/case_28",
+        "duration_s": 5.737025,
         "event_id": "t9",
         "evidence_draft": {
-          "claim_id": "c1",
+          "claim_id": "c2",
           "data": {
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+                "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+                "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -944,31 +1169,28 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+                "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
               }
             ],
-            "duration_s": 5.023958,
+            "duration_s": 5.737025,
             "exit_code": 0,
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+            "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
             "json_parse_error": null,
             "json_result": {
-              "finite_elsewhere": true,
-              "full_row_isnan": true,
-              "full_row_values": [
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN
+              "absmax_reference_max_err": 0.0194,
+              "exceeds_5pct": true,
+              "kernel_per_row_err": [
+                0.3593,
+                0.3479,
+                0.361,
+                0.3491
               ],
-              "nan_count_row1": 8,
-              "nan_count_total": 8
+              "kernel_y_zero_fraction": 0.000244140625,
+              "max_kernel_err": 0.361,
+              "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
             },
             "stderr": "",
-            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
             "timed_out": false,
             "timeout_s": 60
           },
@@ -978,23 +1200,20 @@
           "tool_event_id": "t9"
         },
         "exit_code": 0,
-        "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
+        "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
         "json_parse_error": null,
         "json_result": {
-          "finite_elsewhere": true,
-          "full_row_isnan": true,
-          "full_row_values": [
-            NaN,
-            NaN,
-            NaN,
-            NaN,
-            NaN,
-            NaN,
-            NaN,
-            NaN
+          "absmax_reference_max_err": 0.0194,
+          "exceeds_5pct": true,
+          "kernel_per_row_err": [
+            0.3593,
+            0.3479,
+            0.361,
+            0.3491
           ],
-          "nan_count_row1": 8,
-          "nan_count_total": 8
+          "kernel_y_zero_fraction": 0.000244140625,
+          "max_kernel_err": 0.361,
+          "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
         },
         "sandbox": {
           "cpu_limit_s": 90,
@@ -1004,7 +1223,7 @@
           "network_isolated": false
         },
         "stderr": "",
-        "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+        "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
         "timed_out": false,
         "timeout_s": 60,
         "use_gpu": true
@@ -1015,56 +1234,329 @@
     {
       "args": {
         "data": {
-          "expected_output": "all-zero finite row",
-          "finite_elsewhere": true,
-          "full_row_isnan": true,
-          "n_cols": 8,
-          "n_rows": 3,
-          "nan_count_row1": 8,
-          "nan_count_total": 8,
-          "result": "all 8 lanes of fully-masked row are NaN"
+          "budget": 0.05,
+          "max_row_err_ratio100": 0.9423,
+          "max_row_err_ratio20": 0.5486,
+          "max_row_err_ratio50": 0.8487,
+          "outlier_ratios": [
+            20,
+            50,
+            100
+          ],
+          "per_row_rel_err": {
+            "100x": [
+              0.9344,
+              0.9405,
+              0.9423,
+              0.9377
+            ],
+            "20x": [
+              0.5413,
+              0.5324,
+              0.5486,
+              0.5443
+            ],
+            "50x": [
+              0.8487,
+              0.8298,
+              0.8269,
+              0.8447
+            ]
+          }
         },
-        "event_id": "t9",
+        "event_id": "t8",
         "status": "confirmed",
-        "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+        "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
         "supports": "confirmed"
       },
-      "created_at": "2026-09-30T08:34:33Z",
+      "created_at": "2026-09-30T08:35:47Z",
       "id": "t10",
       "output": {
         "claim": {
-          "created_at": "2026-09-30T08:34:04Z",
+          "created_at": "2026-09-30T08:35:11Z",
           "evidence": [
             {
               "artifacts": [],
-              "created_at": "2026-09-30T08:34:16Z",
-              "data": {
-                "exit_code": 1,
-                "reason": "probe syntax error, no signal",
-                "tool_event_id": "t7"
-              },
-              "id": "c1.e1",
-              "kind": "tool_error",
-              "summary": "Probe t7 exited with a Python SyntaxError (stray comma before closing brace) and produced no stdout; no signal for or against the claim. Re-running corrected probe.",
-              "supports": "inconclusive",
-              "tool_event_id": "t7"
-            },
-            {
-              "artifacts": [],
-              "created_at": "2026-09-30T08:34:33Z",
+              "created_at": "2026-09-30T08:35:47Z",
               "data": {
                 "artifacts": [
                   {
                     "description": "Python probe code executed by local runtime.",
                     "kind": "probe_code",
+                    "path": "probes/t8_probe.py",
+                    "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
+                  },
+                  {
+                    "description": "Captured stdout from the probe process.",
+                    "kind": "stdout",
+                    "path": "probes/t8_stdout.txt",
+                    "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
+                  },
+                  {
+                    "description": "Captured stderr from the probe process.",
+                    "kind": "stderr",
+                    "path": "probes/t8_stderr.txt",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  {
+                    "description": "Parsed JSON object from the last non-empty stdout line.",
+                    "kind": "json_result",
+                    "path": "probes/t8_json_result.json",
+                    "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
+                  }
+                ],
+                "budget": 0.05,
+                "duration_s": 5.738579,
+                "exit_code": 0,
+                "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+                "json_parse_error": null,
+                "json_result": {
+                  "budget": 0.05,
+                  "metric": "per_row_relative_L2_error",
+                  "trials": [
+                    {
+                      "exceeds_5pct": true,
+                      "max_row_err": 0.5486,
+                      "outlier_ratio": 20,
+                      "per_row_rel_err": [
+                        0.5413,
+                        0.5324,
+                        0.5486,
+                        0.5443
+                      ]
+                    },
+                    {
+                      "exceeds_5pct": true,
+                      "max_row_err": 0.8487,
+                      "outlier_ratio": 50,
+                      "per_row_rel_err": [
+                        0.8487,
+                        0.8298,
+                        0.8269,
+                        0.8447
+                      ]
+                    },
+                    {
+                      "exceeds_5pct": true,
+                      "max_row_err": 0.9423,
+                      "outlier_ratio": 100,
+                      "per_row_rel_err": [
+                        0.9344,
+                        0.9405,
+                        0.9423,
+                        0.9377
+                      ]
+                    }
+                  ]
+                },
+                "max_row_err_ratio100": 0.9423,
+                "max_row_err_ratio20": 0.5486,
+                "max_row_err_ratio50": 0.8487,
+                "outlier_ratios": [
+                  20,
+                  50,
+                  100
+                ],
+                "per_row_rel_err": {
+                  "100x": [
+                    0.9344,
+                    0.9405,
+                    0.9423,
+                    0.9377
+                  ],
+                  "20x": [
+                    0.5413,
+                    0.5324,
+                    0.5486,
+                    0.5443
+                  ],
+                  "50x": [
+                    0.8487,
+                    0.8298,
+                    0.8269,
+                    0.8447
+                  ]
+                },
+                "stderr": "",
+                "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
+                "timed_out": false,
+                "timeout_s": 60
+              },
+              "id": "c1.e1",
+              "kind": "runtime_probe",
+              "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
+              "supports": "confirmed",
+              "tool_event_id": "t8"
+            }
+          ],
+          "id": "c1",
+          "raised_by": "skeptic",
+          "rationale": "The kernel deliberately calibrates scale on the third-largest |x| (default pctl_levels=2) instead of the row absmax, so the top-2 magnitude values map to |q|>127 and are clamped; with outlier-to-bulk ratios of 10-100x, the clamped entries lose most of their magnitude and dominate the row norm.",
+          "scope": "in_scope",
+          "scope_evidence": [
+            {
+              "source": "problem.txt",
+              "summary": "Input domain explicitly includes 'a small number of channels carrying values one or two orders of magnitude above the bulk'; accuracy requirement is per-row relative error <= 5% and clamped entries 'remove [their] whole magnitude from the reconstruction', which is 'not loose enough to absorb a value that has been clamped away'."
+            }
+          ],
+          "scope_rationale": "The contract's input domain is heavy-tailed activations with a few channels 1-2 orders of magnitude above the bulk, and it explicitly states the 5% budget cannot absorb clamped entries. A row where the two largest magnitudes are ~50-100x the bulk will have both clamped, likely exceeding 5% relative error.",
+          "statement": "For a heavy-tailed row (e.g., bulk ~N(0,1) with 1-2 channels 50-100x the bulk), quant_dequant with default pctl_levels=2 clamps the outlier channels at 127*scale where scale is the third-largest |x|/127, producing per-row relative error well above the 5% budget.",
+          "status": "confirmed",
+          "updated_at": "2026-09-30T08:35:47Z"
+        },
+        "evidence": {
+          "artifacts": [],
+          "created_at": "2026-09-30T08:35:47Z",
+          "data": {
+            "artifacts": [
+              {
+                "description": "Python probe code executed by local runtime.",
+                "kind": "probe_code",
+                "path": "probes/t8_probe.py",
+                "sha256": "c637e4019751b4a8171fbdace69b3b0e88cba9fdefce3953dc3c60d4a6b8096e"
+              },
+              {
+                "description": "Captured stdout from the probe process.",
+                "kind": "stdout",
+                "path": "probes/t8_stdout.txt",
+                "sha256": "a9195c3484bc71cc5f188bab04c8f2730a104b115be1033a100dd71a57ae2075"
+              },
+              {
+                "description": "Captured stderr from the probe process.",
+                "kind": "stderr",
+                "path": "probes/t8_stderr.txt",
+                "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+              },
+              {
+                "description": "Parsed JSON object from the last non-empty stdout line.",
+                "kind": "json_result",
+                "path": "probes/t8_json_result.json",
+                "sha256": "5794736171b697330d4db947fe11fefb67fab88bc87e6bd444b98eea352a6da1"
+              }
+            ],
+            "budget": 0.05,
+            "duration_s": 5.738579,
+            "exit_code": 0,
+            "expected_signal": "per-row relative error > 5% for heavy-tailed rows with 50-100x outliers",
+            "json_parse_error": null,
+            "json_result": {
+              "budget": 0.05,
+              "metric": "per_row_relative_L2_error",
+              "trials": [
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.5486,
+                  "outlier_ratio": 20,
+                  "per_row_rel_err": [
+                    0.5413,
+                    0.5324,
+                    0.5486,
+                    0.5443
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.8487,
+                  "outlier_ratio": 50,
+                  "per_row_rel_err": [
+                    0.8487,
+                    0.8298,
+                    0.8269,
+                    0.8447
+                  ]
+                },
+                {
+                  "exceeds_5pct": true,
+                  "max_row_err": 0.9423,
+                  "outlier_ratio": 100,
+                  "per_row_rel_err": [
+                    0.9344,
+                    0.9405,
+                    0.9423,
+                    0.9377
+                  ]
+                }
+              ]
+            },
+            "max_row_err_ratio100": 0.9423,
+            "max_row_err_ratio20": 0.5486,
+            "max_row_err_ratio50": 0.8487,
+            "outlier_ratios": [
+              20,
+              50,
+              100
+            ],
+            "per_row_rel_err": {
+              "100x": [
+                0.9344,
+                0.9405,
+                0.9423,
+                0.9377
+              ],
+              "20x": [
+                0.5413,
+                0.5324,
+                0.5486,
+                0.5443
+              ],
+              "50x": [
+                0.8487,
+                0.8298,
+                0.8269,
+                0.8447
+              ]
+            },
+            "stderr": "",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error\", \"budget\": 0.05, \"trials\": [{\"outlier_ratio\": 20, \"per_row_rel_err\": [0.5413, 0.5324, 0.5486, 0.5443], \"max_row_err\": 0.5486, \"exceeds_5pct\": true}, {\"outlier_ratio\": 50, \"per_row_rel_err\": [0.8487, 0.8298, 0.8269, 0.8447], \"max_row_err\": 0.8487, \"exceeds_5pct\": true}, {\"outlier_ratio\": 100, \"per_row_rel_err\": [0.9344, 0.9405, 0.9423, 0.9377], \"max_row_err\": 0.9423, \"exceeds_5pct\": true}]}\n",
+            "timed_out": false,
+            "timeout_s": 60
+          },
+          "id": "c1.e1",
+          "kind": "runtime_probe",
+          "summary": "Heavy-tailed rows (bulk ~N(0,1), two outlier channels at 20x/50x/100x the bulk \u2014 squarely within the contract's stated 1-2 orders-of-magnitude outlier domain) show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% respectively, all far above the 5% budget. The outlier channels are clamped at 127*scale with scale calibrated on the third-largest |x|, removing most of their magnitude. Confirmed.",
+          "supports": "confirmed",
+          "tool_event_id": "t8"
+        }
+      },
+      "status": "ok",
+      "tool": "finalize_probe_evidence"
+    },
+    {
+      "args": {
+        "data": {
+          "absmax_reference_max_err": 0.0194,
+          "kernel_y_zero_fraction": 0.000244140625,
+          "max_kernel_err": 0.361,
+          "top_tied_magnitude": 0.5
+        },
+        "event_id": "t9",
+        "status": "confirmed",
+        "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
+        "supports": "confirmed"
+      },
+      "created_at": "2026-09-30T08:35:47Z",
+      "id": "t11",
+      "output": {
+        "claim": {
+          "created_at": "2026-09-30T08:35:11Z",
+          "evidence": [
+            {
+              "artifacts": [],
+              "created_at": "2026-09-30T08:35:47Z",
+              "data": {
+                "absmax_reference_max_err": 0.0194,
+                "artifacts": [
+                  {
+                    "description": "Python probe code executed by local runtime.",
+                    "kind": "probe_code",
                     "path": "probes/t9_probe.py",
-                    "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+                    "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
                   },
                   {
                     "description": "Captured stdout from the probe process.",
                     "kind": "stdout",
                     "path": "probes/t9_stdout.txt",
-                    "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+                    "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
                   },
                   {
                     "description": "Captured stderr from the probe process.",
@@ -1076,80 +1568,73 @@
                     "description": "Parsed JSON object from the last non-empty stdout line.",
                     "kind": "json_result",
                     "path": "probes/t9_json_result.json",
-                    "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+                    "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
                   }
                 ],
-                "duration_s": 5.023958,
+                "duration_s": 5.737025,
                 "exit_code": 0,
-                "expected_output": "all-zero finite row",
-                "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
-                "finite_elsewhere": true,
-                "full_row_isnan": true,
+                "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
                 "json_parse_error": null,
                 "json_result": {
-                  "finite_elsewhere": true,
-                  "full_row_isnan": true,
-                  "full_row_values": [
-                    NaN,
-                    NaN,
-                    NaN,
-                    NaN,
-                    NaN,
-                    NaN,
-                    NaN,
-                    NaN
+                  "absmax_reference_max_err": 0.0194,
+                  "exceeds_5pct": true,
+                  "kernel_per_row_err": [
+                    0.3593,
+                    0.3479,
+                    0.361,
+                    0.3491
                   ],
-                  "nan_count_row1": 8,
-                  "nan_count_total": 8
+                  "kernel_y_zero_fraction": 0.000244140625,
+                  "max_kernel_err": 0.361,
+                  "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
                 },
-                "n_cols": 8,
-                "n_rows": 3,
-                "nan_count_row1": 8,
-                "nan_count_total": 8,
-                "result": "all 8 lanes of fully-masked row are NaN",
+                "kernel_y_zero_fraction": 0.000244140625,
+                "max_kernel_err": 0.361,
                 "stderr": "",
-                "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+                "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
                 "timed_out": false,
-                "timeout_s": 60
+                "timeout_s": 60,
+                "top_tied_magnitude": 0.5
               },
-              "id": "c1.e2",
+              "id": "c2.e1",
               "kind": "runtime_probe",
-              "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+              "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
               "supports": "confirmed",
               "tool_event_id": "t9"
             }
           ],
-          "id": "c1",
+          "id": "c2",
           "raised_by": "skeptic",
-          "rationale": "When every position in a row is masked, all lanes of x become -inf, so tl.max(x) = -inf and x - max = -inf - (-inf) = NaN; additionally e sums to 0, so the final division 0/0 is NaN. The kernel (lines 14-16) has no guard for this case, so every stored lane of a fully-masked row would be NaN rather than the contractually required finite 0.",
+          "rationale": "tl.where(ax < thresh, ax, 0.0) with strict < removes all tied entries at once; if the three or more largest magnitudes are equal, thresh collapses to 0, the fallback scale=1.0 quantizes every |x|<0.5 to 0 and all others to integer values, destroying the row.",
           "scope": "in_scope",
           "scope_evidence": [
             {
               "source": "problem.txt",
-              "summary": "\"a row may keep NO positions at all -- a fully padded query row... the specification requires an all-zero output row\" and \"Every returned value must be finite.\""
+              "summary": "Contract requires per-row relative reconstruction error <= 5% for real transformer activations; heavy-tailed rows commonly have duplicated outlier magnitudes (identical outlier channels), and the scheme formula scale = calibration(|x|)/127 must reconstruct each row within 5%."
             }
           ],
-          "scope_rationale": "The problem text explicitly defines the input domain to include rows where the mask keeps no positions, requires the output row to be all zeros, and requires every returned value to be finite.",
-          "statement": "For a row whose mask keeps no positions, masked_softmax returns NaN (not the required all-zero finite row), because tl.sum(e)=0 leads to 0/0 (and x - max over an all -inf row is -inf - (-inf) = NaN before exp).",
+          "scope_rationale": "Transformer activation rows with duplicated outlier magnitudes (e.g., two channels both at the max value, plus repeated values) are within the stated heavy-tailed input domain; when the top-3 |x| are tied, the threshold collapses to 0 and the fallback scale=1.0 quantizes small-magnitude entries to zero.",
+          "statement": "When the top |x| values of a row are tied (e.g., a row where the three largest magnitudes are equal), the strict '<' threshold loop drops all tied values at once, making thresh=0 and scale=1.0, so the whole row quantizes to 0 or tiny integers and the per-row relative error approaches 100% for small-magnitude rows.",
           "status": "confirmed",
-          "updated_at": "2026-09-30T08:34:33Z"
+          "updated_at": "2026-09-30T08:35:47Z"
         },
         "evidence": {
           "artifacts": [],
-          "created_at": "2026-09-30T08:34:33Z",
+          "created_at": "2026-09-30T08:35:47Z",
           "data": {
+            "absmax_reference_max_err": 0.0194,
             "artifacts": [
               {
                 "description": "Python probe code executed by local runtime.",
                 "kind": "probe_code",
                 "path": "probes/t9_probe.py",
-                "sha256": "0b95b49e2e39c22bc6c633430edd495f7d25ded6ecca8c347f1b27d4746e9603"
+                "sha256": "7b02990b1d2c4b6fb86d06e7067accbf2f3f211bb19c109daccefc583719f534"
               },
               {
                 "description": "Captured stdout from the probe process.",
                 "kind": "stdout",
                 "path": "probes/t9_stdout.txt",
-                "sha256": "e0fb2081152859a8b15a7c2ee8ebea40d588c024b053c928f752a1ae1af753d5"
+                "sha256": "2a3250f76a9de905a6b2c7b060156afcd68678f1b70e54afb993243fa6f9849f"
               },
               {
                 "description": "Captured stderr from the probe process.",
@@ -1161,45 +1646,37 @@
                 "description": "Parsed JSON object from the last non-empty stdout line.",
                 "kind": "json_result",
                 "path": "probes/t9_json_result.json",
-                "sha256": "0ceed61044fc4a6eeac565d41d908df4ee8cc2f8061934cdbe958f3286c42d60"
+                "sha256": "4174b5f484c16b9c837b66cde22f1a5d6b12010173bdf782569562f5ecbdb450"
               }
             ],
-            "duration_s": 5.023958,
+            "duration_s": 5.737025,
             "exit_code": 0,
-            "expected_output": "all-zero finite row",
-            "expected_signal": "fully-masked row returns NaN (all lanes), other rows finite",
-            "finite_elsewhere": true,
-            "full_row_isnan": true,
+            "expected_signal": "tied top-3 magnitudes collapse thresh to 0, scale=1.0, per-row error near 100%",
             "json_parse_error": null,
             "json_result": {
-              "finite_elsewhere": true,
-              "full_row_isnan": true,
-              "full_row_values": [
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN,
-                NaN
+              "absmax_reference_max_err": 0.0194,
+              "exceeds_5pct": true,
+              "kernel_per_row_err": [
+                0.3593,
+                0.3479,
+                0.361,
+                0.3491
               ],
-              "nan_count_row1": 8,
-              "nan_count_total": 8
+              "kernel_y_zero_fraction": 0.000244140625,
+              "max_kernel_err": 0.361,
+              "metric": "per_row_relative_L2_error, kernel vs absmax-reference"
             },
-            "n_cols": 8,
-            "n_rows": 3,
-            "nan_count_row1": 8,
-            "nan_count_total": 8,
-            "result": "all 8 lanes of fully-masked row are NaN",
+            "kernel_y_zero_fraction": 0.000244140625,
+            "max_kernel_err": 0.361,
             "stderr": "",
-            "stdout": "{\"full_row_isnan\": true, \"full_row_values\": [NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN], \"nan_count_total\": 8, \"finite_elsewhere\": true, \"nan_count_row1\": 8}\n",
+            "stdout": "{\"metric\": \"per_row_relative_L2_error, kernel vs absmax-reference\", \"kernel_per_row_err\": [0.3593, 0.3479, 0.361, 0.3491], \"max_kernel_err\": 0.361, \"absmax_reference_max_err\": 0.0194, \"kernel_y_zero_fraction\": 0.000244140625, \"exceeds_5pct\": true}\n",
             "timed_out": false,
-            "timeout_s": 60
+            "timeout_s": 60,
+            "top_tied_magnitude": 0.5
           },
-          "id": "c1.e2",
+          "id": "c2.e1",
           "kind": "runtime_probe",
-          "summary": "Probe t9: with mask row 1 fully False (bool mask, float32 x, 3x8 on CUDA), masked_softmax returns all 8 lanes of row 1 as NaN (nan_count_row1=8), violating the contract's all-zero finite row requirement; other rows are finite. This confirms claim c1.",
+          "summary": "Rows with the top-3 |x| tied at 0.5 over a ~0.05-magnitude bulk show kernel per-row relative errors of ~35-36% vs the absmax-calibrated reference's 1.94% \u2014 7x over the 5% budget. The strict '<' drops all tied top values at once, collapsing thresh toward the bulk and mis-calibrating the scale (the ~0 scale=1.0 fallback is one manifestation; here thresh lands on the bulk max, crushing small entries to the 0.004-scale grid). Confirmed for the tied-top-values regime.",
           "supports": "confirmed",
           "tool_event_id": "t9"
         }
@@ -1209,45 +1686,49 @@
     },
     {
       "args": {
-        "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+        "reason": "Final review: both claims are in-scope and confirmed \u2014 c1 shows 53-94% per-row relative error on the contract's explicitly stated heavy-tailed domain (outliers 20-100x the bulk, clamped at 127*scale), and c2 shows ~36% error vs the reference's 1.94% for tied top-magnitude rows due to the strict-'<' threshold collapse. The new evidence reveals no additional material, testable in-scope failure mode not already covered.",
         "reviewed_claims": [
-          "c1"
+          "c1",
+          "c2"
         ]
       },
-      "created_at": "2026-09-30T08:34:38Z",
-      "id": "t11",
+      "created_at": "2026-09-30T08:35:53Z",
+      "id": "t12",
       "output": {
-        "created_at": "2026-09-30T08:34:38Z",
+        "created_at": "2026-09-30T08:35:53Z",
         "decision": "no_new_claims",
-        "reason": "Skeptic final review: claim c1 is confirmed by probe t9 (fully-masked row returns 8 NaN lanes on CUDA with float32 x, bool mask, violating problem.txt's explicit all-zero-row and finiteness requirements). The new evidence exposes no additional material, testable, in-scope problem not already covered by c1; other risk-map items (stride/layout, dtype, n_cols edge cases) are not required by the artifact contract.",
+        "reason": "Final review: both claims are in-scope and confirmed \u2014 c1 shows 53-94% per-row relative error on the contract's explicitly stated heavy-tailed domain (outliers 20-100x the bulk, clamped at 127*scale), and c2 shows ~36% error vs the reference's 1.94% for tied top-magnitude rows due to the strict-'<' threshold collapse. The new evidence reveals no additional material, testable in-scope failure mode not already covered.",
         "reviewed_claims": [
-          "c1"
+          "c1",
+          "c2"
         ],
-        "reviewed_tool_event_count": 10,
-        "tool_event_id": "t11",
-        "turn": 8
+        "reviewed_tool_event_count": 11,
+        "tool_event_id": "t12",
+        "turn": 6
       },
       "status": "ok",
       "tool": "record_no_new_claims"
     },
     {
       "args": {
-        "confidence": 0.97,
+        "confidence": 0.95,
         "decisive_claims": [
-          "c1"
+          "c1",
+          "c2"
         ],
-        "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "reason": "The kernel calibrates the per-row scale on the third-largest |x| (default pctl_levels=2) instead of a calibration covering the row's dynamic range. Claim c1 (confirmed, in-scope, scoped to problem.txt's explicitly stated heavy-tailed input domain of channels 1-2 orders of magnitude above the bulk): probes show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% for outlier-to-bulk ratios of 20x/50x/100x, versus the contract's 5% budget. The problem text explicitly states the budget 'is not loose enough to absorb a value that has been clamped away' \u2014 the outlier channels are clamped at 127*scale, removing most of their magnitude, directly violating the accuracy requirement. Claim c2 (confirmed, in-scope): tied top-magnitude rows (a natural case within the heavy-tailed domain) collapse the strict-'<' threshold loop at once, yielding ~36% per-row error versus 1.94% for the absmax-calibrated reference. Since the artifact provides no test.py/get_inputs, problem.txt is the operative contract and these violations of its explicit 5% per-row relative error requirement on its stated input domain are a valid basis for reject. This is a genuine correctness failure (clamping loss), not an acceptable lossy-format or rounding deviation, per the contract's own clause that clamped-away magnitudes cannot be absorbed by the 5% budget.",
         "verdict": "reject"
       },
-      "created_at": "2026-09-30T08:34:48Z",
-      "id": "t12",
+      "created_at": "2026-09-30T08:36:02Z",
+      "id": "t13",
       "output": {
-        "confidence": 0.97,
-        "created_at": "2026-09-30T08:34:48Z",
+        "confidence": 0.95,
+        "created_at": "2026-09-30T08:36:02Z",
         "decisive_claims": [
-          "c1"
+          "c1",
+          "c2"
         ],
-        "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+        "reason": "The kernel calibrates the per-row scale on the third-largest |x| (default pctl_levels=2) instead of a calibration covering the row's dynamic range. Claim c1 (confirmed, in-scope, scoped to problem.txt's explicitly stated heavy-tailed input domain of channels 1-2 orders of magnitude above the bulk): probes show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% for outlier-to-bulk ratios of 20x/50x/100x, versus the contract's 5% budget. The problem text explicitly states the budget 'is not loose enough to absorb a value that has been clamped away' \u2014 the outlier channels are clamped at 127*scale, removing most of their magnitude, directly violating the accuracy requirement. Claim c2 (confirmed, in-scope): tied top-magnitude rows (a natural case within the heavy-tailed domain) collapse the strict-'<' threshold loop at once, yielding ~36% per-row error versus 1.94% for the absmax-calibrated reference. Since the artifact provides no test.py/get_inputs, problem.txt is the operative contract and these violations of its explicit 5% per-row relative error requirement on its stated input domain are a valid basis for reject. This is a genuine correctness failure (clamping loss), not an acceptable lossy-format or rounding deviation, per the contract's own clause that clamped-away magnitudes cannot be absorbed by the 5% budget.",
         "verdict": "reject"
       },
       "status": "ok",
@@ -1255,12 +1736,13 @@
     }
   ],
   "verdict": {
-    "confidence": 0.97,
-    "created_at": "2026-09-30T08:34:48Z",
+    "confidence": 0.95,
+    "created_at": "2026-09-30T08:36:02Z",
     "decisive_claims": [
-      "c1"
+      "c1",
+      "c2"
     ],
-    "reason": "Claim c1 is confirmed and in-scope: probe t9 (CUDA, float32 x, bool mask, 3x8 with row 1 fully masked) shows masked_softmax returns NaN in all 8 lanes of the fully-masked row (nan_count_row1=8) while other rows are finite. The artifact provides no test.py/get_inputs, so problem.txt is the operative contract, and it explicitly states the mask is arbitrary, that a row may keep NO positions, that such rows must return an all-zero output row, and that every returned value must be finite. The kernel's unconditional division by tl.sum(e) (kernel.py lines 14-16) produces 0/0 = NaN, a direct violation of an explicitly required behavior \u2014 a defect regardless of typical-input performance. Skeptic reviewed the latest evidence and recorded no new claims; no open claims remain.",
+    "reason": "The kernel calibrates the per-row scale on the third-largest |x| (default pctl_levels=2) instead of a calibration covering the row's dynamic range. Claim c1 (confirmed, in-scope, scoped to problem.txt's explicitly stated heavy-tailed input domain of channels 1-2 orders of magnitude above the bulk): probes show per-row relative L2 errors of 53-55%, 83-85%, and 93-94% for outlier-to-bulk ratios of 20x/50x/100x, versus the contract's 5% budget. The problem text explicitly states the budget 'is not loose enough to absorb a value that has been clamped away' \u2014 the outlier channels are clamped at 127*scale, removing most of their magnitude, directly violating the accuracy requirement. Claim c2 (confirmed, in-scope): tied top-magnitude rows (a natural case within the heavy-tailed domain) collapse the strict-'<' threshold loop at once, yielding ~36% per-row error versus 1.94% for the absmax-calibrated reference. Since the artifact provides no test.py/get_inputs, problem.txt is the operative contract and these violations of its explicit 5% per-row relative error requirement on its stated input domain are a valid basis for reject. This is a genuine correctness failure (clamping loss), not an acceptable lossy-format or rounding deviation, per the contract's own clause that clamped-away magnitudes cannot be absorbed by the 5% budget.",
     "verdict": "reject"
   }
 }

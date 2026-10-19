@@ -1,16 +1,21 @@
-Operation: row-wise softmax of a 2-D float32 tensor, computed in blocks of
-`block_size` columns (the standard three-pass fused-softmax structure used by
-Triton-based normalization kernels).
+Operation: fused cross-entropy forward with predicted-token reporting
+(linkedin/Liger-Kernel, src/liger_kernel/ops/cross_entropy.py::liger_cross_entropy_kernel).
 
-For each row x:
+`cross_entropy_with_predictions(logits, target)` returns
 
-    y[j] = exp(x[j] - max(x)) / sum_k exp(x[k] - max(x))
+    loss[i]      = -log softmax(logits[i])[target[i]]
+    predicted[i] = argmax over j of logits[i, j]
 
-so every row of the result must be a probability distribution: all entries
-non-negative and summing to 1.
+The logits row is scanned in blocks, so the argmax is accumulated across blocks
+rather than computed in one shot.
 
-Input domain: `n_cols` may be any positive integer. It is NOT required to be a
-multiple of `block_size`; when it is not, the trailing partial block is still
-part of the row and must be normalized with the rest of it.
+Tie rule: when several vocabulary entries attain the row maximum, `predicted`
+must be the LOWEST such index. Downstream decoding gathers an embedding row for
+the predicted token, so which of the tied entries is reported changes the
+continuous output that follows.
 
-Does softmax() satisfy this contract?
+Input domain: `n_cols` is the vocabulary size and may exceed the kernel's block
+size, in which case a row spans several blocks and a tie may fall in different
+blocks.
+
+Does cross_entropy_with_predictions() satisfy this contract?

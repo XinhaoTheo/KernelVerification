@@ -1,43 +1,47 @@
 
-import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_32/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+import json, importlib.util, torch, math
+spec = importlib.util.spec_from_file_location("kmod", "/root/cases/case_33/kernel.py")
+kmod = importlib.util.module_from_spec(spec); spec.loader.exec_module(kmod)
+
 torch.manual_seed(0)
-res = {}
-dev = "cuda"
+dev='cuda'
+M,N,K,gs,bits = 32,32,48,32,4
+G = -(-K//gs)   # ceil = 2
+a = torch.randn(M,K,device=dev,dtype=torch.float32)
+b_packed = torch.randint(-2**31, 2**31-1, (K//8, N), device=dev, dtype=torch.int32)
+zeros_packed = torch.randint(-2**31, 2**31-1, (G, N//8), device=dev, dtype=torch.int32)
+# make the trailing (short) group's scale row very different from group 0
+scales = torch.stack([torch.full((N,),0.01,device=dev), torch.full((N,),0.5,device=dev)]).contiguous()
 
-# Case A: all-equal row, W=8 (power of two)
-a = torch.full((1,8), 5, dtype=torch.int64, device=dev)
-sk, p = m.triton_argsort(a)
-res["allequal_W8_perm"] = p[0].tolist()
-res["allequal_W8_ref_stable_perm"] = torch.sort(a, dim=1, stable=True).indices[0].tolist()
-res["allequal_W8_keys_sorted_ok"] = bool((sk[0].diff() >= 0).all().item())
+k_idx = torch.arange(K, device=dev)
+n_idx = torch.arange(N, device=dev)
+q = (b_packed[(k_idx//8), :] >> ((k_idx%8)*4).unsqueeze(1)) & 15
+zq = (zeros_packed[:, (n_idx//8)] >> ((n_idx%8)*4).unsqueeze(0)) & 15
+z = (zq + 1).float()
 
-# Case B: small-range keys, power-of-two W, many ties
-tot_rows = 0; bad_rows = 0; keys_ok_rows = 0
-details = []
-for W in [8, 16, 32, 64]:
-    N = 16
-    k = torch.randint(0, 4, (N, W), dtype=torch.int64, device=dev)
-    sk, p = m.triton_argsort(k)
-    ref = torch.sort(k, dim=1, stable=True)
-    row_bad = (p != ref.indices).any(dim=1)
-    keys_match = (sk == ref.values).all(dim=1)
-    tot_rows += N; bad_rows += int(row_bad.sum().item()); keys_ok_rows += int(keys_match.sum().item())
-    details.append({"W": W, "perm_mismatch_rows": int(row_bad.sum().item()),
-                    "keys_match_rows": int(keys_match.sum().item()), "rows": N})
-res["pow2_tied_detail"] = details
-res["pow2_total_rows"] = tot_rows
-res["pow2_perm_mismatch_rows"] = bad_rows
-res["pow2_keys_match_rows"] = keys_ok_rows
+def deq(gmap):
+    return (q.float() - z[gmap]) * scales[gmap]
 
-# Case C: check whether ties come out in strictly DESCENDING index order (anti-stable)
-k = torch.randint(0, 3, (8, 16), dtype=torch.int64, device=dev)
-sk, p = m.triton_argsort(k)
-anti = torch.sort(k * 1000 - torch.arange(16, device=dev), dim=1, stable=True).indices  # ties -> descending idx
-res["antistable_perm_match_rows"] = int((p == anti).all(dim=1).sum().item())
-res["antistable_rows_total"] = 8
-res["example_row_keys"] = k[0].tolist()
-res["example_row_perm"] = p[0].tolist()
-res["example_row_stable_ref"] = torch.sort(k, dim=1, stable=True).indices[0].tolist()
-print(json.dumps(res))
+gmap_true  = torch.clamp(k_idx//gs, max=G-1)                 # 0..31 ->0, 32..47 ->1
+gmap_wrong = torch.clamp(k_idx//gs, max=(K//gs)-1)           # kernel's floor model -> all 0
+c_ref   = a @ deq(gmap_true)
+c_wrong = a @ deq(gmap_wrong)
+
+c = kmod.gptq_matmul(a, b_packed, scales, zeros_packed, gs, bits=bits)
+torch.cuda.synchronize()
+
+err_ref   = (c-c_ref).abs().max().item()
+err_wrong = (c-c_wrong).abs().max().item()
+den = c_ref.abs().max().item()
+print(json.dumps({
+ "M":M,"N":N,"K":K,"group_size":gs,"ceil_groups":G,"floor_groups":K//gs,
+ "g_idx_unique_kernel":sorted(set(gmap_wrong.tolist())),
+ "g_idx_unique_contract":sorted(set(gmap_true.tolist())),
+ "max_abs_err_vs_contract_ref":err_ref,
+ "max_abs_err_vs_floor_model":err_wrong,
+ "max_abs_ref":den,
+ "max_rel_err_vs_contract_ref":err_ref/max(den,1e-12),
+ "matches_floor_model":bool(err_wrong<1e-3),
+ "matches_contract_ref":bool(err_ref<1e-3),
+ "metric":"elementwise max abs err of C vs two candidate group-mapping references"
+}))

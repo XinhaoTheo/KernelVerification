@@ -11,7 +11,7 @@ import zlib
 import numpy as np
 import torch
 
-EXPECTED = {"case_152": "trust", "case_153": "reject"}
+EXPECTED = {"case_79": "trust", "case_80": "reject"}
 WIDTHS = (64, 128)
 POLY = 0xEDB88320
 MASK = 0xFFFFFFFF
@@ -227,7 +227,7 @@ def cpu_audit(case_root):
                        "qualification_passed": bool(passed if label == "trust" else not passed),
                        "tests_total": len(tests), "tests_passed": sum(row["numeric_passed"] for row in tests),
                        "tests": tests}
-    assert next(x for x in structural["factor_operator_checks"] if x["case"] == "case_152")["factor_bit_basis_mismatches"] == 0
+    assert next(x for x in structural["factor_operator_checks"] if x["case"] == "case_79")["factor_bit_basis_mismatches"] == 0
     return {"passed": all(item["qualification_passed"] for item in cases.values()),
             "candidate_cpu_screens": cases, "public_reference_checks": reference_checks,
             "structural_audit": structural, "oracle_dependency_hashes": dependency_hashes()}

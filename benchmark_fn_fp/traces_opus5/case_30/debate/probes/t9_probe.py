@@ -1,54 +1,71 @@
 
-import json, torch, triton, triton.language as tl
+import importlib.util, json, torch
 
-@triton.jit
-def _route_kernel(Logits, Idx, stride, E: tl.constexpr, BLOCK: tl.constexpr):
-    tok = tl.program_id(0)
-    cols = tl.arange(0, BLOCK)
-    valid = cols < E
-    x = tl.load(Logits + tok * stride + cols, mask=valid, other=-float("inf"))
-    best = -float("inf")
-    best_i = 0
-    for e in range(E):
-        v = tl.sum(tl.where(cols == e, x, 0.0), axis=0)
-        take = v >= best
-        best = tl.where(take, v, best)
-        best_i = tl.where(take, e, best_i)
-    tl.store(Idx + tok, best_i)
+spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_31/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-def route_top1(logits):
-    n_tokens, n_experts = logits.shape
-    idx = torch.empty(n_tokens, device=logits.device, dtype=torch.int32)
-    _route_kernel[(n_tokens,)](logits, idx, logits.stride(0), E=n_experts,
-                               BLOCK=triton.next_power_of_2(n_experts))
-    return idx
+dev="cuda"; torch.manual_seed(1)
 
-dev='cuda'
-rows = [
- [2.0,1.0,2.0],          # tie at 0 and 2
- [3.0,3.0,0.0],          # tie at 0,1
- [1.0,5.0,5.0],          # tie at 1,2
- [7.0,1.0,2.0],          # unique max at 0
- [0.0,1.0,9.0],          # unique max at 2
-]
-L = torch.tensor(rows, device=dev, dtype=torch.float32)
-got = route_top1(L).cpu().tolist()
-ref = torch.argmax(L, dim=-1).cpu().tolist()
-tied = [i for i,r in enumerate(rows) if r.count(max(r))>1]
-untied = [i for i in range(len(rows)) if i not in tied]
-res = {
- "metric":"exact_index_equality_vs_torch_argmax",
- "rows":rows, "kernel_idx":got, "ref_idx":ref,
- "tied_row_ids":tied,
- "tied_mismatches":[i for i in tied if got[i]!=ref[i]],
- "untied_mismatches":[i for i in untied if got[i]!=ref[i]],
- "kernel_picks_highest_tied":[ (got[i]==max(j for j,v in enumerate(rows[i]) if v==max(rows[i]))) for i in tied],
- "num_tied":len(tied), "num_tied_mismatch":sum(1 for i in tied if got[i]!=ref[i]),
-}
-# also non-power-of-2 E check with unique maxima
-E=5
-torch.manual_seed(0)
-L2 = torch.randn(256,E,device=dev,dtype=torch.float32)
-g2 = route_top1(L2).cpu(); r2 = torch.argmax(L2,dim=-1).cpu().int()
-res["nonpow2_E5_unique_mismatches"]=int((g2!=r2).sum())
-print(json.dumps(res))
+def blocks(cu,bs):
+    cun=[0]
+    for b in range(len(cu)-1):
+        cun.append(cun[-1] + -(-(cu[b+1]-cu[b])//bs))
+    return cun
+
+def ref_attn(q,k,v,cu_q,cu_k,mask,qbs,kbs,scale,hsel):
+    out=torch.zeros_like(q); B=len(cu_q)-1
+    cu_nq=blocks(cu_q,qbs); cu_nk=blocks(cu_k,kbs)
+    Hq=q.shape[1]; ratio=Hq//k.shape[1]
+    for b in range(B):
+        qs,qe=cu_q[b],cu_q[b+1]; ks,ke=cu_k[b],cu_k[b+1]
+        Lq,Lk=qe-qs,ke-ks
+        nqb=-(-Lq//qbs); nkb=-(-Lk//kbs)
+        for hq in range(Hq):
+            hm=hsel(hq); hk=hq//ratio
+            allowed=torch.zeros(Lq,Lk,dtype=torch.bool,device=dev)
+            for i in range(nqb):
+                r0,r1=i*qbs,min((i+1)*qbs,Lq)
+                for j in range(nkb):
+                    c0,c1=j*kbs,min((j+1)*kbs,Lk)
+                    if bool(mask[hm,cu_nq[b]+i,cu_nk[b]+j]): allowed[r0:r1,c0:c1]=True
+            s=q[qs:qe,hq].float() @ k[ks:ke,hk].float().T * scale
+            s=s.masked_fill(~allowed,float('-inf'))
+            p=torch.nan_to_num(torch.softmax(s,-1),nan=0.0)
+            out[qs:qe,hq]=(p@v[ks:ke,hk].float()).to(out.dtype)
+    return out
+
+D=16; Hq=4; Hk=2; ratio=2
+cu_q=[0,8,16]; cu_k=[0,8,16]; qbs=kbs=4
+S=16
+q=torch.randn(S,Hq,D,device=dev); k=torch.randn(S,Hk,D,device=dev); v=torch.randn(S,Hk,D,device=dev)
+cu_q_t=torch.tensor(cu_q,device=dev,dtype=torch.int32); cu_k_t=torch.tensor(cu_k,device=dev,dtype=torch.int32)
+nqb=blocks(cu_q,qbs)[-1]; nkb=blocks(cu_k,kbs)[-1]
+scale=D**-0.5
+
+# per-query-head mask, rows distinct; diagonal always selected so no all-masked rows
+mask=torch.zeros(Hq,nqb,nkb,device=dev,dtype=torch.bool)
+for h in range(Hq):
+    for i in range(nqb):
+        mask[h,i,i]=True
+mask[0,0,1]=True; mask[1,1,0]=True; mask[2,0,1]=False; mask[2,1,0]=True; mask[3,0,1]=True; mask[3,1,0]=False
+mask[2,2,3]=True; mask[3,3,2]=True
+
+out=m.block_sparse_attention(q,k,v,cu_q_t,cu_k_t,mask,qbs,kbs,False,None)
+ref_qhead=ref_attn(q,k,v,cu_q,cu_k,mask,qbs,kbs,scale,lambda h:h)
+ref_kvhead=ref_attn(q,k,v,cu_q,cu_k,mask,qbs,kbs,scale,lambda h:h//ratio)
+
+# mutate rows >= nhead_k and re-run
+mask_mut=mask.clone(); mask_mut[2]=~mask_mut[2]; mask_mut[3]=~mask_mut[3]
+for i in range(nqb):
+    mask_mut[2,i,i]=True; mask_mut[3,i,i]=True
+out_mut=m.block_sparse_attention(q,k,v,cu_q_t,cu_k_t,mask_mut,qbs,kbs,False,None)
+
+print(json.dumps({
+ "max_abs_err_vs_query_head_interp": (out-ref_qhead).abs().max().item(),
+ "max_abs_err_vs_kv_head_interp": (out-ref_kvhead).abs().max().item(),
+ "per_head_err_vs_qhead": [ (out[:,h]-ref_qhead[:,h]).abs().max().item() for h in range(Hq)],
+ "per_head_err_vs_kvhead": [ (out[:,h]-ref_kvhead[:,h]).abs().max().item() for h in range(Hq)],
+ "max_change_when_mask_rows_2_3_mutated": (out-out_mut).abs().max().item(),
+ "nhead_q": Hq, "nhead_k": Hk, "block_mask_shape": list(mask.shape),
+ "metric": "max abs error vs two candidate mask-head interpretations + sensitivity to mask rows >= nhead_k"
+}))

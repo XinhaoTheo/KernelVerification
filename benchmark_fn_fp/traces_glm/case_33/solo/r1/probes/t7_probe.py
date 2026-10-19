@@ -1,42 +1,28 @@
-import torch, json
-import sys
-sys.path.insert(0, '/root/cases/case_33')
-from kernel import gptq_matmul
+import sys, torch
+sys.path.insert(0, "/root/cases/case_106")
+import kernel
 
-torch.manual_seed(0)
-dev = 'cuda'
-
-def run_case(K, group_size, bits=4):
-    M, N = 64, 64
-    ipb = 32 // bits
-    maxq = 2**bits - 1
-    num_groups = (K + group_size - 1) // group_size  # ceil per contract
-    A = torch.randn(M, K, device=dev)
-    q = torch.randint(0, maxq + 1, (K, N), device=dev, dtype=torch.int32)
-    packed = torch.zeros((K + ipb - 1) // ipb, N, device=dev, dtype=torch.int32)
-    for j in range(ipb):
-        packed |= (q[j::ipb] << (j * bits))[:packed.shape[0]]
-    scales = torch.randn(num_groups, N, device=dev) * 0.1 + 0.5
-    zeros = torch.randint(0, maxq, (num_groups, N), device=dev, dtype=torch.int32)
-    # pack zeros per contract: zeros tensor is (num_groups, N) ints; kernel indexes zeros_ptr + g_idx*stride_zeros + bn//ipb
-    # So zeros must be packed along N into int32 words: shape (num_groups, ceil(N/ipb))
-    zp = torch.zeros(num_groups, (N + ipb - 1) // ipb, device=dev, dtype=torch.int32)
-    for j in range(ipb):
-        zp[:, j::ipb] |= (zeros[:, j::ipb] << (j * bits))[:, :zp.shape[1]]
-    C = gptq_matmul(A, packed, scales, zp, group_size, bits)
-    # reference
-    deq = torch.empty(K, N, device=dev)
-    for k in range(K):
-        g = k // group_size
-        deq[k] = (q[k].float() - (zeros[g].float() + 1)) * scales[g]
-    ref = A @ deq
-    err = (C - ref).abs().max().item()
-    rel = err / ref.abs().max().item()
-    return {'K': K, 'group_size': group_size, 'num_groups': num_groups, 'max_abs_err': err, 'rel': rel}
-
-out = []
-# partial trailing group case
-out.append(run_case(80, 32))
-# control: divisible case
-out.append(run_case(64, 32))
-print(json.dumps(out))
+results = []
+cases = [(4,2048,1024,2),(1,4096,1024,128),(2,64,7,5),(1,2,1,2),(3,100,33,64),(2,4096,1,1),(1,3,1024,3)]
+for (B,L,D,K) in cases:
+    for seed in (0,1):
+        g = torch.Generator(device="cpu").manual_seed(seed)
+        state = torch.randn((B,L,D), generator=g).cuda()
+        ev = torch.randn((B,K,D), generator=g).cuda()
+        ref = kernel.reference(state.clone(), ev)
+        out = kernel.run(state, ev)
+        torch.cuda.synchronize()
+        ok_ret = out is state
+        same_storage = out.data_ptr() == state.data_ptr()
+        ev_ok = torch.equal(ev, ev.clone())
+        ok_bits = torch.equal(state.view(torch.int32), ref.view(torch.int32).cuda())
+        # repeated call on resulting state
+        ref2 = kernel.reference(state.clone(), ev)
+        out2 = kernel.run(state, ev)
+        torch.cuda.synchronize()
+        ok2 = torch.equal(state.view(torch.int32), ref2.view(torch.int32).cuda())
+        results.append(dict(B=B,L=L,D=D,K=K,seed=seed,ok_ret=ok_ret,same_storage=same_storage,ev_ok=ev_ok,ok_bits=ok_bits,ok_repeat=ok2))
+import json
+print(json.dumps(results))
+bad = [r for r in results if not (r["ok_ret"] and r["same_storage"] and r["ev_ok"] and r["ok_bits"] and r["ok_repeat"])]
+print("FAILURES:", len(bad))

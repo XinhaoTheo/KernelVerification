@@ -1,67 +1,52 @@
 
-import torch, json, math
+import torch, json
 import importlib.util
-spec = importlib.util.spec_from_file_location("kernel", "/root/cases/case_31/kernel.py")
-# fall back: load via sys.path
-import sys
-sys.path.insert(0, "/root/cases/case_31")
-import kernel as K
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_32/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
-torch.manual_seed(0)
 dev = 'cuda'
-BS = 2
-seqlens_q = [40, 40]
-seqlens_k = [64, 64]
-cu_q = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_q),0)), device=dev, dtype=torch.int32)
-cu_k = torch.tensor([0]+list(torch.cumsum(torch.tensor(seqlens_k),0)), device=dev, dtype=torch.int32)
-nq, nk, hd = 1, 1, 64
-q = torch.randn(cu_q[-1].item(), nq, hd, device=dev)
-k = torch.randn(cu_k[-1].item(), nk, hd, device=dev)
-v = torch.randn_like(k)
-qb, kb = 32, 32
-# compute block counts
-def blocks(cu, bs):
-    sizes = (cu[1:]-cu[:-1])
-    nb = (sizes + bs - 1)//bs
-    return int(nb.sum().item())
-nqb = blocks(cu_q, qb)
-nkb = blocks(cu_k, kb)
-# block_mask: all True EXCEPT query block 0 of batch 0 has no selected k block
-bm = torch.ones(nk, nqb, nkb, dtype=torch.bool, device=dev)
-# q blocks per batch: batch0 -> blocks 0,1 ; batch1 -> blocks 2,3
-bm[0, 0, :] = False
+results = {}
+cases = []
+# duplicate-heavy rows, various W including non-power-of-two
+for W in [2,3,4,5,7,8]:
+    torch.manual_seed(0)
+    keys = torch.randint(0, 3, (256, W), device=dev, dtype=torch.int64)
+    cases.append((f"dup_W{W}", keys))
+# all-equal rows
+cases.append(("all_eq", torch.full((64, 4), 7, device=dev, dtype=torch.int64)))
+# INT64_MAX rows
+cases.append(("maxkey", torch.full((64, 3), 0x7FFFFFFFFFFFFFFF, device=dev, dtype=torch.int64)))
+# random int64 full range
+torch.manual_seed(1)
+cases.append(("rand", torch.randint(-(2**63), 2**63-1, (512, 6), device=dev, dtype=torch.int64)))
 
-out = K.block_sparse_attention(q, k, v, cu_q, cu_k, bm, qb, kb, causal=False)
+for name, keys in cases:
+    ref_perm = torch.argsort(keys.cpu(), dim=1, stable=True).to(dev)
+    ref_sorted = torch.gather(keys, 1, ref_perm)
+    outs = []
+    for r in range(10):
+        s, p = m.triton_argsort(keys.clone())
+        torch.cuda.synchronize()
+        outs.append((s.clone(), p.clone()))
+    sorted_ok = all(torch.equal(s, ref_sorted) for s,_ in outs)
+    perm_ok = all(torch.equal(p, ref_perm) for _,p in outs)
+    determinism = all(torch.equal(outs[0][0], s) and torch.equal(outs[0][1], p) for s,p in outs[1:])
+    perm_valid = all(bool(torch.equal(torch.sort(p[i]).values, torch.arange(p.shape[1], device=dev, dtype=torch.int64))) for n in range(1) for p in [outs[0][1]] for i in [0]) if True else False
+    # perm validity all rows
+    pv = True
+    for p in [outs[0][1]]:
+        for i in range(p.shape[0]):
+            if not torch.equal(torch.sort(p[i]).values, torch.arange(p.shape[1], device=dev, dtype=torch.int64)):
+                pv = False; break
+    # gather consistency
+    gather_ok = all(torch.equal(torch.gather(keys,1,p), s) for s,p in outs)
+    results[name] = {"matches_stable_reference": bool(sorted_ok and perm_ok),
+                     "sorted_keys_match_ref": bool(sorted_ok),
+                     "perm_match_stable_ref": bool(perm_ok),
+                     "deterministic_10_runs": bool(determinism),
+                     "perm_is_permutation": bool(pv),
+                     "gather_consistent": bool(gather_ok),
+                     "sample_kernel_perm_row0": outs[0][1][0].cpu().tolist(),
+                     "ref_perm_row0": ref_perm[0].cpu().tolist()}
 
-# reference: per-row masked softmax over in-scope keys
-scale = hd ** -0.5
-ref = torch.full_like(q, float('nan'))
-rows = cu_q[0].item()  # first 32 rows are the empty rows
-for t in range(q.shape[0]):
-    b = int((cu_q <= t).sum().item()) - 1
-    qstart, qend = cu_q[b].item(), cu_q[b+1].item()
-    kstart, kend = cu_k[b].item(), cu_k[b+1].item()
-    # which q block / k blocks selected
-    qbi = (t - qstart)//qb
-    valid_js = [j for j in range((kend-kstart+kb-1)//kb) if bm[0, int(((cu_q[1:]-cu_q[:-1])[:b].sum().item())) + qbi, j]]
-    if not valid_js:
-        continue  # leave NaN (undefined)
-    cols = []
-    for j in valid_js:
-        ks = kstart + j*kb
-        cols += list(range(ks, min(ks+kb, kend)))
-    cols = torch.tensor(cols, device=dev)
-    scores = (q[t,0].float() @ k[cols,0].float().T) * scale
-    p = torch.softmax(scores, -1)
-    ref[t,0] = (p @ v[cols,0].float()).to(q.dtype)
-
-empty_rows = torch.arange(0, 32, device=dev)
-other_rows = torch.arange(32, 80, device=dev)
-res = {
-  "kernel_out_abs_max_empty_rows": float(out[empty_rows].abs().max().item()),
-  "kernel_out_all_finite": bool(torch.isfinite(out.float()).all().item()),
-  "ref_empty_rows": "NaN (undefined: empty key set)",
-  "max_abs_err_nonempty_rows": float((out[other_rows]-ref[other_rows]).abs().max().item()),
-  "note": "kernel produces exact zeros on empty rows; reference softmax over empty set is mathematically undefined (0/0); natural torch masked-softmax gives NaN. No reference implementation for empty rows in artifact, so match is undecidable from this probe."
-}
-print(json.dumps(res))
+print(json.dumps(results))

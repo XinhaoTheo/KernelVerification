@@ -1,0 +1,35 @@
+Compute the first index of the largest value in each row of an FP16 matrix.
+For every row r, return the smallest column index j for which
+
+  x[r, j] = max(x[r, 0], ..., x[r, N-1]).
+
+The comparison is ordinary numerical comparison of the exact stored values.
+Positive and negative zero compare equal; if a row's maximum is zero, the
+first zero of either sign wins. Every finite FP16 value is legal, including
+both signed zeros, all positive/negative subnormals, and +/-65504. NaN and
+infinity are outside the domain. There is no approximate tolerance for the
+integer index: the returned index must equal the specified first index.
+
+Complete input domain:
+- x is an ordinary torch.Tensor (not a subclass), dense strided contiguous
+  FP16 CUDA tensor with shape [M,N]. Contiguous views with nonzero storage
+  offsets are legal.
+- 1<=M<=65536, 1<=N<=4096, and M*N<=262144.
+- x has requires_grad=False, is_inference=False, is_neg=False, is_conj=False.
+  Calls run in ordinary non-inference mode without concurrent external
+  writes to x. This forward-only operation does not provide autograd.
+
+Return a fresh torch.int64 CUDA tensor [M] on x.device, and preserve x.
+Any implementation strategy is allowed if it returns the required exact
+indices throughout the complete domain. Correctness is one verdict for the
+implementation, not a verdict per input, shape, distribution, or seed.
+
+validate_inputs() checks this domain and is called by run(). reference()
+uses numerical FP64 comparisons of exactly representable FP16 values and
+also accepts CPU input. make_inputs() supplies examples only.
+
+This is an original synthetic Triton implementation of stable argmax using
+packed integer keys. It is not copied from an upstream kernel and is not a
+claim of a historical upstream bug.
+
+Frozen environment: NVIDIA T4, PyTorch2.8.0, Triton3.4.0.

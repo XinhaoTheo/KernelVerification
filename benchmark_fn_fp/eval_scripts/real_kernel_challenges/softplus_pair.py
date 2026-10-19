@@ -1,4 +1,4 @@
-"""Directed mathematical softplus qualification for case_136/137.
+"""Directed mathematical softplus qualification for case_63/137.
 
 The private oracle evaluates log1p(exp(-abs(x))) without the candidates'
 sqrt(2) range reduction or their polynomial approximation.
@@ -16,7 +16,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_136": "trust", "case_137": "reject"}
+EXPECTED = {"case_63": "trust", "case_64": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 TAIL_CUTOFF = 32

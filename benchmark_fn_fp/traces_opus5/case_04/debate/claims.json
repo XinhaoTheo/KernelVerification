@@ -1,134 +1,25 @@
 [
   {
-    "created_at": "2026-09-08T15:49:30Z",
+    "created_at": "2026-09-08T15:55:38Z",
     "evidence": [
       {
         "artifacts": [],
-        "created_at": "2026-09-08T15:50:55Z",
+        "created_at": "2026-09-08T15:57:01Z",
         "data": {
-          "artifacts": [
-            {
-              "description": "Python probe code executed by local runtime.",
-              "kind": "probe_code",
-              "path": "probes/t8_probe.py",
-              "sha256": "4699e4f33d044491e6e9178202ab79c1d690aebd54a297285837bf62a4b75544"
-            },
-            {
-              "description": "Captured stdout from the probe process.",
-              "kind": "stdout",
-              "path": "probes/t8_stdout.txt",
-              "sha256": "b4a651e8aec9c8e3f4912d4dd24c748c86bf0e6915ffcf3ca0c617003568b87f"
-            },
-            {
-              "description": "Captured stderr from the probe process.",
-              "kind": "stderr",
-              "path": "probes/t8_stderr.txt",
-              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-            },
-            {
-              "description": "Parsed JSON object from the last non-empty stdout line.",
-              "kind": "json_result",
-              "path": "probes/t8_json_result.json",
-              "sha256": "c497326968128ebc12eec8734b3e54dc32435e93538791294ee8556b2d2ffd7f"
-            }
-          ],
-          "bf16_assert_close_strict_ok": false,
-          "bf16_dtype_matches_input": false,
-          "bf16_in_out_dtype": "torch.float32",
-          "bf16_ref_dtype": "torch.bfloat16",
-          "duration_s": 8.146397,
-          "eps": 1e-06,
-          "exit_code": 0,
-          "expected_signal": "Output dtype of rms_norm_forward for a bf16 input; if torch.float32 while reference is bf16, claim confirmed.",
-          "fp16_assert_close_strict_ok": false,
-          "fp16_dtype_matches_input": false,
-          "fp16_in_out_dtype": "torch.float32",
-          "fp32_assert_close_strict_ok": true,
-          "fp32_dtype_matches_input": true,
-          "json_parse_error": null,
-          "json_result": {
-            "ok": true,
-            "per_dtype": {
-              "bf16": {
-                "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.",
-                "assert_close_strict_ok": false,
-                "dtype_matches_input": false,
-                "in_dtype": "torch.bfloat16",
-                "out_dtype": "torch.float32",
-                "ref_dtype": "torch.bfloat16"
-              },
-              "fp16": {
-                "assert_close_msg": "The values for attribute 'dtype' do not match: torch.float32 != torch.float16.",
-                "assert_close_strict_ok": false,
-                "dtype_matches_input": false,
-                "in_dtype": "torch.float16",
-                "out_dtype": "torch.float32",
-                "ref_dtype": "torch.float16"
-              },
-              "fp32": {
-                "assert_close_msg": "",
-                "assert_close_strict_ok": true,
-                "dtype_matches_input": true,
-                "in_dtype": "torch.float32",
-                "out_dtype": "torch.float32",
-                "ref_dtype": "torch.float32"
-              }
-            }
-          },
-          "shape": "(4,512)",
-          "stderr": "",
-          "stdout": "{\"ok\": true, \"per_dtype\": {\"fp32\": {\"in_dtype\": \"torch.float32\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float32\", \"dtype_matches_input\": true, \"assert_close_strict_ok\": true, \"assert_close_msg\": \"\"}, \"bf16\": {\"in_dtype\": \"torch.bfloat16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.bfloat16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\"}, \"fp16\": {\"in_dtype\": \"torch.float16\", \"out_dtype\": \"torch.float32\", \"ref_dtype\": \"torch.float16\", \"dtype_matches_input\": false, \"assert_close_strict_ok\": false, \"assert_close_msg\": \"The values for attribute 'dtype' do not match: torch.float32 != torch.float16.\"}}}\n",
-          "timed_out": false,
-          "timeout_s": 60
-        },
-        "id": "c1.e1",
-        "kind": "runtime_probe",
-        "summary": "rms_norm_forward returns torch.float32 unconditionally. For a bf16 input (4,512), out_dtype=torch.float32 while the liger-style reference (fp32 accumulate, store in input dtype) is torch.bfloat16; torch.testing.assert_close fails with \"The values for attribute 'dtype' do not match: torch.float32 != torch.bfloat16.\" Same failure for fp16 input. fp32 input passes strict assert_close. Confirms c1.",
-        "supports": "confirmed",
-        "tool_event_id": "t8"
-      }
-    ],
-    "id": "c1",
-    "raised_by": "skeptic",
-    "rationale": "Line 31-32: X32 = X.float(); Y = torch.empty(..., dtype=torch.float32). The input dtype is never recorded or restored, so every call yields fp32 regardless of the input's storage precision, while the cited upstream op preserves the input dtype.",
-    "scope": "in_scope",
-    "scope_evidence": [
-      {
-        "source": "problem.txt",
-        "summary": "\"The kernel is expected to be run on inputs that may arrive at different storage precisions (e.g. an fp32 tensor, or the same tensor after a bf16 round-trip)\" \u2014 bf16 storage is an explicitly named input case."
-      },
-      {
-        "source": "problem.txt",
-        "summary": "Names the reference as linkedin/Liger-Kernel src/liger_kernel/ops/rms_norm.py::_rms_norm_forward_kernel, whose Y buffer is allocated in the input dtype, establishing the expected output precision."
-      }
-    ],
-    "scope_rationale": "problem.txt is the only contract source in this artifact (no test.py) and it explicitly states the kernel is expected to be run on inputs at different storage precisions including a bf16 round-trip. A representative admitted input is therefore X of dtype torch.bfloat16 (e.g. shape (4, 512), values from randn cast to bf16) with a typical eps such as 1e-6, which makes the output-dtype behavior a stated-contract question rather than a generic PyTorch generalization.",
-    "statement": "When X is a bfloat16 tensor (a storage precision explicitly admitted by problem.txt), rms_norm_forward returns a torch.float32 tensor instead of a bfloat16 tensor matching the input storage precision (kernel.py:32 allocates Y with dtype=torch.float32 unconditionally, and there is no cast back to X.dtype before return). A dtype-strict comparison against the reference Liger _rms_norm_forward_kernel, which writes Y in the input dtype, would fail (e.g. torch.allclose raises / testing.assert_close reports dtype mismatch).",
-    "status": "confirmed",
-    "updated_at": "2026-09-08T15:50:55Z"
-  },
-  {
-    "created_at": "2026-09-08T15:49:30Z",
-    "evidence": [
-      {
-        "artifacts": [],
-        "created_at": "2026-09-08T15:50:55Z",
-        "data": {
-          "allclose_vs_bf16ref_rtol1e-2": true,
-          "allclose_vs_bf16ref_rtol1e-5": false,
-          "allclose_vs_fp32ref_rtol1e-5": true,
+          "N": 8,
+          "all_match": true,
           "artifacts": [
             {
               "description": "Python probe code executed by local runtime.",
               "kind": "probe_code",
               "path": "probes/t9_probe.py",
-              "sha256": "57f99247ceaeb12ee1258ce13c7643a2ceb5e7779bb70ee8db1d516891108bc6"
+              "sha256": "ff6b22a0f6433a7e4aaf1535155466f4d7cd211e88771970fd489aa046beb98d"
             },
             {
               "description": "Captured stdout from the probe process.",
               "kind": "stdout",
               "path": "probes/t9_stdout.txt",
-              "sha256": "6854852df29c260eefb2249d1f0b90a837fa7fd70567856a9d0d4b6947db0a5b"
+              "sha256": "a414942ae871918bc04284f02a3b88723b5eaecea626436fdfb3e587aba839db"
             },
             {
               "description": "Captured stderr from the probe process.",
@@ -140,95 +31,320 @@
               "description": "Parsed JSON object from the last non-empty stdout line.",
               "kind": "json_result",
               "path": "probes/t9_json_result.json",
-              "sha256": "7d138201aac1fb3b92d1980fe5215aa6f3245960e6842dcc6a480d111a37ae22"
+              "sha256": "b1d0f7f8069f878968ef831aa7a788bf0766ae414287ea1e84d54bcdc1a1c062"
             }
           ],
-          "bf16_eps_2pow_minus8": 0.00390625,
-          "duration_s": 5.320805,
-          "eps": 1e-06,
+          "dtype": "float32",
+          "duration_s": 6.570213,
           "exit_code": 0,
-          "expected_signal": "For bf16 input, max relative error of kernel output vs bf16-stored reference ~2^-9..2^-8 (~0.2-0.4%), far above rtol=1e-5; check whether near-zero rows differ from normal rows, and whether kernel output rounded to bf16 matches reference exactly.",
-          "frac_rel_gt_1e-5_vs_bf16_ref": 0.99560546875,
-          "frac_rel_gt_1e-5_vs_fp32_ref": 0.0,
+          "expected_k1_k5": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "expected_signal": "If tl.sum on i1 reduces in i1, counts come back as parity (k=3 -> 1, k=2/4 -> 0); if correct, got == expected for all k.",
+          "got_k1": 1,
+          "got_k2": 2,
+          "got_k3": 3,
+          "got_k4": 4,
+          "got_k5": 5,
           "json_parse_error": null,
           "json_result": {
-            "allclose_vs_bf16ref_rtol1e-2": true,
-            "allclose_vs_bf16ref_rtol1e-5": false,
-            "allclose_vs_fp32ref_rtol1e-5": true,
-            "bf16_eps_2pow-8": 0.00390625,
-            "kernel_out_dtype": "torch.float32",
-            "kernel_rounded_to_bf16_exact_match_frac": 1.0,
-            "ok": true,
-            "rstd_nearzero_rows": [
-              1000.0,
-              1000.0,
-              1000.0,
-              1000.0
-            ],
-            "rstd_normal_rows": [
-              1.067732334136963,
-              0.9982627034187317,
-              0.9897326231002808,
-              0.9696863293647766
-            ],
-            "vs_bf16_ref_all": {
-              "frac_rel_gt_1e-5": 0.99560546875,
-              "max_abs": 0.0077974796295166016,
-              "max_rel": 0.003449842566624284
+            "all_match": true,
+            "cases": {
+              "k=1": {
+                "expected": 1,
+                "got": 1,
+                "tile": [
+                  1.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "k=2": {
+                "expected": 2,
+                "got": 2,
+                "tile": [
+                  1.0,
+                  1.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "k=3": {
+                "expected": 3,
+                "got": 3,
+                "tile": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  5.0,
+                  5.0,
+                  5.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "k=4": {
+                "expected": 4,
+                "got": 4,
+                "tile": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0,
+                  5.0,
+                  5.0,
+                  0.0,
+                  0.0
+                ]
+              },
+              "k=5": {
+                "expected": 5,
+                "got": 5,
+                "tile": [
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0,
+                  1.0,
+                  5.0,
+                  0.0,
+                  0.0
+                ]
+              }
             },
-            "vs_bf16_ref_nearzero_rows": {
-              "frac_rel_gt_1e-5": 0.9921875,
-              "max_abs": 5.960464477539063e-08,
-              "max_rel": 0.0033711472060531378
-            },
-            "vs_bf16_ref_normal_rows": {
-              "frac_rel_gt_1e-5": 0.9990234375,
-              "max_abs": 0.0077974796295166016,
-              "max_rel": 0.003449842566624284
-            },
-            "vs_fp32_ref_all": {
-              "frac_rel_gt_1e-5": 0.0,
-              "max_abs": 2.384185791015625e-07,
-              "max_rel": 1.1579806624695266e-07
-            }
+            "parity_pattern": false,
+            "triton_version": "3.8.0"
           },
-          "kernel_out_dtype": "torch.float32",
-          "kernel_rounded_to_bf16_exact_match_frac": 1.0,
-          "max_abs_vs_bf16_ref_all": 0.0077974796295166016,
-          "max_abs_vs_bf16_ref_nearzero_rows": 5.960464477539063e-08,
-          "max_rel_vs_bf16_ref_all": 0.003449842566624284,
-          "max_rel_vs_bf16_ref_nearzero_rows": 0.0033711472060531378,
-          "max_rel_vs_bf16_ref_normal_rows": 0.003449842566624284,
-          "max_rel_vs_fp32_ref": 1.1579806624695266e-07,
-          "nearzero_concentration_supported": false,
-          "nearzero_row_scale": 1e-08,
-          "rstd_nearzero_rows": 1000.0,
-          "shape": "(8,512)",
+          "parity_pattern": false,
+          "pivot": 0.6,
           "stderr": "",
-          "stdout": "{\"ok\": true, \"kernel_out_dtype\": \"torch.float32\", \"vs_bf16_ref_all\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.99560546875}, \"vs_bf16_ref_normal_rows\": {\"max_abs\": 0.0077974796295166016, \"max_rel\": 0.003449842566624284, \"frac_rel_gt_1e-5\": 0.9990234375}, \"vs_bf16_ref_nearzero_rows\": {\"max_abs\": 5.960464477539063e-08, \"max_rel\": 0.0033711472060531378, \"frac_rel_gt_1e-5\": 0.9921875}, \"vs_fp32_ref_all\": {\"max_abs\": 2.384185791015625e-07, \"max_rel\": 1.1579806624695266e-07, \"frac_rel_gt_1e-5\": 0.0}, \"kernel_rounded_to_bf16_exact_match_frac\": 1.0, \"allclose_vs_bf16ref_rtol1e-5\": false, \"allclose_vs_bf16ref_rtol1e-2\": true, \"allclose_vs_fp32ref_rtol1e-5\": true, \"rstd_nearzero_rows\": [1000.0, 1000.0, 1000.0, 1000.0], \"rstd_normal_rows\": [1.067732334136963, 0.9982627034187317, 0.9897326231002808, 0.9696863293647766], \"bf16_eps_2pow-8\": 0.00390625}\n",
+          "stdout": "{\"triton_version\": \"3.8.0\", \"cases\": {\"k=1\": {\"got\": 1, \"expected\": 1, \"tile\": [1.0, 5.0, 5.0, 5.0, 5.0, 5.0, 0.0, 0.0]}, \"k=2\": {\"got\": 2, \"expected\": 2, \"tile\": [1.0, 1.0, 5.0, 5.0, 5.0, 5.0, 0.0, 0.0]}, \"k=3\": {\"got\": 3, \"expected\": 3, \"tile\": [1.0, 1.0, 1.0, 5.0, 5.0, 5.0, 0.0, 0.0]}, \"k=4\": {\"got\": 4, \"expected\": 4, \"tile\": [1.0, 1.0, 1.0, 1.0, 5.0, 5.0, 0.0, 0.0]}, \"k=5\": {\"got\": 5, \"expected\": 5, \"tile\": [1.0, 1.0, 1.0, 1.0, 1.0, 5.0, 0.0, 0.0]}}, \"parity_pattern\": false, \"all_match\": true}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "triton_version": "3.8.0"
+        },
+        "id": "c1.e1",
+        "kind": "runtime_probe",
+        "summary": "No parity behavior: on Triton 3.8.0, tl.sum over the i1 mask promotes to an integer count. N=8 fp32 tiles with k=1..5 exactly-tied above-pivot values (pivot=0.6) returned exactly k in every case (1,2,3,4,5), including the odd k=3 case the claim predicted would return 1 and the even k=2/k=4 cases predicted to return 0. parity_pattern=false, all_match=true.",
+        "supports": "rebutted",
+        "tool_event_id": "t9"
+      }
+    ],
+    "id": "c1",
+    "raised_by": "skeptic",
+    "rationale": "tile_eq is `above_mask & (|data - tile_min| < EPS)`, an i1 tensor. Several Triton versions reduce i1 operands without promoting to a wider integer, giving XOR/parity or a saturated 0/1 result. A parity result is a direct violation of the stated return value and, downstream, of the 1/count budget split.",
+    "scope": "in_scope",
+    "scope_evidence": [
+      {
+        "source": "problem.txt",
+        "summary": "Requires returning the count of values strictly above pivot tied with the smallest of them; input domain is a single tile whose length is a power of two."
+      },
+      {
+        "source": "problem.txt",
+        "summary": "Only the tolerance value is left unspecified; values 'equal at the boundary' must be counted together, so exactly-equal duplicates have a spec-fixed expected count."
+      }
+    ],
+    "scope_rationale": "problem.txt states the function \"must return how many of the values strictly above `pivot` are tied with the smallest of them\" and fixes the input domain as a single tile of power-of-two length. An 8-element fp32 tile with three exactly-equal values above the pivot is exactly that domain, and the expected answer (3) is fixed by the spec independent of the unspecified tolerance because the tied values are exactly equal.",
+    "statement": "kernel.py:12 sums a boolean (i1) mask via tl.sum(tile_eq) with no .to(tl.int32) cast, so the reduction may be performed in i1 arithmetic and return parity (count mod 2) instead of the true count: for a power-of-two fp32 tile such as scores=[0.0,0.5,1.0,1.0,1.0,0.2,0.3,0.4] with pivot=0.6, count_tied_at_boundary must return 3 but may return 1 (and for 2 or 4 tied boundary values may return 0).",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:57:01Z"
+  },
+  {
+    "created_at": "2026-09-08T15:55:38Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:57:01Z",
+        "data": {
+          "N_cases": [
+            16,
+            32,
+            8
+          ],
+          "all_match": true,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t10_probe.py",
+              "sha256": "33e3abcbcbb012b433c6a27a26157894c651b60d00a9ad627ffdf0c253669347"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t10_stdout.txt",
+              "sha256": "441bbc0e03b2beff1cec944ae602e0d13f11d4ca9eeaa70b5aa180f348cc2e3e"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t10_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t10_json_result.json",
+              "sha256": "a439b26b121017d67cd7111e4636cdadc78f28d4732e30e24f6fd992def1515f"
+            }
+          ],
+          "bool_saturate_signature": false,
+          "dtype": "float32",
+          "duration_s": 5.548989,
+          "exit_code": 0,
+          "expected_empty": 0,
+          "expected_k12": 12,
+          "expected_k5": 5,
+          "expected_signal": "got_k5==5 and got_k12==12 rebuts; got 1/1 confirms bool-typed store saturation.",
+          "got_empty": 0,
+          "got_k12": 12,
+          "got_k5": 5,
+          "json_parse_error": null,
+          "json_result": {
+            "all_match": true,
+            "bool_saturate_signature": false,
+            "expected_empty": 0,
+            "expected_k12": 12,
+            "expected_k5": 5,
+            "got_empty": 0,
+            "got_k12": 12,
+            "got_k5": 5,
+            "parity_signature": false
+          },
+          "parity_signature": false,
+          "stderr": "",
+          "stdout": "{\"got_k5\": 5, \"expected_k5\": 5, \"got_k12\": 12, \"expected_k12\": 12, \"got_empty\": 0, \"expected_empty\": 0, \"bool_saturate_signature\": false, \"parity_signature\": false, \"all_match\": true}\n",
           "timed_out": false,
           "timeout_s": 60
         },
         "id": "c2.e1",
         "kind": "runtime_probe",
-        "summary": "bf16 input (8,512), rows 0-3 normal magnitude, rows 4-7 scaled 1e-8, eps=1e-6. Kernel output stays fp32 and is never rounded to bf16: vs a bf16-stored reference max_rel=3.45e-3 (~2^-8.2, consistent with bf16 eps 3.906e-3) and 99.56% of elements exceed rel 1e-5, so allclose(rtol=1e-5) FAILS; allclose(rtol=1e-2) passes. Against an fp32 reference the kernel is exact (max_rel=1.16e-7, 0% elements over 1e-5). Kernel output rounded to bf16 matches the bf16 reference bit-exactly (match frac=1.0), so the divergence is purely the missing output-storage rounding, not a math error. The claim's sub-assertion that the largest relative deviations concentrate on near-zero rows is NOT supported: normal rows max_rel=3.450e-3 vs near-zero rows max_rel=3.371e-3 (near-zero rows have max_abs only 5.96e-8, rstd correctly saturates to 1/sqrt(eps)=1000). Core claim confirmed, locality sub-claim rebutted.",
-        "supports": "confirmed",
-        "tool_event_id": "t9"
+        "summary": "No boolean/i1 truncation at the store. N=16 with five exact copies of 2.0 above pivot=1.0 returned 5 (not 1); N=32 with twelve copies of 3.0 returned 12 (not 1 or 0); the empty above-pivot tile returned exactly 0. Both the bool-saturate signature (all nonzero counts -> 1) and the parity signature are absent, so tl.where/tl.store carry a genuine int32 count.",
+        "supports": "rebutted",
+        "tool_event_id": "t10"
       }
     ],
     "id": "c2",
     "raised_by": "skeptic",
-    "rationale": "Line 24-25 stores Y_row in fp32; the reference stores the same product into a bf16 buffer, which quantizes each element. This is a value-level (not merely dtype-level) divergence that a probe can measure as max relative error between the kernel output and a bf16-stored reference, reported separately for near-zero rows and normal-magnitude rows.",
+    "rationale": "The result type flows from tl.sum of an i1 tensor through tl.where with a bool condition and a bool*int product; if the final value is i1, the int32 store truncates/encodes the count as a flag. This failure mode is distinguishable from parity: it yields 1 for every nonzero tie count including even ones.",
     "scope": "in_scope",
     "scope_evidence": [
       {
         "source": "problem.txt",
-        "summary": "States computation is 'with float32 accumulation' on inputs that may arrive at bf16 storage precision and on 'rows whose magnitude is close to zero' \u2014 both conditions are explicitly in the operating domain."
+        "summary": "Return value is the number of boundary-tied values (used as 1/count downstream), for a single power-of-two-length tile."
       }
     ],
-    "scope_rationale": "Same contract basis as the dtype claim: problem.txt admits bf16-round-trip inputs and near-zero-magnitude rows as expected operating conditions, so representative inputs are a bf16 tensor with a mix of normal rows and rows scaled to ~1e-8, eps=1e-6. The claim asserts a deviation from the stated reference behavior (fp32 accumulation with storage at the input precision), not a generic stress case.",
-    "statement": "For a bfloat16 input, the returned values are never rounded to bf16 (they are the full fp32 product X32*rstd), so after casting the kernel output to the reference dtype for comparison, individual elements can still differ from the reference by up to ~2^-8 relative (~0.4%); under any tolerance tuned to the fp32 path (e.g. rtol=1e-5) the bf16 case mismatches elementwise, and the largest relative deviations should concentrate on the near-zero-magnitude rows problem.txt calls out.",
+    "scope_rationale": "The contract requires an integer count from a single power-of-two tile; a 16-element fp32 tile with five exactly-equal values strictly above the pivot is inside that domain, and the expected value 5 is spec-fixed since the ties are exact equalities.",
+    "statement": "kernel.py:15/28: num_min_larger = tl.where(is_new, tile_cnt, ...) can inherit a boolean/i1 type from tile_cnt, and tl.store into the int32 `count` buffer then writes only 0/1, so any tile with k>1 exactly-tied boundary values (e.g. N=16 with five copies of 2.0 above pivot=1.0) returns 1 instead of k.",
+    "status": "rebutted",
+    "updated_at": "2026-09-08T15:57:01Z"
+  },
+  {
+    "created_at": "2026-09-08T15:55:38Z",
+    "evidence": [
+      {
+        "artifacts": [],
+        "created_at": "2026-09-08T15:57:01Z",
+        "data": {
+          "EPS": 0.001,
+          "artifacts": [
+            {
+              "description": "Python probe code executed by local runtime.",
+              "kind": "probe_code",
+              "path": "probes/t11_probe.py",
+              "sha256": "eb3d73e54eddc95d04ba1b3062623be7f293023c00141b22b70eac2d39c91910"
+            },
+            {
+              "description": "Captured stdout from the probe process.",
+              "kind": "stdout",
+              "path": "probes/t11_stdout.txt",
+              "sha256": "0b2e178e80e7d93161941f6eb94be6db2ae5a9f718a8fc7abb8cebf9fe541e9b"
+            },
+            {
+              "description": "Captured stderr from the probe process.",
+              "kind": "stderr",
+              "path": "probes/t11_stderr.txt",
+              "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            },
+            {
+              "description": "Parsed JSON object from the last non-empty stdout line.",
+              "kind": "json_result",
+              "path": "probes/t11_json_result.json",
+              "sha256": "413ba2881f3a5768d02ef152bc28545c65abe20a8e2bb8ef81423f8a01bfade8"
+            }
+          ],
+          "codes_spanned_by_eps_at_1000": 16.38,
+          "dtype": "float32",
+          "duration_s": 5.338737,
+          "exact_tie_large_exact_ref": 3,
+          "exact_tie_large_got": 3,
+          "exit_code": 0,
+          "expected_signal": "Overcount vs exact-equality reference on distinct values inside the 1e-3 absolute window (e.g. got 2 vs 1, or got 6 vs 1 at magnitude 1000).",
+          "json_parse_error": null,
+          "json_result": {
+            "exact_tie_large": {
+              "exact_ref": 3,
+              "got": 3
+            },
+            "large_mag": {
+              "distinct_repr": 8,
+              "exact_ref": 1,
+              "got": 6
+            },
+            "near_tie_1e-3": {
+              "exact_ref": 1,
+              "got": 2
+            },
+            "separated_control": {
+              "exact_ref": 1,
+              "got": 1
+            },
+            "ulp_at_1000": 6.103515625e-05
+          },
+          "large_mag_distinct_fp32_values": 8,
+          "large_mag_exact_ref": 1,
+          "large_mag_got": 6,
+          "large_mag_step": 0.0001,
+          "near_tie_exact_ref": 1,
+          "near_tie_gap": 0.0005,
+          "near_tie_got": 2,
+          "separated_control_exact_ref": 1,
+          "separated_control_gap": 0.01,
+          "separated_control_got": 1,
+          "stderr": "",
+          "stdout": "{\"near_tie_1e-3\": {\"got\": 2, \"exact_ref\": 1}, \"large_mag\": {\"got\": 6, \"exact_ref\": 1, \"distinct_repr\": 8}, \"ulp_at_1000\": 6.103515625e-05, \"separated_control\": {\"got\": 1, \"exact_ref\": 1}, \"exact_tie_large\": {\"got\": 3, \"exact_ref\": 3}}\n",
+          "timed_out": false,
+          "timeout_s": 60,
+          "ulp_at_1000": 6.103515625e-05
+        },
+        "id": "c3.e1",
+        "kind": "runtime_probe",
+        "summary": "The fixed absolute 1e-3 window does merge genuinely distinct above-pivot values, exactly as claimed. scores=[1.0,1.0005,5..10], pivot=0.5: kernel returned 2 where the strictly-above-pivot minimum has exact multiplicity 1. Large-magnitude case (1000.0 + i*1e-4 for i=0..5, pivot=500): kernel returned 6 vs exact-equality reference 1, and all 8 values are distinct in fp32 (fp32 ULP at 1000 is 6.10e-5, so the 1e-3 window spans ~16 representable codes). Controls behave correctly: values separated by 1e-2 are not merged (1 vs 1) and exact ties at large magnitude give 3 vs 3. So the mechanism is real and the overcount is deterministic; whether an unspecified-tolerance absolute window of this width violates the spec is a scope/adjudication question, not a runtime one (claim scope remains 'unknown').",
+        "supports": "confirmed",
+        "tool_event_id": "t11"
+      }
+    ],
+    "id": "c3",
+    "raised_by": "skeptic",
+    "rationale": "A magnitude-independent absolute tolerance cannot separate \"equal at the boundary\" from \"merely nearby\" across the logit range that top-k/top-p sampling feeds this primitive. Whether this is a violation depends on how much latitude problem.txt's \"tolerance not fixed\" clause grants, so the claim needs adjudication rather than assumption.",
+    "scope": "unknown",
+    "scope_evidence": [],
+    "scope_rationale": "problem.txt explicitly declines to fix the tolerance value and only mandates that values equal at the boundary be counted together, so over-merging of distinct-but-near values may be spec-permitted. Scope is unknown until the Describer/Judge decides whether an arbitrarily wide absolute window is within that latitude; no test.py exists to pin the reference tie rule.",
+    "statement": "kernel.py:11 uses a fixed absolute window EPS=1e-3 against tile_min, so genuinely distinct boundary values are merged: for scores containing the above-pivot values 1.0000 and 1.0005 (plus other clearly larger values), the kernel returns 2 where the smallest above-pivot value has multiplicity 1, inflating the count and corrupting the downstream 1/count split; the effect worsens for large-magnitude logits where 1e-3 spans many distinct values.",
     "status": "confirmed",
-    "updated_at": "2026-09-08T15:50:55Z"
+    "updated_at": "2026-09-08T15:57:01Z"
   }
 ]

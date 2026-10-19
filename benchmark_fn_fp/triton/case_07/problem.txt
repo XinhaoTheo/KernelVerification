@@ -1,12 +1,15 @@
-Operation: grouped INT4 dequantization fused with a matrix multiply
-(AutoGPTQ/AutoGPTQ, auto_gptq/nn_modules/triton_utils/kernels.py::quant_matmul_248_kernel).
+Operation: stochastic rounding of a tensor onto a coarse grid, using Triton's
+counter-based Philox RNG (tl.rand), as used by low-precision training kernels
+when casting high-precision accumulators down to a storage format.
 
-The kernel computes  C = A @ dequant(B),  where B holds 4-bit weights packed
-into int32 words with a per-(group, column) scale and zero-point, and
+`stochastic_round_to_grid(x, seed)` must round each element to one of the two
+neighbouring multiples of STEP, choosing the upper one with probability equal
+to the element's fractional distance to it:
 
-    dequant(B)[k,n] = (unpacked_q[k,n] - zero[g_idx[k],n]) * scale[g_idx[k],n]
+    lower = floor(x / STEP) * STEP
+    P(out = lower + STEP) = (x - lower) / STEP,   otherwise out = lower
 
-The declared numeric format of the weights is 4-bit: the weight values it
-consumes were produced by quantizing continuous weights onto 16 levels per
-group, and the kernel's job is to evaluate the matmul faithfully in that
-declared format.
+so that E[out] == x. The randomness is drawn from the supplied seed.
+
+Input domain: `x` is a 1-D tensor whose length is a power of two and fits in a
+single block.

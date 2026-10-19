@@ -21,22 +21,16 @@ Output schema:
 
 ## Problem statement (contract + reference behavior)
 
-Operation: multiply every pixel of a feature map by a per-channel scale, the
-per-channel affine step of a normalization or quantization layer.
+Operation: row-wise cosine similarity of two 2-D float32 tensors.
 
-    out[n, c, h, w] = x[n, c, h, w] * scale[c]
+    cos(a, b) = dot(a, b) / (||a|| * ||b||)
 
-Two memory layouts are in common use and both appear in production stacks:
+with the denominator floored at `eps` so a zero-norm row does not divide by
+zero. The result is a bounded quantity in [-1, 1]; what matters downstream is
+the absolute agreement of that quantity, since it is used directly as a
+similarity score.
 
-    NCHW : the channel axis has the larger stride (PyTorch default)
-    NHWC : the channel axis is contiguous (channels-last, which is what most GPU
-           and mobile inference kernels prefer)
-
-Which layout a kernel expects is a property of the pipeline it is compiled into,
-not of the arithmetic. A kernel is correct if, once its own layout convention is
-honored, it produces the specified per-channel scaling.
-
-Does scale_channels() satisfy this contract?
+Does cosine_similarity() satisfy this contract?
 
 
 ## Kernel implementation under test (kernel.py)
@@ -48,19 +42,30 @@ import triton.language as tl
 
 
 @triton.jit
-def _scale_channels_kernel(X, Scale, Out, C: tl.constexpr):
-    pix = tl.program_id(0)
-    offs = tl.arange(0, C)
-    x = tl.load(X + pix * C + offs)
-    s = tl.load(Scale + offs)
-    tl.store(Out + pix * C + offs, x * s)
+def _cosine_kernel(A, B, Out, stride, N, eps, BLOCK: tl.constexpr):
+    row = tl.program_id(0)
+    a_row = A + row * stride
+    b_row = B + row * stride
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for off in range(0, N, BLOCK):
+        cols = off + tl.arange(0, BLOCK)
+        mask = cols < N
+        a = tl.load(a_row + cols, mask=mask, other=0.0).to(tl.float32)
+        b = tl.load(b_row + cols, mask=mask, other=0.0).to(tl.float32)
+        dot += tl.sum(a * b, axis=0)
+        na += tl.sum(a * a, axis=0)
+        nb += tl.sum(b * b, axis=0)
+    denom = tl.sqrt(na) * tl.sqrt(nb)
+    tl.store(Out + row, dot / tl.maximum(denom, eps))
 
 
-def scale_channels(x, scale, channels):
-    # Multiply every pixel by a per-channel scale, channels contiguous in memory.
-    out = torch.empty_like(x)
-    n_pixels = x.numel() // channels
-    _scale_channels_kernel[(n_pixels,)](x, scale, out, C=channels)
+def cosine_similarity(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-8):
+    """Row-wise cosine similarity of two 2-D float32 tensors."""
+    n_rows, n_cols = a.shape
+    out = torch.empty(n_rows, device=a.device, dtype=torch.float32)
+    _cosine_kernel[(n_rows,)](a, b, out, a.stride(0), n_cols, eps, BLOCK=256)
     return out
 
 ```
@@ -69,18 +74,18 @@ Is this implementation correct?
 
 ## Provider reasoning (verbatim)
 
-NHWC indexing, correct given channels contiguous. Trust.
+(not supplied)
 
 ## Final response (verbatim)
 
-{"verdict": "trust", "confidence": 0.9, "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."}
+{"verdict": "trust", "confidence": 0.9, "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."}
 
 ## Verdict
 
 {
   "verdict": "trust",
   "confidence": 0.9,
-  "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."
+  "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."
 }
 
 ## Usage and stop reason
@@ -91,21 +96,21 @@ NHWC indexing, correct given channels contiguous. Trust.
   "response": {
     "verdict": "trust",
     "confidence": 0.9,
-    "reason": "The kernel treats memory as a flat array of pixels, each of C contiguous channels (NHWC convention), applying scale[c] per channel, which satisfies the contract once the channels-contiguous layout is honored. It correctly computes n_pixels = numel//channels and indexes pix*C+offs."
+    "reason": "The kernel correctly computes dot products and norms row-wise with masking, applies the eps floor to the denominator, and stores one output per row; this matches the contract."
   },
   "reasoning_effort": "low",
   "timeout_s": 1800,
   "usage": {
-    "input_tokens": 612,
-    "output_tokens": 90
+    "input_tokens": 737,
+    "output_tokens": 55
   },
   "stop_reason": "stop",
   "max_tokens": 32768,
-  "elapsed_s": 2.4641427909955382,
-  "kernel_sha256": "0dccc0ba9391e9e04a4979bd6fd6bdaccd6164446e00c89fbc0172d2087e4a1a",
-  "problem_sha256": "483cbcd26f5560b7c9534fd6fb64cc5adb72d7635de92447c192ff6f32df6e07",
+  "elapsed_s": 1.4071188329253346,
+  "kernel_sha256": "42e7fb9e5a73d5b52ef1e1feea77661dc3b9717274b62fd71cdac0faa1d61e74",
+  "problem_sha256": "8c576acc0cc17cbf8d6851d821602f8969b464a4d2fa6ce9cf0c25cb8ba4519b",
   "prompt_variant": "original",
-  "estimated_usd": 0.0012527999999999999,
+  "estimated_usd": 0.0012738,
   "pricing_snapshot": {
     "input_per_million": 1.4,
     "output_per_million": 4.4,

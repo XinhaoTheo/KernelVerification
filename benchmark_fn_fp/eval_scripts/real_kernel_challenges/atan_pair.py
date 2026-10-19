@@ -1,4 +1,4 @@
-"""Independent directed-atan qualification for case_146 and case_147.
+"""Independent directed-atan qualification for case_73 and case_74.
 
 The oracle calls MPFR's mathematical atan with directed rounding. It does
 not use the candidates' range reduction or rational coefficients.
@@ -16,7 +16,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_146": "trust", "case_147": "reject"}
+EXPECTED = {"case_73": "trust", "case_74": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 

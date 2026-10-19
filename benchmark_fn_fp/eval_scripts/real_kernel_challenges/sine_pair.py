@@ -1,4 +1,4 @@
-"""Independent directed sine oracle for the fixed case_132/133 pair."""
+"""Independent directed sine oracle for the fixed case_59/133 pair."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -16,7 +16,7 @@ try:
 except ImportError:
     import adaptive_unary_oracle as core
 
-EXPECTED = {"case_132": "trust", "case_133": "reject"}
+EXPECTED = {"case_59": "trust", "case_60": "reject"}
 ATOL = 1e-6
 REFERENCE_BUDGET = 1e-10
 
@@ -81,7 +81,7 @@ def _inspect_ptx():
         fma_count = len(re.findall(r"\bfma(?:\.[a-z0-9]+)*\.f32\b", ptx))
         multiply_count = len(re.findall(r"\bmul(?:\.[a-z0-9]+)*\.f32\b", ptx))
         add_sub_count = len(re.findall(r"\b(?:add|sub)(?:\.[a-z0-9]+)*\.f32\b", ptx))
-        expected_fma = name == "case_132"
+        expected_fma = name == "case_59"
         lowering_passed = fma_count > 0 if expected_fma else fma_count == 0
         preserved = bool(torch.equal(x.view(torch.uint8), before.view(torch.uint8)))
         bits = x.cpu().numpy().view(np.uint16)

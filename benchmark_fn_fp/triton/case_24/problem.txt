@@ -1,10 +1,13 @@
-Operation: row-wise cosine similarity of two 2-D float32 tensors.
+Operation: one symmetric INT8 quantize-dequantize round trip, the storage step
+used by low-precision optimizer state and KV-cache compression.
 
-    cos(a, b) = dot(a, b) / (||a|| * ||b||)
+    scale = max(|x|) / 127        per block
+    q     = round(x / scale)      to the nearest representable level
+    y     = q * scale
 
-with the denominator floored at `eps` so a zero-norm row does not divide by
-zero. The result is a bounded quantity in [-1, 1]; what matters downstream is
-the absolute agreement of that quantity, since it is used directly as a
-similarity score.
+The rounding must be to nearest, so the round trip is unbiased: repeated
+application must not push the tensor systematically toward zero or away from it.
+This matters because the operation is applied once per optimizer step, so any
+per-step bias compounds over a training run.
 
-Does cosine_similarity() satisfy this contract?
+Does requantize() satisfy this contract?

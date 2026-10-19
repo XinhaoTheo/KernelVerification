@@ -4,38 +4,24 @@ import triton.language as tl
 
 
 @triton.jit
-def _matmul_kernel(A, B, C, M, N, K, stride_am, stride_ak, stride_bk, stride_bn,
-                   stride_cm, stride_cn,
-                   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
+def _chunked_scan_kernel(X, OUT, stride_xb, stride_ob, seqlen, CHUNK: tl.constexpr):
+    b = tl.program_id(0)
+    x_row = X + b * stride_xb
+    o_row = OUT + b * stride_ob
+    n_chunks = seqlen // CHUNK
 
-    a_ptrs = A + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = B + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
-    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-    for _ in range(0, K // BLOCK_K):
-        a = tl.load(a_ptrs, mask=offs_m[:, None] < M, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_n[None, :] < N, other=0.0)
-        acc += tl.dot(a, b)
-        a_ptrs += BLOCK_K * stride_ak
-        b_ptrs += BLOCK_K * stride_bk
-
-    c_ptrs = C + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
-    tl.store(c_ptrs, acc, mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
+    carry = 0.0
+    for c in range(n_chunks):
+        offs = c * CHUNK + tl.arange(0, CHUNK)
+        x = tl.load(x_row + offs, mask=offs < seqlen, other=0.0)
+        local = tl.cumsum(x, axis=0)
+        tl.store(o_row + offs, local + carry, mask=offs < seqlen)
+        carry += tl.sum(x, axis=0)
 
 
-def matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """C = A @ B for float32 operands."""
-    M, K = a.shape
-    K2, N = b.shape
-    assert K == K2
-    c = torch.empty((M, N), device=a.device, dtype=torch.float32)
-    grid = (triton.cdiv(M, 64), triton.cdiv(N, 64))
-    _matmul_kernel[grid](a, b, c, M, N, K,
-                         a.stride(0), a.stride(1), b.stride(0), b.stride(1),
-                         c.stride(0), c.stride(1),
-                         BLOCK_M=64, BLOCK_N=64, BLOCK_K=32)
-    return c
+def chunked_cumsum(x: torch.Tensor, chunk: int = 64) -> torch.Tensor:
+    """Cumulative sum along the sequence axis, carried across fixed-size chunks."""
+    batch, seqlen = x.shape
+    out = torch.zeros_like(x)
+    _chunked_scan_kernel[(batch,)](x, out, x.stride(0), out.stride(0), seqlen, CHUNK=chunk)
+    return out

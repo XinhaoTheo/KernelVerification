@@ -1,30 +1,48 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_26/kernel.py")
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_27/kernel.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+dev = "cuda"
 
-res = {}
-def analyze(name, row_list, k):
-    x = torch.tensor([row_list], dtype=torch.float32, device="cuda")
-    out = m.topk_mask(x, k)
-    o = out[0].tolist(); r = x[0].tolist()
-    # kept = output value equals input value (inputs contain no zeros)
-    kept = [i for i in range(len(r)) if o[i] == r[i] and r[i] != 0.0]
-    finite = torch.tensor([v for v in r if v == v], dtype=torch.float64)
-    v = torch.topk(torch.tensor(r, dtype=torch.float64), k).values[-1].item()
-    viol = [r[i] for i in kept if r[i] < v]
-    res[name] = {
-        "n": len(r), "k": k, "kth_largest": v,
-        "kept_count": len(kept),
-        "kept_values": [r[i] for i in kept],
-        "n_kept_strictly_below_kth": len(viol),
-        "out_row": o,
-    }
+def ref_spec(x, mask):
+    neg = torch.full_like(x, -float("inf"))
+    mx = torch.where(mask, x, neg).max(1, keepdim=True).values
+    e = torch.where(mask, torch.exp(x - mx), torch.zeros_like(x))
+    den = e.sum(1, keepdim=True)
+    return torch.where(den > 0, e / torch.where(den > 0, den, torch.ones_like(den)), torch.zeros_like(e))
 
-# (a) pre-masked logits with -inf
-analyze("neg_inf_row", [3.0, 1.0, float("-inf"), float("-inf"), 5.0, 2.0, float("-inf"), 0.5], 2)
-# (b) +inf present with multiplicity 1 < k
-analyze("pos_inf_row", [float("inf"), 3.0, 1.0, 5.0, 2.0, 0.5, 4.0, 6.0], 3)
-# control: all finite
-analyze("finite_control", [3.0, 1.0, 7.0, 5.0, 2.0, 0.5, 4.0, 6.0], 3)
-print(json.dumps(res))
+results = {}
+worst = 0.0
+bad_drop = 0
+nonfinite = 0
+torch.manual_seed(1)
+for (R, C) in [(4,5),(8,7),(16,33),(3,1),(5,64),(6,129),(7,1000)]:
+    x = (torch.randn(R, C, device=dev, dtype=torch.float32) * 5.0)
+    mask = torch.rand(R, C, device=dev) > 0.4
+    # force every row to keep >= 1 position
+    idx = torch.randint(0, C, (R,), device=dev)
+    mask[torch.arange(R, device=dev), idx] = True
+    y = m.masked_softmax(x, mask); torch.cuda.synchronize()
+    r = ref_spec(x, mask)
+    err = float((y - r).abs().max())
+    dz = int((y[~mask] != 0).sum())
+    nf = int((~torch.isfinite(y)).sum())
+    rowsum = y.sum(1)
+    results[f"{R}x{C}"] = {"max_abs_err": err, "dropped_nonzero": dz, "nonfinite": nf,
+                            "max_rowsum_dev": float((rowsum - 1).abs().max())}
+    worst = max(worst, err); bad_drop += dz; nonfinite += nf
+
+# adversarial: identical logits, very negative logits, ties
+x = torch.full((3, 16), -1e30, device=dev); x[1] = 0.0; x[2] = 1e2
+mask = torch.zeros(3, 16, dtype=torch.bool, device=dev); mask[:, :4] = True
+y = m.masked_softmax(x, mask); torch.cuda.synchronize()
+r = ref_spec(x, mask)
+extreme = {"max_abs_err": float((y - r).abs().max()),
+           "nonfinite": int((~torch.isfinite(y)).sum()),
+           "dropped_nonzero": int((y[~mask] != 0).sum()),
+           "row_examples": [[float(v) for v in y[i, :5].tolist()] for i in range(3)]}
+
+print(json.dumps({"metric": "max abs err vs spec reference on rows keeping >=1 position; dropped entries exactly 0",
+                  "per_shape": results, "worst_max_abs_err": worst,
+                  "total_dropped_nonzero": bad_drop, "total_nonfinite": nonfinite,
+                  "extreme_case": extreme}))

@@ -1,27 +1,18 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("k", "/root/cases/case_15/kernel.py")
-k = importlib.util.module_from_spec(spec); spec.loader.exec_module(k)
-
-def ref(x, gs):
-    y = torch.empty_like(x); n = x.shape[1]
-    for s in range(0, n, gs):
-        e = min(s+gs, n); g = x[:, s:e]
-        am = g.abs().amax(dim=1, keepdim=True)
-        sc = torch.where(am == 0, torch.ones_like(am), am/127.0)
-        y[:, s:e] = torch.round(g/sc).clamp(-127,127)*sc
-    return y
-
+spec = importlib.util.spec_from_file_location("k", "/root/cases/case_16/kernel.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 torch.manual_seed(1)
-x = torch.randn(4, 40, device="cuda", dtype=torch.float32)
-out = k.group_quant_dequant(x, 64)
-r = ref(x, 64)
-print(json.dumps({
- "shape": list(x.shape), "group_size": 64,
- "out_nonzero_count": int((out != 0).sum().item()),
- "out_total": out.numel(),
- "ref_nonzero_count": int((r != 0).sum().item()),
- "max_abs_err": (out-r).abs().max().item(),
- "ref_max_abs": r.abs().max().item(),
- "allclose_atol1e-3": bool(torch.allclose(out, r, atol=1e-3))
-}))
+res = {}
+for K in [1, 8, 31]:
+    M = N = 64
+    a = torch.randn(M, K, device='cuda', dtype=torch.float32)
+    b = torch.randn(K, N, device='cuda', dtype=torch.float32)
+    c = m.matmul(a, b)
+    ref = a @ b
+    res[str(K)] = dict(K=K, kernel_all_zero=bool((c == 0).all().item()),
+                       kernel_abs_max=c.abs().max().item(),
+                       ref_abs_max=ref.abs().max().item(),
+                       max_abs_err=(c - ref).abs().max().item(),
+                       nonzero_frac=float((c != 0).float().mean().item()))
+print(json.dumps(res))

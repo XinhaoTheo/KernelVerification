@@ -17,36 +17,36 @@ import modal
 BENCHMARK = Path(__file__).resolve().parents[2] if modal.is_local() else Path("/root")
 HERE = Path(__file__).resolve().parent if modal.is_local() else Path("/root/oracles")
 PRIVATE = BENCHMARK / "real_kernel_challenges/private_data"
-FAMILIES = {"state_pair": ("case_106", "case_107"),
-            "norm_pair": ("case_108", "case_109"),
-            "state_contract_audit": ("case_107", "case_110"),
-            "norm_contract_audit": ("case_108", "case_111"),
-            "segmented_state_pair": ("case_112", "case_113"),
-            "paged_attention_pair": ("case_114", "case_115"),
-            "splitk_pair": ("case_116", "case_117"),
-            "moe_pair": ("case_118", "case_119"),
-            "int4_pair": ("case_120", "case_121"),
-            "stencil_pair": ("case_122", "case_123"),
-            "requant_pair": ("case_124", "case_125"),
-            "erf_pair": ("case_126", "case_127"),
-            "gelu_pair": ("case_128", "case_129"),
-            "silu_pair": ("case_130", "case_131"),
-            "sine_pair": ("case_132", "case_133"),
-            "hypot_pair": ("case_134", "case_135"),
-            "softplus_pair": ("case_136", "case_137"),
-            "compensated_pair": ("case_138", "case_139"),
-            "fastdiv_pair": ("case_140", "case_141"),
-            "butterfly_pair": ("case_142", "case_143"),
-            "packed_argmax_pair": ("case_144", "case_145"),
-            "atan_pair": ("case_146", "case_147"),
-            "rounding_pair": ("case_148", "case_149"),
-            "ntt_pair": ("case_150", "case_151"),
-            "crc_pair": ("case_152", "case_153"),
-            "complex_pair": ("case_154", "case_155"),
-            "requant_compose_pair": ("case_156", "case_157"),
-            "affine_scan_pair": ("case_158", "case_159"),
-            "winograd_pair": ("case_160", "case_161"),
-            "realfft_pair": ("case_162", "case_163")}
+FAMILIES = {"state_pair": ("case_33", "case_34"),
+            "norm_pair": ("case_35", "case_36"),
+            "state_contract_audit": ("case_34", "case_37"),
+            "norm_contract_audit": ("case_35", "case_38"),
+            "segmented_state_pair": ("case_39", "case_40"),
+            "paged_attention_pair": ("case_41", "case_42"),
+            "splitk_pair": ("case_43", "case_44"),
+            "moe_pair": ("case_45", "case_46"),
+            "int4_pair": ("case_47", "case_48"),
+            "stencil_pair": ("case_49", "case_50"),
+            "requant_pair": ("case_51", "case_52"),
+            "erf_pair": ("case_53", "case_54"),
+            "gelu_pair": ("case_55", "case_56"),
+            "silu_pair": ("case_57", "case_58"),
+            "sine_pair": ("case_59", "case_60"),
+            "hypot_pair": ("case_61", "case_62"),
+            "softplus_pair": ("case_63", "case_64"),
+            "compensated_pair": ("case_65", "case_66"),
+            "fastdiv_pair": ("case_67", "case_68"),
+            "butterfly_pair": ("case_69", "case_70"),
+            "packed_argmax_pair": ("case_71", "case_72"),
+            "atan_pair": ("case_73", "case_74"),
+            "rounding_pair": ("case_75", "case_76"),
+            "ntt_pair": ("case_77", "case_78"),
+            "crc_pair": ("case_79", "case_80"),
+            "complex_pair": ("case_81", "case_82"),
+            "requant_compose_pair": ("case_83", "case_84"),
+            "affine_scan_pair": ("case_85", "case_86"),
+            "winograd_pair": ("case_87", "case_88"),
+            "realfft_pair": ("case_89", "case_90")}
 app = modal.App("kv-real-kernel-qualification")
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4",
@@ -97,6 +97,13 @@ def qualify(family_names: list[str]) -> dict:
 
 @app.local_entrypoint()
 def main(families: str = "state_pair,norm_pair"):
+    # Frozen evidence keeps its original IDs. Directory numbering is resolved
+    # only at this local read/write boundary, never by rewriting saved evidence.
+    sys.path.insert(0, str(BENCHMARK / "eval_scripts"))
+    from case_registry import load_registry
+
+    registry = load_registry(BENCHMARK)
+    details = registry.get("case_details", {})
     names = [name.strip() for name in families.split(",") if name.strip()]
     if not names or len(set(names)) != len(names) or any(name not in FAMILIES for name in names):
         raise ValueError("Select supported, unique families")
@@ -130,19 +137,27 @@ def main(families: str = "state_pair,norm_pair"):
     frozen_path = PRIVATE / "validation_gpu.json"
     frozen = json.loads(frozen_path.read_text()) if frozen_path.exists() else {"cases": {}}
     for name, row in result["cases"].items():
-        prior = frozen["cases"].get(name)
-        if name in frozen["cases"] and any(frozen["cases"][name].get(k) != v for k, v in before[name].items()):
+        detail = details.get(name, {})
+        frozen_id = detail.get("validation_case_id", name)
+        owners = [case for case, entry in details.items()
+                  if entry.get("dataset") == "real_kernel_challenges"
+                  and entry.get("validation_case_id", case) == frozen_id]
+        if owners and owners != [name]:
+            raise RuntimeError(f"Ambiguous frozen validation ID: {name}/{frozen_id}")
+        prior = frozen["cases"].get(frozen_id)
+        if prior and any(prior.get(k) != v for k, v in before[name].items()):
             raise RuntimeError(f"Previously frozen case edited: {name}")
         if prior and prior["ground_truth"] != row["ground_truth"] and not row.get("label_correction_reason"):
             raise RuntimeError(f"Label correction must have explicit evidence and reason: {name}")
-        frozen["cases"][name] = {key: row[key] for key in
+        frozen["cases"][frozen_id] = {key: row[key] for key in
             ("ground_truth", "qualification_passed", "kernel_sha256", "problem_sha256",
              "oracle_source_sha256", "family")}
-        frozen["cases"][name].update(environment=result["environment"],
+        frozen["cases"][frozen_id].update(environment=result["environment"],
             evidence_file=destination.relative_to(PRIVATE).as_posix(),
+            evidence_case_id=name,
             label_scope="fixed implementation under the entire public contract; not per-input compliance")
         if prior and prior["ground_truth"] != row["ground_truth"]:
-            frozen["cases"][name]["label_correction"] = {
+            frozen["cases"][frozen_id]["label_correction"] = {
                 "previous_ground_truth": prior["ground_truth"],
                 "previous_evidence_file": prior["evidence_file"],
                 "reason": row["label_correction_reason"],

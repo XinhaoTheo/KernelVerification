@@ -1,16 +1,17 @@
-Operation: layer normalization forward
-(Dao-AILab/flash-attention, flash_attn/ops/triton/layer_norm.py; the same
-formula is used by Liger-Kernel and by every transformer implementation).
+Operation: gather cached key/value tokens for a batch of sequences out of a
+paged KV cache, the block-table indirection used by paged-attention inference
+engines.
 
-For each row x:
+    kv_cache     : [num_pages, page_size, head_dim]
+    block_table  : [num_seqs, max_blocks], int32
+                   block_table[s, b] is the PHYSICAL page holding logical block b
+                   of sequence s
+    result[s, t] = kv_cache[ block_table[s, t // page_size], t % page_size ]
 
-    mean = sum(x) / N
-    var  = sum((x - mean)^2) / N
-    rstd = 1 / sqrt(var + eps)
-    y    = (x - mean) * rstd * weight + bias
+Pages are allocated on demand, so the physical pages of one sequence are not
+contiguous and are generally interleaved with those of other sequences.
 
-The epsilon is the standard stabilizer: it must keep the normalizer finite as
-the row variance approaches zero, so that a constant row does not blow the
-output up.
+Input domain: `seq_len` may be any length that fits within `max_blocks` pages,
+and the block table may map any sequence to any physical page.
 
-Does layer_norm() satisfy this contract?
+Does paged_gather() satisfy this contract?

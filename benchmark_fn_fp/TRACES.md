@@ -7,20 +7,20 @@ Excluded input-based cases and the retired pilot keep their original records und
 benchmark_fn_fp/
 ├── traces_glm/
 │   ├── case_01/solo/r1/
-│   ├── case_109/debate/r1/
-│   ├── case_163/single_call/r1/
+│   ├── case_36/debate/r1/
+│   ├── case_90/single_call/r1/
 │   ├── INDEX.md
 │   └── migration_*.json
 ├── traces_opus5/     claude-opus-5; existing historical paths retained
 └── archive/
-    ├── input_specific/traces_glm/     299 trials, case_34–case_81
-    ├── input_specific/traces_opus5/   11 trials, case_34–case_81
-    └── numerical_pilot/traces_glm/    72 trials, case_82–case_105
+    ├── input_specific/traces_glm/     299 trials, case_91–case_138
+    ├── input_specific/traces_opus5/   11 trials, case_91–case_138
+    └── numerical_pilot/traces_glm/    72 trials, case_139–case_162
 ```
 
-All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. Cases36/37 now belong to `single_call_vs_tools_challenges`; their original `correlation_pair` source field remains in metadata.
+All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. Cases93/94 now belong to `single_call_vs_tools_challenges`; their original `correlation_pair` source field remains in metadata.
 
-The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to `traces_opus5/case_36/` and `case_37/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](archive/input_specific/single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
+The 2026-09-23 migration combined 12 main GLM runs and 8 case_93/case_94 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to the case directories now stored at `archive/input_specific/traces_opus5/case_93/` and `case_94/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](archive/input_specific/single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
 
 The later `rN` normalization changes directory names and metadata identity/provenance fields, while preserving raw requests, responses, transcripts and probe payloads. Its [migration manifest](traces_glm/migration_20260930_trial_names.json) retains the original metadata bytes and path mapping. Earlier migration manifests remain unchanged; the subsequent correlation-pair cleanup separately records source-archive relocation and deduplication.
 
@@ -32,7 +32,7 @@ pilot cases. Their 72 GLM trials are preserved in
 coverage and scoring; expansion and reruns have stopped. In general, the
 presence of a reserved directory does not mean that its experiment is complete.
 
-Cases 34–81 and their GLM and Opus records now live in [archive/input_specific](archive/input_specific/README.md). These studies selected data, parameters or input domains to change labels for the same computation. They are excluded from current coverage and scoring. Current public cases are 01–33 except retired 03, plus [kernel challenges](real_kernel_challenges/README.md) 106–163. Case IDs, raw records and historical verdicts are preserved.
+Cases 91–138 (previously 34–81) and their GLM and Opus records now live in [archive/input_specific](archive/input_specific/README.md). These studies selected data, parameters or input domains to change labels for the same computation. They are excluded from current coverage and scoring. Current public cases are 01–90: originals 01–32 and [kernel challenges](real_kernel_challenges/README.md) 33–90. Directory IDs were compacted on October 19, 2026. Raw records and historical verdicts are preserved; case_map.json records every old ID.
 
 ## A tool-enabled run
 
@@ -95,3 +95,7 @@ Readers discover metadata-aware trials in current trace trees and retain legacy 
 When raw API responses exist, their reported usage takes precedence over parsed agent history, including calls that failed during parsing. Missing responses or usage are marked as incomplete cost coverage. Historical runs without raw responses retain their history-based estimates; those estimates do not certify complete API capture.
 
 A trace cannot be rebuilt from a scoreboard. A scoreboard can be rebuilt from traces. No API calls are required to index or audit existing records.
+
+## Allclose records
+
+`traces_allclose/<case>/rN/` stores the numerical baseline separately from model calls. Each trial saves source files, source hashes, generator settings, comparison rules, full stdout, errors, environment and elapsed time. The root contains a protocol manifest and a result summary for each batch. `r1` records a cancelled startup; `r2` contains all 90 completed checks. See the [allclose index](traces_allclose/README.md).

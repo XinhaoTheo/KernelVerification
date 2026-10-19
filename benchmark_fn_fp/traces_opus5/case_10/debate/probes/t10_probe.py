@@ -1,52 +1,49 @@
 
 import json, importlib.util, torch
-spec = importlib.util.spec_from_file_location("kern", "/root/cases/case_10/kernel.py")
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+spec=importlib.util.spec_from_file_location("k","/root/cases/case_11/kernel.py")
+m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+res={}
+S,H,D=8,4,64
+torch.manual_seed(1)
+x=torch.randn(S,H,D,device="cuda",dtype=torch.float32)
+pos=torch.arange(S,device="cuda").float()[:,None]
+inv=(1.0/(10000**(torch.arange(D//2,device="cuda").float()/(D//2))))[None,:]
+ang=pos*inv+0.37   # asymmetric, sin!=0, cos!=sin, distinct per dim
+cos=torch.cos(ang).contiguous(); sin=torch.sin(ang).contiguous()
 
-def ref_stable(scores, k):
-    v, i = torch.sort(scores.cpu().float(), dim=-1, descending=True, stable=True)
-    return i[:, :k]
+def ref_inter(x,cos,sin):
+    x0=x[...,0::2]; x1=x[...,1::2]
+    c=cos[:,None,:]; s=sin[:,None,:]
+    o0=x0*c-x1*s; o1=x0*s+x1*c
+    o=torch.stack([o0,o1],dim=-1).reshape(x.shape)
+    return o
+def ref_inter_swapped(x,cos,sin):
+    # hypothesised swap: x0<-odd, x1<-even
+    x0=x[...,1::2]; x1=x[...,0::2]
+    c=cos[:,None,:]; s=sin[:,None,:]
+    o0=x0*c-x1*s; o1=x0*s+x1*c
+    return torch.stack([o0,o1],dim=-1).reshape(x.shape)
+def ref_noninter(x,cos,sin):
+    d=x.shape[-1]//2
+    x0=x[...,:d]; x1=x[...,d:]
+    c=cos[:,None,:]; s=sin[:,None,:]
+    return torch.cat([x0*c-x1*s, x0*s+x1*c],dim=-1)
 
-res = {"cases": []}
-
-def run(name, scores, k):
-    sc = scores.cuda()
-    out = m.sorted_topk_indices(sc, k).cpu()
-    ref = ref_stable(sc, k)
-    sel = torch.gather(scores, 1, out)
-    refv = torch.gather(scores, 1, ref)
-    # is kernel output ascending within each equal-value run?
-    asc_ok = True
-    for r in range(out.shape[0]):
-        vals = sel[r].tolist(); idxs = out[r].tolist()
-        run_start = 0
-        for j in range(1, k + 1):
-            if j == k or vals[j] != vals[run_start]:
-                seg = idxs[run_start:j]
-                if seg != sorted(seg):
-                    asc_ok = False
-                run_start = j
-    res["cases"].append({
-        "name": name, "k": k, "N": scores.shape[1],
-        "kernel_topk_row0": out[0].tolist(),
-        "ref_topk_row0": ref[0].tolist(),
-        "index_sequence_matches_stable_ref": bool(torch.equal(out, ref)),
-        "ascending_within_equal_runs": asc_ok,
-        "selected_values_max_abs_diff": float((sel - refv).abs().max()),
-        "kernel_topk_set_equals_ref_set": bool(all(set(out[r].tolist()) == set(ref[r].tolist()) for r in range(out.shape[0]))),
-    })
-
-run("all_equal_N16_k8", torch.ones(1, 16), 8)
-run("all_equal_N32_k8", torch.full((1, 32), 3.5), 8)
-# 6 copies of the top value fully inside top-k
-row = torch.linspace(-2.0, -0.1, 16).unsqueeze(0).clone()
-for j in [1, 3, 4, 8, 12, 13]:
-    row[0, j] = 7.0
-run("six_ties_inside_topk_N16_k8", row, 8)
-# quantized/clustered row: few distinct values
-torch.manual_seed(0)
-q = (torch.randint(0, 3, (4, 32)).float())
-run("quantized_3level_N32_k8", q, 8)
-
-res["metric"] = "exact index sequence within each equal-score run vs CPU stable descending sort (lower-index-first)"
+try:
+    out=m.apply_rotary(x,cos,sin,True); torch.cuda.synchronize()
+    r=ref_inter(x,cos,sin); rs=ref_inter_swapped(x,cos,sin)
+    res["max_abs_err_vs_ref_interleaved"]=float((out-r).abs().max())
+    res["max_abs_err_vs_swapped_variant"]=float((out-rs).abs().max())
+    res["ref_max_abs"]=float(r.abs().max())
+    res["mismatch_count_1e-4"]=int(((out-r).abs()>1e-4).sum())
+    res["even_lane_max_err"]=float((out[...,0::2]-r[...,0::2]).abs().max())
+    res["odd_lane_max_err"]=float((out[...,1::2]-r[...,1::2]).abs().max())
+except Exception as e:
+    res["interleaved_error"]=repr(e)[:600]
+try:
+    out2=m.apply_rotary(x,cos,sin,False); torch.cuda.synchronize()
+    r2=ref_noninter(x,cos,sin)
+    res["max_abs_err_noninterleaved"]=float((out2-r2).abs().max())
+except Exception as e:
+    res["noninterleaved_error"]=repr(e)[:600]
 print(json.dumps(res))

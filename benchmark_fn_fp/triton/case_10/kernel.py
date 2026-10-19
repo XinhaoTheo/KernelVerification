@@ -1,71 +1,65 @@
-"""Triton kernel under test: fn1_nsa_bitonic_topk_tie_dilution."""
+"""Triton kernel under test: fp2_flashattn_rope_neox_vs_gptj."""
 import torch
 import triton
 import triton.language as tl
 
-@triton.jit
-def _compare_and_swap(x, ids, flip, i: tl.constexpr, n_dims: tl.constexpr):
-    n_outer: tl.constexpr = x.numel >> n_dims
-    shape: tl.constexpr = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
-    y = tl.reshape(x, shape)
-    mask = tl.arange(0, 2)[None, :, None]
-    left = tl.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(y.dtype)
-    right = tl.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(y.dtype)
-    left = tl.reshape(left, x.shape)
-    right = tl.reshape(right, x.shape)
-    y_idx = tl.reshape(ids, shape)
-    left_idx = tl.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape)
-    right_idx = tl.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape)
-    left_idx = tl.reshape(left_idx, x.shape).to(y_idx.dtype)
-    right_idx = tl.reshape(right_idx, x.shape).to(y_idx.dtype)
-    idtype = tl.core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
-    ileft = left.to(idtype, bitcast=True)
-    iright = right.to(idtype, bitcast=True)
-    ix = x.to(idtype, bitcast=True)
-    cond = (left > right) != flip
-    ret = ix ^ tl.where(cond, ileft ^ iright, tl.zeros_like(ix))
-    new_ids = ids ^ tl.where(cond, left_idx ^ right_idx, tl.zeros_like(ids))
-    return ret.to(x.dtype, bitcast=True), new_ids
-
 
 @triton.jit
-def _bitonic_merge(x, ids, stage: tl.constexpr, order: tl.constexpr, n_dims: tl.constexpr):
-    n_outer: tl.constexpr = x.numel >> n_dims
-    tl.static_assert(stage <= n_dims)
-    if order == 2:
-        shape: tl.constexpr = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
-        flip = tl.reshape(tl.broadcast_to(tl.arange(0, 2)[None, :, None], shape), x.shape)
+def rotary_kernel(
+    OUT, X, COS, SIN,
+    seqlen, nheads, rotary_dim_half,
+    stride_out_seqlen, stride_out_nheads, stride_out_headdim,
+    stride_x_seqlen, stride_x_nheads, stride_x_headdim,
+    INTERLEAVED: tl.constexpr,
+    BLOCK_H: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+    pid_head = tl.program_id(0)
+    pid_m = tl.program_id(1)
+    rh = pid_head * BLOCK_H + tl.arange(0, BLOCK_H)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rk_half = tl.arange(0, BLOCK_K // 2)
+
+    COS = COS + (rm[:, None] * rotary_dim_half + rk_half[None, :])
+    SIN = SIN + (rm[:, None] * rotary_dim_half + rk_half[None, :])
+    mask_cs = (rm[:, None] < seqlen) & (rk_half[None, :] < rotary_dim_half)
+    cos = tl.load(COS, mask=mask_cs, other=1.0).to(tl.float32)
+    sin = tl.load(SIN, mask=mask_cs, other=0.0).to(tl.float32)
+
+    if not INTERLEAVED:
+        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk_half[None, None, :] * stride_x_headdim)
+        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk_half[None, None, :] * stride_out_headdim)
+        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk_half[None, None, :] < rotary_dim_half)
+        x0 = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)
+        x1 = tl.load(X_ptrs + rotary_dim_half * stride_x_headdim, mask=mask, other=0.0).to(tl.float32)
+        o0 = x0 * cos - x1 * sin
+        o1 = x0 * sin + x1 * cos
+        tl.store(OUT_ptrs, o0, mask=mask)
+        tl.store(OUT_ptrs + rotary_dim_half * stride_out_headdim, o1, mask=mask)
     else:
-        flip = order
-    for i in tl.static_range(stage):
-        x, ids = _compare_and_swap(x, ids, flip, i + (n_dims - stage), n_dims)
-    return x, ids
+        rk = tl.arange(0, BLOCK_K)
+        X_ptrs = X + (rh[:, None, None] * stride_x_nheads + rm[None, :, None] * stride_x_seqlen + rk[None, None, :] * stride_x_headdim)
+        OUT_ptrs = OUT + (rh[:, None, None] * stride_out_nheads + rm[None, :, None] * stride_out_seqlen + rk[None, None, :] * stride_out_headdim)
+        mask = (rh[:, None, None] < nheads) & (rm[None, :, None] < seqlen) & (rk[None, None, :] < 2 * rotary_dim_half)
+        x = tl.load(X_ptrs, mask=mask, other=0.0).to(tl.float32)
+        x0, x1 = tl.split(tl.reshape(x, [BLOCK_H, BLOCK_M, BLOCK_K // 2, 2]))
+        o0 = x0 * cos - x1 * sin
+        o1 = x0 * sin + x1 * cos
+        o = tl.reshape(tl.join(o0, o1), [BLOCK_H, BLOCK_M, BLOCK_K])
+        tl.store(OUT_ptrs, o, mask=mask)
 
 
-@triton.jit
-def _row_argsort_kernel(X_ptr, IDS_ptr, stride_row, N: tl.constexpr, N_DIMS: tl.constexpr, DESCENDING: tl.constexpr):
-    # tl.log2(x.shape[dim]); that call path is not constexpr-stable on every
-    # Triton version, so N_DIMS is passed in from the (Python-side, so still
-    # compile-time-known) caller instead. The bitonic merge/compare-and-swap
-    # primitives below -- where the actual tie-break mechanism lives -- are
-    # byte-for-byte the real kernel, unchanged.
-    row = tl.program_id(0)
-    offs = tl.arange(0, N)
-    x = tl.load(X_ptr + row * stride_row + offs)
-    ids = tl.load(IDS_ptr + row * stride_row + offs)
-    for i in tl.static_range(1, N_DIMS + 1):
-        x, ids = _bitonic_merge(x, ids, i, 2 if i < N_DIMS else DESCENDING, N_DIMS)
-    tl.store(X_ptr + row * stride_row + offs, x)
-    tl.store(IDS_ptr + row * stride_row + offs, ids)
-
-
-def sorted_topk_indices(scores: torch.Tensor, k: int) -> torch.Tensor:
-    """Host wrapper: real bitonic-sort kernel, launched one program per row."""
-    import math
-    assert scores.is_cuda
-    B, N = scores.shape
-    n_dims = int(math.log2(N))
-    x = scores.clone().contiguous()
-    ids = torch.arange(N, device=scores.device, dtype=torch.int32).unsqueeze(0).expand(B, N).contiguous()
-    _row_argsort_kernel[(B,)](x, ids, N, N=N, N_DIMS=n_dims, DESCENDING=True)
-    return ids[:, :k].long()
+def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, interleaved: bool) -> torch.Tensor:
+    """x: (seqlen, nheads, headdim). cos/sin: (seqlen, headdim//2)."""
+    seqlen, nheads, headdim = x.shape
+    rotary_dim_half = headdim // 2
+    out = torch.empty_like(x)
+    BLOCK_K = triton.next_power_of_2(headdim)
+    grid = (nheads, seqlen)
+    rotary_kernel[grid](
+        out, x, cos, sin,
+        seqlen, nheads, rotary_dim_half,
+        out.stride(0), out.stride(1), out.stride(2),
+        x.stride(0), x.stride(1), x.stride(2),
+        INTERLEAVED=interleaved, BLOCK_H=1, BLOCK_M=1, BLOCK_K=BLOCK_K,
+    )
+    return out
