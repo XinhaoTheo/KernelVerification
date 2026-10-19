@@ -69,6 +69,51 @@ def test_archived_cases_leave_active_coverage_and_collection_groups_pair_with_nu
     assert "2 recorded GLM trials" in text
 
 
+def test_each_archive_has_its_own_counts_and_case_links(index, tmp_path, monkeypatch):
+    import json
+    import index_cases
+
+    benchmark = tmp_path / "benchmark_fn_fp"
+    details = {
+        "case_01": {"dataset": "benchmark_fn_fp", "public_dir": "triton_eval_cases/case_01"},
+        "case_34": {"dataset": "benchmark_fn_fp", "status": "archived",
+                    "archive_root": "archive/input_specific",
+                    "public_dir": "archive/input_specific/triton_eval_cases/case_34"},
+        "case_82": {"dataset": "numerical_pilot", "status": "archived",
+                    "archive_root": "archive/numerical_pilot",
+                    "public_dir": "archive/numerical_pilot/eval_cases/case_82"},
+    }
+    for case, detail in details.items():
+        public = benchmark / detail["public_dir"]
+        public.mkdir(parents=True)
+        (public / "kernel.py").write_text("# frozen")
+        prefix = detail.get("archive_root", "")
+        trace = benchmark / prefix / "traces_glm" / case / "solo/r1"
+        trace.mkdir(parents=True)
+        (trace / "trace_meta.json").write_text("{}")
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": details}))
+    monkeypatch.setattr(index_cases, "ROOT", benchmark)
+    index_cases.main()
+    case_text = (benchmark / "CASE_INDEX.md").read_text()
+    assert "当前 1 题；另有 2 题已归档" in case_text
+    assert "(archive/input_specific/traces_glm/case_34/)" in case_text
+    assert "(archive/numerical_pilot/traces_glm/case_82/)" in case_text
+    assert "(archive/numerical_pilot/traces_glm/case_34/)" not in case_text
+
+    current = row()
+    monkeypatch.setattr(index, "BENCHMARK", benchmark)
+    monkeypatch.setattr(index, "iter_trace_records", lambda **kwargs: iter([
+        {"path": benchmark / current["path"], "metadata": {}}]))
+    monkeypatch.setattr(index, "build_report", lambda **kwargs: {
+        "arms": {"fixture": {"per_case": {"case_01": current}}}})
+    index.main()
+    trace_text = (benchmark / "traces_glm/INDEX.md").read_text()
+    assert trace_text.count("1 题、1 条 GLM trials") == 2
+    assert "../archive/input_specific/README.md" in trace_text
+    assert "../archive/numerical_pilot/README.md" in trace_text
+    assert "1 recorded GLM trials" in trace_text
+
+
 def test_selects_first_valid_attempt_even_if_wrong_and_later_one_correct(index):
     wrong = row(trial="earlier", outcome="wrong_verdict")
     correct = row(trial="later")

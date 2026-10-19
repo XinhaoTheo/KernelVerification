@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -170,7 +171,10 @@ def _write_frozen(path, value):
 
 
 def build(output_root):
-    root = Path(output_root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(output_root)
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
     eligible = [row for row in candidates if row["reference_top2_gap"] > 1e-5 and row["quantized_top2_gap"] >= 0.015625]
     selected = {"case_52": next(row for row in eligible if row["error"] <= 0.75 * TOLERANCE),
@@ -207,6 +211,6 @@ def build(output_root):
 
 
 if __name__ == "__main__":
-    answer = build(Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges")
+    answer = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges")
     print(json.dumps({case: {k: row[k] for k in ("cpu_ground_truth", "seed", "error", "budget")}
                       for case, row in answer["cases"].items()}, indent=2))

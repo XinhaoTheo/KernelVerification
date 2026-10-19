@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -183,7 +184,10 @@ def _write_frozen(path, text):
 
 
 def build(output_root: Path):
-    root = Path(output_root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(output_root)
     calibration = [_candidate(seed) for seed in CALIBRATION_SEEDS]
     search = [_candidate(seed) for seed in SEARCH_SEEDS]
     selected = {"case_60": min(search, key=lambda row: row["error"]),
@@ -228,7 +232,7 @@ def build(output_root: Path):
 
 
 if __name__ == "__main__":
-    answer = build(Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges")
+    answer = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges")
     print(json.dumps({case: {key: row[key] for key in (
         "cpu_ground_truth", "error", "budget", "seed", "oracle_max_abs_disagreement")}
         for case, row in answer["cases"].items()}, indent=2))

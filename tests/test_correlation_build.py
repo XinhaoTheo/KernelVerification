@@ -4,6 +4,17 @@ import json
 import pytest
 
 from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.correlation_pair import build, validate_cpu
+from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.archive_paths import (
+    ARCHIVE, BENCHMARK, COLLECTIONS, archived_collection,
+)
+
+
+def test_legacy_project_destinations_route_to_archive_but_fixtures_stay_local(tmp_path):
+    for collection in COLLECTIONS:
+        assert archived_collection(BENCHMARK / collection) == ARCHIVE / collection
+        fixture = tmp_path / "benchmark_fn_fp" / collection
+        assert archived_collection(fixture) == fixture
+    assert build.ROOT == validate_cpu.ROOT == ARCHIVE / "single_call_vs_tools_challenges"
 
 
 def test_fresh_pair_rebuild_and_cpu_validation_preserve_other_cases(tmp_path, monkeypatch):

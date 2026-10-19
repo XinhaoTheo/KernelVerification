@@ -3,6 +3,8 @@ Build writes only this family's public cases under triton_eval_cases and its
 private records under single_call_vs_tools_challenges/private_data; existing frozen artifacts are protected.
 """
 from pathlib import Path
+import sys
+
 import hashlib
 import json
 import math
@@ -91,7 +93,10 @@ def metric(output, ref):
 
 
 def build(output_root):
-    root = Path(output_root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(output_root)
     for name in CASES:
         if (root.parent / "triton_eval_cases" / name).exists():
             raise FileExistsError(f"Do not overwrite frozen case: {name}")
@@ -139,6 +144,6 @@ def build(output_root):
 
 
 if __name__ == "__main__":
-    result = build(Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges")
+    result = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges")
     print(json.dumps({case: {k: row[k] for k in ("cpu_ground_truth", "error", "budget")}
                       for case, row in result["cases"].items()}, indent=2))

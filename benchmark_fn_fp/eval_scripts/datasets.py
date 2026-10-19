@@ -6,10 +6,10 @@ import json
 from pathlib import Path
 
 try:
-    from .case_registry import (canonical_dataset, case_sort_key, dataset_members,
+    from .case_registry import (canonical_dataset, case_public_dir, case_sort_key, dataset_members,
                                 dataset_root, is_active_case, load_registry, validation_path)
 except ImportError:
-    from case_registry import (canonical_dataset, case_sort_key, dataset_members,
+    from case_registry import (canonical_dataset, case_public_dir, case_sort_key, dataset_members,
                                dataset_root, is_active_case, load_registry, validation_path)
 
 DATASETS = ("benchmark_fn_fp", "correlation_pair", "numerical_challenges", "evidence_challenges",
@@ -76,8 +76,11 @@ def checked_case_hashes(repo: Path, dataset: str, name: str) -> dict[str, str]:
         raise ValueError(f"Invalid case name: {name!r}")
     directory = cases_dir(repo, dataset)
     dataset = case_dataset(repo, dataset, name)
+    detail = load_registry(Path(repo) / "benchmark_fn_fp").get("case_details", {}).get(name)
+    public = (case_public_dir(Path(repo) / "benchmark_fn_fp", name, detail)
+              if detail else directory / name)
     hashes = {f"{kind}_sha256": hashlib.sha256(
-        (directory / name / filename).read_bytes()).hexdigest()
+        (public / filename).read_bytes()).hexdigest()
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt"))}
     if dataset in FROZEN_DATASETS:
         frozen_path = validation_path(Path(repo) / "benchmark_fn_fp", dataset)

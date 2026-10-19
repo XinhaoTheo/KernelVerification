@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges"
+ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 PRIVATE = Path("private_data") / "correlation_pair"
 BUDGET = 0.1
 M, K = 64, 128

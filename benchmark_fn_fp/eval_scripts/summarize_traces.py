@@ -45,9 +45,14 @@ def profile_for_tree(traces_dir: str):
 
 def ground_truth(benchmark_dir: Path | None = None) -> dict[str, str]:
     root = Path(benchmark_dir) if benchmark_dir is not None else BENCHMARK
-    cases = json.loads((root / "case_map.json").read_text())["cases"]
+    registry = load_registry(root)
+    cases = registry.get("cases", {})
     out = {}
     for cid, real in cases.items():
+        detail = registry.get("case_details", {}).get(cid, {})
+        if not is_active_case(detail) and detail.get("archived_ground_truth") in {"trust", "reject"}:
+            out[cid] = detail["archived_ground_truth"]
+            continue
         meta = json.loads((root / "triton" / real / "meta.json").read_text())
         out[cid] = "reject" if meta["expected"]["correct_verdict"] == "BUGGY" else "trust"
     return out
@@ -212,6 +217,12 @@ def build_report(*, records=None, labels: dict[str, dict[str, str]] | None = Non
                     case: row["ground_truth"]
                     for case, row in json.loads(validated_labels.read_text())["cases"].items()
                 }
+        # Archived labels remain readable even when their original answer-side
+        # source folders have moved. This does not relabel historical trials.
+        for case, detail in details.items():
+            truth = detail.get("archived_ground_truth")
+            if not is_active_case(detail) and truth in {"trust", "reject"}:
+                labels.setdefault(detail["dataset"], {})[case] = truth
     if not include_archived:
         labels = {dataset: {case: truth for case, truth in truths.items()
                             if is_active_case(details.get(case, {}))}
@@ -313,7 +324,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     parser.add_argument("--include-archived", action="store_true",
-                        help="Include historical pilot traces; print only, leaving the active scoreboard unchanged")
+                        help="Include archived traces; print only, leaving the active scoreboard unchanged")
     args = parser.parse_args(argv)
     report = build_report(include_archived=args.include_archived)
     if args.json:

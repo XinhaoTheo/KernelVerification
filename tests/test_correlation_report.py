@@ -79,6 +79,31 @@ def test_shared_trees_keep_batches_budgets_and_saved_prices_separate(root):
     assert "AUDIT.md" not in text and "r2_64k" in text and "neutral1" in text
 
 
+def test_archived_report_keeps_attempts_prices_and_relative_links(root):
+    single(root)
+    single(root, case="case_37", provider="anthropic", verdict="trust", saved=0.456)
+    before = report.derive(root)
+    benchmark = root.parent
+    archive = benchmark / "archive/input_specific"
+    archive.mkdir(parents=True)
+    archived_root = root.rename(archive / root.name)
+    for name in ("triton_eval_cases", "traces_glm", "traces_opus5"):
+        (benchmark / name).rename(archive / name)
+    write(benchmark / "case_map.json", {"case_details": {
+        case: {"dataset": "correlation_pair", "status": "archived",
+               "public_dir": f"archive/input_specific/triton_eval_cases/{case}",
+               "archive_root": "archive/input_specific", "archived_ground_truth": truth}
+        for case, truth in (("case_36", "reject"), ("case_37", "trust"))}})
+
+    after = report.derive(archived_root)
+    assert after["attempts"] == before["attempts"] == 2
+    assert after["outcomes"] == before["outcomes"]
+    assert after["estimated_api_usd"] == before["estimated_api_usd"]
+    assert all(row["path"].startswith("archive/input_specific/") for row in after["rows"])
+    assert all((archived_root / row["trace_link"]).resolve().exists() for row in after["rows"])
+    assert not root.exists()
+
+
 def test_neutral_ablation_does_not_exempt_unrelated_hash_changes(root):
     path = single(root, provider="anthropic", variant="neutral_contract")
     assert report.derive(root)["attempts"] == 1

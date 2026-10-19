@@ -13,11 +13,12 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges"
+ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 PRIVATE = Path("private_data") / "correlation_pair"
-sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from audit_traces import audit
 from case_registry import case_sort_key
+from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
 from summarize_traces import build_report
 from traces import experiment_trial, iter_trace_records, trial_sort_key
 
@@ -110,7 +111,7 @@ def costs(rows):
 
 def derive(root=ROOT):
     root = Path(root)
-    benchmark = root.parent
+    benchmark = benchmark_root(root)
     labels = read(root / PRIVATE / "validation_gpu.json")
     if not labels.get("cases"):
         raise ValueError("Missing frozen correlation-pair labels")
@@ -118,14 +119,13 @@ def derive(root=ROOT):
     for case, frozen in labels["cases"].items():
         public[case] = {}
         for kind, filename in (("kernel", "kernel.py"), ("problem", "problem.txt")):
-            content = (benchmark / "triton_eval_cases" / case / filename).read_text()
+            content = (root.parent / "triton_eval_cases" / case / filename).read_text()
             if digest(content) != frozen[f"{kind}_sha256"]:
                 raise ValueError(f"Frozen public source changed: {case}/{filename}")
             public[case][kind] = content
-    records = [r for r in iter_trace_records(benchmark_dir=benchmark)
-               if r["dataset"] == DATASET
-               and r["path"].relative_to(benchmark).parts[0] in {"traces_glm", "traces_opus5"}]
-    common = build_report(records=records, benchmark_dir=benchmark, labels={
+    records = [r for r in iter_trace_records(benchmark_dir=benchmark, include_archived=True)
+               if r["dataset"] == DATASET and r["case"] in labels["cases"]]
+    common = build_report(records=records, benchmark_dir=benchmark, include_archived=True, labels={
         DATASET: {case: row["ground_truth"] for case, row in labels["cases"].items()}})
     by_path = {str(r["path"].relative_to(benchmark)): r for r in records}
     rows = []
@@ -156,7 +156,7 @@ def derive(root=ROOT):
             row["audit_issues"] = audit(path) if run and (path / "tool_events.jsonl").exists() else []
             link_file = next((name for name in ("transcript.md", "user_prompt.txt", "trace_meta.json")
                               if (path / name).exists()), "trace_meta.json")
-            row["trace_link"] = "../" + row["path"] + "/" + link_file
+            row["trace_link"] = trace_link(root, path, link_file)
             rows.append(row)
     rows.sort(key=lambda r: (r["model"] or "", case_sort_key(r["case"]), ARMS.index(r["arm"]), trial_sort_key(r["trial"])))
     grouped = defaultdict(list)

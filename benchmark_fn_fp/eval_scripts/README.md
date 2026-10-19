@@ -100,8 +100,4 @@ reasoned their way to the same wrong one. The adversarial structure did not
 improve false-positive suppression, which is the property it was meant to
 provide.
 
-The `allclose` and single-call arms have not been re-measured on current code.
-Their scripts are unchanged and still needed — without arm 1 there is no
-evidence the benchmark defeats fixed tolerances at all, and without arm 2 there
-is no baseline showing what execution is worth. Re-running both costs about $2:
-arm 1 makes no model calls.
+These figures describe the historical Opus experiment. Current GLM single-call, Solo and Debate results are listed in the [current benchmark summary](../README.md#current-accuracy). No saved allclose baseline result is available for the current 90-case set. Its existing runner covers the original suite only, so allclose accuracy remains N/A until an explicit baseline protocol is run and its results are saved.

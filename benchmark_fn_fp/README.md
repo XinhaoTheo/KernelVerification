@@ -4,12 +4,12 @@
 
 | 看什么 | 入口 | 案例 |
 |---|---|---|
-| 固定输入的数值误差能否达标 | [single_call_vs_tools_challenges：无工具单次调用 vs 带工具验证](single_call_vs_tools_challenges/README.md) | case_36–case_61，26题 |
-| 初始参考是否可靠、合同是否被完整覆盖 | [solo_vs_debate_challenges：单 agent＋工具 vs 多角色 debate＋工具](solo_vs_debate_challenges/README.md) | case_62–case_81，20题 |
-| 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_109、114 单独保留；其余八题待归普通集合；106–111 与 112–115 两批独立统计 |
-| kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_81除退役03，加case_106–115，共90题 |
+| 已观察到工具收益的案例 | [Success Cases](SUCCESS_CASES.md) | 9 个案例的总表、详情索引和复测结果 |
+| 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_106–case_163，共58题 |
+| kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–33除退役03，加case_106–163，共90题 |
+| 按输入构造标签的旧实验（已归档） | [archive/input_specific](archive/input_specific/README.md) | case_34–case_81，共48题；不进入当前统计和实验 |
 | 早期24题pilot（已归档） | [archive/numerical_pilot](archive/numerical_pilot/README.md) | case_82–case_105及72条GLM记录；停止扩展和重跑 |
-| 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 当前90题的批次，按case/arm/rN |
+| 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 当前90题，共392条GLM记录，按case/arm/rN |
 
 GPU kernel verification datasets, evaluation programs, and recorded experiments.
 Start with [CASE_INDEX.md](CASE_INDEX.md) for the meaning and location of every
@@ -20,10 +20,20 @@ case. All datasets and trace directories use the same global `case_<number>` ID;
 verifier decide whether the kernel satisfies that contract — catching real
 defects without condemning legitimate implementation differences?
 
-The original FN/FP suite targets fixed-tolerance `allclose`. Later datasets test
-numerical judgment without tools and the possible benefit of independent review
-over a single agent with tools. These groups have different protocols and their
-scores must not be pooled as one benchmark result.
+The original FN/FP suite targets fixed-tolerance `allclose`. The later kernel challenges test implementation correctness over a complete public input domain. Selected examples can expose a defect, but do not receive separate labels. Old studies that assigned labels by changing fixed inputs, parameters or input domains are archived and excluded from current results. Historical model and budget settings differ, so aggregate accuracy is a history summary rather than a controlled comparison.
+
+## Current accuracy
+
+October 19, 2026. The current set contains 90 cases. For each model method, use the earliest completed record per case from the [GLM index](traces_glm/INDEX.md). Abstentions and cases without a completed record stay in the denominator and do not count as correct.
+
+| Method | Correct | Wrong verdict | Abstention / unfinished | Accuracy |
+|---|---:|---:|---:|---:|
+| Conventional allclose | Not measured | — | — | N/A |
+| Single call, no tools | 73/90 | 16 | 1 | 81.1% |
+| Solo + tools | 85/90 | 5 | 0 | 94.4% |
+| Debate + tools | 79/90 | 5 | 6 | 87.8% |
+
+The existing allclose runner covers the original suite only. No saved baseline result is available to verify its accuracy on the current set. Independent GPU qualification and expected allclose behavior are not substitute baseline runs. N/A does not mean 0% accuracy.
 
 ---
 
@@ -34,12 +44,13 @@ benchmark_fn_fp/
 │
 ├── CASE_INDEX.md       all case ranges, purposes, and links
 ├── case_map.json       single canonical ID/source/dataset mapping
-├── triton/             original 34 cases, with answers ← scorer only
-├── triton_eval_cases/  90 public cases: case_01–81 except 03, plus case_106–115
-├── single_call_vs_tools_challenges/  case_36–case_61: README and private_data
-├── solo_vs_debate_challenges/ case_62–case_81: README and private_data
+├── SUCCESS_CASES.md    success table, detail links and repeat results
+├── success_cases/      one description per documented success case
+├── triton/             32 current original cases, with answers ← scorer only
+├── triton_eval_cases/  90 public cases: case_01–33 except 03, plus case_106–163
+├── archive/input_specific/ case_34–case_81, old labels and experiment records
 ├── archive/numerical_pilot/ case_82–case_105, historical results and 72 GLM trials
-├── real_kernel_challenges/ case_106–115: purpose-built challenges; separate results
+├── real_kernel_challenges/ case_106–163: purpose-built challenges; separate results
 │
 ├── eval_scripts/       evaluation scripts and derived scoreboard
 ├── traces_opus5/       every run on claude-opus-5 (see TRACES.md)
@@ -49,34 +60,18 @@ benchmark_fn_fp/
 └── modal_runner.py     shared Modal GPU execution wrapper
 ```
 
-There are **90 active cases**: 34 original FN/FP cases, 26 single-call-versus-tools
-cases, 20 solo-versus-debate cases, and 10 purpose-built real-kernel challenges.
-Another **24 pilot cases are archived**, so the historical total is 114;
-the archive is excluded from current coverage. The ten new cases have fixed
-implementation-level labels and are reported separately from the older studies.
-The original suite occupies `case_01`–`case_35`, with `case_03` retired and never
-reused. The global index explains each range and links to the matching traces.
+There are **90 active cases**: 32 original FN/FP cases and 58 purpose-built kernel challenges. Another **72 cases are archived**: 48 input-specific cases and 24 early pilot cases. The historical total is 162. Case numbers reach 163 because `case_03` is retired and never reused.
 
-The original suite and both challenge groups share
-`triton_eval_cases/`: cases `case_01`–`case_81`, excluding retired `case_03`,
-plus real-kernel cases `case_106`–`case_115`. The retired pilot retains `archive/numerical_pilot/eval_cases/case_NN/`
-and its own archived `traces_glm/`; it is no longer selected for current runs.
+Current public cases share `triton_eval_cases/`: `case_01`–`case_33`, excluding `case_03`, plus `case_106`–`case_163`. Archived public files and traces live under their archive group. They are excluded from current coverage and default scoring.
 Runner `--all` selects the requested dataset's registered cases, not every folder
 in the shared directory. Current CLI aliases use the new descriptive names;
 historical dataset IDs remain in trace metadata for compatibility.
 
-Both challenge groups keep answer keys, construction searches and GPU freeze
-records under `private_data/`; the 36/37 records occupy its `correlation_pair/` subdirectory;
-these files are not agent inputs.
-Each group has one README containing generated results, protocol and necessary
-audit findings. Construction, CPU/GPU validation and reporting programs live
-under the matching `eval_scripts/<group>/` directory.
-Optional JSON scoreboards can be regenerated with the report script's `--json`
-flag under `private_data/reports/`.
+The old challenge groups retain answer keys, construction searches and GPU records in `archive/input_specific/`. Their author programs remain under `eval_scripts/` and target archived paths. Historical reports can still be read without restoring these cases to the current benchmark. Private answer files are never agent inputs.
 
 ---
 
-## `triton/` — the 34 original cases, with answers
+## `triton/` — the 32 current original cases, with answers
 
 One directory per global case ID, matching `triton_eval_cases/` and the traces.
 The historical source names remain in `case_map.json` and private metadata:
@@ -133,10 +128,9 @@ The historical source names remain in `case_map.json` and private metadata:
 
 ## `triton_eval_cases/` — what a verifier actually sees
 
-The original 34 public copies are built from `triton/` by
+The current original public copies are built from `triton/` by
 `benchmark_fn_fp/generation/generators/build_eval_cases.py`. The same directory
-also holds frozen cases `case_36`–`case_81`; their private measurements and study
-notes remain in their respective group directories. The example
+also holds frozen kernel challenges `case_106`–`case_163`. Cases `case_34`–`case_81` and their measurements are archived. The example
 and source-to-public comparison below describe an original-suite case.
 
 ```
@@ -261,7 +255,7 @@ GLM runs share one directory, arranged by case, arm and trial:
 ```
 benchmark_fn_fp/traces_opus5/case_33/debate/              historical Opus run
 benchmark_fn_fp/traces_glm/case_33/debate/r1/
-benchmark_fn_fp/traces_glm/case_36/debate/r1/
+benchmark_fn_fp/traces_glm/case_109/debate/r1/
 ```
 
 Both GLM model profiles in `eval_scripts/models.py` write to `traces_glm/`. Metadata
@@ -294,6 +288,10 @@ harder — so nobody spends the money testing them again.
 
 ---
 
+## `archive/input_specific/` — excluded input-based studies
+
+Cases 34–81 are excluded from current kernel verification. Cases 34–35 use identical code with different input domains. Cases 36–81 change selected input data or fixed parameter data while keeping the computation unchanged. The archive retains 48 public cases, their answers, 299 GLM trials and 11 Opus trials. [The archive index](archive/input_specific/README.md) records the reasons and locations. Case IDs and raw experiment records are preserved.
+
 ## `archive/numerical_pilot/` — retired early survey
 
 The [archived pilot](archive/numerical_pilot/README.md) retains `case_82`–`case_105`:
@@ -321,9 +319,9 @@ modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --p
 # actual trial number printed by the original batch.
 modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --arm both --all --provider fireworks --trial r2 --skip-existing
 
-# Fireworks case_36/case_37 comparison; each command reserves a new unused rN
-python benchmark_fn_fp/eval_scripts/run_single_fireworks.py --dataset single_call_vs_tools_challenges --cases case_36,case_37 --max-tokens 65536
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset single_call_vs_tools_challenges --arm both --cases case_36,case_37 --provider fireworks --max-tokens 65536
+# Fireworks whole-domain kernel comparison; each command reserves a new unused rN
+python benchmark_fn_fp/eval_scripts/run_single_fireworks.py --dataset real_kernel_challenges --cases case_158,case_159 --max-tokens 32768
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset real_kernel_challenges --arm both --cases case_158,case_159 --provider fireworks --max-tokens 32768
 
 # Audit first, score second.
 python benchmark_fn_fp/eval_scripts/audit_traces.py

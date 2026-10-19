@@ -8,6 +8,7 @@ import hashlib
 import itertools
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -253,7 +254,10 @@ def _write_frozen(path, text):
 
 
 def build(root):
-    root = Path(root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(root)
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
     selected = {"case_64": next(row for row in candidates if row["cpu_ground_truth"] == "trust"
                                 and row["permutations_distinct"]),
@@ -341,7 +345,7 @@ def validate_case(name, kernel):
 
 
 if __name__ == "__main__":
-    result = build(Path(__file__).resolve().parents[3] / "solo_vs_debate_challenges")
+    result = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "solo_vs_debate_challenges")
     print(json.dumps({name: {key: row[key] for key in ("seed", "cpu_ground_truth",
         "max_absolute_error", "failing_sequence_count", "worst_operations")}
         for name, row in result["cases"].items()}, indent=2))

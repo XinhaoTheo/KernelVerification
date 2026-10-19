@@ -115,3 +115,28 @@ def test_validator_refuses_cpu_gpu_disagreements(monkeypatch):
     for key in ("input_sha256", "kernel_sha256", "problem_sha256", "ground_truth"):
         with pytest.raises(ValueError, match="CPU/GPU"):
             validator.check_cpu_agreement({"cases": {"case_38": {**row, key: "wrong"}}}, cpu)
+
+
+def test_archived_public_and_validation_paths_stay_readable_but_cannot_run(tmp_path):
+    from benchmark_fn_fp.eval_scripts.datasets import case_dataset
+    from benchmark_fn_fp.eval_scripts.case_registry import case_public_dir
+    case, frozen = frozen_case(tmp_path)
+    benchmark = tmp_path / "benchmark_fn_fp"
+    archived = benchmark / "archive/input_specific"
+    archived.mkdir(parents=True)
+    collection = benchmark / "single_call_vs_tools_challenges"
+    collection.rename(archived / collection.name)
+    public = archived / "triton_eval_cases/case_38"
+    public.parent.mkdir()
+    case.rename(public)
+    detail = {"dataset": "numerical_challenges", "status": "archived",
+              "archive_root": "archive/input_specific", "public_dir": str(public.relative_to(benchmark))}
+    (benchmark / "case_map.json").write_text(json.dumps({"case_details": {"case_38": detail}}))
+    assert case_names(tmp_path, "single_call_vs_tools_challenges") == []
+    assert case_public_dir(benchmark, "case_38") == public
+    assert dataset_root(benchmark, "numerical_challenges") == archived / collection.name
+    assert validation_path(benchmark, "numerical_challenges").is_file()
+    assert checked_case_hashes(tmp_path, "numerical_challenges", "case_38") == {
+        key: value for key, value in frozen.items() if key.endswith("sha256")}
+    with pytest.raises(ValueError, match="archived"):
+        case_dataset(tmp_path, "numerical_challenges", "case_38", require_active=True)

@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -238,7 +239,10 @@ def _sha(content):
 
 
 def build(output_root: Path):
-    root = Path(output_root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(output_root)
     search, selected = _search()
     answer_key = {"family": "iterative_solve", "budget": TOLERANCE, "cases": {}}
     artifacts = {}
@@ -288,7 +292,7 @@ def build(output_root: Path):
 
 
 if __name__ == "__main__":
-    result = build(Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges")
+    result = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges")
     print(json.dumps({case: {key: row[key] for key in
                            ("cpu_ground_truth", "error", "budget", "seed", "kernel_sha256")}
                       for case, row in result["cases"].items()}, indent=2))

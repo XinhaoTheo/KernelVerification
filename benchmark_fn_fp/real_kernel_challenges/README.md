@@ -4,7 +4,7 @@
 kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷机制或历史修复，
 适配、人工修改及测试选择均记录；本组结果独立统计，不与旧题库合并为总准确率。
 
-[Success cases explained in English, with code snippets and evidence](SUCCESS_CASES.md).
+[Success cases explained in English, with code snippets and evidence](../SUCCESS_CASES.md).
 
 [Replication of cases 109, 114, 127 and 128](REPLICATION_RESULTS.md). New cases 134–163 and their three-arm results are documented at the end of this page.
 

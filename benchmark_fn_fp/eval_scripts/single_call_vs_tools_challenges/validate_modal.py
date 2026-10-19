@@ -16,7 +16,7 @@ import sys
 
 import modal
 
-ROOT = Path(__file__).resolve().parents[2] / "single_call_vs_tools_challenges"
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 app = modal.App("kv-numerical-challenges-oracle")
 image = (modal.Image.debian_slim(python_version="3.11")
          .pip_install("torch==2.8.0", "triton==3.4.0", "numpy==1.26.4")

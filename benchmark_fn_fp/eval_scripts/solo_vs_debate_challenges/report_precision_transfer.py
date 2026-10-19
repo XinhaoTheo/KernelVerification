@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[2] / "solo_vs_debate_challenges"
-sys.path.insert(0, str(ROOT.parents[1]))
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "solo_vs_debate_challenges"
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from benchmark_fn_fp.eval_scripts.solo_vs_debate_challenges import report as base_report
 
 CASES = tuple(f"case_{i + 61:02d}" for i in range(15, 21))

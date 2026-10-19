@@ -259,15 +259,31 @@ def test_all_active_repository_public_bundles_collect_without_changing_metadata(
     benchmark = Path(__file__).resolve().parents[1] / "benchmark_fn_fp"
     details = read(benchmark / "case_map.json")["case_details"]
     active = {name: row for name, row in details.items() if is_active_case(row)}
-    # Include the original empty schema, original explicit unknown schema and
-    # all four historical family values that the isolation change must retain.
-    assert {"case_01", "case_64", "case_66", "case_70", "case_72", "case_115"} <= set(active)
+    # Current bundles include the empty and explicit unknown schemas.
+    assert {"case_01", "case_115"} <= set(active)
     for name, row in active.items():
         directory = benchmark / row["public_dir"]
         original = (directory / "meta.json").read_bytes()
         files = module._public_files_for_case(directory)
         assert files["meta.json"] == original, name
         assert (directory / "meta.json").read_bytes() == original, name
+
+
+def test_archived_family_metadata_remains_readable_without_reactivating_cases(runner):
+    from case_registry import is_active_case
+
+    module, _, _ = runner
+    benchmark = Path(__file__).resolve().parents[1] / "benchmark_fn_fp"
+    details = read(benchmark / "case_map.json")["case_details"]
+    for name in ("case_64", "case_66", "case_70", "case_72"):
+        row = details[name]
+        assert not is_active_case(row)
+        directory = benchmark / row["public_dir"]
+        assert directory.is_relative_to(benchmark / "archive")
+        original = (directory / "meta.json").read_bytes()
+        # Local parsing preserves historical schemas; it does not submit a run.
+        assert module._public_files_for_case(directory)["meta.json"] == original
+        assert (directory / "meta.json").read_bytes() == original
 
 
 def test_duplicate_metadata_fields_cannot_hide_a_label_in_preserved_bytes(runner, monkeypatch):

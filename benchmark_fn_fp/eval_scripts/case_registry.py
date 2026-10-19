@@ -38,12 +38,44 @@ def is_active_case(detail: dict) -> bool:
     return detail.get("status", "active") == "active"
 
 
+def case_archive_root(detail: dict) -> str | None:
+    """Locate historical storage without changing the case's dataset identity."""
+    if is_active_case(detail):
+        return None
+    return detail.get("archive_root") or (
+        "archive/numerical_pilot" if detail.get("dataset") == "numerical_pilot" else None)
+
+
+def archived_case_groups(details: dict) -> dict[str, list[str]]:
+    groups = {}
+    for case, detail in sorted(details.items(), key=lambda item: case_sort_key(item[0])):
+        if not is_active_case(detail):
+            groups.setdefault(case_archive_root(detail) or "archive", []).append(case)
+    return groups
+
+
+def case_public_dir(benchmark: Path, case: str, detail: dict | None = None) -> Path:
+    """Resolve current or archived public files from their registered location."""
+    benchmark = Path(benchmark)
+    if detail is None:
+        detail = load_registry(benchmark).get("case_details", {}).get(case, {})
+    public = detail.get("public_dir")
+    if public:
+        return benchmark / str(public).removeprefix("benchmark_fn_fp/")
+    if detail.get("dataset") == "numerical_pilot":
+        return dataset_root(benchmark, "numerical_pilot") / "eval_cases" / case
+    return benchmark / "triton_eval_cases" / case
+
+
 def dataset_root(benchmark: Path, dataset: str) -> Path:
     identity = canonical_dataset(dataset)
     root = Path(benchmark) / DATASET_DIRECTORIES.get(identity, identity)
     legacy = Path(benchmark) / identity
     # Historical checkouts and test fixtures can still use their original layout.
-    return legacy if not root.exists() and legacy.exists() else root
+    if not root.exists() and legacy.exists():
+        return legacy
+    archived = Path(benchmark) / "archive/input_specific" / root.name
+    return archived if not root.exists() and archived.exists() else root
 
 
 def case_sort_key(name: str):

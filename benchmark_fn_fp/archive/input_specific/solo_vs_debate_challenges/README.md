@@ -1,10 +1,12 @@
 # Solo vs 多角色 debate：case_62–case_81
 
+Archived on October 19, 2026. These input-based cases are excluded from current kernel verification and accuracy. The results below are historical. See the [archive index](../README.md).
+
 这 20 题测试：**面对一份真实但可能不充分的初始实验，能否检查参考是否可靠、输入域是否覆盖、观察时机是否符合合同**。三组得到相同 kernel、合同、生成器和初始 T4 输出。初始测试结果是待审查证据，不是真值。
 
 现有结论：最初十题与连续盒域题均未区分 solo/debate。错误求和参考在 case_74 上两次触发 solo 错、debate 对，但 case_75 两次 debate 弃答抵消了总体正确率收益；六个新 seed 的确认仅多答对一题，未达到追加复测门槛。**有具体机制信号，尚未证明稳定的整体 debate 优势。**
 
-看题从 [统一公开目录](../triton_eval_cases/)或[全局题目索引](../CASE_INDEX.md)进入；全部运行、失败与 probe 在 [GLM traces](../traces_glm/INDEX.md)。本目录只保留 README＋`private_data/`；程序在 [eval_scripts/solo_vs_debate_challenges](../eval_scripts/solo_vs_debate_challenges/)。新 CLI 名称为 `solo_vs_debate_challenges`，历史 trace 的 dataset `evidence_challenges` 保留用于追溯。
+看题从 [统一公开目录](../../../triton_eval_cases/)或[全局题目索引](../../../CASE_INDEX.md)进入；全部运行、失败与 probe 在 [GLM traces](../../../traces_glm/INDEX.md)。本目录只保留 README＋`private_data/`；程序在 [eval_scripts/solo_vs_debate_challenges](../../../eval_scripts/solo_vs_debate_challenges/)。新 CLI 名称为 `solo_vs_debate_challenges`，历史 trace 的 dataset `evidence_challenges` 保留用于追溯。
 
 ## 题型与合同
 
@@ -48,7 +50,7 @@
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 指定窗口扩展门槛： **未达到**; 复验中重复纠错的题目： none; 配对明确错误净改善： 0.
 
@@ -79,7 +81,7 @@
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 指定窗口扩展门槛： **未达到**; 复验中重复纠错的题目： none; 配对明确错误净改善： 0.
 
@@ -113,7 +115,7 @@
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 指定窗口扩展门槛： **通过**; 复验中重复纠错的题目： case_74; 配对明确错误净改善： 2.
 
@@ -144,7 +146,7 @@
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 新随机种子复验门槛： **未达到**; 复验中重复纠错的题目： none.
 

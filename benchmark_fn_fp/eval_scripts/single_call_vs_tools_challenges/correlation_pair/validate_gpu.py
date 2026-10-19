@@ -5,7 +5,7 @@ import sys
 
 import modal
 
-ROOT = Path(__file__).resolve().parents[3] / "single_call_vs_tools_challenges"
+ROOT = Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
 PRIVATE = Path("private_data") / "correlation_pair"
 app = modal.App("kv-correlation-pair-eval")
 base_image = (modal.Image.debian_slim(python_version="3.11")

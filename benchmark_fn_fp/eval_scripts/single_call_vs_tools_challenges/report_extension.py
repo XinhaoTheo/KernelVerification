@@ -12,8 +12,9 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[2] / "single_call_vs_tools_challenges"
-sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
@@ -201,9 +202,10 @@ def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
            required_families=2, case_range="case_44–case_49"):
     root = Path(root)
     labels = _labels(root, cases)
-    records = [record for record in iter_trace_records(benchmark_dir=root.parent)
+    benchmark = benchmark_root(root)
+    records = [record for record in iter_trace_records(benchmark_dir=benchmark, include_archived=True)
                if record["dataset"] == DATASET and record["case"] in cases]
-    common = build_report(records=records, benchmark_dir=root.parent,
+    common = build_report(records=records, benchmark_dir=benchmark, include_archived=True,
                           labels={DATASET: {case: row["truth"] for case, row in labels.items()
                                             if row["truth"] is not None}})
     metadata_by_path = {str(Path(record["path"]).resolve()): record["metadata"] for record in records}
@@ -211,7 +213,7 @@ def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
     for group in common["arms"].values():
         for source in group["per_case"].values():
             row = dict(source)
-            path = root.parent / row["path"]
+            path = benchmark / row["path"]
             metadata = metadata_by_path[str(path.resolve())]
             config, captured = _request_config(path, metadata)
             row.update({"attempt_id": "/".join(str(row[key]) for key in
@@ -228,7 +230,7 @@ def derive(root=ROOT, *, cases=CASES, low_trials=LOW_TRIALS, planned=PLANNED,
             if row["status"] in {"running", "queued", "reserved", "started"}:
                 row["outcome"], row["correct"] = "pending", None
             row["protocol_issues"] = _protocol_issues(row, labels[row["case"]], planned)
-            row["trace_link"] = "../" + row["path"] + "/" + (
+            row["trace_link"] = trace_link(root, path,
                 "transcript.md" if (path / "transcript.md").exists() else "trace_meta.json")
             row["provider_errors"] = [{"call": failure.parent.name, "details": _read(failure)}
                                       for failure in sorted((path / "llm_calls").glob("*/error.json"))]

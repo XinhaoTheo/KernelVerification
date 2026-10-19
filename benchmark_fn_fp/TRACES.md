@@ -1,30 +1,30 @@
 # Complete experiment traces
 
 Current GLM traces use one directory layout, without provider subdirectories.
-The retired pilot keeps its original records under the archive:
+Excluded input-based cases and the retired pilot keep their original records under the archive:
 
 ```
 benchmark_fn_fp/
 ├── traces_glm/
 │   ├── case_01/solo/r1/
-│   ├── case_35/debate/r1/
-│   ├── case_36/single_call/r1/
+│   ├── case_109/debate/r1/
+│   ├── case_163/single_call/r1/
 │   ├── INDEX.md
 │   └── migration_*.json
 ├── traces_opus5/     claude-opus-5; existing historical paths retained
-└── archive/numerical_pilot/traces_glm/  72 trials, case_82–case_105
+└── archive/
+    ├── input_specific/traces_glm/     299 trials, case_34–case_81
+    ├── input_specific/traces_opus5/   11 trials, case_34–case_81
+    └── numerical_pilot/traces_glm/    72 trials, case_82–case_105
 ```
 
 All GLM runs use `<case>/<arm>/rN/`, with `r1`, `r2`, and so on numbering attempts within each case/arm, including failed or incomplete attempts. The same number across arms does not imply the same model, budget or experimental configuration. `trace_meta.json` retains the former label in `original_trial`, the former location in `original_trace_path`, and historical selection order in `selection_sort_key`. Provider and exact API model remain provenance fields alongside dataset, case, arm and current trial. They do not create separate directories or sections in the GLM index. Cases36/37 now belong to `single_call_vs_tools_challenges`; their original `correlation_pair` source field remains in metadata.
 
-The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to `traces_opus5/case_36/` and `case_37/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
+The 2026-09-23 migration combined 12 main GLM runs and 8 case_36/case_37 runs. The initial provider subdirectories were flattened into `traces_glm/<case>/<arm>/<trial>/`; `traces_glm_fireworks` is no longer a separate tree. Every original file was checked by SHA-256, and migration manifests retain the inventories and path changes. The later [correlation-pair cleanup](traces_opus5/migration_20260930_correlation_cleanup.json) relocated its nine Opus attempts to `traces_opus5/case_36/` and `case_37/` and removed eight duplicate GLM source archives after verification. The canonical model trees now hold the pair's records once each; [its consolidated audit](archive/input_specific/single_call_vs_tools_challenges/README.md#correlation-audit) preserves the separate Opus, GLM 32K and GLM 64K findings.
 
 The later `rN` normalization changes directory names and metadata identity/provenance fields, while preserving raw requests, responses, transcripts and probe payloads. Its [migration manifest](traces_glm/migration_20260930_trial_names.json) retains the original metadata bytes and path mapping. Earlier migration manifests remain unchanged; the subsequent correlation-pair cleanup separately records source-archive relocation and deduplication.
 
-Start with [the GLM index](traces_glm/INDEX.md): its first table covers all 86
-active cases and three arms, and its lower section retains their historical
-trials. Each case/arm links to its earliest completed judgment, including wrong
-answers and valid abstentions. Running, failed and missing slots remain visible.
+Start with [the GLM index](traces_glm/INDEX.md): it covers all 90 active cases and three arms, with 392 recorded GLM trials. Each case/arm links to its earliest completed judgment, including wrong answers and valid abstentions. Running, failed and missing slots remain visible.
 The [2026-09-30 completion report](traces_glm/COMPLETION_20260930.md)
 records the historical 104-case/312-slot completion, including 24 now-retired
 pilot cases. Their 72 GLM trials are preserved in
@@ -32,13 +32,7 @@ pilot cases. Their 72 GLM trials are preserved in
 coverage and scoring; expansion and reruns have stopped. In general, the
 presence of a reserved directory does not mean that its experiment is complete.
 
-Study settings and reviewed evidence are consolidated in
-[single call versus tools](single_call_vs_tools_challenges/README.md) for case_36–case_61 and
-[solo versus debate](solo_vs_debate_challenges/README.md) for case_62–case_81.
-Their public inputs share `triton_eval_cases/` with the original suite
-(90 active cases, including the separately reported [purpose-built real-kernel
-pilot](real_kernel_challenges/README.md), case_106–115); the 24 early pilot cases live only in the archive.
-These directory changes preserve historical trace dataset IDs and raw payloads.
+Cases 34–81 and their GLM and Opus records now live in [archive/input_specific](archive/input_specific/README.md). These studies selected data, parameters or input domains to change labels for the same computation. They are excluded from current coverage and scoring. Current public cases are 01–33 except retired 03, plus [kernel challenges](real_kernel_challenges/README.md) 106–163. Case IDs, raw records and historical verdicts are preserved.
 
 ## A tool-enabled run
 
@@ -80,7 +74,7 @@ For coverage completion, the shared Modal tool runner also accepts
 same dataset and model-family tree:
 
 ```sh
-modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset single_call_vs_tools_challenges --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
+modal run benchmark_fn_fp/eval_scripts/run_agentic_modal.py --dataset real_kernel_challenges --arm both --all --provider fireworks --only-missing --total-output-tokens 32768
 ```
 
 Correct, incorrect and `needs_more_evidence` judgments all fill a slot; tool
@@ -96,7 +90,7 @@ python benchmark_fn_fp/eval_scripts/summarize_traces.py
 python benchmark_fn_fp/eval_scripts/index_traces.py
 ```
 
-Readers recursively discover metadata-aware trials in current top-level trace trees and retain legacy compatibility. Archived pilot records are excluded from default reports. Reports group by dataset, provider, exact model, arm and original experimental batch (`original_trial`), with current per-case `rN` paths for links. Saved selection ordering preserves which historical judgment was chosen before the rename. Reports distinguish correct, wrong, abstention, token limit and no verdict. Prices use a run's `pricing_snapshot` when present, otherwise its historical exact-model profile; unknown prices remain unknown. New Fireworks snapshots record the source and check date (2026-09-30 for this batch), with cached input conservatively estimated at the uncached rate. Updating current rates does not reprice old traces. These estimates are not invoices and exclude Modal charges.
+Readers discover metadata-aware trials in current trace trees and retain legacy compatibility. All archived cases are excluded by default. `summarize_traces.py --include-archived --json` reads both archive groups without overwriting the current scoreboard. Reports group by dataset, provider, exact model, arm and original experimental batch (`original_trial`), with current per-case `rN` paths for links. Saved selection ordering preserves which historical judgment was chosen before the move. Reports distinguish correct, wrong, abstention, token limit and no verdict. Prices use a run's `pricing_snapshot` when present, otherwise its historical exact-model profile; unknown prices remain unknown. New Fireworks snapshots record the source and check date (2026-09-30 for this batch), with cached input conservatively estimated at the uncached rate. Updating current rates does not reprice old traces. These estimates are not invoices and exclude Modal charges.
 
 When raw API responses exist, their reported usage takes precedence over parsed agent history, including calls that failed during parsing. Missing responses or usage are marked as incomplete cost coverage. Historical runs without raw responses retain their history-based estimates; those estimates do not certify complete API capture.
 

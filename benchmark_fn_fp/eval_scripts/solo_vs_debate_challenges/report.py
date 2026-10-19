@@ -9,8 +9,9 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[2] / "solo_vs_debate_challenges"
-sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "solo_vs_debate_challenges"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trial_sort_key
@@ -109,7 +110,7 @@ def audit_row(row, metadata, path, frozen):
         row["outcome"] = "token_limit"
     row["valid_complete"] = bool(row["status"] == "completed" and not issues and not error)
     row["correct"] = row["outcome"] == "correct" if row.get("truth") is not None else None
-    row["trace_link"] = "../" + row["path"] + "/" + (
+    row["trace_link"] = trace_link(ROOT, path,
         "transcript.md" if (path / "transcript.md").exists() else "trace_meta.json")
     return row
 
@@ -146,6 +147,7 @@ def pilot_gate(rows, *, cases=CASES, trials=TRIALS):
 
 
 def derive(*, cases=CASES, trials=TRIALS):
+    benchmark = benchmark_root(ROOT)
     frozen = {case: row for case, row in read(ROOT / "private_data" / "validation_gpu.json")["cases"].items()
               if case in cases}
     for case, label in frozen.items():
@@ -153,15 +155,15 @@ def derive(*, cases=CASES, trials=TRIALS):
             actual = hashlib.sha256((ROOT.parent / "triton_eval_cases" / case / filename).read_bytes()).hexdigest()
             if label[f"{kind}_sha256"] != actual:
                 raise ValueError(f"Frozen source changed: {case}/{kind}")
-    records = [r for r in iter_trace_records(benchmark_dir=ROOT.parent)
+    records = [r for r in iter_trace_records(benchmark_dir=benchmark, include_archived=True)
                if r["dataset"] == "evidence_challenges" and r["case"] in cases]
-    common = build_report(records=records, benchmark_dir=ROOT.parent, labels={
+    common = build_report(records=records, benchmark_dir=benchmark, include_archived=True, labels={
         "evidence_challenges": {case: row["ground_truth"] for case, row in frozen.items()}})
     meta = {str(Path(r["path"]).resolve()): r["metadata"] for r in records}
     rows = []
     for group in common["arms"].values():
         for row in group["per_case"].values():
-            path = ROOT.parent / row["path"]
+            path = benchmark / row["path"]
             m = meta[str(path.resolve())]
             rows.append(audit_row(row, m, path, frozen))
     rows.sort(key=lambda r: (r["case"], r["arm"], trial_sort_key(r["trial"])))

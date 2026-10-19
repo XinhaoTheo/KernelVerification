@@ -2,8 +2,8 @@
 from collections import defaultdict
 from pathlib import Path
 from summarize_traces import build_report, BENCHMARK
-from case_registry import case_collection, case_sort_key, is_active_case, load_registry
-from index_cases import DATASET_LABELS, curation_lines
+from case_registry import archived_case_groups, case_collection, case_sort_key, is_active_case, load_registry
+from index_cases import ARCHIVE_LABELS, DATASET_LABELS, curation_lines
 from traces import iter_trace_records, trace_selection_key, trial_sort_key
 
 ARMS = ("single_call", "solo", "debate")
@@ -129,12 +129,12 @@ def main():
         'Historical trace payloads keep their original IDs; the current directory and registry determine the case.', '']
     lines += ['每个 case/arm 下按历史时间顺序编号为 `r1`、`r2`……；不同案例的同名 rN 不代表同一实验批次。'
               '原始批次保存在 `trace_meta.json` 的 `original_trial`，统计继续按批次、模型和预算配置分组。', '']
-    archived = [case for case, detail in details.items() if not is_active_case(detail)]
-    if archived:
-        archive = BENCHMARK / 'archive/numerical_pilot/traces_glm'
+    for archive_root, archived in archived_case_groups(details).items():
+        archive = BENCHMARK / archive_root / 'traces_glm'
         archived_trials = sum(1 for case in archived for _ in (archive / case).glob('*/*/trace_meta.json'))
-        lines += [f'早期 pilot 的 {len(archived)} 题、{archived_trials} 条 GLM trials 已移入'
-                  '[归档](../archive/numerical_pilot/README.md)，不计入下方当前题库覆盖。'
+        label = ARCHIVE_LABELS.get(archive_root, archive_root)
+        lines += [f'{label}的 {len(archived)} 题、{archived_trials} 条 GLM trials 已移入'
+                  f'[归档](../{archive_root}/README.md)，不计入下方当前题库覆盖。'
                   '历史记录保留；归档不表示重跑或改判。', '']
     lines += curation_lines(details, trace_prefix="")
     lines += _coverage_lines(coverage, metadata_by_path, BENCHMARK)

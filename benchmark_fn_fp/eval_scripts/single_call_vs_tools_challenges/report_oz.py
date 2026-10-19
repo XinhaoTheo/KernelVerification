@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[2] / "single_call_vs_tools_challenges"
-sys.path.insert(0, str(ROOT.parents[1]))
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from benchmark_fn_fp.eval_scripts.single_call_vs_tools_challenges.report_extension import ARMS, derive, render, replace_results
 
 CASES = tuple(f"case_{i:02d}" for i in range(50, 62))

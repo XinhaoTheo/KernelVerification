@@ -225,21 +225,25 @@ def trial_sort_key(trial: str) -> tuple[int, int | str]:
 
 
 def iter_trace_records(benchmark_dir: Path | None = None, *, include_archived: bool = False):
-    """Read current trace roots, optionally including the separately archived pilot."""
+    """Read active cases by default; archived storage is an explicit opt-in."""
     try:
         from .models import PROFILES
-        from .case_registry import load_registry, resolve_trace_case
+        from .case_registry import archived_case_groups, is_active_case, load_registry, resolve_trace_case
     except ImportError:
         from models import PROFILES
-        from case_registry import load_registry, resolve_trace_case
+        from case_registry import archived_case_groups, is_active_case, load_registry, resolve_trace_case
     benchmark = Path(benchmark_dir) if benchmark_dir is not None else BENCHMARK_DIR
     registry = load_registry(benchmark)
     legacy_models = {"traces_glm": "z-ai/glm-5.3-flash",
                      "traces_glm_fireworks": "accounts/fireworks/models/glm-5p3",
                      "traces_opus5": "claude-opus-5"}
-    roots = list(benchmark.glob(TRACES_GLOB))
+    roots = set(benchmark.glob(TRACES_GLOB))
     if include_archived:
-        roots.extend((benchmark / "archive/numerical_pilot").glob(TRACES_GLOB))
+        archive_roots = {benchmark / path for path in archived_case_groups(registry.get("case_details", {}))}
+        # Also read older archived trees that predate archive_root registry fields.
+        archive_roots.update(path for path in (benchmark / "archive").glob("*") if path.is_dir())
+        for archive in archive_roots:
+            roots.update(archive.glob(TRACES_GLOB))
     for root in sorted(roots):
         if not root.is_dir() or root.is_symlink():
             continue
@@ -274,6 +278,8 @@ def iter_trace_records(benchmark_dir: Path | None = None, *, include_archived: b
                 model = matches[0].model if len(matches) == 1 else None
             profile = PROFILES.get(model)
             case, original_case, dataset = resolve_trace_case(parts[arm_index-1], meta, registry)
+            if not include_archived and not is_active_case(registry.get("case_details", {}).get(case, {})):
+                continue
             leaf_trial = parts[arm_index+1] if len(parts)>arm_index+1 else "legacy"
             trial = leaf_trial if leaf_trial.startswith("r") and leaf_trial[1:].isdigit() else meta.get("trial", leaf_trial)
             yield {"path": directory, "metadata": meta,

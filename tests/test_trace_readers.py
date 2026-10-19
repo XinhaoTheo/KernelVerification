@@ -159,6 +159,62 @@ def test_archived_json_cli_does_not_overwrite_active_scoreboard(tmp_path, monkey
     assert output.read_bytes() == b"active scoreboard sentinel\n"
 
 
+def test_input_specific_archive_keeps_labels_providers_and_costs_opt_in(tmp_path):
+    from benchmark_fn_fp.eval_scripts.traces import iter_trace_records
+    reader = _reader()
+    details = {
+        "case_01": {"dataset": "benchmark_fn_fp"},
+        "case_34": {"dataset": "benchmark_fn_fp", "status": "archived",
+                    "archive_root": "archive/input_specific", "archived_ground_truth": "reject"},
+        "case_38": {"dataset": "numerical_challenges", "status": "archived",
+                    "archive_root": "archive/input_specific", "archived_ground_truth": "trust"},
+    }
+    # Original cases removed from the active source map still have their old truth.
+    (tmp_path / "case_map.json").write_text(json.dumps({"cases": {}, "case_details": details}))
+    configs = [
+        ("traces_glm", "case_01", "fireworks", "accounts/fireworks/models/glm-5p3"),
+        ("archive/input_specific/traces_glm", "case_34", "fireworks", "accounts/fireworks/models/glm-5p3"),
+        ("archive/input_specific/traces_opus5", "case_38", "anthropic", "claude-opus-5"),
+    ]
+    for prefix, case, provider, model in configs:
+        dest = tmp_path / prefix / case / "single_call/r1"
+        dest.mkdir(parents=True)
+        (dest / "trace_meta.json").write_text(json.dumps({
+            "case": case, "dataset": details[case]["dataset"], "arm": "single_call", "trial": "r1",
+            "original_trial": "frozen_batch", "model": model, "provider": provider,
+            "pricing_snapshot": {"input_per_million": 1.4, "output_per_million": 4.4}}))
+        (dest / "usage.json").write_text(json.dumps({
+            "usage": {"input_tokens": 1000, "output_tokens": 2000}, "stop_reason": "stop",
+            "response": {"verdict": "trust"}}))
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert [r["case"] for r in iter_trace_records(tmp_path)] == ["case_01"]
+    records = list(iter_trace_records(tmp_path, include_archived=True))
+    assert {r["case"] for r in records} == set(details)
+    active = reader.build_report(records=records, benchmark_dir=tmp_path)
+    assert sum(group["attempts"] for group in active["arms"].values()) == 1
+    historical = reader.build_report(benchmark_dir=tmp_path, include_archived=True)
+    rows = {case: row for group in historical["arms"].values() for case, row in group["per_case"].items()}
+    assert rows["case_34"]["outcome"] == "wrong_verdict"
+    assert rows["case_38"]["outcome"] == "correct"
+    assert rows["case_38"]["provider"] == "anthropic"
+    assert rows["case_34"]["original_trial"] == rows["case_38"]["original_trial"] == "frozen_batch"
+    assert sum(row["usd"] for row in rows.values()) == pytest.approx(0.0306)
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_archived_status_excludes_a_trace_even_before_its_files_move(tmp_path):
+    from benchmark_fn_fp.eval_scripts.traces import iter_trace_records
+    (tmp_path / "case_map.json").write_text(json.dumps({"case_details": {
+        "case_34": {"dataset": "benchmark_fn_fp", "status": "archived",
+                    "archive_root": "archive/input_specific"}}}))
+    dest = tmp_path / "traces_glm/case_34/solo/r1"
+    dest.mkdir(parents=True)
+    (dest / "trace_meta.json").write_text(json.dumps({"case": "case_34", "arm": "solo",
+        "model": "accounts/fireworks/models/glm-5p3", "dataset": "benchmark_fn_fp"}))
+    assert list(iter_trace_records(tmp_path)) == []
+    assert [r["case"] for r in iter_trace_records(tmp_path, include_archived=True)] == ["case_34"]
+
+
 def test_report_separates_provider_trial_dataset_and_uses_exact_model_price(tmp_path):
     reader = _reader()
     fw = "accounts/fireworks/models/glm-5p3"

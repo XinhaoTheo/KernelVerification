@@ -3,16 +3,17 @@
 所有题库和 traces 共用 `case_数字` 编号。同一编号始终指向同一道题；来源记录在 case_map.json，部分题库共用统一公开目录。
 本页是说明与答案侧索引，不作为模型输入。编号描述实验来源，不保证某种方法一定获胜。
 
-当前 138 题；另有 24 题已归档。归档编号保留，不复用、不进入默认实验。
+当前 90 题；另有 72 题已归档。归档编号保留，不复用、不进入默认实验。
 
 | 编号范围 | 数量 | 测什么 | 说明与题目 |
 |---|---:|---|---|
-| `case_01`–`case_35` | 34 | 原始 FN/FP benchmark | [说明](README.md) · [题目](triton_eval_cases/) |
-| `case_36`–`case_61` | 26 | 无工具单次调用 vs 带工具验证 | [说明](single_call_vs_tools_challenges/README.md) · [题目](triton_eval_cases/) |
-| `case_62`–`case_81` | 20 | Solo vs 多角色 debate | [说明](solo_vs_debate_challenges/README.md) · [题目](triton_eval_cases/) |
+| `case_01`–`case_33` | 32 | 原始 FN/FP benchmark | [说明](README.md) · [题目](triton_eval_cases/) |
 | `case_106`–`case_163` | 58 | 专门构造的真实 kernel 验证挑战（单独统计） | [说明](real_kernel_challenges/README.md) · [题目](triton_eval_cases/) |
 
-已归档：`case_82`–`case_105`，共 24 题。[早期数值 pilot](archive/numerical_pilot/README.md) 保留题目、真值、旧 Opus 结果和 72 条 GLM 实验。
+| 归档 | 数量 | 保留内容 |
+|---|---:|---|
+| [按指定输入设计的旧案例](archive/input_specific/README.md) | 48 | 题目、原始标签、构造记录与历史 traces；不计入当前题库 |
+| [早期数值 pilot](archive/numerical_pilot/README.md) | 24 | 题目、原始标签、构造记录与历史 traces；不计入当前题库 |
 
 ## 实验后的保留分组
 
@@ -63,54 +64,54 @@
 | `case_31` | 当前 | `case_31` | benchmark_fn_fp / 变长 Attention 的整块分支 | [kernel](triton_eval_cases/case_31/kernel.py) · [合同](triton_eval_cases/case_31/problem.txt) | [记录](traces_glm/case_31/) |
 | `case_32` | 当前 | `case_32` | benchmark_fn_fp / 稳定排序的并列顺序 | [kernel](triton_eval_cases/case_32/kernel.py) · [合同](triton_eval_cases/case_32/problem.txt) | [记录](traces_glm/case_32/) |
 | `case_33` | 当前 | `case_33` | benchmark_fn_fp / GPTQ 最后一个量化分组 | [kernel](triton_eval_cases/case_33/kernel.py) · [合同](triton_eval_cases/case_33/problem.txt) | [记录](traces_glm/case_33/) |
-| `case_34` | 当前 | `case_34` | benchmark_fn_fp / FP32 原子累加的逐位复现 | [kernel](triton_eval_cases/case_34/kernel.py) · [合同](triton_eval_cases/case_34/problem.txt) | [记录](traces_glm/case_34/) |
-| `case_35` | 当前 | `case_35` | benchmark_fn_fp / 整数网格上原子累加的精确性 | [kernel](triton_eval_cases/case_35/kernel.py) · [合同](triton_eval_cases/case_35/problem.txt) | [记录](traces_glm/case_35/) |
-| `case_36` | 当前 | `case_a` | single_call_vs_tools_challenges / 两路量化误差相加与抵消 | [kernel](triton_eval_cases/case_36/kernel.py) · [合同](triton_eval_cases/case_36/problem.txt) | [记录](traces_glm/case_36/) |
-| `case_37` | 当前 | `case_b` | single_call_vs_tools_challenges / 两路量化误差相加与抵消 | [kernel](triton_eval_cases/case_37/kernel.py) · [合同](triton_eval_cases/case_37/problem.txt) | [记录](traces_glm/case_37/) |
-| `case_38` | 当前 | `case_c` | single_call_vs_tools_challenges / Attention logits 量化误差 | [kernel](triton_eval_cases/case_38/kernel.py) · [合同](triton_eval_cases/case_38/problem.txt) | [记录](traces_glm/case_38/) |
-| `case_39` | 当前 | `case_d` | single_call_vs_tools_challenges / Attention logits 量化误差 | [kernel](triton_eval_cases/case_39/kernel.py) · [合同](triton_eval_cases/case_39/problem.txt) | [记录](traces_glm/case_39/) |
-| `case_40` | 当前 | `case_e` | single_call_vs_tools_challenges / FP16 递推舍入误差传播 | [kernel](triton_eval_cases/case_40/kernel.py) · [合同](triton_eval_cases/case_40/problem.txt) | [记录](traces_glm/case_40/) |
-| `case_41` | 当前 | `case_f` | single_call_vs_tools_challenges / FP16 递推舍入误差传播 | [kernel](triton_eval_cases/case_41/kernel.py) · [合同](triton_eval_cases/case_41/problem.txt) | [记录](traces_glm/case_41/) |
-| `case_42` | 当前 | `case_g` | single_call_vs_tools_challenges / FP32 求和顺序 | [kernel](triton_eval_cases/case_42/kernel.py) · [合同](triton_eval_cases/case_42/problem.txt) | [记录](traces_glm/case_42/) |
-| `case_43` | 当前 | `case_h` | single_call_vs_tools_challenges / FP32 求和顺序 | [kernel](triton_eval_cases/case_43/kernel.py) · [合同](triton_eval_cases/case_43/problem.txt) | [记录](traces_glm/case_43/) |
-| `case_44` | 当前 | `case_i` | single_call_vs_tools_challenges / LayerNorm 方差相消 | [kernel](triton_eval_cases/case_44/kernel.py) · [合同](triton_eval_cases/case_44/problem.txt) | [记录](traces_glm/case_44/) |
-| `case_45` | 当前 | `case_j` | single_call_vs_tools_challenges / LayerNorm 方差相消 | [kernel](triton_eval_cases/case_45/kernel.py) · [合同](triton_eval_cases/case_45/problem.txt) | [记录](traces_glm/case_45/) |
-| `case_46` | 当前 | `case_k` | single_call_vs_tools_challenges / 固定步数线性求解 | [kernel](triton_eval_cases/case_46/kernel.py) · [合同](triton_eval_cases/case_46/problem.txt) | [记录](traces_glm/case_46/) |
-| `case_47` | 当前 | `case_l` | single_call_vs_tools_challenges / 固定步数线性求解 | [kernel](triton_eval_cases/case_47/kernel.py) · [合同](triton_eval_cases/case_47/problem.txt) | [记录](traces_glm/case_47/) |
-| `case_48` | 当前 | `case_m` | single_call_vs_tools_challenges / Horner 多项式舍入 | [kernel](triton_eval_cases/case_48/kernel.py) · [合同](triton_eval_cases/case_48/problem.txt) | [记录](traces_glm/case_48/) |
-| `case_49` | 当前 | `case_n` | single_call_vs_tools_challenges / Horner 多项式舍入 | [kernel](triton_eval_cases/case_49/kernel.py) · [合同](triton_eval_cases/case_49/problem.txt) | [记录](traces_glm/case_49/) |
-| `case_50` | 当前 | `case_o` | single_call_vs_tools_challenges / 近共线投影与归一化 | [kernel](triton_eval_cases/case_50/kernel.py) · [合同](triton_eval_cases/case_50/problem.txt) | [记录](traces_glm/case_50/) |
-| `case_51` | 当前 | `case_p` | single_call_vs_tools_challenges / 近共线投影与归一化 | [kernel](triton_eval_cases/case_51/kernel.py) · [合同](triton_eval_cases/case_51/problem.txt) | [记录](traces_glm/case_51/) |
-| `case_52` | 当前 | `case_q` | single_call_vs_tools_challenges / 量化最近邻与路由 | [kernel](triton_eval_cases/case_52/kernel.py) · [合同](triton_eval_cases/case_52/problem.txt) | [记录](traces_glm/case_52/) |
-| `case_53` | 当前 | `case_r` | single_call_vs_tools_challenges / 量化最近邻与路由 | [kernel](triton_eval_cases/case_53/kernel.py) · [合同](triton_eval_cases/case_53/problem.txt) | [记录](traces_glm/case_53/) |
-| `case_54` | 当前 | `case_s` | single_call_vs_tools_challenges / 固定网格积分欠采样 | [kernel](triton_eval_cases/case_54/kernel.py) · [合同](triton_eval_cases/case_54/problem.txt) | [记录](traces_glm/case_54/) |
-| `case_55` | 当前 | `case_t` | single_call_vs_tools_challenges / 固定网格积分欠采样 | [kernel](triton_eval_cases/case_55/kernel.py) · [合同](triton_eval_cases/case_55/problem.txt) | [记录](traces_glm/case_55/) |
-| `case_56` | 当前 | `case_u` | single_call_vs_tools_challenges / Fourier 频带截断 | [kernel](triton_eval_cases/case_56/kernel.py) · [合同](triton_eval_cases/case_56/problem.txt) | [记录](traces_glm/case_56/) |
-| `case_57` | 当前 | `case_v` | single_call_vs_tools_challenges / Fourier 频带截断 | [kernel](triton_eval_cases/case_57/kernel.py) · [合同](triton_eval_cases/case_57/problem.txt) | [记录](traces_glm/case_57/) |
-| `case_58` | 当前 | `case_w` | single_call_vs_tools_challenges / 病态矩阵 logdet | [kernel](triton_eval_cases/case_58/kernel.py) · [合同](triton_eval_cases/case_58/problem.txt) | [记录](traces_glm/case_58/) |
-| `case_59` | 当前 | `case_x` | single_call_vs_tools_challenges / 病态矩阵 logdet | [kernel](triton_eval_cases/case_59/kernel.py) · [合同](triton_eval_cases/case_59/problem.txt) | [记录](traces_glm/case_59/) |
-| `case_60` | 当前 | `case_y` | single_call_vs_tools_challenges / RBF 距离展开相消 | [kernel](triton_eval_cases/case_60/kernel.py) · [合同](triton_eval_cases/case_60/problem.txt) | [记录](traces_glm/case_60/) |
-| `case_61` | 当前 | `case_z` | single_call_vs_tools_challenges / RBF 距离展开相消 | [kernel](triton_eval_cases/case_61/kernel.py) · [合同](triton_eval_cases/case_61/problem.txt) | [记录](traces_glm/case_61/) |
-| `case_62` | 当前 | `case_e01` | solo_vs_debate_challenges / 协方差回归的参考独立性 | [kernel](triton_eval_cases/case_62/kernel.py) · [合同](triton_eval_cases/case_62/problem.txt) | [记录](traces_glm/case_62/) |
-| `case_63` | 当前 | `case_e02` | solo_vs_debate_challenges / 协方差回归的参考独立性 | [kernel](triton_eval_cases/case_63/kernel.py) · [合同](triton_eval_cases/case_63/problem.txt) | [记录](traces_glm/case_63/) |
-| `case_64` | 当前 | `case_e03` | solo_vs_debate_challenges / 缓存状态序列覆盖 | [kernel](triton_eval_cases/case_64/kernel.py) · [合同](triton_eval_cases/case_64/problem.txt) | [记录](traces_glm/case_64/) |
-| `case_65` | 当前 | `case_e04` | solo_vs_debate_challenges / 缓存状态序列覆盖 | [kernel](triton_eval_cases/case_65/kernel.py) · [合同](triton_eval_cases/case_65/problem.txt) | [记录](traces_glm/case_65/) |
-| `case_66` | 当前 | `case_e05` | solo_vs_debate_challenges / 四阶联合分布 | [kernel](triton_eval_cases/case_66/kernel.py) · [合同](triton_eval_cases/case_66/problem.txt) | [记录](traces_glm/case_66/) |
-| `case_67` | 当前 | `case_e06` | solo_vs_debate_challenges / 四阶联合分布 | [kernel](triton_eval_cases/case_67/kernel.py) · [合同](triton_eval_cases/case_67/problem.txt) | [记录](traces_glm/case_67/) |
-| `case_68` | 当前 | `case_e07` | solo_vs_debate_challenges / 局部匹配与全局共同变换 | [kernel](triton_eval_cases/case_68/kernel.py) · [合同](triton_eval_cases/case_68/problem.txt) | [记录](traces_glm/case_68/) |
-| `case_69` | 当前 | `case_e08` | solo_vs_debate_challenges / 局部匹配与全局共同变换 | [kernel](triton_eval_cases/case_69/kernel.py) · [合同](triton_eval_cases/case_69/problem.txt) | [记录](traces_glm/case_69/) |
-| `case_70` | 当前 | `case_e09` | solo_vs_debate_challenges / 历史输出被后续更新覆盖 | [kernel](triton_eval_cases/case_70/kernel.py) · [合同](triton_eval_cases/case_70/problem.txt) | [记录](traces_glm/case_70/) |
-| `case_71` | 当前 | `case_e10` | solo_vs_debate_challenges / 历史输出被后续更新覆盖 | [kernel](triton_eval_cases/case_71/kernel.py) · [合同](triton_eval_cases/case_71/problem.txt) | [记录](traces_glm/case_71/) |
-| `case_72` | 当前 | `case_e11` | solo_vs_debate_challenges / 连续输入域的最坏情况 | [kernel](triton_eval_cases/case_72/kernel.py) · [合同](triton_eval_cases/case_72/problem.txt) | [记录](traces_glm/case_72/) |
-| `case_73` | 当前 | `case_e12` | solo_vs_debate_challenges / 连续输入域的最坏情况 | [kernel](triton_eval_cases/case_73/kernel.py) · [合同](triton_eval_cases/case_73/problem.txt) | [记录](traces_glm/case_73/) |
-| `case_74` | 当前 | `case_e13` | solo_vs_debate_challenges / FP64 求和参考失真 | [kernel](triton_eval_cases/case_74/kernel.py) · [合同](triton_eval_cases/case_74/problem.txt) | [记录](traces_glm/case_74/) |
-| `case_75` | 当前 | `case_e14` | solo_vs_debate_challenges / FP64 求和参考失真 | [kernel](triton_eval_cases/case_75/kernel.py) · [合同](triton_eval_cases/case_75/problem.txt) | [记录](traces_glm/case_75/) |
-| `case_76` | 当前 | `case_e15` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_76/kernel.py) · [合同](triton_eval_cases/case_76/problem.txt) | [记录](traces_glm/case_76/) |
-| `case_77` | 当前 | `case_e16` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_77/kernel.py) · [合同](triton_eval_cases/case_77/problem.txt) | [记录](traces_glm/case_77/) |
-| `case_78` | 当前 | `case_e17` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_78/kernel.py) · [合同](triton_eval_cases/case_78/problem.txt) | [记录](traces_glm/case_78/) |
-| `case_79` | 当前 | `case_e18` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_79/kernel.py) · [合同](triton_eval_cases/case_79/problem.txt) | [记录](traces_glm/case_79/) |
-| `case_80` | 当前 | `case_e19` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_80/kernel.py) · [合同](triton_eval_cases/case_80/problem.txt) | [记录](traces_glm/case_80/) |
-| `case_81` | 当前 | `case_e20` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](triton_eval_cases/case_81/kernel.py) · [合同](triton_eval_cases/case_81/problem.txt) | [记录](traces_glm/case_81/) |
+| `case_34` | 已归档 | `case_34` | benchmark_fn_fp / FP32 原子累加的逐位复现 | [kernel](archive/input_specific/triton_eval_cases/case_34/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_34/problem.txt) | [记录](archive/input_specific/traces_glm/case_34/) |
+| `case_35` | 已归档 | `case_35` | benchmark_fn_fp / 整数网格上原子累加的精确性 | [kernel](archive/input_specific/triton_eval_cases/case_35/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_35/problem.txt) | [记录](archive/input_specific/traces_glm/case_35/) |
+| `case_36` | 已归档 | `case_a` | single_call_vs_tools_challenges / 两路量化误差相加与抵消 | [kernel](archive/input_specific/triton_eval_cases/case_36/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_36/problem.txt) | [记录](archive/input_specific/traces_glm/case_36/) |
+| `case_37` | 已归档 | `case_b` | single_call_vs_tools_challenges / 两路量化误差相加与抵消 | [kernel](archive/input_specific/triton_eval_cases/case_37/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_37/problem.txt) | [记录](archive/input_specific/traces_glm/case_37/) |
+| `case_38` | 已归档 | `case_c` | single_call_vs_tools_challenges / Attention logits 量化误差 | [kernel](archive/input_specific/triton_eval_cases/case_38/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_38/problem.txt) | [记录](archive/input_specific/traces_glm/case_38/) |
+| `case_39` | 已归档 | `case_d` | single_call_vs_tools_challenges / Attention logits 量化误差 | [kernel](archive/input_specific/triton_eval_cases/case_39/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_39/problem.txt) | [记录](archive/input_specific/traces_glm/case_39/) |
+| `case_40` | 已归档 | `case_e` | single_call_vs_tools_challenges / FP16 递推舍入误差传播 | [kernel](archive/input_specific/triton_eval_cases/case_40/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_40/problem.txt) | [记录](archive/input_specific/traces_glm/case_40/) |
+| `case_41` | 已归档 | `case_f` | single_call_vs_tools_challenges / FP16 递推舍入误差传播 | [kernel](archive/input_specific/triton_eval_cases/case_41/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_41/problem.txt) | [记录](archive/input_specific/traces_glm/case_41/) |
+| `case_42` | 已归档 | `case_g` | single_call_vs_tools_challenges / FP32 求和顺序 | [kernel](archive/input_specific/triton_eval_cases/case_42/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_42/problem.txt) | [记录](archive/input_specific/traces_glm/case_42/) |
+| `case_43` | 已归档 | `case_h` | single_call_vs_tools_challenges / FP32 求和顺序 | [kernel](archive/input_specific/triton_eval_cases/case_43/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_43/problem.txt) | [记录](archive/input_specific/traces_glm/case_43/) |
+| `case_44` | 已归档 | `case_i` | single_call_vs_tools_challenges / LayerNorm 方差相消 | [kernel](archive/input_specific/triton_eval_cases/case_44/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_44/problem.txt) | [记录](archive/input_specific/traces_glm/case_44/) |
+| `case_45` | 已归档 | `case_j` | single_call_vs_tools_challenges / LayerNorm 方差相消 | [kernel](archive/input_specific/triton_eval_cases/case_45/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_45/problem.txt) | [记录](archive/input_specific/traces_glm/case_45/) |
+| `case_46` | 已归档 | `case_k` | single_call_vs_tools_challenges / 固定步数线性求解 | [kernel](archive/input_specific/triton_eval_cases/case_46/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_46/problem.txt) | [记录](archive/input_specific/traces_glm/case_46/) |
+| `case_47` | 已归档 | `case_l` | single_call_vs_tools_challenges / 固定步数线性求解 | [kernel](archive/input_specific/triton_eval_cases/case_47/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_47/problem.txt) | [记录](archive/input_specific/traces_glm/case_47/) |
+| `case_48` | 已归档 | `case_m` | single_call_vs_tools_challenges / Horner 多项式舍入 | [kernel](archive/input_specific/triton_eval_cases/case_48/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_48/problem.txt) | [记录](archive/input_specific/traces_glm/case_48/) |
+| `case_49` | 已归档 | `case_n` | single_call_vs_tools_challenges / Horner 多项式舍入 | [kernel](archive/input_specific/triton_eval_cases/case_49/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_49/problem.txt) | [记录](archive/input_specific/traces_glm/case_49/) |
+| `case_50` | 已归档 | `case_o` | single_call_vs_tools_challenges / 近共线投影与归一化 | [kernel](archive/input_specific/triton_eval_cases/case_50/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_50/problem.txt) | [记录](archive/input_specific/traces_glm/case_50/) |
+| `case_51` | 已归档 | `case_p` | single_call_vs_tools_challenges / 近共线投影与归一化 | [kernel](archive/input_specific/triton_eval_cases/case_51/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_51/problem.txt) | [记录](archive/input_specific/traces_glm/case_51/) |
+| `case_52` | 已归档 | `case_q` | single_call_vs_tools_challenges / 量化最近邻与路由 | [kernel](archive/input_specific/triton_eval_cases/case_52/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_52/problem.txt) | [记录](archive/input_specific/traces_glm/case_52/) |
+| `case_53` | 已归档 | `case_r` | single_call_vs_tools_challenges / 量化最近邻与路由 | [kernel](archive/input_specific/triton_eval_cases/case_53/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_53/problem.txt) | [记录](archive/input_specific/traces_glm/case_53/) |
+| `case_54` | 已归档 | `case_s` | single_call_vs_tools_challenges / 固定网格积分欠采样 | [kernel](archive/input_specific/triton_eval_cases/case_54/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_54/problem.txt) | [记录](archive/input_specific/traces_glm/case_54/) |
+| `case_55` | 已归档 | `case_t` | single_call_vs_tools_challenges / 固定网格积分欠采样 | [kernel](archive/input_specific/triton_eval_cases/case_55/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_55/problem.txt) | [记录](archive/input_specific/traces_glm/case_55/) |
+| `case_56` | 已归档 | `case_u` | single_call_vs_tools_challenges / Fourier 频带截断 | [kernel](archive/input_specific/triton_eval_cases/case_56/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_56/problem.txt) | [记录](archive/input_specific/traces_glm/case_56/) |
+| `case_57` | 已归档 | `case_v` | single_call_vs_tools_challenges / Fourier 频带截断 | [kernel](archive/input_specific/triton_eval_cases/case_57/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_57/problem.txt) | [记录](archive/input_specific/traces_glm/case_57/) |
+| `case_58` | 已归档 | `case_w` | single_call_vs_tools_challenges / 病态矩阵 logdet | [kernel](archive/input_specific/triton_eval_cases/case_58/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_58/problem.txt) | [记录](archive/input_specific/traces_glm/case_58/) |
+| `case_59` | 已归档 | `case_x` | single_call_vs_tools_challenges / 病态矩阵 logdet | [kernel](archive/input_specific/triton_eval_cases/case_59/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_59/problem.txt) | [记录](archive/input_specific/traces_glm/case_59/) |
+| `case_60` | 已归档 | `case_y` | single_call_vs_tools_challenges / RBF 距离展开相消 | [kernel](archive/input_specific/triton_eval_cases/case_60/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_60/problem.txt) | [记录](archive/input_specific/traces_glm/case_60/) |
+| `case_61` | 已归档 | `case_z` | single_call_vs_tools_challenges / RBF 距离展开相消 | [kernel](archive/input_specific/triton_eval_cases/case_61/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_61/problem.txt) | [记录](archive/input_specific/traces_glm/case_61/) |
+| `case_62` | 已归档 | `case_e01` | solo_vs_debate_challenges / 协方差回归的参考独立性 | [kernel](archive/input_specific/triton_eval_cases/case_62/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_62/problem.txt) | [记录](archive/input_specific/traces_glm/case_62/) |
+| `case_63` | 已归档 | `case_e02` | solo_vs_debate_challenges / 协方差回归的参考独立性 | [kernel](archive/input_specific/triton_eval_cases/case_63/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_63/problem.txt) | [记录](archive/input_specific/traces_glm/case_63/) |
+| `case_64` | 已归档 | `case_e03` | solo_vs_debate_challenges / 缓存状态序列覆盖 | [kernel](archive/input_specific/triton_eval_cases/case_64/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_64/problem.txt) | [记录](archive/input_specific/traces_glm/case_64/) |
+| `case_65` | 已归档 | `case_e04` | solo_vs_debate_challenges / 缓存状态序列覆盖 | [kernel](archive/input_specific/triton_eval_cases/case_65/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_65/problem.txt) | [记录](archive/input_specific/traces_glm/case_65/) |
+| `case_66` | 已归档 | `case_e05` | solo_vs_debate_challenges / 四阶联合分布 | [kernel](archive/input_specific/triton_eval_cases/case_66/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_66/problem.txt) | [记录](archive/input_specific/traces_glm/case_66/) |
+| `case_67` | 已归档 | `case_e06` | solo_vs_debate_challenges / 四阶联合分布 | [kernel](archive/input_specific/triton_eval_cases/case_67/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_67/problem.txt) | [记录](archive/input_specific/traces_glm/case_67/) |
+| `case_68` | 已归档 | `case_e07` | solo_vs_debate_challenges / 局部匹配与全局共同变换 | [kernel](archive/input_specific/triton_eval_cases/case_68/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_68/problem.txt) | [记录](archive/input_specific/traces_glm/case_68/) |
+| `case_69` | 已归档 | `case_e08` | solo_vs_debate_challenges / 局部匹配与全局共同变换 | [kernel](archive/input_specific/triton_eval_cases/case_69/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_69/problem.txt) | [记录](archive/input_specific/traces_glm/case_69/) |
+| `case_70` | 已归档 | `case_e09` | solo_vs_debate_challenges / 历史输出被后续更新覆盖 | [kernel](archive/input_specific/triton_eval_cases/case_70/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_70/problem.txt) | [记录](archive/input_specific/traces_glm/case_70/) |
+| `case_71` | 已归档 | `case_e10` | solo_vs_debate_challenges / 历史输出被后续更新覆盖 | [kernel](archive/input_specific/triton_eval_cases/case_71/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_71/problem.txt) | [记录](archive/input_specific/traces_glm/case_71/) |
+| `case_72` | 已归档 | `case_e11` | solo_vs_debate_challenges / 连续输入域的最坏情况 | [kernel](archive/input_specific/triton_eval_cases/case_72/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_72/problem.txt) | [记录](archive/input_specific/traces_glm/case_72/) |
+| `case_73` | 已归档 | `case_e12` | solo_vs_debate_challenges / 连续输入域的最坏情况 | [kernel](archive/input_specific/triton_eval_cases/case_73/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_73/problem.txt) | [记录](archive/input_specific/traces_glm/case_73/) |
+| `case_74` | 已归档 | `case_e13` | solo_vs_debate_challenges / FP64 求和参考失真 | [kernel](archive/input_specific/triton_eval_cases/case_74/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_74/problem.txt) | [记录](archive/input_specific/traces_glm/case_74/) |
+| `case_75` | 已归档 | `case_e14` | solo_vs_debate_challenges / FP64 求和参考失真 | [kernel](archive/input_specific/triton_eval_cases/case_75/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_75/problem.txt) | [记录](archive/input_specific/traces_glm/case_75/) |
+| `case_76` | 已归档 | `case_e15` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_76/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_76/problem.txt) | [记录](archive/input_specific/traces_glm/case_76/) |
+| `case_77` | 已归档 | `case_e16` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_77/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_77/problem.txt) | [记录](archive/input_specific/traces_glm/case_77/) |
+| `case_78` | 已归档 | `case_e17` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_78/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_78/problem.txt) | [记录](archive/input_specific/traces_glm/case_78/) |
+| `case_79` | 已归档 | `case_e18` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_79/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_79/problem.txt) | [记录](archive/input_specific/traces_glm/case_79/) |
+| `case_80` | 已归档 | `case_e19` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_80/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_80/problem.txt) | [记录](archive/input_specific/traces_glm/case_80/) |
+| `case_81` | 已归档 | `case_e20` | solo_vs_debate_challenges / 求和参考失真：新输入确认 | [kernel](archive/input_specific/triton_eval_cases/case_81/kernel.py) · [合同](archive/input_specific/triton_eval_cases/case_81/problem.txt) | [记录](archive/input_specific/traces_glm/case_81/) |
 | `case_82` | 已归档 | `case_01` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_82/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_82/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_82/) |
 | `case_83` | 已归档 | `case_02` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_83/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_83/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_83/) |
 | `case_84` | 已归档 | `case_03` | numerical_pilot / 早期数值 pilot： | [kernel](archive/numerical_pilot/eval_cases/case_84/kernel.py) · [合同](archive/numerical_pilot/eval_cases/case_84/problem.txt) | [记录](archive/numerical_pilot/traces_glm/case_84/) |
@@ -199,13 +200,13 @@
 `traces_glm/<case>/<arm>/<trial>/` 中，`single_call` 是无工具单次调用，`solo` 是单 agent 加工具，`debate` 是多角色加工具。各组批次目录统一为 `r1`、`r2` 等运行序号；原批次名保留在 `trace_meta.json` 的 `original_trial` 中。同名 `r1` 不代表模型、预算或实验配置相同。
 [GLM 逐次运行索引](traces_glm/INDEX.md) 保留不同配置、复测与失败尝试；题库编号相同不代表三组都已跑齐。
 目录已统一编号；历史请求、回复和 probe 代码保留原始字节；目录和 metadata 的身份、迁移字段按索引更新。原始内容中的旧编号不是另一道题，读取程序根据当前目录与本注册表核对身份。
-case_36–case_37 已并入单次调用与工具比较组；其 Opus 和 GLM 原始记录仍在 traces_opus5 与 traces_glm，历史来源字段不改写。
+归档案例的公开题目与 traces 按上表移入对应归档目录，历史来源字段和原始调用内容不改写。
 早期数值 pilot（case_82–case_105）和它的 72 条 GLM 记录移入 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出；过去 104 题的历史报告保留原结论。
 
 ## 文件清理说明
 
-两组 challenges 各保留一份 README 和 `private_data/`。后者保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。
-当前题目统一在 `triton_eval_cases/`，构造、校验与报告程序统一在 `eval_scripts/` 的对应目录；pilot 的公开题目留在归档中。
+各来源组的 `private_data/` 保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。归档组的资料留在归档目录。
+当前题目统一在 `triton_eval_cases/`，构造、校验与报告程序统一在 `eval_scripts/` 的对应目录；已归档的公开题目不再留在当前目录。
 零散实验说明已合并进各组 README；旧逻辑数据集名只用于兼容历史 traces 和旧命令。可从原始 traces 重建的 scoreboard JSON 已清理；报告脚本默认更新 README 中的结果表，如需机器可读汇总可显式请求 JSON。原始模型调用与 GPU 记录不属于可重建汇总。
 
 本页由 `eval_scripts/index_cases.py` 根据 `case_map.json` 生成。

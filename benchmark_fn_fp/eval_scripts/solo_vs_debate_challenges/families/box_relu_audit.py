@@ -12,6 +12,7 @@ import hashlib
 import itertools
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
 
@@ -207,7 +208,10 @@ def _write_frozen(path, text):
 
 
 def build(root):
-    root = Path(root)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from single_call_vs_tools_challenges.archive_paths import archived_collection
+
+    root = archived_collection(root)
     candidates = [_candidate(seed) for seed in SEARCH_SEEDS]
     search = {"family": "box_relu_audit", "numpy_version": np.__version__,
         "search_seeds": list(SEARCH_SEEDS), "candidates": candidates,
@@ -296,7 +300,7 @@ def validate_case(name, kernel):
 
 
 if __name__ == "__main__":
-    answers = build(Path(__file__).resolve().parents[3] / "solo_vs_debate_challenges")
+    answers = build(Path(__file__).resolve().parents[3] / "archive" / "input_specific" / "solo_vs_debate_challenges")
     print(json.dumps({name: {key: row[key] for key in (
         "seed", "cpu_ground_truth", "error", "smoke_max_error", "naive_sum_upper_bound", "max_single_neuron")}
         for name, row in answers["cases"].items()}, indent=2))

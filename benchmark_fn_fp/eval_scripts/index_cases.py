@@ -4,7 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from case_registry import case_collection, case_sort_key, dataset_root, is_active_case, load_registry
+from case_registry import (archived_case_groups, case_archive_root, case_collection,
+                           case_sort_key, dataset_root, is_active_case, load_registry)
 from datasets import cases_dir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,10 @@ DATASET_LABELS = {
 CURATION_LABELS = {
     "tool_gain_observed": "成功案例：已观察到工具流程增益，单独保留",
     "ordinary_candidate": "未体现增益，保留待归普通集合",
+}
+ARCHIVE_LABELS = {
+    "archive/numerical_pilot": "早期数值 pilot",
+    "archive/input_specific": "按指定输入设计的旧案例",
 }
 
 
@@ -74,8 +79,10 @@ def main():
         lines.append(f"| `{cases[0]}`–`{cases[-1]}` | {len(cases)} | "
                      f"{DATASET_LABELS.get(dataset, dataset)} | [说明]({guide}) · [题目]({path}/) |")
     if archived:
-        lines += ["", f"已归档：`{archived[0]}`–`{archived[-1]}`，共 {len(archived)} 题。"
-                  "[早期数值 pilot](archive/numerical_pilot/README.md) 保留题目、真值、旧 Opus 结果和 72 条 GLM 实验。"]
+        lines += ["", "| 归档 | 数量 | 保留内容 |", "|---|---:|---|"]
+        for archive, cases in archived_case_groups(details).items():
+            lines.append(f"| [{ARCHIVE_LABELS.get(archive, archive)}]({archive}/README.md) | "
+                         f"{len(cases)} | 题目、原始标签、构造记录与历史 traces；不计入当前题库 |")
     lines += [""] + curation_lines(details)
     retired = ", ".join(f"`{name}`" for name in registry.get("retired_ids", [])) or "无"
     lines += ["", f"已退休且不复用的编号：{retired}。下一可用编号从 {registry.get('next_case_number', '注册表')} 开始。",
@@ -90,9 +97,10 @@ def main():
         mechanism = row.get("title") or row.get("mechanism") or row.get("source_name") or row.get("category")
         source = f"{case_collection(row)} / {_cell(mechanism)}"
         state = "当前" if is_active_case(row) else "已归档"
-        if row.get("curation_status") in CURATION_LABELS:
+        if is_active_case(row) and row.get("curation_status") in CURATION_LABELS:
             state += " · " + CURATION_LABELS[row["curation_status"]]
-        trace_root = "traces_glm" if is_active_case(row) else "archive/numerical_pilot/traces_glm"
+        archive = case_archive_root(row)
+        trace_root = f"{archive}/traces_glm" if archive else "traces_glm"
         traces = f"[记录]({trace_root}/{case}/)" if (ROOT / trace_root / case).is_dir() else "无 GLM 记录"
         lines.append(f"| `{case}` | {state} | `{row.get('previous_id', case)}` | {source} | "
                      f"[kernel]({public}/kernel.py) · [合同]({public}/problem.txt) | {traces} |")
@@ -103,12 +111,12 @@ def main():
         "[GLM 逐次运行索引](traces_glm/INDEX.md) 保留不同配置、复测与失败尝试；题库编号相同不代表三组都已跑齐。",
         "目录已统一编号；历史请求、回复和 probe 代码保留原始字节；目录和 metadata 的身份、迁移字段按索引更新。"
         "原始内容中的旧编号不是另一道题，读取程序根据当前目录与本注册表核对身份。",
-        "case_36–case_37 已并入单次调用与工具比较组；其 Opus 和 GLM 原始记录仍在 traces_opus5 与 traces_glm，历史来源字段不改写。",
+        "归档案例的公开题目与 traces 按上表移入对应归档目录，历史来源字段和原始调用内容不改写。",
         "早期数值 pilot（case_82–case_105）和它的 72 条 GLM 记录移入 archive/numerical_pilot，已从当前 GLM 索引与默认评分移出；"
         "过去 104 题的历史报告保留原结论。", "",
         "## 文件清理说明", "",
-        "两组 challenges 各保留一份 README 和 `private_data/`。后者保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。",
-        "当前题目统一在 `triton_eval_cases/`，构造、校验与报告程序统一在 `eval_scripts/` 的对应目录；pilot 的公开题目留在归档中。",
+        "各来源组的 `private_data/` 保存答案、搜索过程和 GPU 真值校验；这些是实验可复现性依据。归档组的资料留在归档目录。",
+        "当前题目统一在 `triton_eval_cases/`，构造、校验与报告程序统一在 `eval_scripts/` 的对应目录；已归档的公开题目不再留在当前目录。",
         "零散实验说明已合并进各组 README；旧逻辑数据集名只用于兼容历史 traces 和旧命令。可从原始 traces 重建的 scoreboard JSON 已清理；报告脚本默认更新 README 中的结果表，"
         "如需机器可读汇总可显式请求 JSON。原始模型调用与 GPU 记录不属于可重建汇总。", "",
         "本页由 `eval_scripts/index_cases.py` 根据 `case_map.json` 生成。", ""]

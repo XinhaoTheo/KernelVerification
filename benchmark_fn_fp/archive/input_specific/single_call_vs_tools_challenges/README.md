@@ -1,8 +1,10 @@
 # 无工具单次调用 vs 带工具验证：case_36–case_61
 
+Archived on October 19, 2026. These input-based cases are excluded from current kernel verification and accuracy. The results below are historical. See the [archive index](../README.md).
+
 这 26 题、13 对机制判断的是：**公开的固定输入经过近似计算后，最终误差是否满足合同**。它们主要区分源码估测与实际计算；已完成的指定复验中，solo 和 debate 的最终标签准确率均打平，不能据此声称多角色比单 agent 更强。
 
-公开 kernel、输入生成器和合同统一位于 [triton_eval_cases](../triton_eval_cases/)。本目录只保留这份说明和 `private_data/`；构造、独立参考、GPU 验证及报告程序在 [eval_scripts/single_call_vs_tools_challenges](../eval_scripts/single_call_vs_tools_challenges/)。新 CLI 名称是 `single_call_vs_tools_challenges`，历史 trace 的来源标识 `correlation_pair`（36/37）和 `numerical_challenges`（38–61）保留用于追溯。原始记录见 [GLM 索引](../traces_glm/INDEX.md) 和 [Opus traces](../traces_opus5/)。
+公开 kernel、输入生成器和合同统一位于 [triton_eval_cases](../../../triton_eval_cases/)。本目录只保留这份说明和 `private_data/`；构造、独立参考、GPU 验证及报告程序在 [eval_scripts/single_call_vs_tools_challenges](../../../eval_scripts/single_call_vs_tools_challenges/)。新 CLI 名称是 `single_call_vs_tools_challenges`，历史 trace 的来源标识 `correlation_pair`（36/37）和 `numerical_challenges`（38–61）保留用于追溯。原始记录见 [GLM 索引](../../../traces_glm/INDEX.md) 和 [Opus traces](../../../traces_opus5/)。
 
 ## 题型与真值
 
@@ -132,7 +134,7 @@ GLM `accounts/fireworks/models/glm-5p3` 的2026-09-22–23原批次固定两题�
 
 **GLM 64K补测。** [36/r2](../traces_glm/case_36/single_call/r2/)与[37/r2](../traces_glm/case_37/single_call/r2/)都正常stop：36正确reject（置信度0.90，25492输出tokens，305秒，$0.028380）；37错误reject（0.85，22122 tokens，314秒，$0.024673）。并发等待约5分14秒，无GPU任务。37再次把独立噪声16%–17%代替实际3.3647%；36仍错用独立假设且把64行写成128行。两者实际输出都不足32K，独立采样也可能解释完成，不能认定提高cap解决了旧截断；一次事后补测不能估计稳定错误率。
 
-**失败与追溯边界。** 初次Modal网络升级被自动审批拒绝，用户明确授权后才继续；镜像构建顺序/远端路径在模型评测前修正。首次本地Fireworks缺 `openai` 在API前失败，换已有环境后执行；另一次旧driver因case_37目录已存在而拒绝重复，不是额外付费失败。旧工具记录仅history无逐调用原始API；Opus source有prompt/final/usage无API envelope；GLM source保留完整请求/响应。缺失捕获不能补造。历史GLM费率$0.28/$1.10每百万输入/输出，并非当前单价或账单；未返回usage的HTTP重试和Modal不在估算内。九次Opus和八次GLM均保留，原路径去重见[迁移记录](../traces_opus5/migration_20260930_correlation_cleanup.json)。正确标签不验证所有解释，置信度未校准；两题也不能证明模型必然无法静态求解、优于所有allclose，或多角色结构具有额外收益。
+**失败与追溯边界。** 初次Modal网络升级被自动审批拒绝，用户明确授权后才继续；镜像构建顺序/远端路径在模型评测前修正。首次本地Fireworks缺 `openai` 在API前失败，换已有环境后执行；另一次旧driver因case_37目录已存在而拒绝重复，不是额外付费失败。旧工具记录仅history无逐调用原始API；Opus source有prompt/final/usage无API envelope；GLM source保留完整请求/响应。缺失捕获不能补造。历史GLM费率$0.28/$1.10每百万输入/输出，并非当前单价或账单；未返回usage的HTTP重试和Modal不在估算内。九次Opus和八次GLM均保留，原路径去重见[迁移记录](../../../traces_opus5/migration_20260930_correlation_cleanup.json)。正确标签不验证所有解释，置信度未校准；两题也不能证明模型必然无法静态求解、优于所有allclose，或多角色结构具有额外收益。
 
 </details>
 
@@ -172,7 +174,7 @@ GLM `accounts/fireworks/models/glm-5p3` 的2026-09-22–23原批次固定两题�
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 固定窗口复验门槛： **未达到**; 达到门槛的机制： none (0/2).
 
@@ -210,7 +212,7 @@ Low 条件下 source 11/18（逐轮 3/6、3/6、5/6），两工具臂各 12/12�
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 指定窗口复验门槛： **通过**; 达到门槛的题目： case_44, case_48.
 
@@ -248,7 +250,7 @@ Low 下 source 13/36 正确、19 次明确错误（9 次误拒、10 次误接受
 
 “其他”含未完成、无判定及运行失败，不算明确判断错误。费用不含 Modal GPU 和未返回的用量。按原实验批次、模型及完整配置分别统计；本地 rN 只是目录编号。unknown 表示原记录未声明该项。
 
-逐次记录及原始证据见 [GLM traces 索引](../traces_glm/INDEX.md) 和 [Opus traces 目录](../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
+逐次记录及原始证据见 [GLM traces 索引](../../../traces_glm/INDEX.md) 和 [Opus traces 目录](../../../traces_opus5/)。运行本报告的 `--json` 可将完整审核结果导出至 `private_data/reports/`。
 
 指定窗口复验门槛： **通过**; 达到门槛的题目： case_50, case_51, case_52, case_55, case_59, case_61.
 
@@ -282,7 +284,7 @@ Low 下 source 13/36 正确、19 次明确错误（9 次误拒、10 次误接受
 | [logdet](private_data/search_log_logdet.json) | 38/100 | 135/256 | 98200–98455 |
 | [distance](private_data/search_log_distance.json) | 139/200 | 192/256 | 119100–119355 |
 
-Routing 另筛选真实前两名距离差 >1e-5、量化差 ≥1/64：210 候选符合，其中 19 合格，再按 seed 顺序选首个满足余量的正反例；其余五组取正式区间最小/最大误差。最终选中 seeds 为 830230/830228、840104/840101、711165/711076、811164/811158、98339/98262、119130/119263。所有生成器、独立参考和选择规则在 [families](../eval_scripts/single_call_vs_tools_challenges/families/)；完整日志比挑出的均衡题组更能说明选择偏差。
+Routing 另筛选真实前两名距离差 >1e-5、量化差 ≥1/64：210 候选符合，其中 19 合格，再按 seed 顺序选首个满足余量的正反例；其余五组取正式区间最小/最大误差。最终选中 seeds 为 830230/830228、840104/840101、711165/711076、811164/811158、98339/98262、119130/119263。所有生成器、独立参考和选择规则在 [families](../../../eval_scripts/single_call_vs_tools_challenges/families/)；完整日志比挑出的均衡题组更能说明选择偏差。
 
 **早期探索记录不完整。** Logdet 最终 regularizer=1/1024、RBF 最终 offset=16 的校准行完整保留；此前 regularizer=1/64、1/256 和 offset=8、32 没有逐候选原始记录。2026-09-24T01:01:24Z 从更早工具输出补归档的摘要如下，不能当作恢复了原始候选日志或用来计算未保存配置的精确通过率：
 
@@ -310,7 +312,7 @@ Routing 另筛选真实前两名距离差 >1e-5、量化差 ≥1/64：210 候选
 | 58–59 | [58 debate r1 t15](../traces_glm/case_58/debate/r1/probes/t15_probe.py)测的是FP64主元转FP32，非真实FP32消元主元；t16编译失败未修复，c3保持inconclusive，t14终值独立支持trust。r2 t13成功获取真实主元，不回填r1失败；log_only等字段实际混入求和/消元差，59的log_accum_only更比较整条管线，不能仅按名字作因果分解。 |
 | 60–61 | 60 r1 clamp检查是CPU仿真，61 r1 negative_raw_count误用了FP64对象。[60 debate r2 t12](../traces_glm/case_60/debate/r2/probes/t12_probe.py)在GPU调用后因CUDA→NumPy失败，t15才完成真实参考比较；61 r2修正clamp计数，但后续FP64 exp仿真与GPU仍差约7.55e-9，不是bitwise exact。61 solo r1被ledger阻止的重复probe没有发生第二次GPU执行。 |
 
-多数运行有缺少 `scope_rationale` 等可恢复 ledger 错误，未删除失败文件；额外诊断有时未检查 dtype/shape/输入不变性，源码或私有冻结验证的检查不能冒称 agent 自己测量过。完整证据从 [GLM 索引](../traces_glm/INDEX.md)按 case/arm/rN 查看。
+多数运行有缺少 `scope_rationale` 等可恢复 ledger 错误，未删除失败文件；额外诊断有时未检查 dtype/shape/输入不变性，源码或私有冻结验证的检查不能冒称 agent 自己测量过。完整证据从 [GLM 索引](../../../traces_glm/INDEX.md)按 case/arm/rN 查看。
 
 </details>
 

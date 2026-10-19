@@ -12,8 +12,9 @@ import json
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[2] / "single_call_vs_tools_challenges"
-sys.path.insert(0, str(ROOT.parent / "eval_scripts"))
+ROOT = Path(__file__).resolve().parents[2] / "archive" / "input_specific" / "single_call_vs_tools_challenges"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from single_call_vs_tools_challenges.archive_paths import benchmark_root, trace_link
 from summarize_traces import build_report
 from generated_results import compact_results, replace_results
 from traces import iter_trace_records, experiment_trial, trace_selection_key
@@ -135,10 +136,10 @@ def derive(root=ROOT, *, cases=None):
     if cases is not None:
         validation = {**validation, "cases": {case: row for case, row in validation["cases"].items() if case in cases}}
     labels = validation["cases"]
-    benchmark = root.parent
-    records = [record for record in iter_trace_records(benchmark_dir=benchmark)
+    benchmark = benchmark_root(root)
+    records = [record for record in iter_trace_records(benchmark_dir=benchmark, include_archived=True)
                if record["dataset"] == DATASET and (cases is None or record["case"] in cases)]
-    common = build_report(records=records, benchmark_dir=benchmark,
+    common = build_report(records=records, benchmark_dir=benchmark, include_archived=True,
                           labels={DATASET: {case: row["ground_truth"] for case, row in labels.items()}})
     by_path = {str(Path(record["path"]).resolve()): record for record in records}
     rows = []
@@ -188,7 +189,7 @@ def derive(root=ROOT, *, cases=None):
             row["provider_errors"] = [
                 {"call": failure.parent.name, "details": _read(failure)}
                 for failure in sorted((path / "llm_calls").glob("*/error.json"))]
-            row["trace_link"] = "../" + row["path"] + "/" + (
+            row["trace_link"] = trace_link(root, path,
                 "transcript.md" if (path / "transcript.md").exists() else "trace_meta.json")
             rows.append(row)
     rows.sort(key=lambda row: (row["case"], ARMS.index(row["arm"]) if row["arm"] in ARMS else 99,
