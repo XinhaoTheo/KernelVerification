@@ -4,7 +4,7 @@
 
 | 看什么 | 入口 | 案例 |
 |---|---|---|
-| 已观察到工具收益的案例 | [Success Cases](SUCCESS_CASES.md) | 9 个案例的总表、详情索引和复测结果 |
+| 有工具与无工具的区分案例 | [Tools vs No Tools](SUCCESS_CASES.md) | 9 个案例的总表、详情和复测结果；尚未证明 Solo 与 Debate 有稳定差异 |
 | 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_33–case_90，共58题 |
 | kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_90，共90题 |
 | 按输入构造标签的旧实验（已归档） | [archive/input_specific](archive/input_specific/README.md) | case_91–case_138，共48题；不进入当前统计和实验 |
@@ -53,7 +53,7 @@ benchmark_fn_fp/
 │
 ├── CASE_INDEX.md       all case ranges, purposes, and links
 ├── case_map.json       single canonical ID/source/dataset mapping
-├── SUCCESS_CASES.md    success table, detail links and repeat results
+├── SUCCESS_CASES.md    tools vs no tools: table, case details and repeats
 ├── success_cases/      one description per documented success case
 ├── triton/             32 current original cases, with answers ← scorer only
 ├── triton_eval_cases/  90 public cases: case_01–case_90

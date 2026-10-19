@@ -1,6 +1,6 @@
 # 55 — GELU approximation
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **This kernel meets the accuracy requirement, but the model without tools incorrectly rejected it.** The tool-assisted workflows checked the actual numerical error and correctly accepted it.
 

@@ -1,6 +1,6 @@
 # 54 — erf approximation
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it should do.** `erf` is a smooth function used in Gaussian probability calculations. The [problem.txt](../triton_eval_cases/case_54/problem.txt) allows any approximation, provided its error is at most **0.000001 (`1e-6`)** for every finite FP16 input. Output is FP32; the target is the mathematical function.
 

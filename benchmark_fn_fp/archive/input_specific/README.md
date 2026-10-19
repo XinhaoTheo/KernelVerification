@@ -1,6 +1,6 @@
 # Archived Input-Based Cases
 
-Archived on October 19, 2026. **Cases 91–138 are excluded from the current benchmark, default scoring and new agent runs.** The current benchmark has 90 cases. See the [current case index](../../CASE_INDEX.md) and [success cases](../../SUCCESS_CASES.md).
+Archived on October 19, 2026. **Cases 91–138 are excluded from the current benchmark, default scoring and new agent runs.** The current benchmark has 90 cases. See the [current case index](../../CASE_INDEX.md) and [Tools vs No Tools](../../SUCCESS_CASES.md).
 
 These cases were previously numbered 34–81. These 48 cases assigned different labels to the same computation by changing selected data, fixed parameters or the permitted input domain. They do not meet the current design rule: compare implementation correctness over a shared complete input domain. A test input can expose a defect, but must not define a separate label for the same kernel.
 

@@ -1,6 +1,6 @@
 # 74 — Atan approximation
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it must do.** The kernel must calculate `atan(x)`, the inverse tangent of `x`, in radians. The [problem description](../triton_eval_cases/case_74/problem.txt) permits every finite FP16 input value. FP16 and FP32 are 16-bit and 32-bit floating-point formats. The output must use FP32 and have an absolute error of **at most `0.000001`**.
 

@@ -1,6 +1,6 @@
 # 86 — Recurrence order
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it must do.** The kernel must update a two-component state at each step: `state = matrix @ state + bias`. It must return the state after every step. The [problem description](../triton_eval_cases/case_86/problem.txt) permits sequences of 1 to 32 steps. Each matrix entry is −1, 0, or 1. The bias and initial state can use any INT16 value. Every INT64 output must equal the mathematical result exactly. There is no permitted rounding error.
 

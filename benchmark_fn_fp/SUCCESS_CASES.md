@@ -1,8 +1,10 @@
-# Success Cases
+# Tools vs No Tools
 
 Updated: October 19, 2026. Model: GLM-5p3 via Fireworks.
 
-This file describes cases where tools helped the model correct an incorrect decision. A correct decision can be **Accept** or **Reject**.
+These cases were selected to compare a single model call without tools with workflows that use tools. Solo and Debate both use tools. A correct decision can be **Accept** or **Reject**.
+
+**These cases target the difference between tools and no tools. The results do not establish a stable difference between Solo and Debate.** Their results are shown separately to keep each workflow's successes and failures visible.
 
 Each kernel has **one fixed Accept or Reject label for its full problem description**. If a kernel fails on an input that the problem description permits, the kernel is incorrect.
 
@@ -12,7 +14,7 @@ Case numbers were updated on October 19, 2026. [CASE_INDEX.md](CASE_INDEX.md) gi
 
 Select a case number for the detailed explanation and traces. The table shows the initial trials. For cases 74, 76, 78, 86, and 90, it shows the first trial, `r1`. A separate table gives the results from five more trials.
 
-| Case | Kernel | Ground truth | Allclose | No tools | Solo + tools | Debate + tools |
+| Case | Kernel | Ground truth | Allclose | Single call, no tools | Solo + tools | Debate + tools |
 |---|---|---|---|---|---|---|
 | [36](success_cases/case_36.md) | RMSNorm backward | Reject | Reject | Accept | Reject | No verdict: token limit |
 | [41](success_cases/case_41.md) | Paged sliding-window attention | Reject | Accept | Accept | Reject | Reject |
@@ -24,13 +26,13 @@ Select a case number for the detailed explanation and traces. The table shows th
 | [86](success_cases/case_86.md) | Recurrence order | Reject | Reject | Accept | Reject | Reject |
 | [90](success_cases/case_90.md) | FFT address | Reject | Reject | Accept | Reject | Reject |
 
-Allclose uses the complete October 19 `r2` batch: existing original checks and one public default input per new kernel. It returned correct decisions for 7 of these 9 selected cases; it missed cases 41 and 76. See the [protocol and saved results](traces_allclose/README.md). The model columns retain the original trials.
+Allclose is a separate numerical test baseline, with no model calls. It uses the complete October 19 `r2` batch: existing original checks and one public default input per new kernel. It returned correct decisions for 7 of these 9 selected cases; it missed cases 41 and 76. See the [protocol and saved results](traces_allclose/README.md). The model columns retain the original trials.
 
 ## Repeat results
 
 Each case in this table has one initial trial, `r1`, and five more trials, `r2` through `r6`, for each method. The table below counts correct decisions in the **five more trials only**. The kernel code and problem description stayed the same.
 
-| Case | No tools: correct | Solo + tools: correct | Debate + tools: correct |
+| Case | Single call, no tools: correct | Solo + tools: correct | Debate + tools: correct |
 |---|---|---|---|
 | [74](success_cases/case_74.md) | 2/5 | 5/5 | 5/5 |
 | [76](success_cases/case_76.md) | 2/5 | 5/5 | 4/5 |
@@ -48,6 +50,8 @@ Each case in this table has one initial trial, `r1`, and five more trials, `r2` 
 
 **90:** Solo and Debate returned the correct decision in all five more trials. Each included an actual GPU failure on a permitted input. The model without tools returned the correct decision in two trials. Some correct responses without tools used numerical examples outside the permitted row lengths. Their correct decisions remain counted, but those examples are not valid test evidence.
 
-These results show a consistent difference for case 78 across the five more trials. Cases 74, 76, 86, and 90 show benefits from tools, but the difference does not occur in every trial. Cases 86 and 90 did not meet the planned requirement for separation in all five repeat trials. These results compare complete workflows, so they do not separate tool access from additional reasoning. These selected cases do not show that Debate is better than Solo.
+For case 78, both workflows with tools were correct and the single call without tools was wrong in all five repeat trials. Cases 74, 76, 86, and 90 show benefits from workflows with tools, but this difference does not occur in every trial. Cases 86 and 90 did not meet the planned requirement for a difference between tools and no tools in all five repeat trials.
+
+These results compare complete workflows, so they do not separate tool access from additional reasoning. **They do not establish a stable difference between Solo and Debate or show that Debate is better than Solo.**
 
 Full trial records: [74](real_kernel_challenges/private_data/source_atan_pair.json) · [76](real_kernel_challenges/private_data/source_rounding_pair.json) · [78](real_kernel_challenges/private_data/source_ntt_pair.json) · [86](real_kernel_challenges/private_data/source_affine_scan_pair.json) · [90](real_kernel_challenges/private_data/source_realfft_pair.json).

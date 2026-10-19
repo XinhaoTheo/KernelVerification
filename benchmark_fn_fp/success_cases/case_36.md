@@ -1,6 +1,6 @@
 # 36 — RMSNorm backward
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it should do.** RMSNorm backward computes gradients during training. The relevant output, `dw`, adds each row's contribution to the weight gradient. The [problem.txt](../triton_eval_cases/case_36/problem.txt) deliberately rounds individual products to FP16, but requires their final sum to meet a tighter accuracy limit. Those individual FP16 roundings are allowed.
 

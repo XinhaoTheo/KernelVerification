@@ -1,6 +1,6 @@
 # 76 — Sigmoid rounding
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it must do.** The kernel must calculate `sigmoid(x) = 1 / (1 + exp(-x))` for every finite FP16 input. The [problem description](../triton_eval_cases/case_76/problem.txt) specifies the nearest FP16 value to the exact mathematical result. At an exact midpoint, the ties-to-even rule selects the value whose last stored fraction bit is zero. This task permits **no difference in the final FP16 bits**. It does not use an approximate error limit.
 

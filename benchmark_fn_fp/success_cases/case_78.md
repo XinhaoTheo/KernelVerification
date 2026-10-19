@@ -1,6 +1,6 @@
 # 78 — NTT coefficient conversion
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it must do.** An NTT, or number-theoretic transform, combines integer inputs with fixed coefficients. This kernel must calculate each output modulo 3329: it must return the remainder after division by 3329. The [problem description](../triton_eval_cases/case_78/problem.txt) permits rows of 64 or 128 integers, each from 0 to 3328. Every output must equal the mathematical result **exactly**. At output position zero, the result is the sum of the input row, modulo 3329.
 

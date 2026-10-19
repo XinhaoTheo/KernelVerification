@@ -1,6 +1,6 @@
 # 90 — FFT address
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it must do.** The kernel must calculate the Fourier transform of each real input row. The [problem description](../triton_eval_cases/case_90/problem.txt) permits row lengths of 64, 128, or 256 and every finite FP16 input value. It requires FP32 real and imaginary output components in increasing frequency order. Each component must satisfy `absolute error <= 0.0001 + 0.000001 * abs(exact result)`.
 

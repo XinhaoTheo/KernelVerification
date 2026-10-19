@@ -6,7 +6,7 @@ Case labels use the October 19, 2026 numbering: current cases 33–90 were previ
 kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷机制或历史修复，
 适配、人工修改及测试选择均记录；本组结果独立统计，不与旧题库合并为总准确率。
 
-[Success cases explained in English, with code snippets and evidence](../SUCCESS_CASES.md).
+[Tools vs No Tools: case explanations, code snippets and evidence](../SUCCESS_CASES.md).
 
 [Replication of cases 36, 41, 54 and 55](REPLICATION_RESULTS.md). New cases 61–90 and their three-arm results are documented at the end of this page.
 

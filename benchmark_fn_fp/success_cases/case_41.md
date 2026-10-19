@@ -1,6 +1,6 @@
 # 41 — Paged attention
 
-[Back to success cases](../SUCCESS_CASES.md)
+[Back to Tools vs No Tools](../SUCCESS_CASES.md)
 
 **What it should do.** Each query computes a weighted average of the values in its allowed attention window. Old cache positions outside every query's window must have no effect. The [problem.txt](../triton_eval_cases/case_41/problem.txt) explicitly permits NaN in those unused positions; all values that a query may actually attend to must be finite.
 
