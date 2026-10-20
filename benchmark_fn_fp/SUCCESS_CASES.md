@@ -10,7 +10,7 @@ Each kernel has **one fixed Accept or Reject label for its full problem descript
 
 We ran all tests on an NVIDIA T4 with PyTorch 2.8.0 and Triton 3.4.0.
 
-Case numbers match the current [case index](CASE_INDEX.md).
+The 11 selected cases are listed in ascending order by their current benchmark case ID. These IDs match the [case index](CASE_INDEX.md), public kernel folders and traces. Case 100 is the latest addition.
 
 Select a case number for the detailed explanation and traces. The table shows the initial trials. The repeat table below gives the results from five more trials for cases 74, 76, 78, 86, and 90, and two more trials for cases 94 and 100.
 

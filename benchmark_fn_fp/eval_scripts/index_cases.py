@@ -20,7 +20,7 @@ DATASET_LABELS = {
     "real_kernel_challenges": "专门构造的真实 kernel 验证挑战（单独统计）",
 }
 CURATION_LABELS = {
-    "tool_gain_observed": "成功案例：已观察到工具流程增益，单独保留",
+    "tool_gain_observed": "已观察到工具收益（含历史候选）",
     "ordinary_candidate": "未体现增益，保留待归普通集合",
 }
 ARCHIVE_LABELS = {
@@ -37,7 +37,8 @@ def curation_lines(details, *, trace_prefix="traces_glm/"):
         return []
     lines = ["## 实验后的保留分组", "",
              "这是后续整理状态，原始题库来源与全部实验统计保留。"
-             "单次观察到增益不代表稳定优势；待归普通集合的案例目前仍保留在原来源组。", "",
+             "单次观察到增益不代表稳定优势；本分组包含未写入成功案例总表的历史候选。"
+             "待归普通集合的案例目前仍保留在原来源组。", "",
              "| 分组 | Case / traces |", "|---|---|"]
     for status, cases in groups.items():
         if cases:

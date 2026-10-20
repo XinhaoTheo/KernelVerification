@@ -8,7 +8,7 @@
 | 专门构造的真实 kernel 验证挑战 | [real_kernel_challenges](real_kernel_challenges/README.md) | case_33–case_102，共70题 |
 | kernel、输入生成器与合同 | [统一公开题目录](triton_eval_cases/) / [题目索引](CASE_INDEX.md) | case_01–case_102，共102题 |
 | 按输入构造标签的旧实验（已归档） | [archive/input_specific](archive/input_specific/README.md) | case_103–case_150，共48题；不进入当前统计和实验 |
-| 早期24题pilot（已归档） | [archive/numerical_pilot](archive/numerical_pilot/README.md) | case_151–case_168及72条GLM记录；停止扩展和重跑 |
+| 早期24题pilot（已归档） | [archive/numerical_pilot](archive/numerical_pilot/README.md) | case_151–case_174及72条GLM记录；停止扩展和重跑 |
 | 每次调用、失败和probe | [GLM traces](traces_glm/INDEX.md) | 当前102题，共440条GLM记录，按case/arm/rN |
 
 GPU kernel verification datasets, evaluation programs, and recorded experiments.

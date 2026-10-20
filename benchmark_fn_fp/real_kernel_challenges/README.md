@@ -8,18 +8,19 @@ kernel 随机抽取的代表性样本。公开 kernel 来自真实计算/缺陷�
 
 [Tools vs No Tools: case explanations, code snippets and evidence](../SUCCESS_CASES.md).
 
-[Replication of cases 36, 41, 54 and 55](REPLICATION_RESULTS.md). Cases 61–90 and the new October 20 cases 91–96 have their three-arm results below.
+[Replication of cases 36, 41, 54 and 55](REPLICATION_RESULTS.md). Cases 61–90 and the new October 20 cases 91–102 have their three-arm results below.
 
 ## 实验后的保留分组
 
-当前优先比较**带工具验证流程与无工具单次调用**。成功案例按实际观察到的判断差距及合法验证证据保留；暂不把纯工具因果归因或 debate 超过 solo 作为入选门槛。按此口径，**case_41 继续归入成功案例**。原始结果与证据审计仍完整保留。
+当前优先比较**带工具验证流程与无工具单次调用**。[成功案例总表](../SUCCESS_CASES.md)收录 **11 例**，按当前 case 编号升序排列。最新加入的是 **case_100**：三轮正确数为无工具 0/3、Solo 3/3、Debate 3/3；这是小规模复测结果，不表示已经证明长期稳定收益或 Debate 优于 Solo。
 
-| 分组 | Case | 后续用途 |
-|---|---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | **case_36、case_41、case_54、case_55、case_62、case_68、case_74、case_76、case_78、case_81、case_86、case_90、case_94** | 历史入选：36 的 solo、41/54 的 solo/debate 正确拒绝，无工具错误接受；55 的 solo/debate 正确接受，无工具错误拒绝。62 首轮的 solo/debate 找到数值反例，无工具错误接受，但其 r2 三组均正确，区分度未复现；68 首两轮有差距，但新增 r3–r5 中无工具正确 2/3，solo/debate 均正确 3/3；区分度不稳定；74/76 的新增五轮也有波动，78 的新增五轮均复现工具差距；81 仅首轮有差距，新增五轮无工具均正确，未复现；86/90 的首轮差距与固定五轮复测分别报告；94 在首轮体现工具收益，但无工具已在一轮复测答对，仍是有波动的候选，详见本页末尾 |
-| 未体现增益，保留待归普通集合 | case_33、34、35、37、38、39、40、42、43–53、56–61、63–67、69–73、75、77、79–80、82–85、87–89、91–93、95–96 | 保留正确/错误 kernel、来源和全部 traces，后续整理进普通集合 |
+| 分组 | 数量 | Case | 说明 |
+|---|---:|---|---|
+| 已写入成功案例总表 | 11 | [case_36](../traces_glm/case_36/)、[case_41](../traces_glm/case_41/)、[case_54](../traces_glm/case_54/)、[case_55](../traces_glm/case_55/)、[case_74](../traces_glm/case_74/)、[case_76](../traces_glm/case_76/)、[case_78](../traces_glm/case_78/)、[case_86](../traces_glm/case_86/)、[case_90](../traces_glm/case_90/)、[case_94](../traces_glm/case_94/)、[case_100](../traces_glm/case_100/) | 每例有单独说明、代码片段、验证证据和 traces；复测次数与稳定程度分别报告 |
+| 历史工具收益候选 | 3 | [case_62](../traces_glm/case_62/)、[case_68](../traces_glm/case_68/)、[case_81](../traces_glm/case_81/) | 曾观察到判断差距，但未纳入当前 11 例说明；复测与原始结果继续保留 |
+| 普通候选 | 56 | [case_33](../traces_glm/case_33/)、[case_34](../traces_glm/case_34/)、[case_35](../traces_glm/case_35/)、[case_37](../traces_glm/case_37/)、[case_38](../traces_glm/case_38/)、[case_39](../traces_glm/case_39/)、[case_40](../traces_glm/case_40/)、[case_42](../traces_glm/case_42/)、[case_43](../traces_glm/case_43/)、[case_44](../traces_glm/case_44/)、[case_45](../traces_glm/case_45/)、[case_46](../traces_glm/case_46/)、[case_47](../traces_glm/case_47/)、[case_48](../traces_glm/case_48/)、[case_49](../traces_glm/case_49/)、[case_50](../traces_glm/case_50/)、[case_51](../traces_glm/case_51/)、[case_52](../traces_glm/case_52/)、[case_53](../traces_glm/case_53/)、[case_56](../traces_glm/case_56/)、[case_57](../traces_glm/case_57/)、[case_58](../traces_glm/case_58/)、[case_59](../traces_glm/case_59/)、[case_60](../traces_glm/case_60/)、[case_61](../traces_glm/case_61/)、[case_63](../traces_glm/case_63/)、[case_64](../traces_glm/case_64/)、[case_65](../traces_glm/case_65/)、[case_66](../traces_glm/case_66/)、[case_67](../traces_glm/case_67/)、[case_69](../traces_glm/case_69/)、[case_70](../traces_glm/case_70/)、[case_71](../traces_glm/case_71/)、[case_72](../traces_glm/case_72/)、[case_73](../traces_glm/case_73/)、[case_75](../traces_glm/case_75/)、[case_77](../traces_glm/case_77/)、[case_79](../traces_glm/case_79/)、[case_80](../traces_glm/case_80/)、[case_82](../traces_glm/case_82/)、[case_83](../traces_glm/case_83/)、[case_84](../traces_glm/case_84/)、[case_85](../traces_glm/case_85/)、[case_87](../traces_glm/case_87/)、[case_88](../traces_glm/case_88/)、[case_89](../traces_glm/case_89/)、[case_91](../traces_glm/case_91/)、[case_92](../traces_glm/case_92/)、[case_93](../traces_glm/case_93/)、[case_95](../traces_glm/case_95/)、[case_96](../traces_glm/case_96/)、[case_97](../traces_glm/case_97/)、[case_98](../traces_glm/case_98/)、[case_99](../traces_glm/case_99/)、[case_101](../traces_glm/case_101/)、[case_102](../traces_glm/case_102/) | 保留正确／错误实现、来源和全部 traces，计入完整题库统计 |
 
-整理状态登记在 `case_map.json` 的 `curation_status`，并显示于案例和 GLM 索引。当前仅分组保留，未正式迁移普通集合；编号、公开题目路径、固定标签和 traces 均保留。下方 33–38 六例、39–42 四例、43–46 四例、47–48 两例、49–50 两例、51–52 两例、53–54 两例、三轮探索 55–60 六例、61–66 六例、67–72 六例、73–78 六例、79–84 六例及 85–90 六例分别完整统计，不能仅用筛出的成功案例重算成功率。
+`case_map.json` 的 `tool_gain_observed` 包含已收录案例和历史候选；成功案例总表列出当前已整理的 11 例。当前题库统一使用 case_01–case_102，下一新题从 case_103 开始。成功案例沿用题库编号，公开题目、说明文件和 traces 中的 case ID 一致。分组不改变固定标签，也不改变完整题库的准确率统计。
 
 ## 固定标签与公开合同
 

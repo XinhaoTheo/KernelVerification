@@ -12,11 +12,11 @@ See [案例总索引](../CASE_INDEX.md) for numeric ranges, original IDs and sou
 
 ## 实验后的保留分组
 
-这是后续整理状态，原始题库来源与全部实验统计保留。单次观察到增益不代表稳定优势；待归普通集合的案例目前仍保留在原来源组。
+这是后续整理状态，原始题库来源与全部实验统计保留。单次观察到增益不代表稳定优势；本分组包含未写入成功案例总表的历史候选。待归普通集合的案例目前仍保留在原来源组。
 
 | 分组 | Case / traces |
 |---|---|
-| 成功案例：已观察到工具流程增益，单独保留 | [case_36](case_36/)、[case_41](case_41/)、[case_54](case_54/)、[case_55](case_55/)、[case_62](case_62/)、[case_68](case_68/)、[case_74](case_74/)、[case_76](case_76/)、[case_78](case_78/)、[case_81](case_81/)、[case_86](case_86/)、[case_90](case_90/)、[case_94](case_94/)、[case_100](case_100/) |
+| 已观察到工具收益（含历史候选） | [case_36](case_36/)、[case_41](case_41/)、[case_54](case_54/)、[case_55](case_55/)、[case_62](case_62/)、[case_68](case_68/)、[case_74](case_74/)、[case_76](case_76/)、[case_78](case_78/)、[case_81](case_81/)、[case_86](case_86/)、[case_90](case_90/)、[case_94](case_94/)、[case_100](case_100/) |
 | 未体现增益，保留待归普通集合 | [case_33](case_33/)、[case_34](case_34/)、[case_35](case_35/)、[case_37](case_37/)、[case_38](case_38/)、[case_39](case_39/)、[case_40](case_40/)、[case_42](case_42/)、[case_43](case_43/)、[case_44](case_44/)、[case_45](case_45/)、[case_46](case_46/)、[case_47](case_47/)、[case_48](case_48/)、[case_49](case_49/)、[case_50](case_50/)、[case_51](case_51/)、[case_52](case_52/)、[case_53](case_53/)、[case_56](case_56/)、[case_57](case_57/)、[case_58](case_58/)、[case_59](case_59/)、[case_60](case_60/)、[case_61](case_61/)、[case_63](case_63/)、[case_64](case_64/)、[case_65](case_65/)、[case_66](case_66/)、[case_67](case_67/)、[case_69](case_69/)、[case_70](case_70/)、[case_71](case_71/)、[case_72](case_72/)、[case_73](case_73/)、[case_75](case_75/)、[case_77](case_77/)、[case_79](case_79/)、[case_80](case_80/)、[case_82](case_82/)、[case_83](case_83/)、[case_84](case_84/)、[case_85](case_85/)、[case_87](case_87/)、[case_88](case_88/)、[case_89](case_89/)、[case_91](case_91/)、[case_92](case_92/)、[case_93](case_93/)、[case_95](case_95/)、[case_96](case_96/)、[case_97](case_97/)、[case_98](case_98/)、[case_99](case_99/)、[case_101](case_101/)、[case_102](case_102/) |
 
 ## 全题库三组覆盖
